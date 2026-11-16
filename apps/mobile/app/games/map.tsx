@@ -134,7 +134,7 @@ export default function GamesMap() {
       {statusTop !== undefined && selectionError && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Выбранная площадка недоступна в этом городе.</Label><TextButton title="Площадки списком" onPress={() => setCatalog(true)} /></View>}
       {!selection && <View style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',backgroundColor:colors.card,borderRadius:999}}><TextButton title="Обновить площадки" onPress={retry} /></View>}
       {selection && <VenueSheet key={`${routeKey}:${state.key}:${selection.id}`} onMeasure={measureSheet} selection={selection} expanded={overlay.expanded} games={schedules?.get(selection.id) ?? null}
-        onExpand={expanded => setOverlay(v => ({...v,expanded}))} onClose={() => setOverlay(v => ({...v,selected:null,expanded:false}))} onRetrySchedule={retry} />}
+        onExpand={expanded => setOverlay(v => ({...v,expanded}))} onClose={() => setOverlay(v => ({...v,selected:null,expanded:false}))} onRetrySchedule={retry} returnFocusRef={filterTrigger} />}
       <DiscoverySheet visible={overlay.filter} title="Фильтры карты" onClose={() => setOverlay(v => ({...v,filter:false}))} returnFocusRef={filterTrigger}>
         <Label>Когда играем</Label><DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => setDay('')} />
         {today && Array.from({length:7},(_,i) => nextCalendarDay(today,i)).map(value => <DiscoveryChip key={value} title={discoveryDateLabel(value)} selected={day === value} onPress={() => setDay(value)} />)}

@@ -95,16 +95,306 @@ test('A→B→A request generation and pagination cursor fences reject old respo
   gates[5]!.resolve(page('trainer')); await fresh; gates[4]!.resolve(page('late')); await oldMore;
   assert.equal(c.getSnapshot().list.data?.items[0]?.publicPlayerId, 'trainer');
 });
-test('actor/logout and known 404 clear all DTO eligibility, and late reads cannot restore it', async () => {
+test('actor/logout and late reads clear DTO eligibility without a global detail-404 catalog wipe', async () => {
   const c = new PlayersCoordinator(), late = deferred<PublicPlayer>(), list = deferred<PlayerPage>();
   c.setScope('native:a:session:1', { list: async () => page(), detail: async () => late.promise });
   await c.loadList(filters); const old = c.loadDetail(player.publicPlayerId);
   c.setScope('native:b:session:2', { list: async () => list.promise, detail: async () => { throw new PlayersError('unavailable', 404); } });
   assert.equal(c.getSnapshot().list.data, null);
   const currentList = c.loadList(filters); await c.loadDetail(player.publicPlayerId);
-  list.resolve(page('must-not-return')); late.resolve(player); await Promise.all([old, currentList]);
-  assert.equal(c.getSnapshot().detail.data, null); assert.equal(c.getSnapshot().list.data, null);
+  assert.equal(c.getSnapshot().detail.status, 'error');
+  assert.equal(c.getSnapshot().detail.data, null);
+  list.resolve(page('actor-b-catalog')); late.resolve(player); await Promise.all([old, currentList]);
+  assert.equal(c.getSnapshot().detail.data, null);
+  assert.equal(c.getSnapshot().list.data?.items[0]?.publicPlayerId, 'actor-b-catalog');
   c.setScope(null, null); await c.loadList(filters); assert.equal(c.getSnapshot().scope, null);
+  assert.equal(c.getSnapshot().list.data, null); assert.equal(c.getSnapshot().detail.data, null);
+});
+
+test('individual peer detail 404 keeps unrelated multi-page catalog key, rows, cursor and status', async () => {
+  const c = new PlayersCoordinator();
+  const filtered = { ...filters, cityId: 'city-a', name: '  Anna ', areaKey: 'north' };
+  const key = playerFilterKey(filtered);
+  c.setScope('guest', {
+    list: async (_f, cursor) => cursor
+      ? { items: [{ ...player, publicPlayerId: 'peer-c' }], nextCursor: 'cursor-2' }
+      : { items: [{ ...player, publicPlayerId: 'peer-a' }, { ...player, publicPlayerId: 'peer-b' }], nextCursor: 'cursor-1' },
+    detail: async id => { if (id === 'peer-a') throw new PlayersError('unavailable', 404); return { ...player, publicPlayerId: id }; },
+  });
+  await c.loadList(filtered);
+  await c.loadList(filtered, 'cursor-1');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-a', 'peer-b', 'peer-c']);
+  await c.loadDetail('peer-a');
+  const snap = c.getSnapshot();
+  assert.equal(snap.list.key, key);
+  assert.equal(snap.list.status, 'ready');
+  assert.equal(snap.list.data?.nextCursor, 'cursor-2');
+  assert.deepEqual(snap.list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-c']);
+  assert.equal(snap.detail.status, 'error');
+  assert.equal(snap.detail.id, 'peer-a');
+  assert.equal(snap.detail.data, null);
+});
+
+test('pre-404 pending next page cannot resurrect unavailable peer while unrelated rows survive', async () => {
+  const c = new PlayersCoordinator(), more = deferred<PlayerPage>();
+  let listCalls = 0;
+  c.setScope('guest', {
+    list: async (_f, cursor) => {
+      listCalls++;
+      if (!cursor) return { items: [{ ...player, publicPlayerId: 'peer-a' }, { ...player, publicPlayerId: 'peer-b' }], nextCursor: 'next' };
+      return more.promise;
+    },
+    detail: async () => { throw new PlayersError('unavailable', 404); },
+  });
+  await c.loadList(filters);
+  const pendingMore = c.loadList(filters, 'next');
+  await c.loadDetail('peer-a');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b']);
+  assert.equal(c.getSnapshot().list.status, 'ready');
+  assert.equal(c.getSnapshot().list.loadingMore, true);
+  more.resolve({ items: [{ ...player, publicPlayerId: 'peer-a' }, { ...player, publicPlayerId: 'peer-c' }], nextCursor: 'later' });
+  await pendingMore;
+  assert.equal(listCalls, 2);
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-c']);
+  assert.equal(c.getSnapshot().list.data?.nextCursor, 'later');
+  assert.equal(c.getSnapshot().list.loadingMore, false);
+});
+
+test('fresh detail after 404 does not authorize pre-404 catalog projection; B/C retained; fresh catalog may recover', async () => {
+  const c = new PlayersCoordinator(), more = deferred<PlayerPage>();
+  let listCalls = 0, detailPhase = 0;
+  c.setScope('guest', {
+    list: async (_f, cursor) => {
+      listCalls++;
+      if (!cursor) {
+        if (listCalls === 1) {
+          return {
+            items: [
+              { ...player, publicPlayerId: 'peer-a', canRequestContact: true },
+              { ...player, publicPlayerId: 'peer-b', canRequestContact: true },
+            ],
+            nextCursor: 'next',
+          };
+        }
+        return {
+          items: [{ ...player, publicPlayerId: 'peer-a', canRequestContact: false }, { ...player, publicPlayerId: 'peer-b' }],
+          nextCursor: null,
+        };
+      }
+      return more.promise;
+    },
+    detail: async id => {
+      detailPhase++;
+      if (detailPhase === 1) throw new PlayersError('unavailable', 404);
+      return { ...player, publicPlayerId: id, canRequestContact: false };
+    },
+  });
+  await c.loadList(filters);
+  const pendingMore = c.loadList(filters, 'next');
+  await c.loadDetail('peer-a');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b']);
+  await c.loadDetail('peer-a');
+  assert.equal(c.getSnapshot().detail.status, 'ready');
+  assert.equal(c.getSnapshot().detail.data?.canRequestContact, false);
+  more.resolve({ items: [{ ...player, publicPlayerId: 'peer-a', canRequestContact: true }, { ...player, publicPlayerId: 'peer-c' }], nextCursor: 'later' });
+  await pendingMore;
+  const afterPending = c.getSnapshot().list.data?.items ?? [];
+  assert.deepEqual(afterPending.map(p => p.publicPlayerId), ['peer-b', 'peer-c']);
+  assert.equal(afterPending.find(p => p.publicPlayerId === 'peer-a'), undefined);
+  assert.equal(c.getSnapshot().detail.data?.canRequestContact, false);
+  assert.equal(c.getSnapshot().list.data?.nextCursor, 'later');
+  await c.loadList(filters);
+  const recovered = c.getSnapshot().list.data?.items ?? [];
+  assert.deepEqual(recovered.map(p => p.publicPlayerId), ['peer-a', 'peer-b']);
+  assert.equal(recovered.find(p => p.publicPlayerId === 'peer-a')?.canRequestContact, false);
+});
+
+test('A404 then fresh page then B404 recovers updatedA and excludes staleB without conflating peer cutoffs', async () => {
+  const c = new PlayersCoordinator(), fresh = deferred<PlayerPage>();
+  let listCalls = 0;
+  const key = playerFilterKey(filters);
+  c.setScope('guest', {
+    list: async () => {
+      listCalls++;
+      if (listCalls === 1) {
+        return {
+          items: [
+            { ...player, publicPlayerId: 'peer-a', canRequestContact: true },
+            { ...player, publicPlayerId: 'peer-b', canRequestContact: true },
+            { ...player, publicPlayerId: 'peer-c' },
+          ],
+          nextCursor: 'cursor-initial',
+        };
+      }
+      return fresh.promise;
+    },
+    detail: async _id => { throw new PlayersError('unavailable', 404); },
+  });
+  await c.loadList(filters);
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-a', 'peer-b', 'peer-c']);
+  await c.loadDetail('peer-a');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-c']);
+  const pendingFresh = c.loadList(filters);
+  await c.loadDetail('peer-b');
+  assert.equal(c.getSnapshot().list.status, 'loading');
+  assert.equal(c.getSnapshot().list.key, key);
+  fresh.resolve({
+    items: [
+      { ...player, publicPlayerId: 'peer-a', canRequestContact: false },
+      { ...player, publicPlayerId: 'peer-b', canRequestContact: true },
+      { ...player, publicPlayerId: 'peer-c' },
+      { ...player, publicPlayerId: 'peer-d' },
+    ],
+    nextCursor: 'cursor-fresh',
+  });
+  await pendingFresh;
+  const rows = c.getSnapshot().list.data?.items ?? [];
+  assert.deepEqual(rows.map(p => p.publicPlayerId), ['peer-a', 'peer-c', 'peer-d']);
+  assert.equal(rows.find(p => p.publicPlayerId === 'peer-a')?.canRequestContact, false);
+  assert.equal(rows.find(p => p.publicPlayerId === 'peer-b'), undefined);
+  assert.equal(c.getSnapshot().list.key, key);
+  assert.equal(c.getSnapshot().list.data?.nextCursor, 'cursor-fresh');
+  assert.equal(c.getSnapshot().list.status, 'ready');
+  assert.equal(c.getSnapshot().list.loadingMore, false);
+  assert.equal(c.getSnapshot().list.error, null);
+});
+
+test('multi-peer pre-404 pages keep unrelated rows; late 404 and actor success stay fenced after fresh detail', async () => {
+  const c = new PlayersCoordinator(), more = deferred<PlayerPage>(), late404 = deferred<PublicPlayer>();
+  let detailCalls = 0;
+  c.setScope('native:a:session:1', {
+    list: async (_f, cursor) => {
+      if (!cursor) {
+        return {
+          items: [
+            { ...player, publicPlayerId: 'peer-a', canRequestContact: true },
+            { ...player, publicPlayerId: 'peer-b' },
+            { ...player, publicPlayerId: 'peer-d', canRequestContact: true },
+          ],
+          nextCursor: 'next',
+        };
+      }
+      return more.promise;
+    },
+    detail: async id => {
+      detailCalls++;
+      if (id === 'peer-a' && detailCalls === 1) throw new PlayersError('unavailable', 404);
+      if (id === 'peer-a') return { ...player, publicPlayerId: 'peer-a', canRequestContact: false };
+      if (id === 'peer-d') return late404.promise;
+      return { ...player, publicPlayerId: id };
+    },
+  });
+  await c.loadList(filters);
+  const pendingMore = c.loadList(filters, 'next');
+  await c.loadDetail('peer-a');
+  const stale = c.loadDetail('peer-d');
+  await c.loadDetail('peer-a');
+  assert.equal(c.getSnapshot().detail.data?.canRequestContact, false);
+  more.resolve({
+    items: [
+      { ...player, publicPlayerId: 'peer-a', canRequestContact: true },
+      { ...player, publicPlayerId: 'peer-c' },
+      { ...player, publicPlayerId: 'peer-d', canRequestContact: true },
+    ],
+    nextCursor: null,
+  });
+  await pendingMore;
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-d', 'peer-c']);
+  assert.equal(c.getSnapshot().list.data?.items.find(p => p.publicPlayerId === 'peer-a'), undefined);
+  late404.reject(new PlayersError('unavailable', 404)); await stale;
+  assert.equal(c.getSnapshot().detail.id, 'peer-a');
+  assert.equal(c.getSnapshot().detail.data?.canRequestContact, false);
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-d', 'peer-c']);
+  await c.loadDetail('peer-d');
+  assert.equal(c.getSnapshot().detail.status, 'error');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-c']);
+  c.setScope('native:b:session:2', {
+    list: async () => ({ items: [{ ...player, publicPlayerId: 'actor-b-only' }], nextCursor: null }),
+    detail: async () => ({ ...player, publicPlayerId: 'actor-b-only', canRequestContact: true }),
+  });
+  await c.loadList(filters);
+  await c.loadDetail('actor-b-only');
+  assert.equal(c.getSnapshot().list.data?.items[0]?.publicPlayerId, 'actor-b-only');
+  assert.equal(c.getSnapshot().detail.data?.canRequestContact, true);
+});
+
+test('peer 404 leaves newer filter refresh, detail target and actor rotation unaffected; detail 503 leaves catalog', async () => {
+  const c = new PlayersCoordinator();
+  const first = deferred<PlayerPage>(), second = deferred<PlayerPage>(), late404 = deferred<PublicPlayer>();
+  const looking = { ...filters, looking: true };
+  c.setScope('native:a:session:1', {
+    list: async f => f.looking ? second.promise : first.promise,
+    detail: async id => {
+      if (id === 'peer-a') return late404.promise;
+      if (id === 'peer-dead') throw new PlayersError('unavailable', 404);
+      if (id === 'peer-503') throw new PlayersError('server', 503);
+      return { ...player, publicPlayerId: id };
+    },
+  });
+  const loadA = c.loadList(filters);
+  first.resolve({
+    items: [
+      { ...player, publicPlayerId: 'peer-a' },
+      { ...player, publicPlayerId: 'peer-b' },
+      { ...player, publicPlayerId: 'peer-dead' },
+    ],
+    nextCursor: null,
+  });
+  await loadA;
+  await c.loadDetail('peer-dead');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-a', 'peer-b']);
+  assert.equal(c.getSnapshot().detail.id, 'peer-dead');
+  assert.equal(c.getSnapshot().detail.status, 'error');
+  const stale = c.loadDetail('peer-a');
+  await c.loadDetail('peer-b');
+  assert.equal(c.getSnapshot().detail.id, 'peer-b');
+  assert.equal(c.getSnapshot().detail.data?.publicPlayerId, 'peer-b');
+  late404.reject(new PlayersError('unavailable', 404)); await stale;
+  assert.equal(c.getSnapshot().detail.id, 'peer-b');
+  assert.equal(c.getSnapshot().detail.data?.publicPlayerId, 'peer-b');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-a', 'peer-b']);
+  const refresh = c.loadList(looking);
+  second.resolve({ items: [{ ...player, publicPlayerId: 'peer-x' }], nextCursor: null });
+  await refresh;
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-x']);
+  assert.equal(c.getSnapshot().list.key, playerFilterKey(looking));
+  await c.loadDetail('peer-503');
+  assert.equal(c.getSnapshot().detail.status, 'error');
+  assert.ok(c.getSnapshot().detail.error instanceof PlayersError && (c.getSnapshot().detail.error as PlayersError).status === 503);
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-x']);
+  c.setScope('native:b:session:2', {
+    list: async () => ({ items: [{ ...player, publicPlayerId: 'actor-b-only' }], nextCursor: null }),
+    detail: async () => { throw new PlayersError('unavailable', 404); },
+  });
+  assert.equal(c.getSnapshot().list.data, null);
+  assert.equal(c.getSnapshot().detail.data, null);
+  await c.loadList(filters);
+  assert.equal(c.getSnapshot().list.data?.items[0]?.publicPlayerId, 'actor-b-only');
+});
+
+test('safetyReread 404 isolates detail error without peer catalog invalidation; list-endpoint 404 still clears catalog', async () => {
+  const c = new PlayersCoordinator();
+  c.setScope('guest', {
+    list: async () => ({ items: [{ ...player, publicPlayerId: 'peer-safe' }, { ...player, publicPlayerId: 'peer-keep' }], nextCursor: 'cursor-safe' }),
+    detail: async () => { throw new PlayersError('unavailable', 404); },
+  });
+  await c.loadList(filters);
+  await c.loadDetail('peer-safe', true);
+  assert.equal(c.getSnapshot().detail.status, 'error');
+  assert.equal(c.getSnapshot().detail.data, null);
+  assert.equal(c.getSnapshot().list.status, 'ready');
+  assert.equal(c.getSnapshot().list.key, playerFilterKey(filters));
+  assert.equal(c.getSnapshot().list.data?.nextCursor, 'cursor-safe');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-safe', 'peer-keep']);
+  c.setScope('native:list404:session:1', {
+    list: async () => { throw new PlayersError('unavailable', 404); },
+    detail: async () => player,
+  });
+  await c.loadList(filters);
+  assert.equal(c.getSnapshot().list.status, 'error');
+  assert.equal(c.getSnapshot().list.data, null);
+  assert.equal(c.getSnapshot().detail.status, 'error');
+  assert.equal(c.getSnapshot().detail.data, null);
 });
 test('guest transport is credential-free; closed native reads send only bearer and never retry anonymous on errors', async () => {
   const calls: RequestInit[] = [];

@@ -9,6 +9,14 @@ import { createPublicApi, gamesResourceKey } from '../src/public-api.ts';
 import type { MapSnapshot, MapOverlay, SheetMeasurement } from '../src/maps.ts';
 import { LatestResource } from '../src/resource.ts';
 import { parseVenue } from '../src/venues.ts';
+import type {
+  CompactSheetAction,
+  GalleryAxis,
+  GallerySwipeAction,
+  HandleSettleAction,
+  SheetAxis,
+  SheetDrag,
+} from '../src/venue-gestures.ts';
 import { game } from './fixtures.ts';
 const pack = mapPackForCity('a0000000-0000-4000-8000-000000000001')!;
 const id = '11111111-1111-4111-8111-111111111111', alias = '22222222-2222-4222-8222-222222222222';
@@ -287,10 +295,10 @@ test('expanded X preserves selection; compact dismiss clears it; real measured o
   activeSheet.current=expandedOwner;published=null;measure(208);measure(0);assert.equal(published,null); // stale layout/unmount
   activeSheet.current=null;measure(208);assert.equal(published,null); // deselect / parent unmount
   const sheetSource=readFileSync(new URL('../src/components/venue-sheet.tsx',import.meta.url),'utf8');
-  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  return <View'))+'\nclose;';
+  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';
   let collapsed:boolean|null=null, dismissed=0;
   const makeClose=(expanded:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{closeVenueSheet,expanded,selection:venue,
-    onExpand:(value:boolean)=>{collapsed=value;},onClose:()=>{dismissed++;}}) as ()=>void;
+    onExpand:(value:boolean)=>{collapsed=value;},dismissSheet:()=>{dismissed++;}}) as ()=>void;
   makeClose(true)();assert.equal(collapsed,false);assert.equal(dismissed,0);
   makeClose(false)();assert.equal(dismissed,1);
 
@@ -311,10 +319,10 @@ test('map schedule groups only the real eligible snapshot by venue-local date, p
 test('Players venue/person measured owners reserve actual safe clearance and reject retired layout callbacks across transitions',async()=>{
   const {readFileSync}=await import('node:fs'),{stripTypeScriptTypes}=await import('node:module'),{runInNewContext}=await import('node:vm');
   const source=readFileSync(new URL('../app/players/index.tsx',import.meta.url),'utf8');
-  const body=source.slice(source.indexOf('  const sheetContext ='),source.indexOf('  const statusTop ='))+'\n({sheetOwner,measureSheet,controlBottom});';
+  const body=source.slice(source.indexOf('  const sheetContext ='),source.indexOf('  const statusTop ='))+'\n({sheetOwner,venueSheetKey,measureSheet,controlBottom});';
   const refs:{current:unknown}[]=[],lifecycle:{deps?:unknown[];cleanup?:()=>void}={};
   let measurement:SheetMeasurement|null=null;
-  const input={mapOpen:true,selection:venue,person:null as {publicPlayerId:string}|null,params:{view:'map'},key:'filters',mapCityId:pack.cityId,
+  const input={mapOpen:true,selection:venue as typeof venue | null,person:null as {publicPlayerId:string}|null,params:{view:'map'},key:'filters',mapCityId:pack.cityId,
     venueMode:'all',showPeople:true,radarState:{generation:1},expanded:false,window:{width:390,height:844,fontScale:1},insets:{top:44,bottom:34,left:0,right:0}};
   const render=()=>{
     let ref=0;
@@ -323,12 +331,19 @@ test('Players venue/person measured owners reserve actual safe clearance and rej
       useCallback:(fn:unknown)=>fn,setSheetMeasurement:(value:typeof measurement)=>{measurement=value;},
       useLayoutEffect:(effect:()=>()=>void,deps:unknown[])=>{
         if(!lifecycle.deps || deps.some((v,i)=>v!==lifecycle.deps![i])){lifecycle.cleanup?.();lifecycle.deps=deps;lifecycle.cleanup=effect();}
-      }}) as {sheetOwner:string|null;measureSheet:(height:number)=>void;controlBottom:number};
+      }}) as {sheetOwner:string|null;venueSheetKey:string|null;measureSheet:(height:number)=>void;controlBottom:number};
   };
   const compact=render();compact.measureSheet(208);assert.equal(render().controlBottom,262);
   compact.measureSheet(340);assert.equal(render().controlBottom,394); // text/content growth
-  input.person={publicPlayerId:'peer'};const person=render();assert.notEqual(person.sheetOwner,compact.sheetOwner);
-  compact.measureSheet(900);assert.equal(measurement,null);person.measureSheet(180);assert.equal(render().controlBottom,234);
+  const venueKey=compact.venueSheetKey;assert.equal(venueKey,`venue:${pack.cityId}:filters:${venue.id}`);
+  input.expanded=true;const venueExpanded=render();assert.equal(venueExpanded.venueSheetKey,venueKey);
+  assert.notEqual(venueExpanded.sheetOwner,compact.sheetOwner);
+  compact.measureSheet(900);assert.equal(measurement,null);venueExpanded.measureSheet(680);assert.equal(render().controlBottom,688);
+  input.expanded=false;const venueBack=render();assert.equal(venueBack.venueSheetKey,venueKey);
+  venueExpanded.measureSheet(900);assert.equal(measurement,null);venueBack.measureSheet(340);assert.equal(render().controlBottom,394);
+  input.selection=null;input.person={publicPlayerId:'peer'};const person=render();assert.equal(person.venueSheetKey,null);
+  assert.notEqual(person.sheetOwner,venueBack.sheetOwner);
+  venueBack.measureSheet(900);assert.equal(measurement,null);person.measureSheet(180);assert.equal(render().controlBottom,234);
   input.expanded=true;const expanded=render();person.measureSheet(900);assert.equal(measurement,null);
   expanded.measureSheet(680);assert.equal(render().controlBottom,688);
   input.expanded=false;const back=render();assert.notEqual(back.sheetOwner,person.sheetOwner);person.measureSheet(900);assert.equal(measurement,null);
@@ -336,8 +351,9 @@ test('Players venue/person measured owners reserve actual safe clearance and rej
   const rotated=render();back.measureSheet(900);assert.equal(measurement,null);rotated.measureSheet(200);assert.equal(render().controlBottom,241);
   input.key='changed filters';const filtered=render();rotated.measureSheet(900);assert.equal(measurement,null);assert.notEqual(filtered.sheetOwner,rotated.sheetOwner);
   input.mapOpen=false;const closed=render();filtered.measureSheet(900);assert.equal(measurement,null);assert.equal(closed.sheetOwner,null);
+  assert.equal(closed.venueSheetKey,null);
   assert.match(source,/key=\{sheetOwner\} onLayout=\{event => measureSheet\(event.nativeEvent.layout.height\)\}/);
-  assert.match(source,/<VenueSheet key=\{sheetOwner\}[\s\S]*onMeasure=\{measureSheet\}/);
+  assert.match(source,/<VenueSheet key=\{venueSheetKey\}[\s\S]*onMeasure=\{measureSheet\}/);
   assert.match(source,/setControlsBottom\(event.nativeEvent.layout.y\+event.nativeEvent.layout.height\)/);
   assert.doesNotMatch(source,/sheetHeight\+24|statusTop=\{140\}/);
 });
@@ -532,4 +548,156 @@ test('actual native/accessible people bindings reuse onPerson only for the curre
   current.native();hidden.native();hidden.accessible();assert.equal(selected.length,3);
   const unauthorized=committed({...input,people:[fresh],onPerson:undefined}).person(fresh);
   unauthorized.native();unauthorized.accessible();assert.equal(selected.length,3);
+});
+
+test('venue sheet/gallery UX seams: production handlers, media identity, local Modal focus, host returnFocus', async () => {
+  const {readFileSync}=await import('node:fs');
+  const {stripTypeScriptTypes}=await import('node:module');
+  const {runInNewContext}=await import('node:vm');
+  const sheetSource=readFileSync(new URL('../src/components/venue-sheet.tsx',import.meta.url),'utf8');
+  const detailSource=readFileSync(new URL('../src/components/venue-detail.tsx',import.meta.url),'utf8');
+  const gamesMap=readFileSync(new URL('../app/games/map.tsx',import.meta.url),'utf8');
+  const playersMap=readFileSync(new URL('../app/players/index.tsx',import.meta.url),'utf8');
+
+  // Retained composition seams (not mirrored algorithm assertions).
+  assert.doesNotMatch(sheetSource,/compact \+ 200|compact \* 2\.5/);
+  assert.match(sheetSource,/createCompactSheetHandlers/);
+  assert.match(sheetSource,/createHandleSheetHandlers/);
+  assert.match(sheetSource,/compactLiveGrowthHeight/);
+  assert.match(sheetSource,/Modal transparent visible/);
+  assert.match(sheetSource,/importantForAccessibility="no-hide-descendants"/);
+  assert.match(sheetSource,/restoreFocusOnCollapse/);
+  assert.match(sheetSource,/createReturnFocusLifecycle|restoreOpenerFocus|returnFocusRef/);
+  assert.match(sheetSource,/armDismissRestore|disposeSheetUnmount/);
+  assert.match(sheetSource,/ScrollView \{\.\.\.compactResponder\.panHandlers\}/);
+  // Handle panHandlers on View host — not spread onto Pressable (RN Pressable overrides responders).
+  assert.match(sheetSource,/View \{\.\.\.handleResponder\.panHandlers\}/);
+  assert.doesNotMatch(sheetSource,/Pressable ref=\{handleFocus\} \{\.\.\.handleResponder\.panHandlers\}/);
+  assert.match(sheetSource,/translateY: lift/);
+
+  assert.match(detailSource,/mediaFailureApplies\(activeIdentity\.current, identity\)/);
+  assert.match(detailSource,/createGalleryGestureHandlers/);
+  assert.match(detailSource,/onPressOut=\{onControlTouchEnd\}/);
+  assert.match(detailSource,/accessibilityActions/);
+  const previewSlice=detailSource.slice(detailSource.indexOf('export function VenuePreview'),detailSource.indexOf('export function VenueDetail'));
+  assert.doesNotMatch(previewSlice,/accessibilityLabel="Предыдущее изображение"/);
+  assert.doesNotMatch(previewSlice,/accessibilityLabel="Следующее изображение"/);
+  assert.match(previewSlice,/accessibilityActions/);
+  assert.match(detailSource,/VenueMediaSurface/);
+  assert.match(detailSource,/VenueImageCredits/);
+
+  assert.match(gamesMap,/returnFocusRef=\{filterTrigger\}/);
+  assert.match(playersMap,/returnFocusRef=\{filterTrigger\}/);
+
+  const gestures = await import('../src/venue-gestures.ts');
+  const {
+    canonicalSheetOriginY, compactLiveGrowthHeight, createCompactSheetHandlers, createGalleryGestureHandlers,
+    createHandleSheetHandlers, createReturnFocusLifecycle, decideCompactRelease, decideHandleSettle, eventClockAgeMs,
+    measuredSheetTravel, mediaFailureApplies, secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress,
+    gestureGenerationActive,
+  } = gestures;
+  assert.equal(measuredSheetTravel(172, 0, Math.floor(800 * 0.88)), Math.floor(800 * 0.88) - 172);
+  assert.equal(compactLiveGrowthHeight(172, 80, 704), 252);
+  assert.equal(secondTouchCancels(2), true);
+  assert.equal(suppressAfterFreshTouch(false, true), false);
+  assert.equal(consumeFollowOnSuppress(true).blocked, true);
+  assert.equal(mediaFailureApplies('/a', '/b'), false);
+  assert.equal(mediaFailureApplies('/a', '/a'), true);
+  const age = eventClockAgeMs(4500, 4200);
+  assert.equal(decideHandleSettle({
+    originExpanded: false, dy: 70, start: 0, travel: 300, velocity: 0.9, velocityAgeMs: age,
+  }), 'dismiss');
+  assert.equal(decideCompactRelease('vertical', -60), 'expand');
+  assert.equal(gestureGenerationActive(2, 1, true), false);
+
+  // Production compact handler trace: delayed grant origin recovers full -60 expand.
+  // Typed fixture port: callback-mutated state read via getter so TS keeps SheetDrag | null.
+  const dragPort: { current: SheetDrag | null } = { current: null };
+  const readDrag = (): SheetDrag | null => dragPort.current;
+  const compactActions: CompactSheetAction[] = [];
+  const compact = createCompactSheetHandlers({
+    isExpanded: () => false, isHandleActive: () => false, getControlOrigin: () => false,
+    getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
+    getDrag: readDrag, setDrag: (next: SheetDrag | null) => { dragPort.current = next; },
+    beginFreshTouch: () => {}, retireGesture: () => { dragPort.current = null; },
+    applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
+    endCompact: (axis: SheetAxis, dy: number) => {
+      compactActions.push(decideCompactRelease(axis, dy)); dragPort.current = null;
+    },
+    endHandle: () => {},
+  });
+  compact.onPanResponderGrant({ nativeEvent: { pageY: 490, timestamp: 1000 } }, { dx: 0, dy: -10, numberActiveTouches: 1 });
+  assert.equal(readDrag()?.startY, canonicalSheetOriginY(490, -10));
+  compact.onPanResponderMove({ nativeEvent: { pageY: 450, timestamp: 1040 } }, { dx: 0, dy: -50, numberActiveTouches: 1 });
+  compact.onPanResponderRelease({ nativeEvent: { pageY: 440, timestamp: 1050 } }, { dx: 0, dy: -60, numberActiveTouches: 1 });
+  assert.equal(compactActions.at(-1), 'expand');
+
+  // Production handle: terminal release clock crosses dismiss after earlier move.
+  dragPort.current = null;
+  const handleActions: HandleSettleAction[] = [];
+  const handle = createHandleSheetHandlers({
+    isExpanded: () => false, isHandleActive: () => true, getControlOrigin: () => false,
+    getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
+    getDrag: readDrag, setDrag: (next: SheetDrag | null) => { dragPort.current = next; },
+    beginFreshTouch: () => {}, retireGesture: () => { dragPort.current = null; },
+    applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
+    endCompact: () => {},
+    endHandle: (_gen: number, dy: number, velocity: number, velocityAgeMs: number) => {
+      handleActions.push(decideHandleSettle({
+        originExpanded: false, dy, start: 0, travel: 300, velocity, velocityAgeMs,
+      }));
+      dragPort.current = null;
+    },
+  });
+  handle.onPanResponderGrant({ nativeEvent: { pageY: 100, timestamp: 4000 } });
+  handle.onPanResponderMove({ nativeEvent: { pageY: 150, timestamp: 4050 } }, { dx: 0, dy: 50, numberActiveTouches: 1 });
+  handle.onPanResponderRelease({ nativeEvent: { pageY: 170, timestamp: 4100 } }, { dx: 0, dy: 70, numberActiveTouches: 1 });
+  assert.equal(handleActions.at(-1), 'dismiss');
+
+  // Gallery second finger + release0 cannot reconstruct commit; fresh single finger recovers.
+  let axis: GalleryAxis = 'pending';
+  let retired = false;
+  let generation = 1;
+  const commits: Array<Exclude<GallerySwipeAction, 'none'>> = [];
+  const gallery = createGalleryGestureHandlers({
+    canPage: () => true, isMounted: () => true, getGeneration: () => generation,
+    bumpGeneration: () => { generation += 1; },
+    isRetired: () => retired, setRetired: (value: boolean) => { retired = value; },
+    getAxis: () => axis, setAxis: (next: GalleryAxis) => { axis = next; },
+    onGrantFresh: () => {}, onCommit: (action: Exclude<GallerySwipeAction, 'none'>) => { commits.push(action); },
+  });
+  const gEvent = { nativeEvent: { pageY: 0, timestamp: 0 } };
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderMove(gEvent, { dx: -40, dy: 0, numberActiveTouches: 1 });
+  gallery.onPanResponderMove(gEvent, { dx: -55, dy: 0, numberActiveTouches: 2 });
+  gallery.onPanResponderRelease(gEvent, { dx: -55, dy: 0, numberActiveTouches: 0 });
+  assert.equal(commits.length, 0);
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderMove(gEvent, { dx: -50, dy: 0, numberActiveTouches: 1 });
+  gallery.onPanResponderRelease(gEvent, { dx: -50, dy: 0, numberActiveTouches: 1 });
+  assert.equal(commits.at(-1), 'next');
+
+  // Deferred dismiss → unmount dispose → flush: opener focus survives (P2).
+  const focusCalls: string[] = [];
+  let focusQueued: (() => void) | null = null;
+  const focusLife = createReturnFocusLifecycle();
+  focusLife.armDismissRestore(() => { focusCalls.push('opener'); }, (cb) => {
+    focusQueued = cb;
+    return { cancel: () => { if (focusQueued === cb) focusQueued = null; } };
+  });
+  focusLife.disposeSheetUnmount();
+  assert.equal(typeof focusQueued, 'function');
+  focusQueued!();
+  assert.deepEqual(focusCalls, ['opener']);
+
+  // Existing close seam still extracts without generation/retire helpers.
+  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';
+  let collapsed:boolean|null=null, dismissed=0;
+  const makeClose=(expandedFlag:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{
+    closeVenueSheet,expanded:expandedFlag,selection:venue,
+    onExpand:(value:boolean)=>{collapsed=value;},
+    dismissSheet:()=>{dismissed++;},
+  }) as ()=>void;
+  makeClose(true)();assert.equal(collapsed,false);assert.equal(dismissed,0);
+  makeClose(false)();assert.equal(dismissed,1);
 });

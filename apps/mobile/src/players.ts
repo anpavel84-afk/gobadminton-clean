@@ -83,14 +83,32 @@ export class PlayersCoordinator {
   private generation = 0;
   private listSequence = 0;
   private detailSequence = 0;
+  /** Peer ID → listSequence at authoritative detail 404; cleared on scope change and list-endpoint 404. */
+  private unavailablePeers = new Map<string, number>();
   private listeners = new Set<() => void>();
   getSnapshot = () => this.snapshot;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   private show(snapshot: PlayersSnapshot) { this.snapshot = snapshot; this.listeners.forEach(fn => fn()); }
+  private clearPeerInvalidation() {
+    this.unavailablePeers = new Map();
+  }
   setScope(scope: string | null, reader: Reader | null) {
     if (scope === this.snapshot.scope) return;
     this.lastFilters = null;
+    this.clearPeerInvalidation();
     this.generation++; this.reader = reader; this.show(empty(scope));
+  }
+  /** Drop peers whose invalidation sequence is at/after this request; only a newer sequence may recover that peer. Detail success does not clear tombstones. */
+  private applyPeerInvalidation(page: PlayerPage, sequence: number): PlayerPage {
+    if (this.unavailablePeers.size === 0) return page;
+    const items: PublicPlayer[] = [];
+    for (const row of page.items) {
+      const invalidatedAt = this.unavailablePeers.get(row.publicPlayerId);
+      if (invalidatedAt !== undefined && sequence <= invalidatedAt) continue;
+      if (invalidatedAt !== undefined) this.unavailablePeers.delete(row.publicPlayerId);
+      items.push(row);
+    }
+    return { items, nextCursor: page.nextCursor };
   }
   loadList = async (filters: PlayerFilters, cursor?: string) => {
     const reader = this.reader, generation = this.generation, key = playerFilterKey(filters), old = this.snapshot.list;
@@ -102,12 +120,15 @@ export class PlayersCoordinator {
     try {
       const page = await reader.list({ ...filters }, cursor);
       if (generation !== this.generation || sequence !== this.listSequence) return;
-      const data = cursor && old.data ? appendPlayers(old.data, page) : page;
+      // Prefer the live accepted catalog so detail-404 removals are not resurrected from a pre-request capture.
+      const baseline = cursor ? this.snapshot.list.data : null;
+      const merged = cursor && baseline ? appendPlayers(baseline, page) : page;
+      const data = this.applyPeerInvalidation(merged, sequence);
       this.show({ ...this.snapshot, list: { key, status: 'ready', data, error: null, moreError: null, loadingMore: false } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.listSequence) return;
       if (error instanceof PlayersError && error.status === 404) { this.clearUnavailable(error); return; }
-      this.show({ ...this.snapshot, list: cursor ? { ...old, moreError: error, loadingMore: false }
+      this.show({ ...this.snapshot, list: cursor ? { ...this.snapshot.list, moreError: error, loadingMore: false }
         : { key, status: 'error', data: null, error, moreError: null, loadingMore: false } });
     }
   };
@@ -119,10 +140,11 @@ export class PlayersCoordinator {
       const data = await reader.detail(id);
       if (generation !== this.generation || sequence !== this.detailSequence) return;
       if (data.publicPlayerId !== id) throw new PlayersError('invalid');
+      // Fresh detail must not authorize an older captured catalog projection; only a newer list sequence may recover the peer.
       this.show({ ...this.snapshot, detail: { id, status: 'ready', data, error: null } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.detailSequence) return;
-      if (!safetyReread && error instanceof PlayersError && error.status === 404) { this.clearUnavailable(error); return; }
+      if (!safetyReread && error instanceof PlayersError && error.status === 404) { this.invalidatePeer(id, error); return; }
       this.show({ ...this.snapshot, detail: { id, status: 'error', data: null, error } });
     }
   };
@@ -131,8 +153,23 @@ export class PlayersCoordinator {
     if (this.lastFilters) void this.loadList(this.lastFilters);
     if (this.snapshot.detail.id === peer) void this.loadDetail(peer, true);
   };
+  /** Narrow detail-404: drop only that peer from accepted catalog; keep key/rows/cursor/paging and in-flight list sequences. */
+  private invalidatePeer(id: string, error: unknown) {
+    this.unavailablePeers.set(id, this.listSequence);
+    const list = this.snapshot.list;
+    const data = list.data
+      ? { items: list.data.items.filter(row => row.publicPlayerId !== id), nextCursor: list.data.nextCursor }
+      : list.data;
+    this.show({
+      ...this.snapshot,
+      list: { ...list, data },
+      detail: { id, status: 'error', data: null, error },
+    });
+  }
+  /** List-endpoint authoritative 404: retire catalog eligibility for the current scope generation. */
   private clearUnavailable(error: unknown) {
     this.generation++; this.listSequence++; this.detailSequence++;
+    this.clearPeerInvalidation();
     this.show({ scope: this.snapshot.scope,
       list: { ...this.snapshot.list, status: 'error', data: null, error, moreError: null, loadingMore: false },
       detail: { ...this.snapshot.detail, status: 'error', data: null, error } });
