@@ -103,10 +103,12 @@ function CommunityPanel({name}:{name:string}) {
       {s.summaryPhase === 'error' && <><Label accessibilityRole="alert">Не удалось загрузить оценки</Label><ActionButton title="Повторить загрузку оценок" onPress={() => void owner.refresh()} /></>}
       {aggregate?.state === 'unavailable' && <Label>Сводка оценок недоступна</Label>}
       {aggregate?.state === 'empty' && <Label>Пока нет оценок</Label>}
-      {aggregate?.state === 'available' && <View accessible accessibilityLabel={`${aggregate.average!.toFixed(1).replace('.',',')} из 5 · ${countLabel(aggregate.count!)}`} style={{gap:8}}>
+      {aggregate?.state === 'available' && <View accessible accessibilityLabel={`${aggregate.average!.toFixed(1).replace('.',',')} из 5 · ${countLabel(aggregate.count!)}`} style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}>
         <Label accessible={false} style={{fontSize:40,lineHeight:48,fontWeight:'700'}}>{aggregate.average!.toFixed(1).replace('.',',')}</Label>
-        <Label accessible={false} style={{color:colors.purple}}>★</Label><Label accessible={false}>{countLabel(aggregate.count!)}</Label>
-        {aggregate.count! < 10 && <Label accessible={false}>пока небольшая выборка</Label>}
+        <View accessible={false}>
+          <Label accessible={false} style={{color:colors.purple}}>★</Label>
+          <Label accessible={false}>{countLabel(aggregate.count!)}{aggregate.count! < 10 ? ' · пока небольшая выборка' : ''}</Label>
+        </View>
       </View>}
       <Label accessibilityRole="header" style={styles.subtitle}>Как вам эта площадка?</Label>
       {!s.actor ? <><Label>Войдите, чтобы поставить свою оценку</Label><ActionButton title="Войти и оценить" onPress={login} /></> : <>
