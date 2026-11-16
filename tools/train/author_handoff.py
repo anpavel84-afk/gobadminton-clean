@@ -632,7 +632,8 @@ class DirectSourceCustody(SourceQuarantine):
         self.root.record.update(source_anchor=anchor); self.root._record(); self.ready = True
 
     def checkpoint(self, retention):
-        retention.persist(Path('/proc/self/fd') / str(self.cap), self.root.binding)
+        retention.persist(Path('/proc/self/fd') / str(self.cap), self.root.binding,
+                          directory_fd=self.cap)
         self.root.collect()
 
     def quarantine(self):
@@ -975,7 +976,7 @@ class SourceRetention:
             return Observed()
         return launch
 
-    def persist(self, directory, binding):
+    def persist(self, directory, binding, *, directory_fd=None):
         """Separate UNVALIDATED checkpoint, never native parsed-success evidence."""
         need(self.failure is None and self.result is not None)
         from providers import atomic_write
@@ -995,8 +996,17 @@ class SourceRetention:
         atomic_write(destination / 'manifest.json', manifest, 0o600)
         # atomic_write fsyncs file bytes; seal directory entries before allowing
         # native parsing/finally to delete the source workspace.
-        for path in (destination, Path(directory)):
-            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        # Capability fd is already open; reopening /proc/self/fd/N with
+        # O_NOFOLLOW raises ENOTDIR (final component is a magic symlink).
+        if directory_fd is not None:
+            os.fsync(directory_fd)
+        else:
+            fd = os.open(Path(directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 os.fsync(fd)
             finally:

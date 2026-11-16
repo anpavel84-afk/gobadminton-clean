@@ -4947,6 +4947,147 @@ class DirectSourceCustodyCollectOwnerTests(unittest.TestCase):
             self.assertFalse(custody_bad.record.get('checkpoint_ready'))
 
 
+class DirectSourceCustodyPersistFdTests(unittest.TestCase):
+    """#527: persist fsyncs capability fd; /proc/self/fd/N + O_NOFOLLOW is ENOTDIR."""
+
+    def _binding(self):
+        import author_routing as policy
+        from author_routing import Operation
+        return Operation('527', 'op-527-persist-fd', policy.CURSOR,
+                         'a' * 40, 'b' * 64, 'c' * 40)
+
+    def _retention(self, payloads):
+        import author_handoff as ah
+        retention = ah.SourceRetention(
+            baseline={}, allowed=sorted(payloads), ignored=lambda n: False,
+            source_name=lambda n: True, secrets=lambda: ())
+        hashes = {n: hashlib.sha256(raw).hexdigest() for n, raw in payloads.items()}
+        retention.result = dict(
+            changed_paths=sorted(payloads), payloads=dict(payloads),
+            deleted=[], payload_hashes=hashes, before={}, after=hashes,
+            partial_state='preserved_diff')
+        return retention
+
+    def _validate_manifest(self, manifest, binding, payloads):
+        import author_handoff as ah
+        from dataclasses import asdict
+        self.assertEqual(manifest['schema'], 'GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1')
+        self.assertEqual(manifest['validation'], 'bounded_secret_checked')
+        self.assertEqual(manifest['binding'], asdict(binding))
+        self.assertEqual(
+            manifest['fingerprint'],
+            ah.fingerprint({k: v for k, v in manifest.items() if k != 'fingerprint'}))
+        self.assertEqual(manifest['payload_files'],
+                         {n: f'payload-{i}' for i, n in enumerate(sorted(payloads))})
+        self.assertEqual(manifest['payload_hashes'],
+                         {n: hashlib.sha256(raw).hexdigest() for n, raw in payloads.items()})
+
+    def test_proc_fd_persist_enotdir_without_directory_fd_ok_with(self):
+        """Old path: reopen /proc/self/fd/N → ENOTDIR; directory_fd=fd succeeds."""
+        import errno
+        import author_handoff as ah
+        payloads = {'tools/train/author_handoff.py': b'persist-fd-fix\n'}
+        binding = self._binding()
+        with tempfile.TemporaryDirectory() as td:
+            cap_dir = Path(td) / 'incoming'
+            cap_dir.mkdir(mode=0o700)
+            fd = os.open(str(cap_dir), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            self.addCleanup(os.close, fd)
+            proc_path = Path('/proc/self/fd') / str(fd)
+
+            retention_old = self._retention(payloads)
+            with self.assertRaises(OSError) as raised:
+                retention_old.persist(proc_path, binding)
+            self.assertEqual(raised.exception.errno, errno.ENOTDIR)
+
+            # Fresh destination: prior attempt created source-checkpoint then failed.
+            cap_ok = Path(td) / 'incoming-ok'
+            cap_ok.mkdir(mode=0o700)
+            fd_ok = os.open(str(cap_ok), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            self.addCleanup(os.close, fd_ok)
+            retention = self._retention(payloads)
+            manifest = retention.persist(
+                Path('/proc/self/fd') / str(fd_ok), binding, directory_fd=fd_ok)
+            dest = cap_ok / 'source-checkpoint'
+            self.assertTrue(dest.is_dir())
+            self.assertEqual(dest.stat().st_mode & 0o777, 0o700)
+            for leaf in ('manifest.json', 'payload-0'):
+                path = dest / leaf
+                self.assertTrue(path.is_file())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((dest / 'payload-0').read_bytes(),
+                             payloads['tools/train/author_handoff.py'])
+            self._validate_manifest(manifest, binding, payloads)
+            loaded = json.loads((dest / 'manifest.json').read_text())
+            self._validate_manifest(loaded, binding, payloads)
+
+    def test_direct_checkpoint_sets_checkpoint_ready(self):
+        """DirectSourceCustody.checkpoint → collect marks checkpoint_ready."""
+        import author_handoff as ah
+        writer = os.geteuid()
+        payloads = {'tools/train/author_handoff.py': b'direct-checkpoint-e2e\n'}
+        binding = self._binding()
+        with tempfile.TemporaryDirectory() as td:
+            outer = Path(td) / 'outer'
+            incoming = outer / 'incoming'
+            outer.mkdir(mode=0o700)
+            incoming.mkdir(mode=0o700)
+            root = object.__new__(ah.RootSourceCustody)
+            root.uid = writer
+            root.expected_checkpoint_owner = writer
+            root.binding = binding
+            root.allowed = sorted(payloads)
+            root.outer = outer
+            root.outerfd = os.open(str(outer), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            root.cap = os.open(str(incoming), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            root.record = dict(checkpoint_ready=False)
+            root.record_path = Path(td) / 'source-custody-record.json'
+            root.checkpoint = None
+            root.anchors = ()
+            root.native_identity = None
+            root.stop_proof = None
+
+            def _close_root():
+                for attr in ('cap', 'outerfd'):
+                    fd = getattr(root, attr, None)
+                    if fd is not None:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                        setattr(root, attr, None)
+
+            self.addCleanup(_close_root)
+            direct = ah.DirectSourceCustody(root)
+            self.addCleanup(direct.close)
+            retention = self._retention(payloads)
+            with mock.patch.object(os, 'fchown'), \
+                 mock.patch.object(root, '_record', lambda: None):
+                direct.checkpoint(retention)
+            self.assertTrue(root.record.get('checkpoint_ready'))
+            self.assertIsNotNone(root.checkpoint)
+            self.assertEqual(root.checkpoint['schema'],
+                             'GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1')
+
+    def test_plain_path_persist_agy_style(self):
+        """CustodyClient/AGY persist(directory, binding) without directory_fd."""
+        import author_handoff as ah
+        payloads = {'tools/train/author_handoff.py': b'agy-plain-persist\n'}
+        binding = self._binding()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            retention = self._retention(payloads)
+            manifest = retention.persist(root, binding)
+            dest = root / 'source-checkpoint'
+            self.assertTrue((dest / 'manifest.json').is_file())
+            self.assertEqual((dest / 'manifest.json').stat().st_mode & 0o777, 0o600)
+            self.assertEqual((dest / 'payload-0').stat().st_mode & 0o777, 0o600)
+            self._validate_manifest(manifest, binding, payloads)
+            # Idempotent same-identity return.
+            again = retention.persist(root, binding)
+            self.assertIs(again, manifest)
+
+
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()
