@@ -105,7 +105,7 @@ function CommunityPanel({name}:{name:string}) {
       {aggregate?.state === 'empty' && <Label>Пока нет оценок</Label>}
       {aggregate?.state === 'available' && <View accessible accessibilityLabel={`${aggregate.average!.toFixed(1).replace('.',',')} из 5 · ${countLabel(aggregate.count!)}`} style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}>
         <Label accessible={false} style={{fontSize:40,lineHeight:48,fontWeight:'700'}}>{aggregate.average!.toFixed(1).replace('.',',')}</Label>
-        <View accessible={false}>
+        <View accessible={false} style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}>
           <Label accessible={false} style={{color:colors.purple}}>★</Label>
           <Label accessible={false}>{countLabel(aggregate.count!)}{aggregate.count! < 10 ? ' · пока небольшая выборка' : ''}</Label>
         </View>
