@@ -435,9 +435,9 @@ test('P0 auth context projects avatar coordinator into editor wiring', () => {
   assert.match(editor, /avatarOwner\.change/);
   assert.match(editor, /createExpoAvatarRuntime/);
   const runtime = readFileSync(new URL('../src/profile-avatar-runtime.ts', import.meta.url), 'utf8');
-  assert.match(runtime, /typeof import\('expo-image-picker'\)/);
-  assert.match(runtime, /typeof import\('expo-image-manipulator'\)/);
-  assert.match(runtime, /typeof import\('expo-file-system'\)/);
+  assert.match(runtime, /import type \* as ExpoImagePickerModule from 'expo-image-picker'/);
+  assert.match(runtime, /import type \* as ExpoImageManipulatorModule from 'expo-image-manipulator'/);
+  assert.match(runtime, /import type \* as ExpoFileSystemModule from 'expo-file-system'/);
   let serial = 0;
   const auth = new AuthCoordinator({
     api: createNativeApi(async () => new Response('{}')),
@@ -456,7 +456,7 @@ test('UNKNOWN mutate+reconcile failure keeps Retry reachable and blocks edits; s
     ...emptyProfile, version: 4, displayName: 'Игрок', cityId: 'c',
     avatar: { uploadedUrl: `/v1/media/avatars/${'33'.repeat(32)}.png`, providerUrl: null },
   };
-  let avatar!: ProfileAvatarCoordinator;
+  const holder: { avatar: ProfileAvatarCoordinator } = {} as { avatar: ProfileAvatarCoordinator };
   const text = new ProfileCoordinator(
     {
       read: async () => profile,
@@ -464,11 +464,11 @@ test('UNKNOWN mutate+reconcile failure keeps Retry reachable and blocks edits; s
       send: async () => profile,
     },
     () => 'text',
-    () => avatar.blocksEdits(),
+    () => holder.avatar.blocksEdits(),
   );
   let mutateCalls = 0;
   const retries: AvatarPacket[] = [];
-  avatar = new ProfileAvatarCoordinator(
+  const avatar = new ProfileAvatarCoordinator(
     {
       mutate: async (packet) => {
         mutateCalls += 1;
@@ -487,6 +487,7 @@ test('UNKNOWN mutate+reconcile failure keeps Retry reachable and blocks edits; s
       rebaseProfile: f => text.rebaseFromAuthoritative(f),
     },
   );
+  holder.avatar = avatar;
   text.setActor(actor);
   avatar.setActor(actor);
   await text.load();
@@ -514,7 +515,7 @@ test('UNKNOWN mutate+reconcile failure keeps Retry reachable and blocks edits; s
 });
 
 test('authoritative GET rebase preserves dirty bio and adopts concurrent name/version; 409 recovers without stale retry', async () => {
-  let profile: OwnProfile = {
+  const profile: OwnProfile = {
     ...emptyProfile, version: 0, displayName: 'Old', cityId: 'c', bio: null,
     avatar: { uploadedUrl: null, providerUrl: null },
   };

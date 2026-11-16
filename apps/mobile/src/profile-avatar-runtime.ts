@@ -13,6 +13,9 @@ import {
   type AvatarDerivative,
   type AvatarMetadata,
 } from './profile-avatar.ts';
+import type * as ExpoFileSystemModule from 'expo-file-system';
+import type * as ExpoImageManipulatorModule from 'expo-image-manipulator';
+import type * as ExpoImagePickerModule from 'expo-image-picker';
 
 /** Exact verified picker options for Expo image-picker 58.0.10. */
 export const AVATAR_PICKER_OPTIONS = Object.freeze({
@@ -229,10 +232,6 @@ export function isClosedSdkAppCacheUri(uri: string, cacheRoots: readonly string[
   return false;
 }
 
-type ExpoImagePickerModule = typeof import('expo-image-picker');
-type ExpoImageManipulatorModule = typeof import('expo-image-manipulator');
-type ExpoFileSystemModule = typeof import('expo-file-system');
-
 /** Live Expo 58 adapter — genuine SDK module types for lazy require; injectable test port stays separate. */
 export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -255,6 +254,7 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
     launchLibrary: options =>
       picker.launchImageLibraryAsync({
         ...options,
+        mediaTypes: [...options.mediaTypes],
         preferredAssetRepresentationMode: preferred,
       }),
     openReadOnly: uri => {
