@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
-import { Keyboard, Pressable, TextInput, View } from 'react-native';
+import { Image, Keyboard, Pressable, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import {
   LEVEL_GUIDE_DISCLAIMER, PILOT_LEVEL_OPTIONS, formatPreservedLevelChoiceLabel, levelChoiceLabel,
   levelGuideChoiceFromControlValue, levelGuideControlValue, levelGuideSkillFor, levelGuideSkills,
   shouldOfferPreservedLevel,
 } from '../profile.ts';
+import { createExpoAvatarRuntime, pickOwnAvatarAsset, prepareOwnAvatarDerivative } from '../profile-avatar-runtime.ts';
+import { playerMediaUrl } from '../media.ts';
+import { playerInitials } from '../presentation.ts';
+import { colors } from '../theme.ts';
 import { DiscoveryChip, DiscoverySheet, Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 export function ProfileEditor() {
-  const auth = useAuth(), owner = auth.profile;
+  const auth = useAuth(), owner = auth.profile, avatarOwner = auth.avatar;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const avatar = useSyncExternalStore(avatarOwner.subscribe, avatarOwner.getSnapshot, avatarOwner.getSnapshot);
   const [query, setQuery] = useState('');
   const [levelOpen, setLevelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -19,12 +24,15 @@ export function ProfileEditor() {
   useEffect(() => {
     if (auth.status === 'authenticated' && owner.getSnapshot().status === 'idle') void owner.load();
   }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation]);
-  const locked = !!state.command || state.status !== 'ready';
+  const locked = !!state.command || state.status !== 'ready' || avatarOwner.busy();
   const selected = state.cities.find(c => c.id === state.draft.cityId);
   const preserved = state.profile?.level ?? null;
   const showPreserved = shouldOfferPreservedLevel(preserved);
   const choice = state.draft.levelChoice;
   const selectedSkill = choice.kind === 'ntrp' ? levelGuideSkillFor(choice.levelId) : null;
+  const uploaded = state.profile?.avatar.uploadedUrl ?? null;
+  const avatarUri = playerMediaUrl(uploaded, 'avatar');
+  const displayName = state.draft.displayName.trim() || state.profile?.displayName || '';
   function pick(next: string) {
     if (locked) return;
     owner.update({ levelChoice: levelGuideChoiceFromControlValue(next, showPreserved ? preserved : null) });
@@ -44,6 +52,33 @@ export function ProfileEditor() {
       {(state.status === 'error' || state.status === 'idle') && <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.load()} />}
       {state.status === 'stale' && <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.load()} />}
       {state.profile && <>
+        <View accessible accessibilityLabel="Фото профиля" accessibilityState={{ busy: avatarOwner.busy() }} style={{ gap: 8 }}>
+          <View style={{ width: 96, height: 96, borderRadius: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.yellow }}>
+            {avatarUri
+              ? <Image source={{ uri: avatarUri }} style={{ width: 96, height: 96 }} accessibilityIgnoresInvertColors />
+              : <Label style={{ fontSize: 32, lineHeight: 42 }}>{playerInitials(displayName || 'Игрок')}</Label>}
+          </View>
+          <Label style={styles.subtitle}>Фото профиля</Label>
+          <Label>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации. Фото обрезается до квадрата на устройстве и доступно по ссылке. HEIC/HEIF сохраните как JPEG.</Label>
+          {!locked && <TextButton title="Изменить фото" onPress={() => {
+            Keyboard.dismiss();
+            const runtime = createExpoAvatarRuntime();
+            void avatarOwner.change(async retired => {
+              const asset = await pickOwnAvatarAsset(runtime, retired);
+              if (asset === 'cancelled' || retired()) return 'cancelled';
+              return prepareOwnAvatarDerivative(runtime, asset, retired);
+            });
+          }} />}
+          {!locked && !!uploaded && <TextButton title="Удалить фото" onPress={() => { Keyboard.dismiss(); void avatarOwner.remove(); }} />}
+          {avatarOwner.busy() && <Label accessibilityLiveRegion="polite" accessibilityState={{ busy: true }}>Сохраняем фото…</Label>}
+          {avatar.notice && <Label accessibilityLiveRegion="polite">{avatar.notice}</Label>}
+          {avatar.error && <>
+            <Label accessibilityRole="alert">{avatar.error}</Label>
+            {avatar.command?.status === 'unknown' && !avatarOwner.busy() && !state.command
+              ? <TextButton title="Повторить" onPress={() => void avatarOwner.retry()} />
+              : null}
+          </>}
+        </View>
         <Label>Публичное имя</Label>
         <TextInput accessibilityLabel="Публичное имя" value={state.draft.displayName} onChangeText={displayName => owner.update({ displayName })}
           editable={!locked} maxLength={80} allowFontScaling autoComplete="off" style={styles.input} />

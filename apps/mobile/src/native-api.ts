@@ -10,8 +10,9 @@ import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
 import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
 import type { ContactPacket } from './contact.ts';
-import { ProfileError, parseOwnProfile, profileWireBody } from './profile.ts';
-import type { ProfilePacket } from './profile.ts';
+import { ProfileError, parseOwnAvatar, parseOwnProfile, profileWireBody } from './profile.ts';
+import type { AvatarReceipt, ProfilePacket } from './profile.ts';
+import type { AvatarPacket } from './profile-avatar.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
 import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
@@ -219,6 +220,52 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     ownProfile: async (access: string) => parseOwnProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, false, false, false, true)),
     saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH',
       profileWireBody(packet.body), access, packet.key, false, false, false, true)),
+    /** Closed RAW BINARY avatar port — PUT/DELETE /me/avatar only; never JSON.stringify binary/multipart/base64. */
+    mutateOwnAvatar: async (access: string, packet: AvatarPacket): Promise<AvatarReceipt> => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const replace = packet.action === 'replace';
+        if (replace && (!packet.derivative || !packet.derivative.bytes.byteLength)) throw new ProfileError('invalid');
+        if (!replace && packet.derivative) throw new ProfileError('invalid');
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/avatar`, {
+          method: replace ? 'PUT' : 'DELETE',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${access}`,
+            'Idempotency-Key': packet.key,
+            'X-Profile-Version': String(packet.profileVersion),
+            ...(replace ? { 'Content-Type': packet.derivative!.mime } : {}),
+          },
+          ...(replace ? { body: packet.derivative!.bytes } : {}),
+        });
+        if (!response.ok) {
+          let code = 'UNKNOWN';
+          try {
+            const problem = await response.json();
+            if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code;
+          } catch { /* No raw text retained. */ }
+          throw new ProfileError(
+            response.status >= 500 ? 'network' : response.status === 401 ? 'authority'
+              : code !== 'COMMAND_IN_PROGRESS' && [400, 403, 404, 409, 413, 415, 422, 429].includes(response.status) ? 'business' : 'network',
+            response.status,
+            code,
+          );
+        }
+        const raw = await response.json();
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ProfileError('invalid');
+        const row = raw as Record<string, unknown>;
+        if (!Number.isSafeInteger(row.version) || Number(row.version) < 0) throw new ProfileError('invalid');
+        return { version: row.version as number, avatar: parseOwnAvatar(row.avatar) };
+      } catch (error) {
+        if (error instanceof ProfileError) throw error;
+        throw new ProfileError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),

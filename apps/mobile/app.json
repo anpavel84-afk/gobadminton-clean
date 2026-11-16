@@ -43,7 +43,7 @@
           ]
         }
       ],
-      "versionCode": 13
+      "versionCode": 14
     },
     "plugins": [
       "expo-router",
@@ -81,6 +81,14 @@
           "isAndroidBackgroundLocationEnabled": false,
           "isAndroidForegroundServiceEnabled": false,
           "isAndroidMotionActivityEnabled": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": false,
+          "cameraPermission": false,
+          "microphonePermission": false
         }
       ]
     ],

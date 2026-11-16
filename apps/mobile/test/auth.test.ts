@@ -1246,7 +1246,8 @@ test('browse own hidden profile public-avatar 404 stays isolated from the authen
   t.mock.method(publicApi,'cities',async()=>[]);
   const own={publicPlayerId:'own-hidden',version:1,displayName:'Своё публичное имя',cityId:null,areaKey:null,level:null,bio:null,
     directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,
-    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null};
+    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null,
+    avatar:{uploadedUrl:null,providerUrl:null}};
   const peer={publicPlayerId:'peer-visible',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true};
   const page={items:[peer],nextCursor:null};
   const s=setup(sessionEnvelope());

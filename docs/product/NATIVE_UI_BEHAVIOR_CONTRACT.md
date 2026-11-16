@@ -67,9 +67,21 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Scenario P1; mobile unit `profile.test.ts` |
 | Status | **SOURCE_ONLY** implementation/source for this slice pending actual owning review, independent QA, and device gates; parse/selftest is not independent QA or device PASS; **UNVERIFIED_DEVICE** no current device/emulator PASS; photos/privacy/contactPolicy/linked identity remain unfinished |
 
+## P-02 · Own profile avatar change/remove
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `ProfilePage.tsx` + `AvatarEditor.tsx` composition; native `profile-avatar.ts` / `profile-avatar-runtime.ts` / existing `ProfileEditor` |
+| Entry | Authenticated `/profile` existing «Игровой профиль» editor — Change/Delete precede text fields |
+| Trigger | OS photo-library still image (no camera/mic); Cancel; Delete when uploadedUrl present; explicit retry/refresh only |
+| Expected | Approved uploadedUrl or initials only (`providerUrl:null`); on-device 512 derivative ≤512KiB; text draft preserved across photo ops; duplicate taps one dispatch; ambiguous write reconciles via GET `/me/social-profile` |
+| Accessibility | Labelled photo controls; busy status while saving |
+| Evidence | Scenario P2; mobile unit `profile-avatar.test.ts`; API `native-avatar.foundation.test.ts` (DB harness) |
+| Status | **SOURCE_IMPLEMENTATION_PENDING_ACTUAL_LOCK_OWNING_QA_BINARY_DEVICE** — packages pinned in manifest only; genuine lock/native modules/binary/device remain Root/QA; iOS original-container fallback and native white-flatten are bounded blockers, not parity claims |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.
 - Emulator success is not Xiaomi success; Owner Xiaomi FAIL stays separate.
 - This scope does not close full native parity for the rest of #522.
-- code12 publication receipt satisfied the conditional counter; code13 is planned source value only — not built/installed/device/public release; no full #522 / OTA / iOS PASS claim.
+- code14 is planned source `versionCode` only — new native modules require a fresh code14 binary; code13 cannot gain modules through OTA/export; no build/device/iOS/OTA acceptance claim.

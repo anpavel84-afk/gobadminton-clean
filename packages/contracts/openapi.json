@@ -5694,15 +5694,16 @@
         "tags": [
           "Profiles"
         ],
-        "summary": "Own avatar mutation, cookie + Origin + CSRF; shares social-profile version. Removal restores provider/initials fallback.",
+        "summary": "Own avatar mutation, cookie+Origin+CSRF or NativeBearer; shares social-profile version. Removal clears uploaded media; public/own projection keeps providerUrl null (initials when no approved upload).",
         "parameters": [
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "X-Profile-Version",
@@ -5719,11 +5720,11 @@
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -5789,10 +5790,13 @@
             }
           }
         },
-        "description": "Direct owned uploads require approval for the exact sanitized 512x512 PNG (maximum 2 MiB derivative) before file staging/publication. Provider preflight is outside the publication transaction; profile version and derivative fingerprint are rechecked at commit. Failure preserves the previous avatar. Existing avatars remain legacy/unreviewed. Trusted VK/Yandex provider fallback is not re-moderated.",
+        "description": "Direct owned uploads require approval for the exact sanitized 512x512 PNG (maximum 2 MiB derivative) before file staging/publication. Provider preflight is outside the publication transaction; profile version and derivative fingerprint are rechecked at commit. Failure preserves the previous avatar. Existing avatars remain legacy/unreviewed. Trusted VK/Yandex provider fallback is not re-moderated. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key, X-Profile-Version and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404. Own receipts project providerUrl as null; approved uploadedUrl or initials only — trusted provider images are not restored from auth identity.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ]
       },
@@ -5801,15 +5805,16 @@
         "tags": [
           "Profiles"
         ],
-        "summary": "Own avatar mutation, cookie + Origin + CSRF; shares social-profile version. Removal restores provider/initials fallback.",
+        "summary": "Own avatar mutation, cookie+Origin+CSRF or NativeBearer; shares social-profile version. Removal clears uploaded media; public/own projection keeps providerUrl null (initials when no approved upload).",
         "parameters": [
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "X-Profile-Version",
@@ -5826,11 +5831,11 @@
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -5869,10 +5874,13 @@
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
-        "description": "Provider-independent removal clears both owned media and its internal approval binding, preserving trusted provider fallback. Works during moderation outage and upload saturation.",
+        "description": "Provider-independent removal clears both owned media and its internal approval binding, preserving trusted provider fallback. Works during moderation outage and upload saturation. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key, X-Profile-Version and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404. Own receipts project providerUrl as null; approved uploadedUrl or initials only — trusted provider images are not restored from auth identity.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ]
       }

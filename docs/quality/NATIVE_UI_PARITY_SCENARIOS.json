@@ -2,7 +2,7 @@
   "status": "DECLARATIVE_CAPTURE_MANIFEST",
   "issue": 522,
   "contract": "docs/product/NATIVE_UI_BEHAVIOR_CONTRACT.md",
-  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery", "venue.ratings-comments", "profile.level-area-bio"],
+  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery", "venue.ratings-comments", "profile.level-area-bio", "profile.avatar"],
   "fixture": {
     "data_revision": null,
     "actor_auth_state": "guest_or_dedicated_DEV_actor_supplied_by_Root",
@@ -126,6 +126,15 @@
       "expect": "Accepted labels/copy; unchanged fields omitted on PATCH; explicit null distinct from keep; unrelated visibility/contact flags untouched; same-actor frozen packet retry only",
       "expected_state": "profile.level_area_bio.editor",
       "artifact": "step log / future device capture"
+    },
+    {
+      "id": "P2",
+      "start": "authenticated /profile editor with authoritative avatar/version and unsaved text draft",
+      "action": "Change photo via OS library; cancel picker; delete uploaded; duplicate taps; rotate/invalid/animated input; lose response; retry/reconcile; logout mid-flight",
+      "expect": "Uploaded or initials only; draft text preserved; one dispatch; ambiguous outcome reconciles via GET social-profile; no blind stale mutation; iOS original-container and white-flatten remain honest blockers where unproved",
+      "expected_state": "profile.avatar.editor",
+      "status": "SOURCE_IMPLEMENTATION_PENDING_ACTUAL_LOCK_OWNING_QA_BINARY_DEVICE",
+      "artifact": "step log / future device capture after code14 binary"
     }
   ],
   "pass_rule": "Missing runtime capture => NOT_TESTED. Unit/export/build success does not invent device PASS. Emulator ≠ Xiaomi.",
