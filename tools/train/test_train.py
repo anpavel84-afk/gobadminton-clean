@@ -4709,6 +4709,244 @@ class CapacityPrelaunchPolicyRegression(unittest.TestCase):
                     self.assertEqual(state['author_calls'], 0)
 
 
+class DirectSourceCustodyCollectOwnerTests(unittest.TestCase):
+    """#527: Direct collect expects trusted writer owner, not executor uid."""
+
+    EXECUTOR_UID = 1002
+
+    def _binding(self, provider=None):
+        import author_routing as policy
+        from author_routing import Operation
+        return Operation('527', 'op-527-direct-custody', provider or policy.CURSOR,
+                         'a' * 40, 'b' * 64, 'c' * 40)
+
+    def _write_checkpoint(self, incoming, binding, payloads, *, mode_dir=0o700, mode_leaf=0o600,
+                          corrupt_hash=False, extra_leaf=None, leaf_modes=None):
+        import author_handoff as ah
+        from dataclasses import asdict
+        dest = Path(incoming) / 'source-checkpoint'
+        dest.mkdir(mode=mode_dir)
+        os.chmod(dest, mode_dir)
+        names = {n: f'payload-{i}' for i, n in enumerate(sorted(payloads))}
+        hashes = {}
+        for n, leaf in names.items():
+            data = payloads[n]
+            digest = hashlib.sha256(data).hexdigest()
+            hashes[n] = ('0' * 64) if corrupt_hash else digest
+            path = dest / leaf
+            path.write_bytes(data)
+            os.chmod(path, (leaf_modes or {}).get(leaf, mode_leaf))
+        man = dict(
+            schema='GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1',
+            validation='bounded_secret_checked',
+            binding=asdict(binding),
+            payload_files=names,
+            changed_paths=sorted(payloads),
+            deleted=[],
+            payload_hashes=hashes,
+            before={},
+            after={n: hashlib.sha256(payloads[n]).hexdigest() for n in payloads},
+            partial_state='preserved_diff',
+        )
+        man['fingerprint'] = ah.fingerprint({k: v for k, v in man.items() if k != 'fingerprint'})
+        (dest / 'manifest.json').write_bytes(
+            (json.dumps(man, sort_keys=True, indent=2) + '\n').encode())
+        os.chmod(dest / 'manifest.json', mode_leaf)
+        if extra_leaf is not None:
+            extra = dest / extra_leaf
+            extra.write_bytes(b'x')
+            os.chmod(extra, mode_leaf)
+        return dest
+
+    def _executor_uid(self):
+        """Executor uid distinct from the test process (stand-in Root writer)."""
+        writer = os.geteuid()
+        return self.EXECUTOR_UID if writer != self.EXECUTOR_UID else writer + 1
+
+    def _custody(self, tmp, *, uid, expected_owner, binding, allowed):
+        import author_handoff as ah
+        outer = Path(tmp) / 'outer'
+        incoming = outer / 'incoming'
+        outer.mkdir(mode=0o700)
+        incoming.mkdir(mode=0o700)
+        os.chmod(outer, 0o700)
+        os.chmod(incoming, 0o700)
+        c = object.__new__(ah.RootSourceCustody)
+        c.uid = uid
+        c.expected_checkpoint_owner = expected_owner
+        c.binding = binding
+        c.allowed = sorted(set(allowed))
+        c.outer = outer
+        c.outerfd = os.open(str(outer), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        c.cap = os.open(str(incoming), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        c.record = dict(checkpoint_ready=False)
+        c.record_path = Path(tmp) / 'source-custody-record.json'
+        c.checkpoint = None
+        c.anchors = ()
+        c.native_identity = None
+        c.stop_proof = None
+
+        def _close_fds():
+            for fd in (c.cap, c.outerfd):
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            c.cap = c.outerfd = None
+
+        self.addCleanup(_close_fds)
+        return c, incoming
+
+    def _collect(self, custody):
+        # collect() seals with root fchown + Root _record; CI runs non-root.
+        with mock.patch.object(os, 'fchown'), \
+             mock.patch.object(custody, '_record', lambda: None):
+            custody.collect()
+
+    def test_direct_writer_owned_checkpoint_collect_succeeds(self):
+        """Regression: Direct parent-written checkpoint (not executor uid) collects."""
+        import author_handoff as ah
+        writer = os.geteuid()
+        executor = self._executor_uid()
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding()
+            allowed = ['tools/train/author_handoff.py']
+            custody, incoming = self._custody(
+                td, uid=executor, expected_owner=executor,
+                binding=binding, allowed=allowed)
+            # DirectSourceCustody.__init__ sets expected owner to parent geteuid().
+            direct = ah.DirectSourceCustody(custody)
+            self.addCleanup(direct.close)
+            self.assertEqual(custody.expected_checkpoint_owner, writer)
+            self._write_checkpoint(incoming, binding, {
+                'tools/train/author_handoff.py': b'fixed-custody\n',
+            })
+            # Files are writer-owned (this process), not the executor uid.
+            st = os.stat(Path(incoming) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertNotEqual(st.st_uid, custody.uid)
+            self._collect(custody)
+            self.assertTrue(custody.record.get('checkpoint_ready'))
+            self.assertIsNotNone(custody.checkpoint)
+            self.assertEqual(custody.checkpoint['schema'],
+                             'GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1')
+
+    def test_direct_rejects_owner_other_than_expected_writer(self):
+        """Direct mode rejects when checkpoint owner != trusted writer expectation."""
+        import author_handoff as ah
+        writer = os.geteuid()
+        executor = self._executor_uid()
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding()
+            allowed = ['tools/train/author_handoff.py']
+            custody, incoming = self._custody(
+                td, uid=executor, expected_owner=executor,
+                binding=binding, allowed=allowed)
+            direct = ah.DirectSourceCustody(custody)
+            self.addCleanup(direct.close)
+            self.assertEqual(custody.expected_checkpoint_owner, writer)
+            self._write_checkpoint(incoming, binding, {
+                'tools/train/author_handoff.py': b'x\n',
+            })
+            # Distinct expected uid: require executor ownership while files are
+            # writer-owned (stand-in for rejecting non-writer / uid1002 Direct).
+            custody.expected_checkpoint_owner = executor
+            st = os.stat(Path(incoming) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertNotEqual(st.st_uid, custody.expected_checkpoint_owner)
+            with self.assertRaises(ah.RetentionError):
+                self._collect(custody)
+            self.assertFalse(custody.record.get('checkpoint_ready'))
+            self.assertIsNone(custody.checkpoint)
+
+    def test_agy_default_requires_executor_ownership_rejects_writer(self):
+        """Default expected owner stays executor uid; writer-owned files rejected."""
+        import author_handoff as ah
+        writer = os.geteuid()
+        executor = self._executor_uid()
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding()
+            allowed = ['tools/train/author_handoff.py']
+            # No DirectSourceCustody: expected_checkpoint_owner remains executor.
+            custody, incoming = self._custody(
+                td, uid=executor, expected_owner=executor,
+                binding=binding, allowed=allowed)
+            self.assertEqual(custody.expected_checkpoint_owner, custody.uid)
+            self._write_checkpoint(incoming, binding, {
+                'tools/train/author_handoff.py': b'agy-path\n',
+            })
+            st = os.stat(Path(incoming) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertNotEqual(st.st_uid, custody.expected_checkpoint_owner)
+            with self.assertRaises(ah.RetentionError):
+                self._collect(custody)
+            self.assertFalse(custody.record.get('checkpoint_ready'))
+
+    def test_collect_still_rejects_tampering(self):
+        import author_handoff as ah
+        writer = os.geteuid()
+        executor = self._executor_uid()
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding()
+            allowed = ['tools/train/author_handoff.py']
+            payloads = {'tools/train/author_handoff.py': b'ok\n'}
+
+            def attempt(**kwargs):
+                sub = tempfile.mkdtemp(dir=td)
+                custody, incoming = self._custody(
+                    sub, uid=executor, expected_owner=writer,
+                    binding=binding, allowed=allowed)
+                self._write_checkpoint(incoming, binding, payloads, **kwargs)
+                with self.assertRaises(ah.RetentionError):
+                    self._collect(custody)
+                self.assertFalse(custody.record.get('checkpoint_ready'))
+
+            attempt(corrupt_hash=True)
+            attempt(extra_leaf='payload-extra')
+            attempt(mode_leaf=0o644)
+
+    def test_new_without_expected_owner_falls_back_to_uid(self):
+        """CI seams use object.__new__ without __init__; None -> self.uid."""
+        import author_handoff as ah
+        writer = os.geteuid()
+        executor = self._executor_uid()
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding()
+            allowed = ['tools/train/author_handoff.py']
+            # Accept: uid == current euid, no expected_checkpoint_owner set.
+            custody_ok, incoming_ok = self._custody(
+                td, uid=writer, expected_owner=None,
+                binding=binding, allowed=allowed)
+            del custody_ok.expected_checkpoint_owner
+            self.assertIsNone(custody_ok.expected_checkpoint_owner)
+            self._write_checkpoint(incoming_ok, binding, {
+                'tools/train/author_handoff.py': b'new-fallback-ok\n',
+            })
+            st = os.stat(Path(incoming_ok) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertEqual(st.st_uid, custody_ok.uid)
+            self._collect(custody_ok)
+            self.assertTrue(custody_ok.record.get('checkpoint_ready'))
+
+            # Reject: uid differs from file owner (writer), still no override.
+            sub = tempfile.mkdtemp(dir=td)
+            custody_bad, incoming_bad = self._custody(
+                sub, uid=executor, expected_owner=None,
+                binding=binding, allowed=allowed)
+            del custody_bad.expected_checkpoint_owner
+            self.assertIsNone(custody_bad.expected_checkpoint_owner)
+            self._write_checkpoint(incoming_bad, binding, {
+                'tools/train/author_handoff.py': b'new-fallback-bad\n',
+            })
+            st = os.stat(Path(incoming_bad) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertNotEqual(st.st_uid, custody_bad.uid)
+            with self.assertRaises(ah.RetentionError):
+                self._collect(custody_bad)
+            self.assertFalse(custody_bad.record.get('checkpoint_ready'))
+
+
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()
