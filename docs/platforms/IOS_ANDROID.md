@@ -1,6 +1,55 @@
 # iOS и Android
 
-## #522: SOURCE-now и отдельные факты приёмки · 2026-11-15
+## #522: checkpoint подготовки alpha.96 · 2026-11-16
+
+Это снимок предоставленных фактов на момент подготовки metadata, без сетевой проверки runtime.
+Текущий принятый сервер — DEV `0.1.0-alpha.95`, source/rollback
+`dfd886a0a8f66f2c2193dd41878e0e78778f4508`, API `0.44.0`, release `r43768255684-a1`,
+приёмка `2026-11-15T22:20:35Z`. Основание — `ACTUAL-ALPHA95-HISTORY-SEED.json`,
+SHA256 `080a69ed4a07bd7ae18de81728d24d0fb65ed9f117e0bf69e8b1e0393b6f99c7` (9618 bytes).
+Все десять полей этой записи, оба deployment alpha.93, alpha.94 и более ранняя история сохранены.
+
+Qualified native source — `c287be8b5597072f3c9ad800bac2f5d6cb93c91f` (C287),
+versionName `0.1.0`, versionCode **11**, отдельно от будущего metadata candidate и server merge.
+Основание — `ACTUAL-QUALIFIED-NATIVE-SOURCE-SUMMARY.json`,
+SHA256 `1444b7373a7e2362006463873d9a5522c321d046a39a023c7c9fac72fea440d8` (1020 bytes).
+C287 ещё **не принят на DEV**. Alpha.96 — подготовленный release descriptor:
+`prepared_source_sha` указывает на C287, `source_sha: null`; deployment/release_id/accepted_at
+этого выпуска не назначены. Будущие metadata SHA, source counter и публичные artifact URLs
+не назначены. Actual paired build/owned-sign подтверждены отдельным review ниже;
+бинарные файлы зафиксированы, повторная сборка и новый native bump не выполняются.
+
+| Стадия | Подтверждённый факт / открытая граница |
+|---|---|
+| Native source | Source RS SHA256 `9648ae02a070db5016a98fa65581a110672b474da26f154675faf635ab44d2ab`; owning parent PASS SHA256 `3d1a9ed2aea35dd8270428703df3a07eab75bb16b28030c18dbe36770de8e5ca` |
+| Независимая source QA | Actual FIRST13 **FAIL** SHA256 `63326ca96c4d8c44d3aa0f36652479fa39bc453bf31dae233c8f07fba9b139e4` сохранён. Focused P2/all-repair PASS SHA256 `ed16f6cd1e955ba56e45000e9a826f115a04c948621112aab355f25d3f6d7c10` подтверждает исправления в своей границе; cumulative FIRST13 PASS **не предоставлен** |
+| Дополнительная bounded source QA | Actual Astra6 SOURCE PASS для конкретного C287, SHA256 `eed084b305dda04e320850f8741194e1e2c0d7e4cac0626e437f30011b2cde02`; это не device PASS и не общая квалификация production identity |
+| Android code11 build/sign/publication | **PASS_ARTIFACT_ONLY**, binaries frozen: `ACTUAL-CODE11-PAIRED-ARTIFACT-REVIEW.json`, SHA256 `dccfe7ce01122542e1a22e692aecfc6c36df675f91de9480937e480f3e04cb3d` (3944 bytes). Actual arm64-v8a и x86_64 APK имеют verified owned/v2 signature и payload byteexact к qualified C287 build. Package `ru.gobadminton.mobile.dev`, versionName `0.1.0`, versionCode **11**, owned certificate сохранён. Общий embedded bundle **3215008 bytes**, SHA256 `c4cdc4ac26cc45a67cbdc2b2207ced1ecb703b6686c0d538781ef7503c7d47e1`. Публичная доставка **не разрешена**, статус **HELD_METADATA_INDEPENDENT_QA_CI_DEV**; URL не назначены, device **NOT_TESTED**, Android domain verification **NOT_VERIFIED** |
+| Зафиксированные code11 APK | arm64-v8a: **44780041 bytes**, SHA256 `aee1aba2dfcba5064c6eaa239a73ab273e8dbec54f52fddb5345a84d3338c070`, receipt SHA256 `b2c4b63a9093e0c140802e940fc0b8473ec16702109d496decea032bafad1c68`; x86_64 QA: **45816251 bytes**, SHA256 `594a8d88b9c6bbd0a7fa09015afd2d1ea274eb2f08feb7c9ab64414532360152`, receipt SHA256 `0a61cf11c9f6463fbc635fcc48c081579fb7d5778eb2ffd1aa6597fc5805b224`. Private paths не являются публичными ссылками; rebuild не требуется |
+| Backend | API `0.44.0`, selected native inventory **22**, whole OpenAPI NativeBearer **64**. Это существующие серверные факты, не новые opt-ins alpha.96; backend/contracts/auth/permissions не меняются |
+| Устройство / Owner UAT | Device **NOT_TESTED**, Owner UAT **FAIL_RECHECK_PENDING**. Прежние замечания Owner на Xiaomi в APK10 к жестам и шапке сохраняются до actual capture нового APK11. Samsung S23/alpha.85 FAIL и замечания к меткам также сохранены. Причина PlayerSwipe two-gesture load error **UNCONFIRMED**; обработка отдельных peer 404 не доказывает её исправление |
+| Доставка alpha.96 | Root: fresh web types/lint, три release suites/history → FIRST five independent metadata QA → обычный PR → CI7 → merge dev → DEV STRICT selected22/whole64 → read smoke → owned paired APK11 publication. Эти будущие стадии не объявлены пройденными; существующие accepted DF/alpha.95 проверки не заменяют доставку C287 |
+| Обязательный остаток | #522 **PARTIAL**, full native parity **MANDATORY_NOT_COMPLETE**; source/preview/build дают только частичное подтверждение. Installed Android/device visual/taps/auth/links, full profile, native UGC и остальные WEB contracts обязательны. Backend current/previous-client compatibility, signed OTA A→B, interruption/offline/tamper/recovery и iOS gates ниже остаются открытыми; PROD/Store не разрешены |
+
+Alpha.96 описывает только подготовленные в source поведения: карточка площадки на карте раскрывается,
+сворачивается и закрывается вертикальным жестом, кнопки и прокрутка сохраняют своё управление;
+галерея переключается горизонтальным жестом, выбранное изображение сохраняется при раскрытии,
+сворачивании и переходе между сведениями о площадке и расписанием. Native fullscreen viewer этим
+source proof не подтверждается.
+Шапка содержит переход к играм по названию, радар и профиль; возврат расположен отдельно.
+При последовательных подтверждённых detail-404 удаляются только соответствующие анкеты, сохраняются
+остальные загруженные карточки и cursor/пагинация; устаревшие ответы не возвращают исключённые анкеты.
+List-endpoint 404, network/parse/auth ошибки этим поведением не объявляются безопасными пропусками.
+Это не завершение карт, Radar, Swipe или полного matching и не доказательство жестов на телефоне.
+
+Исторические phone/x86 code10 publications сохраняются как история предыдущего binary; checksum и
+sign verification code11 подтверждены actual paired review выше, публичные URL из code10 не выводятся.
+Ниже оставлен прежний alpha.95 preparation
+snapshot с фактическими supplied code10 build/sign summaries: его private/public состояние относится
+к тому checkpoint, а не ко всему последующему lifecycle. Точные новые publication receipts здесь
+не предоставлены; вымышленные ссылки и отрицательный signing status не добавляются.
+
+## Исторический checkpoint подготовки alpha.95 · 2026-11-15 (сохранён)
 
 Один React Native + Expo/Router клиент, backend и User, единые бизнес-правила. E «Траектория» — introduction;
 четыре конечных корня **Игры / Игроки / Мои игры / Сообщения**, профиль — destination из постоянного header.
@@ -39,7 +88,7 @@ candidate (**224**) **HELD_NOT_INCLUDED** и не входит в этот produ
 `GET /me/postgame-reminders`, `POST /me/postgame-reminders/:reminderId`.
 Disputes/history/help и остальные закрытые сценарии этим списком не объявляются перенесёнными.
 
-### Исторические факты alpha.94 code9 (не текущее состояние alpha.95)
+### Исторические факты alpha.94 code9 (сохранены)
 
 | Стадия | Подтверждённый факт / отдельная граница |
 |---|---|
@@ -80,7 +129,7 @@ Disputes/history/help и остальные закрытые сценарии э
 | Свой профиль / contact | Ручные публичное имя/город и редактор публичного контакта игры, явное versioned/idempotent save, conflict/UNKNOWN/actor fences и возврат к форме без auto-create | Level/photo/privacy settings, методы/link/email/reauth и полный профиль |
 | Safety | Явные block/unblock/report, scoped authority reads/fences, сохранение исходных UNKNOWN и черновиков; historical replay не доказывает текущий block state | Повторная пользовательская проверка и физические native interruption flows |
 | Площадка: реализовано в source | Game → native public venue facts/gallery/credits/contacts → public upcoming schedule → game; typed venue-create → явный выбор в существующей форме → preview/publish | Полная venue parity и device taps обязательны; source, build/sign и публикация разделены выше |
-| Maps/Radar/Swipe | Native public games/venues map, venue sheet и переход к create; в `8cd08ec8631ea8af89b6190482fcb35caaffca9c` исправлена обработка нажатий на метки площадок на карте (source fix; device taps **NOT_TESTED**). Radar origin/conditions/results/явное управление поиском; просмотр игроков по одному, явный play interest и переход при mutual interest. Смена условий/остановка убирает устаревшие результаты; privacy/consent fences сохранены. Swipe load-error cause **UNCONFIRMED**, swipe code fix не входит в alpha.95 | Это ограниченный core, не полные карты/Radar/matching; Owner retest code10 и все remaining WEB contracts/consents/privacy, permissions и device visual/taps обязательны |
+| Maps/Radar/Swipe | Native public games/venues map и переход к create; marker-tap fix alpha.95 сохранён. C287/code11 добавляет описанные выше sheet/gallery/header и batched qualified peer detail-404 handling. Radar origin/conditions/results/явное управление поиском; просмотр игроков по одному, явный play interest и переход при mutual interest. Смена условий/остановка убирает устаревшие результаты; privacy/consent fences сохранены. Swipe load-error cause **UNCONFIRMED** | Это ограниченный core, не полные карты/Radar/matching; Owner Xiaomi APK10 FAIL сохраняется до retest APK11, все remaining WEB contracts/consents/privacy, permissions и device visual/taps обязательны |
 | UGC/остальное | Неперенесённые native сценарии не заявлены завершёнными | Ratings/comments/reviews/uploads/новые площадки, оставшиеся сообщения/социальные сценарии и весь обязательный parity |
 
 Pure type-only `@gobadminton/contracts/native-auth` исключает `node:fs` root из Metro. DOM, cookies и CSRF
@@ -152,7 +201,7 @@ Apple 2.5.2/2.5.19 и Google Play interpreted-code exception не дают об�
 
 Auth/profile, games/application/My Games и Players/Messages уже имеют source ports в указанных выше границах.
 Native venue/map/Radar/Swipe/contact/safety и MyGames/Postgame core реализованы в source в описанных границах;
-marker-tap source fix входит в alpha.95 metadata, venue/community **224** остаётся HELD. Remaining parity и все
+marker-tap fix сохранён в принятой истории alpha.95; alpha.96 описывает C287 sheet/gallery/header и qualified peer-404 source repair. Venue/community **224** остаётся HELD. Remaining parity и все
 оставшиеся сценарии обязательны и не завершены. Source static/focused QA, standalone build, owned signing,
 Product CI/STRICT DEV, публикация и Android device acceptance разделены. Accepted E introduction с чёрным текстом
 на зелёном сохранён. Реальный signed OTA A→B, S23 и iOS acceptance остаются обязательными открытыми gates.
