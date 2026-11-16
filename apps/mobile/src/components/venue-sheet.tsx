@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
-import { AccessibilityInfo, findNodeHandle, PanResponder, Pressable, ScrollView, View } from 'react-native';
+import {
+  AccessibilityInfo, findNodeHandle, Modal, PanResponder, Platform, Pressable, ScrollView, useWindowDimensions, View,
+} from 'react-native';
 import type { GestureResponderEvent, PanResponderGestureState } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,13 +14,22 @@ import { discoveryDateLabel, levelLabel } from '../presentation.ts';
 import { useReduceMotion, useResource } from '../hooks.ts';
 import {
   clampSheetLift,
+  consumeFollowOnSuppress,
   decideCompactRelease,
   decideHandleSettle,
   decideSheetAxis,
+  eventClockAgeMs,
+  expandedHandleLift,
   gallerySelectionOf,
+  gestureGenerationActive,
+  measuredSheetTravel,
   resolveGallerySelection,
+  sampleHandleVelocity,
+  secondTouchCancels,
+  suppressAfterFreshTouch,
   type GallerySelection,
   type SheetAxis,
+  type SheetDrag,
 } from '../venue-gestures.ts';
 import { colors } from '../theme.ts';
 import { VenueContent, VenueFailure, VenuePreview } from './venue-detail.tsx';
@@ -31,27 +42,52 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
 }) {
   const router = useRouter(), insets = useSafeAreaInsets(), spacing = venueSheetSpacing(insets.bottom);
   const reduceMotion = useReduceMotion();
+  const { height: windowHeight } = useWindowDimensions();
   const [view,setView] = useState<'info'|'schedule'>('info'), [selectedDate,setSelectedDate] = useState('');
   const [media, setMedia] = useState<GallerySelection | null>(null);
   const [lift, setLift] = useState(0);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null), mounted = useRef(true);
   const handleFocus = useRef<ComponentRef<typeof Pressable>>(null);
+  const compactFocus = useRef<ComponentRef<typeof Pressable>>(null);
   const heights = useRef({ compact: 0, expanded: 0 });
   const suppressTap = useRef(false);
-  const drag = useRef<{
-    kind: 'compact' | 'handle'; axis: SheetAxis; startY: number; lastY: number; time: number; velocity: number;
-    originExpanded: boolean; start: number; travel: number; generation: number;
-  } | null>(null);
+  const controlOrigin = useRef(false);
+  const drag = useRef<SheetDrag | null>(null);
   const generation = useRef(0);
   const expandedRef = useRef(expanded); expandedRef.current = expanded;
+  const wasExpanded = useRef(expanded);
 
-  useLayoutEffect(() => {mounted.current=true;return () => {mounted.current=false;onMeasure(0);};},[onMeasure]);
+  const retireGesture = useCallback((clearSuppress = true) => {
+    drag.current = null;
+    controlOrigin.current = false;
+    if (clearSuppress) suppressTap.current = false;
+    setLift(0);
+  }, []);
+
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      drag.current = null;
+      onMeasure(0);
+    };
+  }, [onMeasure]);
+
   useEffect(() => {
     generation.current += 1;
+    retireGesture(true);
+  }, [selection.id, selection.cityId, retireGesture]);
+
+  // External expanded/Back/state replacement retires drag; measurement generation stays separate.
+  // Do not clear follow-on suppress here — the completing gesture's synthetic press must still be consumable once.
+  useEffect(() => {
+    if (wasExpanded.current === expanded) return;
+    wasExpanded.current = expanded;
+    generation.current += 1;
     drag.current = null;
-    suppressTap.current = false;
+    controlOrigin.current = false;
     setLift(0);
-  }, [selection.id, selection.cityId]);
+  }, [expanded]);
 
   const task = useCallback(async (signal:AbortSignal) => {
     const venue = await publicApi.venue(selection.id,signal);
@@ -70,12 +106,27 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     if ((next?.url ?? null) !== (media?.url ?? null) || (next?.id ?? null) !== (media?.id ?? null)) setMedia(next);
   }, [venue, media]);
 
+  const restoreFocusOnCollapse = useRef(false);
   useEffect(() => {
-    if (!expanded) return;
+    if (expanded) {
+      restoreFocusOnCollapse.current = true;
+      return;
+    }
+    if (!restoreFocusOnCollapse.current) return;
+    restoreFocusOnCollapse.current = false;
+    const frame = requestAnimationFrame(() => {
+      const target = compactFocus.current ?? handleFocus.current;
+      const node = findNodeHandle(target);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expanded]);
+
+  const focusExpandedHandle = () => {
     const node = findNodeHandle(handleFocus.current);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
     AccessibilityInfo.announceForAccessibility(venue?.name ? `Площадка: ${venue.name}` : 'Площадка');
-  }, [expanded, venue?.name]);
+  };
 
   const changeView = (next:'info'|'schedule') => {setView(next);scroll.current?.scrollTo({y:0,animated:false});};
   const close = () => {
@@ -83,14 +134,19 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     if (next.selected) onExpand(next.expanded); else onClose();
   };
   const consumeSuppress = () => {
-    if (!suppressTap.current) return false;
-    suppressTap.current = false;
-    return true;
+    const result = consumeFollowOnSuppress(suppressTap.current);
+    suppressTap.current = result.suppress;
+    return result.blocked;
   };
-  const travelFor = () => {
-    const compact = heights.current.compact || 172;
-    const full = heights.current.expanded || Math.max(compact + 200, compact * 2.5);
-    return Math.max(1, full - compact);
+  const noteControlOrigin = () => { controlOrigin.current = true; };
+  const clearControlOrigin = () => { controlOrigin.current = false; };
+  const travelFor = () => measuredSheetTravel(
+    heights.current.compact,
+    heights.current.expanded,
+    Math.floor(windowHeight * 0.88),
+  );
+  const beginFreshTouch = () => {
+    suppressTap.current = suppressAfterFreshTouch(drag.current !== null, suppressTap.current);
   };
 
   const liftRef = useRef(0); liftRef.current = lift;
@@ -100,7 +156,11 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     applyLift: (value: number) => { setLift(reduceMotionRef.current ? 0 : value); },
     settleLift: () => { setLift(0); },
     endCompact: (axis: SheetAxis, dy: number, gen: number) => {
-      if (gen !== generation.current) { drag.current = null; setLift(0); return; }
+      if (!gestureGenerationActive(generation.current, gen, mounted.current)) {
+        drag.current = null; setLift(0); return;
+      }
+      const current = drag.current;
+      if (current?.controlOrigin) { drag.current = null; setLift(0); return; }
       const action = decideCompactRelease(axis, dy);
       drag.current = null;
       if (action === 'none' || action === 'origin') { setLift(0); return; }
@@ -109,19 +169,21 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       if (action === 'dismiss') actions.current.onClose();
       else actions.current.onExpand(true);
     },
-    endHandle: (gen: number) => {
+    endHandle: (gen: number, dy: number, velocity: number, velocityAgeMs: number) => {
       const current = drag.current;
-      if (!current || current.kind !== 'handle' || gen !== generation.current) {
+      if (!current || current.kind !== 'handle' || !gestureGenerationActive(generation.current, gen, mounted.current)) {
         drag.current = null; setLift(0); return;
       }
-      if (current.axis !== 'vertical') { drag.current = null; setLift(0); return; }
+      if (current.controlOrigin || current.axis !== 'vertical' || current.travel <= 0) {
+        drag.current = null; setLift(0); return;
+      }
       const action = decideHandleSettle({
         originExpanded: current.originExpanded,
-        dy: current.lastY - current.startY,
+        dy,
         start: current.start,
         travel: current.travel,
-        velocity: current.velocity,
-        velocityAgeMs: Date.now() - current.time,
+        velocity,
+        velocityAgeMs,
       });
       drag.current = null;
       suppressTap.current = true;
@@ -135,19 +197,28 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   const [compactResponder] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onMoveShouldSetPanResponder: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
-      if (expandedRef.current || drag.current?.kind === 'handle') return false;
+      if (expandedRef.current || drag.current?.kind === 'handle' || controlOrigin.current) return false;
+      if (secondTouchCancels(gesture.numberActiveTouches)) return false;
       return decideSheetAxis(gesture.dx, gesture.dy) === 'vertical';
     },
     onPanResponderGrant: (event) => {
+      beginFreshTouch();
       const travel = travelFor();
       drag.current = {
         kind: 'compact', axis: 'pending', startY: event.nativeEvent.pageY, lastY: event.nativeEvent.pageY,
-        time: event.nativeEvent.timestamp, velocity: 0, originExpanded: false, start: 0, travel, generation: generation.current,
+        time: event.nativeEvent.timestamp, velocity: 0, originExpanded: false, start: 0, travel,
+        generation: generation.current, controlOrigin: controlOrigin.current,
       };
     },
     onPanResponderMove: (event, gesture) => {
       const current = drag.current;
       if (!current || current.kind !== 'compact' || current.generation !== generation.current) return;
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        retireGesture(true);
+        gestureApi.current.settleLift();
+        return;
+      }
+      if (current.controlOrigin) return;
       if (current.axis === 'pending') {
         const axis = decideSheetAxis(gesture.dx, gesture.dy);
         if (axis === 'pending') return;
@@ -155,16 +226,21 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
         current.axis = 'vertical';
         suppressTap.current = true;
       }
-      current.lastY = event.nativeEvent.pageY;
-      gestureApi.current.applyLift(clampSheetLift(gesture.dy, current.travel));
+      const sampled = sampleHandleVelocity(current, event.nativeEvent.pageY, event.nativeEvent.timestamp);
+      current.lastY = sampled.lastY; current.time = sampled.time; current.velocity = sampled.velocity;
+      if (current.travel > 0) gestureApi.current.applyLift(clampSheetLift(gesture.dy, current.travel));
     },
-    onPanResponderRelease: (_event, gesture) => {
+    onPanResponderRelease: (event, gesture) => {
       const current = drag.current;
       if (!current || current.kind !== 'compact') { gestureApi.current.settleLift(); return; }
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        retireGesture(true); gestureApi.current.settleLift(); return;
+      }
       const axis = current.axis === 'pending' ? decideSheetAxis(gesture.dx, gesture.dy) : current.axis;
-      gestureApi.current.endCompact(axis, gesture.dy, current.generation);
+      const dy = event.nativeEvent.pageY - current.startY;
+      gestureApi.current.endCompact(axis, dy, current.generation);
     },
-    onPanResponderTerminate: () => { drag.current = null; gestureApi.current.settleLift(); suppressTap.current = false; },
+    onPanResponderTerminate: () => { retireGesture(true); gestureApi.current.settleLift(); },
     onPanResponderTerminationRequest: () => true,
   }));
 
@@ -172,17 +248,22 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderGrant: (event) => {
+      beginFreshTouch();
       const originExpanded = expandedRef.current;
       const travel = travelFor();
       const start = originExpanded ? travel : (liftRef.current > 0 ? Math.min(travel, liftRef.current) : 0);
       drag.current = {
         kind: 'handle', axis: 'pending', startY: event.nativeEvent.pageY, lastY: event.nativeEvent.pageY,
-        time: event.nativeEvent.timestamp, velocity: 0, originExpanded, start, travel, generation: generation.current,
+        time: event.nativeEvent.timestamp, velocity: 0, originExpanded, start, travel,
+        generation: generation.current, controlOrigin: false,
       };
     },
     onPanResponderMove: (event, gesture) => {
       const current = drag.current;
       if (!current || current.kind !== 'handle' || current.generation !== generation.current) return;
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        retireGesture(true); gestureApi.current.settleLift(); return;
+      }
       if (current.axis === 'pending') {
         const axis = decideSheetAxis(gesture.dx, gesture.dy);
         if (axis === 'pending') return;
@@ -190,19 +271,26 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
         current.axis = 'vertical';
         suppressTap.current = true;
       }
-      const elapsed = event.nativeEvent.timestamp - current.time;
-      if (elapsed > 0) current.velocity = (current.lastY - event.nativeEvent.pageY) / elapsed;
-      current.lastY = event.nativeEvent.pageY;
-      current.time = event.nativeEvent.timestamp;
-      const position = Math.max(0, Math.min(current.travel, current.start - gesture.dy));
-      gestureApi.current.applyLift(current.originExpanded ? Math.max(0, current.travel - position) : position);
+      if (current.travel <= 0) return;
+      const sampled = sampleHandleVelocity(current, event.nativeEvent.pageY, event.nativeEvent.timestamp);
+      current.lastY = sampled.lastY; current.time = sampled.time; current.velocity = sampled.velocity;
+      const dy = event.nativeEvent.pageY - current.startY;
+      gestureApi.current.applyLift(expandedHandleLift(current.originExpanded, current.start, current.travel, dy));
     },
-    onPanResponderRelease: () => {
+    onPanResponderRelease: (event, gesture) => {
       const current = drag.current;
       if (!current || current.kind !== 'handle') { gestureApi.current.settleLift(); return; }
-      gestureApi.current.endHandle(current.generation);
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        retireGesture(true); gestureApi.current.settleLift(); return;
+      }
+      const releaseY = event.nativeEvent.pageY;
+      const releaseTime = event.nativeEvent.timestamp;
+      const dy = releaseY - current.startY;
+      // Terminal release shares the move event clock; dy from actual release coordinates.
+      const velocityAgeMs = eventClockAgeMs(releaseTime, current.time);
+      gestureApi.current.endHandle(current.generation, dy, current.velocity, velocityAgeMs);
     },
-    onPanResponderTerminate: () => { drag.current = null; gestureApi.current.settleLift(); suppressTap.current = false; },
+    onPanResponderTerminate: () => { retireGesture(true); gestureApi.current.settleLift(); },
     onPanResponderTerminationRequest: () => false,
   }));
 
@@ -229,38 +317,74 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
         <Label>Организатор: {game.organizer.displayName}</Label><Label style={{color:colors.limeDeep}}>Свободно мест: {game.availablePlaces}</Label>
       </Pressable>)}
       <TextButton title="Обновить расписание" onPress={onRetrySchedule} />
-    </> : <VenueContent venue={venue} mapSheet selected={media} onSelectMedia={setMedia} schedule={<View style={{gap:8}}>
+    </> : <VenueContent venue={venue} mapSheet selected={media} onSelectMedia={setMedia} onControlTouch={noteControlOrigin} onControlTouchEnd={clearControlOrigin} schedule={<View style={{gap:8}}>
       <Label>{games === null ? 'Расписание временно недоступно' : games.length ? `${games.length} доступных игр по выбранным условиям` : 'Нет доступных игр по выбранным условиям'}</Label>
       {games !== null && games.length > 0 && <PrimaryButton title="Показать игры на этой площадке" onPress={() => changeView('schedule')} />}
       <TextButton title={games === null ? 'Повторить загрузку расписания' : 'Обновить расписание'} onPress={onRetrySchedule} />
     </View>} /> : <VenuePreview venue={venue} games={games} selected={media} onSelectMedia={setMedia} suppressTap={consumeSuppress}
+      onControlTouch={noteControlOrigin} onControlTouchEnd={clearControlOrigin}
       onOpen={() => { if (consumeSuppress()) return; onExpand(true); }} />)}
   </>;
 
-  return <View accessibilityLabel="Площадка" accessibilityViewIsModal={expanded}
-    onAccessibilityEscape={close}
-    onLayout={event => onSheetLayout(event.nativeEvent.layout.height)}
-    style={{position:'absolute',bottom:expanded ? 0 : insets.bottom+12,left:expanded ? 0 : 12,right:expanded ? 0 : 12,
-      maxHeight:expanded ? '88%' : '60%',backgroundColor:colors.card,borderRadius:20,borderWidth:1,borderColor:colors.line,
-      paddingBottom: !expanded && lift > 0 ? lift : 0}}>
-    <View style={{minHeight:44,paddingHorizontal:52,alignItems:'center'}}>
-      <Pressable ref={handleFocus} {...handleResponder.panHandlers} accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Развернуть площадку'} accessibilityState={{expanded}}
-        onPress={() => { if (consumeSuppress()) return; onExpand(!expanded); }} style={{minHeight:44,width:'100%',alignItems:'center',justifyContent:'center'}}>
-        <View style={{width:40,height:4,borderRadius:4,backgroundColor:colors.lineDark}} />
-      </Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Закрыть площадку'} onPress={() => { if (consumeSuppress()) return; close(); }}
-        style={{position:'absolute',right:4,top:0,width:44,height:44,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="close" /></Pressable>
+  const dragStyle = lift > 0
+    ? (expanded
+      ? { transform: [{ translateY: lift }] as const }
+      : { transform: [{ translateY: -lift }] as const })
+    : null;
+
+  const sheet = (
+    <View
+      accessibilityLabel="Площадка"
+      accessibilityViewIsModal={expanded}
+      onAccessibilityEscape={close}
+      onTouchStart={beginFreshTouch}
+      onLayout={event => onSheetLayout(event.nativeEvent.layout.height)}
+      style={[{
+        position: expanded ? 'relative' as const : 'absolute' as const,
+        bottom: expanded ? 0 : insets.bottom + 12,
+        left: expanded ? 0 : 12,
+        right: expanded ? 0 : 12,
+        maxHeight: expanded ? '88%' : '60%',
+        backgroundColor: colors.card,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: colors.line,
+        alignSelf: expanded ? 'stretch' as const : undefined,
+      }, dragStyle]}
+    >
+      <View style={{minHeight:44,paddingHorizontal:52,alignItems:'center'}}>
+        <Pressable ref={handleFocus} {...handleResponder.panHandlers} accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Развернуть площадку'} accessibilityState={{expanded}}
+          onPress={() => { if (consumeSuppress()) return; onExpand(!expanded); }} style={{minHeight:44,width:'100%',alignItems:'center',justifyContent:'center'}}>
+          <View style={{width:40,height:4,borderRadius:4,backgroundColor:colors.lineDark}} />
+        </Pressable>
+        <Pressable ref={compactFocus} accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Закрыть площадку'} onPress={() => { if (consumeSuppress()) return; close(); }}
+          style={{position:'absolute',right:4,top:0,width:44,height:44,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="close" /></Pressable>
+      </View>
+      {expanded ? (
+        <ScrollView ref={scroll} style={{flexShrink:1}} contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{paddingHorizontal:16,paddingBottom:spacing.bodyBottom,gap:16}} keyboardShouldPersistTaps="handled">
+          {body}
+        </ScrollView>
+      ) : (
+        <ScrollView {...compactResponder.panHandlers} style={{flexShrink:1}} contentInsetAdjustmentBehavior="never"
+          keyboardShouldPersistTaps="handled" nestedScrollEnabled
+          contentContainerStyle={{paddingHorizontal:16,paddingBottom:16,gap:16}}>{body}</ScrollView>
+      )}
+      {create && <View style={{padding:16,paddingBottom:spacing.footerBottom,borderTopWidth:1,borderColor:colors.line}}>
+        <PrimaryButton title="Создать игру на этой площадке" onPress={() => router.push(create)} />
+      </View>}
     </View>
-    {expanded ? (
-      <ScrollView ref={scroll} style={{flexShrink:1}} contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={{paddingHorizontal:16,paddingBottom:spacing.bodyBottom,gap:16}} keyboardShouldPersistTaps="handled">
-        {body}
-      </ScrollView>
-    ) : (
-      <View {...compactResponder.panHandlers} style={{paddingHorizontal:16,paddingBottom:16,gap:16}}>{body}</View>
-    )}
-    {create && <View style={{padding:16,paddingBottom:spacing.footerBottom,borderTopWidth:1,borderColor:colors.line}}>
-      <PrimaryButton title="Создать игру на этой площадке" onPress={() => router.push(create)} />
-    </View>}
-  </View>;
+  );
+
+  if (!expanded) return sheet;
+
+  // Local Modal: Android TalkBack isolation + Back/escape; map host ownership unchanged.
+  return <Modal transparent visible animationType="none" onRequestClose={close} onShow={focusExpandedHandle}
+    presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}>
+    <View style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents="box-none">
+      <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
+        pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
+      {sheet}
+    </View>
+  </Modal>;
 }

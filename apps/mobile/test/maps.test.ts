@@ -541,3 +541,65 @@ test('actual native/accessible people bindings reuse onPerson only for the curre
   const unauthorized=committed({...input,people:[fresh],onPerson:undefined}).person(fresh);
   unauthorized.native();unauthorized.accessible();assert.equal(selected.length,3);
 });
+
+test('venue sheet/gallery UX seams: release clock, fresh suppress clear, control origin, media identity, local Modal focus', async () => {
+  const {readFileSync}=await import('node:fs');
+  const {stripTypeScriptTypes}=await import('node:module');
+  const {runInNewContext}=await import('node:vm');
+  const sheetSource=readFileSync(new URL('../src/components/venue-sheet.tsx',import.meta.url),'utf8');
+  const detailSource=readFileSync(new URL('../src/components/venue-detail.tsx',import.meta.url),'utf8');
+  const gesturesSource=readFileSync(new URL('../src/venue-gestures.ts',import.meta.url),'utf8');
+
+  assert.match(sheetSource,/eventClockAgeMs\(releaseTime, current\.time\)/);
+  assert.match(sheetSource,/pageY - current\.startY/);
+  assert.match(sheetSource,/beginFreshTouch/);
+  assert.match(sheetSource,/secondTouchCancels/);
+  assert.match(sheetSource,/controlOrigin/);
+  assert.match(sheetSource,/measuredSheetTravel/);
+  assert.doesNotMatch(sheetSource,/compact \+ 200|compact \* 2\.5/);
+  assert.match(sheetSource,/translateY: lift/);
+  assert.match(sheetSource,/Modal transparent visible/);
+  assert.match(sheetSource,/importantForAccessibility="no-hide-descendants"/);
+  assert.match(sheetSource,/restoreFocusOnCollapse/);
+  assert.match(sheetSource,/ScrollView \{\.\.\.compactResponder\.panHandlers\}/);
+
+  assert.match(detailSource,/mediaFailureApplies\(activeIdentity\.current, identity\)/);
+  assert.match(detailSource,/accessibilityActions/);
+  const previewSlice=detailSource.slice(detailSource.indexOf('export function VenuePreview'),detailSource.indexOf('export function VenueDetail'));
+  assert.doesNotMatch(previewSlice,/accessibilityLabel="Предыдущее изображение"/);
+  assert.doesNotMatch(previewSlice,/accessibilityLabel="Следующее изображение"/);
+  assert.match(previewSlice,/accessibilityActions/);
+  assert.match(detailSource,/onPressIn=\{onControlTouch\}/);
+  assert.match(detailSource,/VenueMediaSurface/);
+  assert.match(detailSource,/VenueImageCredits/);
+
+  assert.match(gesturesSource,/export function eventClockAgeMs/);
+  assert.match(gesturesSource,/export function measuredSheetTravel/);
+  assert.match(gesturesSource,/export function secondTouchCancels/);
+  assert.match(gesturesSource,/export function mediaFailureApplies/);
+
+  const {
+    decideCompactRelease, decideHandleSettle, eventClockAgeMs, measuredSheetTravel, mediaFailureApplies,
+    secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress, gestureGenerationActive,
+  } = await import('../src/venue-gestures.ts');
+  assert.equal(measuredSheetTravel(172, 0, Math.floor(800 * 0.88)), Math.floor(800 * 0.88) - 172);
+  assert.equal(secondTouchCancels(2), true);
+  assert.equal(suppressAfterFreshTouch(false, true), false);
+  assert.equal(consumeFollowOnSuppress(true).blocked, true);
+  assert.equal(mediaFailureApplies('/a', '/b'), false);
+  assert.equal(mediaFailureApplies('/a', '/a'), true);
+  // Delayed release age on event clock; final dy still decides compact dismiss.
+  const age = eventClockAgeMs(4500, 4200);
+  assert.equal(decideHandleSettle({
+    originExpanded: false, dy: 70, start: 0, travel: 300, velocity: 0.9, velocityAgeMs: age,
+  }), 'dismiss');
+  assert.equal(decideCompactRelease('vertical', -60), 'expand');
+  assert.equal(gestureGenerationActive(2, 1, true), false);
+  // Existing close seam still extracts without generation/retire helpers.
+  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';
+  let collapsed:boolean|null=null, dismissed=0;
+  const makeClose=(expandedFlag:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{closeVenueSheet,expanded:expandedFlag,selection:venue,
+    onExpand:(value:boolean)=>{collapsed=value;},onClose:()=>{dismissed++;}}) as ()=>void;
+  makeClose(true)();assert.equal(collapsed,false);assert.equal(dismissed,0);
+  makeClose(false)();assert.equal(dismissed,1);
+});

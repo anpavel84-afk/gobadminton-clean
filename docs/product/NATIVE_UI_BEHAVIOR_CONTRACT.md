@@ -23,23 +23,23 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Authority | Owner map-popup decision; web `VenuePopup.tsx` compact/handle thresholds; native `maps.ts` Back/close hierarchy |
 | Entry | Games/Players map venue selection (no venue-route navigation merely to expand) |
 | States | none → compact → expanded; expanded info/schedule; selected media owned above branches |
-| Gestures | Compact UP expands with live lift; compact DOWN dismisses; expanded HANDLE DOWN collapses; expanded BODY keeps ScrollView. Axis lock 8dp; compact dy≤−56 / dy≥64; handle half measured travel or ≥0.5 dp/ms (stale >100ms ignored) |
+| Gestures | Compact UP expands with live lift; compact DOWN dismisses; expanded HANDLE DOWN collapses; expanded BODY keeps ScrollView. Axis lock 8dp; compact dy≤−56 / dy≥64; handle half measured/available travel or ≥0.5 dp/ms (same native event clock; stale >100ms ignored). Follow-on tap suppress is gesture-local; control origins and second touch cancel/ignore; retired generation ignores late release |
 | Close hierarchy | Filter Back → expanded collapse → compact deselect → map exit; X expanded collapses, compact closes |
-| Layout | One expanded body scroll; sticky Create only expanded verified venue; compact has no Create; safe bottom reserved once |
-| Accessibility | Named expand/collapse/close; expanded state exposed; modal escape; focus to handle when expanded |
+| Layout | One expanded body scroll; sticky Create only expanded verified venue; compact has no Create; safe bottom reserved once; compact overflow ScrollView without a new gallery strip below the settled row |
+| Accessibility | Named expand/collapse/close; expanded state exposed; local Modal + obscured-background isolation when expanded; escape/Back; focus to handle on expand and restore compact/opener focus on collapse |
 | Evidence | Scenarios V1–V6 |
-| Status | **VERIFIED_SOURCE** close/measurement owners; native responders added (**was GAP** tap-only); **UNVERIFIED_DEVICE** real touch/scroll/safe-area/TalkBack |
+| Status | **VERIFIED_SOURCE** close/measurement owners; native responders + local Modal lifecycle (**was GAP** tap-only / entry-only focus); **UNVERIFIED_DEVICE** real touch/scroll/safe-area/TalkBack/keyboard |
 
 ## V-02 · Venue gallery axis and continuity
 
 | Field | Content |
 | --- | --- |
 | Authority | `VENUE_GALLERY.md`; web `VenueGallery.tsx` axis lock 10 / commit 48 |
-| Trigger | Horizontal swipe on gallery/compact image; explicit previous/next ≥44dp; counter |
-| Expected | Left→next / right→previous modulo wrap; zero/one image no pretend paging; horizontal never expands sheet or opens credits; vertical compact image yields sheet; expanded image vertical keeps body scroll |
+| Trigger | Horizontal swipe on gallery/compact image; expanded explicit previous/next ≥44dp + counter; compact accessible paging on the established image region (no extra strip below settled compact row) |
+| Expected | Left→next / right→previous modulo wrap; zero/one image no pretend paging; horizontal never expands sheet or opens credits; vertical compact image yields sheet; expanded image vertical keeps body scroll; load/error/retry scoped to selected media identity |
 | Continuity | Selected media survives compact↔expanded and info↔schedule; refresh keeps surviving URL/id; removed falls back to main/first; new venue/city does not inherit |
 | Evidence | Scenario V7 |
-| Status | **VERIFIED_SOURCE** web gallery; native controlled selection + swipe (**was GAP** button-only local index); **UNVERIFIED_DEVICE** axis arbitration on device |
+| Status | **VERIFIED_SOURCE** web gallery; native controlled selection + swipe + media-identity errors (**was GAP** button-only local index); **UNVERIFIED_DEVICE** axis arbitration on device |
 
 ## Explicit non-claims
 
