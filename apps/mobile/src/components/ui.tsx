@@ -77,12 +77,14 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
   return <View style={styles.header}>
     <View style={styles.headerRow}>
       {light ? <BrandLockup light /> : <Pressable accessibilityRole="button" accessibilityLabel="GoBadminton — Игры" onPress={() => router.navigate('/games')} style={{ minWidth: 112, minHeight: 64 }}><BrandLockup /></Pressable>}
-      {!light && <RadarControls compact />}
-      {!light && pathname !== '/profile' && <Pressable accessibilityRole="button" accessibilityLabel="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })}
-        style={styles.profileAction}>
-        <View style={styles.headerAvatar}><Label style={{ fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{initials}</Label></View>
-      </Pressable>}
-      {action}
+      <View style={styles.headerActions}>
+        {!light && <RadarControls compact />}
+        {!light && pathname !== '/profile' && <Pressable accessibilityRole="button" accessibilityLabel="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })}
+          style={styles.profileAction}>
+          <View style={styles.headerAvatar}><Label style={{ fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{initials}</Label></View>
+        </Pressable>}
+        {action}
+      </View>
     </View>
     {back && <TextButton title="Назад" onPress={back} light={light} />}
   </View>;
@@ -178,6 +180,7 @@ export const styles = StyleSheet.create({
   brandName: { fontFamily: 'Onest', fontSize: 17, lineHeight: 21, letterSpacing: -0.45, color: colors.ink },
   header: { gap: 4 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 64 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
   profileAction: { ...interaction, alignItems: 'center', justifyContent: 'center' },
   headerAvatar: { width: 40, height: 40, borderRadius: 20, borderWidth: 3, borderColor: colors.card, backgroundColor: colors.lime, alignItems: 'center', justifyContent: 'center' },
   createBanner: { minHeight: 70, borderRadius: 12, paddingHorizontal: 18, paddingVertical: 9, backgroundColor: colors.lime, flexDirection: 'row', alignItems: 'center', gap: 14, overflow: 'hidden' },

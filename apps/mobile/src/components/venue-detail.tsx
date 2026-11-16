@@ -1,11 +1,20 @@
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Image, Linking, Pressable, ScrollView, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Image, Linking, PanResponder, Pressable, ScrollView, View } from 'react-native';
+import type { GestureResponderEvent, PanResponderGestureState } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useResource, useUpcomingItems } from '../hooks.ts';
 import type { PublicGame } from '../public-api.ts';
 import { API_ORIGIN, PublicApiError, publicApi } from '../public-api.ts';
+import {
+  decideGalleryAxis,
+  decideGallerySwipe,
+  gallerySelectionOf,
+  resolveGallerySelection,
+  stepGallerySelection,
+  type GallerySelection,
+} from '../venue-gestures.ts';
 import { VenueSchedule, safeCatalogSource, venueCreatePath } from '../venues.ts';
 import type { GalleryItem, PublicVenue } from '../venues.ts';
 import { GameCard } from './game-card.tsx';
@@ -40,21 +49,81 @@ function VenueImage({ item, name, mapSheet = false }: { item: GalleryItem; name:
     {item.credit.url ? <PublicLink key={item.credit.url} label={item.credit.text} url={item.credit.url} /> : <Label>{item.credit.text}</Label>}
   </View>;
 }
-function VenueGallery({ venue, mapSheet = false }: { venue: PublicVenue; mapSheet?: boolean }) {
-  const [index, setIndex] = useState(() => Math.max(0, venue.gallery.findIndex(item => item.url === venue.mainImage)));
-  const item = venue.gallery[index];
+/** Controlled gallery: parent owns selected media across compact/expanded and info/schedule. */
+export function VenueGallery({ venue, mapSheet = false, selected, onSelect }: {
+  venue: PublicVenue; mapSheet?: boolean; selected: GallerySelection | null; onSelect: (next: GallerySelection | null) => void;
+}) {
+  const item = resolveGallerySelection(venue.gallery, venue.mainImage, selected);
+  const index = item ? Math.max(0, venue.gallery.findIndex(entry => entry.url === item.url || entry.id === item.id)) : 0;
+  const suppress = useRef(false);
+  const axis = useRef<'pending' | 'horizontal' | 'vertical'>('pending');
+  const go = useCallback((delta: 1 | -1) => {
+    if (venue.gallery.length <= 1) return;
+    const next = stepGallerySelection(venue.gallery, item, delta);
+    onSelect(gallerySelectionOf(next));
+  }, [venue.gallery, item, onSelect]);
+  const responder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
+      if (venue.gallery.length <= 1) return false;
+      const next = decideGalleryAxis(gesture.dx, gesture.dy);
+      axis.current = next;
+      return next === 'horizontal';
+    },
+    onPanResponderGrant: () => { axis.current = 'pending'; },
+    onPanResponderMove: (_event, gesture) => {
+      if (axis.current === 'pending') axis.current = decideGalleryAxis(gesture.dx, gesture.dy);
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      const locked = axis.current === 'pending' ? decideGalleryAxis(gesture.dx, gesture.dy) : axis.current;
+      const action = decideGallerySwipe(locked, gesture.dx);
+      axis.current = 'pending';
+      if (action === 'none') return;
+      suppress.current = true;
+      go(action === 'next' ? 1 : -1);
+    },
+    onPanResponderTerminate: () => { axis.current = 'pending'; },
+    onPanResponderTerminationRequest: () => true,
+  }), [venue.gallery.length, go]);
+  const step = (delta: 1 | -1) => {
+    if (suppress.current) { suppress.current = false; return; }
+    go(delta);
+  };
   return <View style={mapSheet ? {gap:8} : styles.card}>
     {!mapSheet && <Label accessibilityRole="header" style={styles.subtitle}>Галерея</Label>}
     {item ? <>
-      <VenueImage key={item.url} item={item} name={venue.name} mapSheet={mapSheet} />
+      <View {...responder.panHandlers}>
+        <VenueImage key={item.url} item={item} name={venue.name} mapSheet={mapSheet} />
+      </View>
       {(!mapSheet || venue.gallery.length > 1) && <Label accessibilityLiveRegion="polite">Изображение {index + 1} из {venue.gallery.length}</Label>}
-      {venue.gallery.length > 1 && <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-        <TextButton title="Предыдущее изображение" onPress={() => setIndex((index + venue.gallery.length - 1) % venue.gallery.length)} />
-        <TextButton title="Следующее изображение" onPress={() => setIndex((index + 1) % venue.gallery.length)} />
+      {venue.gallery.length > 1 && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Предыдущее изображение" onPress={() => step(-1)}
+          style={{ minWidth: 44, minHeight: 44, paddingHorizontal: 10, justifyContent: 'center' }}>
+          <Label>←</Label>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Следующее изображение" onPress={() => step(1)}
+          style={{ minWidth: 44, minHeight: 44, paddingHorizontal: 10, justifyContent: 'center' }}>
+          <Label>→</Label>
+        </Pressable>
       </View>}
     </> : <Label>Нет доступных изображений площадки.</Label>}
     {venue.catalogSource && <><Label>Источник: badminton4u.ru</Label>{venue.catalogSource.clubs.map(club => <PublicLink key={club.id} label={club.name} url={club.url} />)}</>}
   </View>;
+}
+
+/** Standalone detail owns media identity without a map sheet parent. */
+function useVenueMedia(venue: PublicVenue | undefined) {
+  const [selected, setSelected] = useState<GallerySelection | null>(null);
+  const venueKey = venue ? `${venue.id}:${venue.cityId}` : '';
+  useEffect(() => { setSelected(null); }, [venueKey]);
+  useEffect(() => {
+    if (!venue) { setSelected(null); return; }
+    const identity = gallerySelectionOf(resolveGallerySelection(venue.gallery, venue.mainImage, selected));
+    if ((identity?.url ?? null) !== (selected?.url ?? null) || (identity?.id ?? null) !== (selected?.id ?? null)) {
+      setSelected(identity);
+    }
+  }, [venue, selected]);
+  return { selected, setSelected };
 }
 function Schedule({ venue }: { venue: PublicVenue }) {
   const router = useRouter();
@@ -73,9 +142,15 @@ function Schedule({ venue }: { venue: PublicVenue }) {
   </View>;
 }
 const amenity = (value: boolean | null) => value === null ? 'Нет данных' : value ? 'Есть' : 'Нет';
-export function VenueContent({ venue, schedule, mapSheet = false }: { venue: PublicVenue; schedule?: ReactNode; mapSheet?: boolean }) {
+export function VenueContent({ venue, schedule, mapSheet = false, selected = null, onSelectMedia }: {
+  venue: PublicVenue; schedule?: ReactNode; mapSheet?: boolean;
+  selected?: GallerySelection | null; onSelectMedia?: (next: GallerySelection | null) => void;
+}) {
+  const owned = useVenueMedia(onSelectMedia ? undefined : venue);
+  const media = onSelectMedia ? selected : owned.selected;
+  const setMedia = onSelectMedia ?? owned.setSelected;
   if (mapSheet) return <>
-    <VenueGallery venue={venue} mapSheet />
+    <VenueGallery venue={venue} mapSheet selected={media} onSelect={setMedia} />
     {venue.description && <Label>{venue.description}</Label>}
     <Label accessibilityRole="header" style={{fontSize:24,lineHeight:32,fontWeight:'800'}}>{venue.name}</Label><Label>{venue.address}</Label>
     <View style={{gap:8}}>
@@ -90,7 +165,7 @@ export function VenueContent({ venue, schedule, mapSheet = false }: { venue: Pub
   </>;
   return <>
     <Label accessibilityRole="header" style={styles.title}>{venue.name}</Label><Label>{venue.address}</Label>
-    <VenueGallery venue={venue} />
+    <VenueGallery venue={venue} selected={media} onSelect={setMedia} />
     <View style={styles.card}><Label accessibilityRole="header" style={styles.subtitle}>О площадке</Label>
       {venue.description && <Label>{venue.description}</Label>}
       <Label>Количество кортов: {venue.courtCount ?? 'Нет данных'}</Label>
@@ -110,14 +185,40 @@ function CompactSourceLink({name,url}:{name:string;url:string}) {
     {failed && <Label accessibilityRole="alert">Не удалось открыть источник. Попробуйте ещё раз.</Label>}</>;
 }
 /** Verified compact catalog credit is a sibling of the single row action. */
-export function VenuePreview({ venue, games, onOpen }: { venue: PublicVenue; games: readonly PublicGame[] | null; onOpen: () => void }) {
-  const item = venue.gallery.find(item => item.url === venue.mainImage) ?? venue.gallery[0];
+export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMedia, suppressTap }: {
+  venue: PublicVenue; games: readonly PublicGame[] | null; onOpen: () => void;
+  selected?: GallerySelection | null; onSelectMedia?: (next: GallerySelection | null) => void;
+  suppressTap?: () => boolean;
+}) {
+  const item = resolveGallerySelection(venue.gallery, venue.mainImage, selected);
   const [failed,setFailed] = useState(false), [badgeHeight,setBadgeHeight] = useState(0);
   const source = safeCatalogSource(venue.catalogSource), club = source?.clubs[0];
+  const axis = useRef<'pending' | 'horizontal' | 'vertical'>('pending');
+  const imageSwipe = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_event, gesture) => {
+      if (!onSelectMedia || venue.gallery.length <= 1) return false;
+      const next = decideGalleryAxis(gesture.dx, gesture.dy);
+      axis.current = next;
+      return next === 'horizontal';
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      const locked = axis.current === 'pending' ? decideGalleryAxis(gesture.dx, gesture.dy) : axis.current;
+      axis.current = 'pending';
+      if (!onSelectMedia) return;
+      const action = decideGallerySwipe(locked, gesture.dx);
+      if (action === 'none') return;
+      const next = stepGallerySelection(venue.gallery, item, action === 'next' ? 1 : -1);
+      onSelectMedia(gallerySelectionOf(next));
+    },
+    onPanResponderTerminate: () => { axis.current = 'pending'; },
+    onPanResponderTerminationRequest: () => true,
+  }), [onSelectMedia, venue.gallery, item]);
+  const open = () => { if (suppressTap?.()) return; onOpen(); };
   return <View style={{gap:8}}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Открыть площадку ${venue.name}`} onPress={onOpen}
+    <Pressable accessibilityRole="button" accessibilityLabel={`Открыть площадку ${venue.name}`} onPress={open}
       style={{flexDirection:'row',alignItems:'center',gap:12,minHeight:84}}>
-      <View style={{width:64,minHeight:Math.max(64,badgeHeight),backgroundColor:colors.paper,borderRadius:12,overflow:'hidden'}}>
+      <View {...imageSwipe.panHandlers} style={{width:64,minHeight:Math.max(64,badgeHeight),backgroundColor:colors.paper,borderRadius:12,overflow:'hidden'}}>
         {item && !failed ? <Image source={{uri:`${API_ORIGIN}${item.url}`}} resizeMode="cover" accessibilityLabel={item.credit.kind === 'illustration' ? 'Иллюстрация' : item.credit.kind === 'logo' ? 'Логотип площадки' : 'Фото площадки'} onError={() => setFailed(true)} style={{width:64,height:64}} />
           : <Label style={{fontSize:11}}>{failed ? 'Фото не загрузилось' : 'Нет изображения'}</Label>}
         {item?.credit.kind === 'illustration' && <Label onLayout={event => setBadgeHeight(event.nativeEvent.layout.height)}
@@ -129,6 +230,15 @@ export function VenuePreview({ venue, games, onOpen }: { venue: PublicVenue; gam
         {games !== null && games.length > 0 && <Label style={{fontSize:13,lineHeight:18,color:colors.limeDeep}}>{games.length} доступных игр</Label>}
       </View><View style={{width:44,height:44,borderRadius:22,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><Label accessible={false}>↑</Label></View>
     </Pressable>
+    {venue.gallery.length > 1 && onSelectMedia && <View style={{flexDirection:'row',gap:8}}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Предыдущее изображение" onPress={() => onSelectMedia(gallerySelectionOf(stepGallerySelection(venue.gallery, item, -1)))}
+        style={{minWidth:44,minHeight:44,alignItems:'center',justifyContent:'center'}}><Label>←</Label></Pressable>
+      <Label accessibilityLiveRegion="polite" style={{alignSelf:'center'}}>
+        {Math.max(1, venue.gallery.findIndex(entry => entry.url === item?.url) + 1)} / {venue.gallery.length}
+      </Label>
+      <Pressable accessibilityRole="button" accessibilityLabel="Следующее изображение" onPress={() => onSelectMedia(gallerySelectionOf(stepGallerySelection(venue.gallery, item, 1)))}
+        style={{minWidth:44,minHeight:44,alignItems:'center',justifyContent:'center'}}><Label>→</Label></Pressable>
+    </View>}
     {club && <View><CompactSourceLink name={club.name} url={club.url} /></View>}
   </View>;
 }

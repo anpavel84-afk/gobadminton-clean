@@ -287,7 +287,7 @@ test('expanded X preserves selection; compact dismiss clears it; real measured o
   activeSheet.current=expandedOwner;published=null;measure(208);measure(0);assert.equal(published,null); // stale layout/unmount
   activeSheet.current=null;measure(208);assert.equal(published,null); // deselect / parent unmount
   const sheetSource=readFileSync(new URL('../src/components/venue-sheet.tsx',import.meta.url),'utf8');
-  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  return <View'))+'\nclose;';
+  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';
   let collapsed:boolean|null=null, dismissed=0;
   const makeClose=(expanded:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{closeVenueSheet,expanded,selection:venue,
     onExpand:(value:boolean)=>{collapsed=value;},onClose:()=>{dismissed++;}}) as ()=>void;
@@ -311,10 +311,10 @@ test('map schedule groups only the real eligible snapshot by venue-local date, p
 test('Players venue/person measured owners reserve actual safe clearance and reject retired layout callbacks across transitions',async()=>{
   const {readFileSync}=await import('node:fs'),{stripTypeScriptTypes}=await import('node:module'),{runInNewContext}=await import('node:vm');
   const source=readFileSync(new URL('../app/players/index.tsx',import.meta.url),'utf8');
-  const body=source.slice(source.indexOf('  const sheetContext ='),source.indexOf('  const statusTop ='))+'\n({sheetOwner,measureSheet,controlBottom});';
+  const body=source.slice(source.indexOf('  const sheetContext ='),source.indexOf('  const statusTop ='))+'\n({sheetOwner,venueSheetKey,measureSheet,controlBottom});';
   const refs:{current:unknown}[]=[],lifecycle:{deps?:unknown[];cleanup?:()=>void}={};
   let measurement:SheetMeasurement|null=null;
-  const input={mapOpen:true,selection:venue,person:null as {publicPlayerId:string}|null,params:{view:'map'},key:'filters',mapCityId:pack.cityId,
+  const input={mapOpen:true,selection:venue as typeof venue | null,person:null as {publicPlayerId:string}|null,params:{view:'map'},key:'filters',mapCityId:pack.cityId,
     venueMode:'all',showPeople:true,radarState:{generation:1},expanded:false,window:{width:390,height:844,fontScale:1},insets:{top:44,bottom:34,left:0,right:0}};
   const render=()=>{
     let ref=0;
@@ -323,12 +323,19 @@ test('Players venue/person measured owners reserve actual safe clearance and rej
       useCallback:(fn:unknown)=>fn,setSheetMeasurement:(value:typeof measurement)=>{measurement=value;},
       useLayoutEffect:(effect:()=>()=>void,deps:unknown[])=>{
         if(!lifecycle.deps || deps.some((v,i)=>v!==lifecycle.deps![i])){lifecycle.cleanup?.();lifecycle.deps=deps;lifecycle.cleanup=effect();}
-      }}) as {sheetOwner:string|null;measureSheet:(height:number)=>void;controlBottom:number};
+      }}) as {sheetOwner:string|null;venueSheetKey:string|null;measureSheet:(height:number)=>void;controlBottom:number};
   };
   const compact=render();compact.measureSheet(208);assert.equal(render().controlBottom,262);
   compact.measureSheet(340);assert.equal(render().controlBottom,394); // text/content growth
-  input.person={publicPlayerId:'peer'};const person=render();assert.notEqual(person.sheetOwner,compact.sheetOwner);
-  compact.measureSheet(900);assert.equal(measurement,null);person.measureSheet(180);assert.equal(render().controlBottom,234);
+  const venueKey=compact.venueSheetKey;assert.equal(venueKey,`venue:${pack.cityId}:filters:${venue.id}`);
+  input.expanded=true;const venueExpanded=render();assert.equal(venueExpanded.venueSheetKey,venueKey);
+  assert.notEqual(venueExpanded.sheetOwner,compact.sheetOwner);
+  compact.measureSheet(900);assert.equal(measurement,null);venueExpanded.measureSheet(680);assert.equal(render().controlBottom,688);
+  input.expanded=false;const venueBack=render();assert.equal(venueBack.venueSheetKey,venueKey);
+  venueExpanded.measureSheet(900);assert.equal(measurement,null);venueBack.measureSheet(340);assert.equal(render().controlBottom,394);
+  input.selection=null;input.person={publicPlayerId:'peer'};const person=render();assert.equal(person.venueSheetKey,null);
+  assert.notEqual(person.sheetOwner,venueBack.sheetOwner);
+  venueBack.measureSheet(900);assert.equal(measurement,null);person.measureSheet(180);assert.equal(render().controlBottom,234);
   input.expanded=true;const expanded=render();person.measureSheet(900);assert.equal(measurement,null);
   expanded.measureSheet(680);assert.equal(render().controlBottom,688);
   input.expanded=false;const back=render();assert.notEqual(back.sheetOwner,person.sheetOwner);person.measureSheet(900);assert.equal(measurement,null);
@@ -336,8 +343,9 @@ test('Players venue/person measured owners reserve actual safe clearance and rej
   const rotated=render();back.measureSheet(900);assert.equal(measurement,null);rotated.measureSheet(200);assert.equal(render().controlBottom,241);
   input.key='changed filters';const filtered=render();rotated.measureSheet(900);assert.equal(measurement,null);assert.notEqual(filtered.sheetOwner,rotated.sheetOwner);
   input.mapOpen=false;const closed=render();filtered.measureSheet(900);assert.equal(measurement,null);assert.equal(closed.sheetOwner,null);
+  assert.equal(closed.venueSheetKey,null);
   assert.match(source,/key=\{sheetOwner\} onLayout=\{event => measureSheet\(event.nativeEvent.layout.height\)\}/);
-  assert.match(source,/<VenueSheet key=\{sheetOwner\}[\s\S]*onMeasure=\{measureSheet\}/);
+  assert.match(source,/<VenueSheet key=\{venueSheetKey\}[\s\S]*onMeasure=\{measureSheet\}/);
   assert.match(source,/setControlsBottom\(event.nativeEvent.layout.y\+event.nativeEvent.layout.height\)/);
   assert.doesNotMatch(source,/sheetHeight\+24|statusTop=\{140\}/);
 });

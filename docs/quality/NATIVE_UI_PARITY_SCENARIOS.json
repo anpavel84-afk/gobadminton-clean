@@ -1,0 +1,101 @@
+{
+  "status": "DECLARATIVE_CAPTURE_MANIFEST",
+  "issue": 522,
+  "contract": "docs/product/NATIVE_UI_BEHAVIOR_CONTRACT.md",
+  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery"],
+  "fixture": {
+    "data_revision": null,
+    "actor_auth_state": "guest_or_dedicated_DEV_actor_supplied_by_Root",
+    "city_id": null,
+    "venue_id": null,
+    "query_filter_day": null,
+    "reference_time_timezone": null,
+    "logical_viewport": null,
+    "font_scale": null,
+    "appearance": null,
+    "note": "Operator fills same-run controls before capture; nulls are intentional until bound."
+  },
+  "reference": {
+    "web": "dfd886a0a8f66f2c2193dd41878e0e78778f4508",
+    "android_apk10_baseline": "8cd08ec8631ea8af89b6190482fcb35caaffca9c",
+    "baseline_apk_sha256": "e71b48949f250d729d601ee415edfca4af03d4b8e0f5181207bc9a9ee178dac3",
+    "candidate_artifact_url": null,
+    "candidate_source_sha": null
+  },
+  "comparison_policy": {
+    "cross_platform": "Matched semantic state and composition only; no raw web-vs-Android pixel equality.",
+    "pixel_baselines": "Separate web and Android approved screenshots keyed by build/viewport/font/fixture."
+  },
+  "artifact_slots": {
+    "web": ["01-header", "02-compact-selected", "03-expanded", "04-expanded-body-scrolled", "05-compact-after-collapse", "06-map-after-dismiss", "07-alternate-gallery-expanded", "08-alternate-gallery-compact"],
+    "android": ["01-header", "02-compact-selected", "03-expanded", "04-expanded-body-scrolled", "05-compact-after-collapse", "06-map-after-dismiss", "07-alternate-gallery-expanded", "08-alternate-gallery-compact"]
+  },
+  "cases": [
+    {
+      "id": "H1",
+      "start": "games list; Radar off",
+      "action": "Capture header; open and close Radar without enable; activate profile separately",
+      "expect": "Radar then profile in one trailing group with fixed 8dp gap; independent targets; no location publication",
+      "expected_state": "header.actions.grouped",
+      "artifact": "01-header"
+    },
+    {
+      "id": "V1",
+      "start": "same city/map camera/filters",
+      "action": "Tap named venue marker or same fallback row",
+      "expect": "Compact selected venue; map remains",
+      "expected_state": "venue.compact",
+      "artifact": "02-compact-selected"
+    },
+    {
+      "id": "V2",
+      "start": "compact selected",
+      "action": "Swipe upward from preview body outside links with live movement samples",
+      "expect": "Live growth then expanded same venue; no post-swipe tap/navigation",
+      "expected_state": "venue.expanded",
+      "artifact": "03-expanded"
+    },
+    {
+      "id": "V3",
+      "start": "expanded",
+      "action": "Scroll body; use horizontal date strip without writes",
+      "expect": "Body scroll owns vertical; sheet stays expanded; CTA reachable above safe bottom",
+      "expected_state": "venue.expanded.scrolled",
+      "artifact": "04-expanded-body-scrolled"
+    },
+    {
+      "id": "V4",
+      "start": "expanded",
+      "action": "Swipe down on handle",
+      "expect": "Compact same venue; camera/filters unchanged; no map exit",
+      "expected_state": "venue.compact",
+      "artifact": "05-compact-after-collapse"
+    },
+    {
+      "id": "V5",
+      "start": "compact",
+      "action": "Swipe down on preview body or handle",
+      "expect": "Selection dismissed; same map context",
+      "expected_state": "venue.none",
+      "artifact": "06-map-after-dismiss"
+    },
+    {
+      "id": "V6",
+      "start": "reselect same venue",
+      "action": "Short/cancelled and horizontal drag; fresh tap expand; X collapse; expand; Android Back or web Escape; dismiss",
+      "expect": "Aborted/horizontal no transition; first fresh tap works; X/Back/Escape hierarchy preserved",
+      "expected_state": "venue.close_hierarchy",
+      "artifact": "step log/clip"
+    },
+    {
+      "id": "V7",
+      "start": "same venue with ≥2 gallery items",
+      "action": "Horizontal swipe; previous/next; collapse/reexpand; info→schedule→info; compact upward swipe from image",
+      "expect": "Horizontal changes only photo; vertical changes sheet; media identity/credit persists",
+      "expected_state": "venue.gallery.continuity",
+      "artifact": "07-alternate-gallery-expanded + 08-alternate-gallery-compact"
+    }
+  ],
+  "pass_rule": "Missing runtime capture => NOT_TESTED. Unit/export/build success does not invent device PASS. Emulator ≠ Xiaomi.",
+  "secrets_and_privacy": "No OTP, tokens, passwords, credentials or real PII in prompts/screenshots/logs."
+}
