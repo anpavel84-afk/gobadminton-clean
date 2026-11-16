@@ -21167,6 +21167,9 @@
           {
             "cookieSession": []
           },
+          {
+            "NativeBearer": []
+          },
           {}
         ],
         "parameters": [
@@ -21281,6 +21284,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21299,19 +21305,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -21422,6 +21429,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21440,19 +21450,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -21589,6 +21600,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21607,19 +21621,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -21724,7 +21739,15 @@
           "Comments"
         ],
         "summary": "Current permitted source comment for deep linking",
-        "security": [],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          },
+          {}
+        ],
         "parameters": [
           {
             "name": "commentId",
@@ -24719,6 +24742,14 @@
         "tags": [
           "Venues"
         ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "venueId",
@@ -24752,6 +24783,14 @@
         "tags": [
           "Venues"
         ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "venueId",
@@ -24773,10 +24812,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -24819,6 +24859,14 @@
         "tags": [
           "Venues"
         ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "venueId",
@@ -24840,10 +24888,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {

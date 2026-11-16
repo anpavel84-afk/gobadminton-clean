@@ -126,6 +126,19 @@ test('compact VenuePreview/maps are exact pinned bytes; community follows schedu
   assert.match(sheet,/PrimaryButton title="Создать игру на этой площадке"/);
   assert.doesNotMatch(preview,/NativeVenueCommunity/);
   assert.match(community,/<Page keyboard/);
+  // VC-UX1..5 composition: tombstone without author header; separate rating openers; long-text gate; compact order; single aggregate star.
+  assert.match(community,/c\.deleted \? <Label>Комментарий удалён<\/Label>/);
+  assert.ok(community.indexOf('c.deleted ? <Label>Комментарий удалён</Label>') < community.indexOf('c.author?.avatar.uploadedUrl'));
+  assert.match(community,/withdrawTrigger/);
+  assert.match(community,/ownReportTrigger/);
+  assert.match(community,/aggregateReportTrigger/);
+  assert.match(community,/text\.length > 220 \|\| text\.split\('\\n'\)\.length > 4/);
+  assert.match(community,/DiscoverySheet visible=\{orderOpen\}/);
+  assert.match(community,/DiscoveryChip key=\{value\} title=\{label\} selected=\{s\.order === value\}/);
+  assert.doesNotMatch(community,/title=\{`\$\{s\.order === 'asc' \? '✓ ' : ''\}Сначала старые`\}/);
+  assert.match(community,/>★<\/Label>/);
+  assert.doesNotMatch(community,/>★★★★★<\/Label>/);
+  assert.equal((community.match(/value <= \(s\.selected \?\? 0\) \? '★' : '☆'/g)??[]).length,1);
 });
 
 test('edit owner resumes unsent text after detach/reopen and cancel/reopen without trusting a supplied cached row',async()=>{

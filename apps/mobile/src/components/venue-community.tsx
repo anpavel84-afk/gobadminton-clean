@@ -8,9 +8,11 @@ import type { Comment, Action, CreateVenueCommunityReportRequest, Packet } from 
 import { commentText } from '../venue-community.ts';
 import { API_ORIGIN } from '../public-api.ts';
 import { colors } from '../theme.ts';
-import { Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
+import { DiscoveryChip, DiscoverySheet, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
 type Trigger = ComponentRef<typeof Pressable>;
 const reasons = [ ['harassment','Оскорбления / давление'], ['spam','Спам'], ['fake_profile','Поддельный профиль'], ['inappropriate','Неприемлемый контент'], ['other','Другое'] ] as const;
+const orderOptions = [ ['asc','Сначала старые'], ['desc','Сначала новые'] ] as const;
+function longComment(text: string) { return text.length > 220 || text.split('\n').length > 4; }
 function ActionButton({ title, onPress, disabled = false, expanded, buttonRef }: { title: string; onPress: () => void; disabled?: boolean; expanded?: boolean; buttonRef?: RefObject<Trigger | null> }) {
   return <Pressable ref={buttonRef} accessibilityRole="button" accessibilityState={{disabled, ...(expanded === undefined ? {} : {expanded})}} disabled={disabled} onPress={onPress}
     style={({pressed}) => ({minHeight:48,minWidth:48,padding:10,justifyContent:'center',borderRadius:12,backgroundColor:pressed ? colors.paper : undefined,opacity:disabled ? 0.5 : 1})}>
@@ -77,16 +79,19 @@ export function NativeVenueCommunity({ venueId, name }: { venueId: string; name:
   return <CommunityPanel key={key} name={name} />;
 }
 function CommunityPanel({name}:{name:string}) {
-  const {owner,state:s} = useVenueCommunity(), router = useRouter(), trigger = useRef<Trigger>(null);
+  const {owner,state:s} = useVenueCommunity(), router = useRouter();
+  const withdrawTrigger = useRef<Trigger>(null), ownReportTrigger = useRef<Trigger>(null), aggregateReportTrigger = useRef<Trigger>(null), orderTrigger = useRef<Trigger>(null);
   const [report,setReport] = useState<ReportSubject | null>(null), [reason,setReason] = useState<CreateVenueCommunityReportRequest['reasonCode'] | null>(null), [detail,setDetail] = useState('');
   const [confirmation,setConfirmation] = useState<{packet:Packet; title:string; text:string} | null>(null);
-  const origin = useRef<RefObject<Trigger | null>>(trigger);
+  const [orderOpen,setOrderOpen] = useState(false);
+  const origin = useRef<RefObject<Trigger | null>>(aggregateReportTrigger);
   const locked = owner.busy(), own = s.own?.own;
+  const orderLabel = orderOptions.find(([value]) => value === s.order)?.[1] ?? orderOptions[0][1];
   const login = () => router.push({pathname:'/profile',params:{returnTo:`/venues/${s.venueId}`}});
   const commit = (action:Action) => { const packet = owner.review(action); if (packet) void owner.commit(packet.key); };
   const confirm = (action:Action,title:string,text:string) => { const packet = owner.review(action); if (packet) setConfirmation({packet,title,text}); };
   const close = () => { if (confirmation) owner.cancelReview(confirmation.packet.key); setConfirmation(null); setReport(null); setReason(null); setDetail(''); };
-  const reportSubject = (subject:ReportSubject, source = trigger) => { if (!s.actor) {login();return;} origin.current=source;setReport(subject);setReason(null);setDetail(''); };
+  const reportSubject = (subject:ReportSubject, source: RefObject<Trigger | null>) => { if (!s.actor) {login();return;} origin.current=source;setReport(subject);setReason(null);setDetail(''); };
   const aggregate = s.summary;
   return <>
     <UnresolvedActions owner={owner} />
@@ -100,7 +105,7 @@ function CommunityPanel({name}:{name:string}) {
       {aggregate?.state === 'empty' && <Label>Пока нет оценок</Label>}
       {aggregate?.state === 'available' && <View accessible accessibilityLabel={`${aggregate.average!.toFixed(1).replace('.',',')} из 5 · ${countLabel(aggregate.count!)}`} style={{gap:8}}>
         <Label accessible={false} style={{fontSize:40,lineHeight:48,fontWeight:'700'}}>{aggregate.average!.toFixed(1).replace('.',',')}</Label>
-        <Label accessible={false} style={{color:colors.purple}}>★★★★★</Label><Label accessible={false}>{countLabel(aggregate.count!)}</Label>
+        <Label accessible={false} style={{color:colors.purple}}>★</Label><Label accessible={false}>{countLabel(aggregate.count!)}</Label>
         {aggregate.count! < 10 && <Label accessible={false}>пока небольшая выборка</Label>}
       </View>}
       <Label accessibilityRole="header" style={styles.subtitle}>Как вам эта площадка?</Label>
@@ -117,21 +122,24 @@ function CommunityPanel({name}:{name:string}) {
         </View>
         <PrimaryButton title={own && own.version > 0 && !own.withdrawn ? 'Сохранить изменение' : 'Отправить оценку'} disabled={locked || !owner.canRate() || s.selected === null || !own?.withdrawn && s.selected === own?.value}
           onPress={() => { if (s.selected !== null) commit({kind:'upsert',value:s.selected,expectedVersion:own?.version ?? 0}); }} />
-        {own?.allowedActions.withdraw && !own.withdrawn && <ActionButton buttonRef={trigger} title="Убрать мою оценку" disabled={locked} onPress={() => {origin.current=trigger;confirm({kind:'withdraw',expectedVersion:own.version},'Убрать мою оценку?','Ваша оценка больше не будет учитываться в сводке.');}} />}
-        {own && own.version > 0 && !own.withdrawn && <ActionButton buttonRef={trigger} title="Запросить проверку моей оценки" disabled={locked} onPress={() => reportSubject({subjectKind:'own_vote',venueId:s.venueId!,expectedVersion:own.version,label:'Моя оценка'})} />}
+        {own?.allowedActions.withdraw && !own.withdrawn && <ActionButton buttonRef={withdrawTrigger} title="Убрать мою оценку" disabled={locked} onPress={() => {origin.current=withdrawTrigger;confirm({kind:'withdraw',expectedVersion:own.version},'Убрать мою оценку?','Ваша оценка больше не будет учитываться в сводке.');}} />}
+        {own && own.version > 0 && !own.withdrawn && <ActionButton buttonRef={ownReportTrigger} title="Запросить проверку моей оценки" disabled={locked} onPress={() => reportSubject({subjectKind:'own_vote',venueId:s.venueId!,expectedVersion:own.version,label:'Моя оценка'}, ownReportTrigger)} />}
       </>}
       <Outcomes owner={owner} match={o => o.packet.action.kind === 'upsert' || o.packet.action.kind === 'withdraw'} />
-      <ActionButton buttonRef={trigger} title="Пожаловаться на сводку оценок" disabled={locked || s.summaryPhase !== 'ready' || aggregate?.state === 'unavailable'} onPress={() => reportSubject({subjectKind:'aggregate',venueId:s.venueId!,label:'Сводка оценок'})} />
+      <ActionButton buttonRef={aggregateReportTrigger} title="Пожаловаться на сводку оценок" disabled={locked || s.summaryPhase !== 'ready' || aggregate?.state === 'unavailable'} onPress={() => reportSubject({subjectKind:'aggregate',venueId:s.venueId!,label:'Сводка оценок'}, aggregateReportTrigger)} />
     </View>
     <View style={styles.card}>
       <Label accessibilityRole="header" style={styles.subtitle}>Обсуждение площадки</Label>
       {s.editNotice && <Label accessibilityLiveRegion="polite">{s.editNotice}</Label>}
       <Label style={{color:colors.secondary}}>Вопросы и впечатления о площадке · не проверенные отзывы после игры</Label>
       {s.roots.phase === 'ready' && s.roots.pages[0]?.page.visibleCount !== null && <Label>Комментарии · {s.roots.pages[0]?.page.visibleCount}</Label>}
-      <View style={{flexDirection:'row',flexWrap:'wrap'}}>
-        <ActionButton title={`${s.order === 'asc' ? '✓ ' : ''}Сначала старые`} disabled={locked} onPress={() => owner.setOrder('asc')} />
-        <ActionButton title={`${s.order === 'desc' ? '✓ ' : ''}Сначала новые`} disabled={locked} onPress={() => owner.setOrder('desc')} />
-      </View>
+      <Pressable ref={orderTrigger} accessibilityRole="button" accessibilityLabel={`Порядок · ${orderLabel}`} accessibilityState={{expanded:orderOpen,disabled:locked}} disabled={locked}
+        onPress={() => setOrderOpen(true)} style={({pressed}) => ({minHeight:48,minWidth:48,padding:10,justifyContent:'center',borderRadius:12,backgroundColor:pressed ? colors.paper : undefined,opacity:locked ? 0.5 : 1})}>
+        <Label accessible={false}>Порядок · {orderLabel}</Label>
+      </Pressable>
+      <DiscoverySheet visible={orderOpen} title="Порядок" onClose={() => setOrderOpen(false)} returnFocusRef={orderTrigger}>
+        {orderOptions.map(([value,label]) => <DiscoveryChip key={value} title={label} selected={s.order === value} onPress={() => { owner.setOrder(value); setOrderOpen(false); }} />)}
+      </DiscoverySheet>
       {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} /> : s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate ? <>
         <Field label="Ваш комментарий" value={s.drafts.root ?? ''} disabled={locked} onChange={text => owner.setDraft('root',text)} />
         <PrimaryButton title="Отправить" disabled={locked || !validText(s.drafts.root ?? '')} onPress={() => commit({kind:'create',text:s.drafts.root!,parentCommentId:null,parentEntityId:s.scope!.canonicalVenueId})} />
@@ -177,19 +185,21 @@ function CommentRow({comment:c,owner,canCreate,locked,report,remove,commit,reply
   useEffect(() => { if (menu) { const node = findNodeHandle(menuHeading.current); if (node) AccessibilityInfo.setAccessibilityFocus(node); } }, [menu]);
   useEffect(() => { setEditing(false); }, [c.version]);
   useEffect(() => { if (!canCreate || !c.mine || c.deleted) setEditing(false); }, [canCreate,c.mine,c.deleted]);
+  const body = c.body ?? 'Текст недоступен';
+  const long = !!c.body && longComment(c.body);
   return <View style={{gap:8,paddingTop:16,borderTopWidth:1,borderColor:colors.line,...(reply ? {marginLeft:8} : {})}}>
-    <View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}>
-      {c.author?.avatar.uploadedUrl ? <Image source={{uri:`${API_ORIGIN}${c.author.avatar.uploadedUrl}`}} accessibilityLabel="Аватар автора" style={{width:40,height:40,borderRadius:20}} />
-        : <View accessible={false} style={{width:40,height:40,borderRadius:20,backgroundColor:colors.paper,alignItems:'center',justifyContent:'center'}}><Label>{c.author?.displayName.slice(0,1) ?? '?'}</Label></View>}
-      <View style={{flex:1,minWidth:100}}>
-        {c.author?.profilePublic && c.author.publicPlayerId ? <ActionButton title={c.author.displayName} onPress={() => router.push({pathname:'/players/[id]',params:{id:c.author!.publicPlayerId!}})} /> : <Label>{c.author?.displayName ?? 'Игрок'}</Label>}
-        <Label style={{color:colors.secondary}}>{new Date(c.createdAt).toLocaleString('ru-RU')}{c.edited ? ' · изменён' : ''}</Label>
-      </View>
-      {!c.deleted && <ActionButton buttonRef={trigger} title="Действия с комментарием" expanded={menu} onPress={() => setMenu(!menu)} />}
-    </View>
     {c.deleted ? <Label>Комментарий удалён</Label> : <>
-      <Label numberOfLines={full ? undefined : 4}>{c.body ?? 'Текст недоступен'}</Label>
-      {c.body && <ActionButton title={full ? 'Свернуть текст' : 'Читать полностью'} expanded={full} onPress={() => setFull(!full)} />}
+      <View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}>
+        {c.author?.avatar.uploadedUrl ? <Image source={{uri:`${API_ORIGIN}${c.author.avatar.uploadedUrl}`}} accessibilityLabel="Аватар автора" style={{width:40,height:40,borderRadius:20}} />
+          : <View accessible={false} style={{width:40,height:40,borderRadius:20,backgroundColor:colors.paper,alignItems:'center',justifyContent:'center'}}><Label>{c.author?.displayName.slice(0,1) ?? '?'}</Label></View>}
+        <View style={{flex:1,minWidth:100}}>
+          {c.author?.profilePublic && c.author.publicPlayerId ? <ActionButton title={c.author.displayName} onPress={() => router.push({pathname:'/players/[id]',params:{id:c.author!.publicPlayerId!}})} /> : <Label>{c.author?.displayName ?? 'Игрок'}</Label>}
+          <Label style={{color:colors.secondary}}>{new Date(c.createdAt).toLocaleString('ru-RU')}{c.edited ? ' · изменён' : ''}</Label>
+        </View>
+        <ActionButton buttonRef={trigger} title="Действия с комментарием" expanded={menu} onPress={() => setMenu(!menu)} />
+      </View>
+      <Label numberOfLines={long && !full ? 4 : undefined}>{body}</Label>
+      {long && <ActionButton title={full ? 'Свернуть текст' : 'Читать полностью'} expanded={full} onPress={() => setFull(!full)} />}
       {c.photos.map(photo => <Image key={photo.id} source={{uri:`${API_ORIGIN}${photo.url}`}} accessibilityLabel="Фото в комментарии" resizeMode="contain" style={{width:'100%',aspectRatio:photo.width/photo.height,maxHeight:260,backgroundColor:colors.paper}} />)}
     </>}
     {menu && <View style={{gap:8}}><Label ref={menuHeading} accessibilityRole="header">Действия с комментарием</Label>
