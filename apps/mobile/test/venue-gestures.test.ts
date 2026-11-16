@@ -23,6 +23,7 @@ import {
   mediaFailureApplies,
   resolveGallerySelection,
   sampleHandleVelocity,
+  createReturnFocusLifecycle,
   scheduleReturnFocus,
   secondTouchCancels,
   sheetReleaseDy,
@@ -36,6 +37,8 @@ import {
   VENUE_SHEET_DISMISS_DY,
   VENUE_SHEET_EXPAND_DY,
   type GalleryAxis,
+  type ResponderGestureSnapshot,
+  type ResponderTouchEvent,
   type SheetDrag,
   type SheetResponderPorts,
 } from '../src/venue-gestures.ts';
@@ -241,9 +244,10 @@ function createSheetFixture(options: {
       lift = 0;
       actions.push(action);
     },
+    activateHandle: () => { actions.push('activate'); },
   };
-  const touch = (pageY: number, timestamp: number) => ({ nativeEvent: { pageY, timestamp } });
-  const gesture = (dx: number, dy: number, touches = 1) => ({ dx, dy, numberActiveTouches: touches });
+  const touch = (pageY: number, timestamp: number): ResponderTouchEvent => ({ nativeEvent: { pageY, timestamp } });
+  const gesture = (dx: number, dy: number, touches = 1): ResponderGestureSnapshot => ({ dx, dy, numberActiveTouches: touches });
   return {
     ports, actions, lifts,
     getDrag: () => drag,
@@ -254,6 +258,30 @@ function createSheetFixture(options: {
     touch, gesture,
     compact: createCompactSheetHandlers(ports),
     handle: createHandleSheetHandlers(ports),
+  };
+}
+
+/**
+ * Equivalent of frozen RN Pressable.js host merge: restProps then usePressability
+ * eventHandlers — duplicate responder keys resolve to Pressability, not PanResponder.
+ */
+function composePressableHostView<T extends Record<string, unknown>>(
+  restProps: T,
+  pressabilityEventHandlers: Record<string, unknown>,
+): T & Record<string, unknown> {
+  return { ...restProps, ...pressabilityEventHandlers };
+}
+
+/** Map factory callbacks to host responder prop names the way PanResponder.panHandlers does. */
+function handleFactoryAsPanHandlers(handlers: ReturnType<typeof createHandleSheetHandlers>) {
+  return {
+    onStartShouldSetResponder: handlers.onStartShouldSetPanResponder,
+    onMoveShouldSetResponder: handlers.onMoveShouldSetPanResponder,
+    onResponderGrant: handlers.onPanResponderGrant,
+    onResponderMove: handlers.onPanResponderMove,
+    onResponderRelease: handlers.onPanResponderRelease,
+    onResponderTerminate: handlers.onPanResponderTerminate,
+    onResponderTerminationRequest: handlers.onPanResponderTerminationRequest,
   };
 }
 
@@ -331,7 +359,7 @@ test('production callbacks: cancelled control, gallery second finger including r
   let axis: GalleryAxis = 'pending';
   let generation = 1;
   let retired = false;
-  let mounted = true;
+  const mounted = true;
   const commits: string[] = [];
   const gallery = createGalleryGestureHandlers({
     canPage: () => true,
@@ -367,18 +395,93 @@ test('production callbacks: cancelled control, gallery second finger including r
   assert.equal(gestureGenerationActive(3, lateGen, true), false);
   assert.equal(retiredSheet.actions.length, 0);
 
-  // Normal handle tap path: pending axis release does not invent settle; Pressable onPress remains separate.
+  // Normal handle tap on View host: pending axis release activates once (not settle invent).
   const tap = createSheetFixture({ expanded: false });
   tap.handle.onPanResponderGrant(tap.touch(200, 6000));
   tap.handle.onPanResponderRelease(tap.touch(200, 6010), tap.gesture(0, 0));
-  assert.equal(tap.actions.length, 0);
+  assert.deepEqual(tap.actions, ['activate']);
+});
 
-  // Local focus port scheduling (unmount-safe).
-  let focused = 0;
-  const handle = scheduleReturnFocus(() => { focused += 1; }, (cb) => {
+test('handle rendered-host composition: Pressable merge overrides panHandlers; View host preserves gesture owner', () => {
+  const broken = createSheetFixture({ expanded: false });
+  const panHandlers = handleFactoryAsPanHandlers(broken.handle);
+  let pressabilityGrant = 0;
+  const pressabilityHandlers = {
+    onStartShouldSetResponder: () => true,
+    onResponderGrant: () => { pressabilityGrant += 1; },
+    onResponderMove: () => {},
+    onResponderRelease: () => {},
+    onResponderTerminate: () => {},
+    onResponderTerminationRequest: () => true,
+  };
+
+  // Broken Pressable host: restProps then pressability — grant never reaches factory.
+  const brokenHost = composePressableHostView(panHandlers, pressabilityHandlers);
+  (brokenHost.onResponderGrant as (e: ResponderTouchEvent) => void)(broken.touch(100, 4000));
+  assert.equal(pressabilityGrant, 1);
+  assert.equal(broken.getDrag(), null);
+
+  // Fixed View host owns panHandlers; Pressable child keeps separate onPress/a11y surface.
+  const fixed = createSheetFixture({ expanded: false });
+  const viewHost = handleFactoryAsPanHandlers(fixed.handle);
+  const pressableChild = composePressableHostView(
+    { onPress: () => { /* a11y activate */ } },
+    pressabilityHandlers,
+  );
+  (viewHost.onResponderGrant as (e: ResponderTouchEvent) => void)(fixed.touch(100, 4000));
+  assert.equal(fixed.getDrag()?.kind, 'handle');
+  (viewHost.onResponderMove as (e: ResponderTouchEvent, g: ResponderGestureSnapshot) => void)(
+    fixed.touch(150, 4050), fixed.gesture(0, 50),
+  );
+  (viewHost.onResponderRelease as (e: ResponderTouchEvent, g: ResponderGestureSnapshot) => void)(
+    fixed.touch(170, 4100), fixed.gesture(0, 70),
+  );
+  assert.equal(fixed.actions.at(-1), 'dismiss');
+  assert.equal(typeof pressableChild.onPress, 'function');
+});
+
+test('return-focus lifecycle: deferred dismiss survives unmount disposal; obsolete cancels; null host safe', () => {
+  const life = createReturnFocusLifecycle();
+  const calls: string[] = [];
+  let queued: (() => void) | null = null;
+  const deferred = (cb: () => void) => {
+    queued = cb;
+    return {
+      cancel: () => {
+        if (queued === cb) queued = null;
+      },
+    };
+  };
+
+  let host: { focus: () => void } | null = { focus: () => { calls.push('fallback'); } };
+  life.armDismissRestore(() => { host?.focus(); }, deferred);
+  // Production dismiss: onClose unmounts sheet → dispose must NOT cancel armed dismiss.
+  life.disposeSheetUnmount();
+  assert.equal(typeof queued, 'function');
+  queued!();
+  queued = null;
+  assert.deepEqual(calls, ['fallback']);
+
+  calls.length = 0;
+  life.armDismissRestore(() => { calls.push('stale'); }, deferred);
+  life.cancelObsolete();
+  assert.equal(queued, null);
+  assert.deepEqual(calls, []);
+
+  host = { focus: () => { calls.push('alive'); } };
+  life.armDismissRestore(() => { host?.focus(); }, deferred);
+  host = null;
+  life.disposeSheetUnmount();
+  queued!();
+  queued = null;
+  assert.deepEqual(calls, []);
+
+  // scheduleReturnFocus primitive still available for direct inject.
+  let sync = 0;
+  const handle = scheduleReturnFocus(() => { sync += 1; }, (cb) => {
     cb();
     return { cancel: () => {} };
   });
-  assert.equal(focused, 1);
+  assert.equal(sync, 1);
   handle.cancel();
 });

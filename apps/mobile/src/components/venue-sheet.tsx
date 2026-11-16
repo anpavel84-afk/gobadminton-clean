@@ -22,7 +22,7 @@ import {
   gestureGenerationActive,
   measuredSheetTravel,
   resolveGallerySelection,
-  scheduleReturnFocus,
+  createReturnFocusLifecycle,
   suppressAfterFreshTouch,
   type GallerySelection,
   type SheetAxis,
@@ -57,7 +57,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   const expandedRef = useRef(expanded); expandedRef.current = expanded;
   const wasExpanded = useRef(expanded);
   const returnFocus = useRef(returnFocusRef); returnFocus.current = returnFocusRef;
-  const focusCancel = useRef<{ cancel: () => void } | null>(null);
+  const focusLife = useRef(createReturnFocusLifecycle()).current;
 
   const retireGesture = useCallback((clearSuppress = true) => {
     drag.current = null;
@@ -71,16 +71,17 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     return () => {
       mounted.current = false;
       drag.current = null;
-      focusCancel.current?.cancel();
-      focusCancel.current = null;
+      // Intentional dismiss restore stays armed; obsolete/transient only is cancelled.
+      focusLife.disposeSheetUnmount();
       onMeasure(0);
     };
-  }, [onMeasure]);
+  }, [onMeasure, focusLife]);
 
   useEffect(() => {
     generation.current += 1;
     retireGesture(true);
-  }, [selection.id, selection.cityId, retireGesture]);
+    focusLife.cancelObsolete();
+  }, [selection.id, selection.cityId, retireGesture, focusLife]);
 
   // External expanded/Back/state replacement retires drag; measurement generation stays separate.
   // Do not clear follow-on suppress here — the completing gesture's synthetic press must still be consumable once.
@@ -133,8 +134,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   };
 
   const restoreOpenerFocus = useCallback(() => {
-    focusCancel.current?.cancel();
-    focusCancel.current = scheduleReturnFocus(() => {
+    focusLife.armDismissRestore(() => {
       const target = returnFocus.current?.current;
       if (!target) return;
       target.focus?.();
@@ -144,7 +144,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       const id = requestAnimationFrame(cb);
       return { cancel: () => cancelAnimationFrame(id) };
     });
-  }, []);
+  }, [focusLife]);
 
   const dismissSheet = useCallback(() => {
     restoreOpenerFocus();
@@ -216,6 +216,12 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       else if (action === 'expand') actions.current.onExpand(true);
       else actions.current.onExpand(false);
     },
+    activateHandle: () => {
+      const blocked = consumeFollowOnSuppress(suppressTap.current);
+      suppressTap.current = blocked.suppress;
+      if (blocked.blocked) return;
+      actions.current.onExpand(!expandedRef.current);
+    },
   });
 
   const portsRef = useRef<SheetResponderPorts | null>(null);
@@ -235,6 +241,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     markSuppress: () => { suppressTap.current = true; },
     endCompact: (axis, dy, gen) => gestureApi.current.endCompact(axis, dy, gen),
     endHandle: (gen, dy, velocity, velocityAgeMs) => gestureApi.current.endHandle(gen, dy, velocity, velocityAgeMs),
+    activateHandle: () => gestureApi.current.activateHandle(),
   };
 
   const [compactResponder] = useState(() => PanResponder.create(
@@ -254,6 +261,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       markSuppress: () => portsRef.current!.markSuppress(),
       endCompact: (axis, dy, gen) => portsRef.current!.endCompact(axis, dy, gen),
       endHandle: (gen, dy, velocity, age) => portsRef.current!.endHandle(gen, dy, velocity, age),
+      activateHandle: () => portsRef.current!.activateHandle?.(),
     }),
   ));
 
@@ -274,6 +282,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       markSuppress: () => portsRef.current!.markSuppress(),
       endCompact: (axis, dy, gen) => portsRef.current!.endCompact(axis, dy, gen),
       endHandle: (gen, dy, velocity, age) => portsRef.current!.endHandle(gen, dy, velocity, age),
+      activateHandle: () => portsRef.current!.activateHandle?.(),
     }),
   ));
 
@@ -340,10 +349,15 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       }, dragStyle]}
     >
       <View style={{minHeight:44,paddingHorizontal:52,alignItems:'center'}}>
-        <Pressable ref={handleFocus} {...handleResponder.panHandlers} accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Развернуть площадку'} accessibilityState={{expanded}}
-          onPress={() => { if (consumeSuppress()) return; onExpand(!expanded); }} style={{minHeight:44,width:'100%',alignItems:'center',justifyContent:'center'}}>
-          <View style={{width:40,height:4,borderRadius:4,backgroundColor:colors.lineDark}} />
-        </Pressable>
+        {/* View owns panHandlers — Pressable must not host them (RN Pressable overrides responder callbacks). */}
+        <View {...handleResponder.panHandlers} style={{minHeight:44,width:'100%',alignItems:'center',justifyContent:'center'}}>
+          <Pressable ref={handleFocus} pointerEvents="none" accessibilityRole="button"
+            accessibilityLabel={expanded ? 'Свернуть площадку' : 'Развернуть площадку'} accessibilityState={{expanded}}
+            onPress={() => { if (consumeSuppress()) return; onExpand(!expanded); }}
+            style={{minHeight:44,width:'100%',alignItems:'center',justifyContent:'center'}}>
+            <View style={{width:40,height:4,borderRadius:4,backgroundColor:colors.lineDark}} />
+          </Pressable>
+        </View>
         <Pressable ref={compactFocus} accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Закрыть площадку'} onPress={() => { if (consumeSuppress()) return; close(); }}
           style={{position:'absolute',right:4,top:0,width:44,height:44,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="close" /></Pressable>
       </View>

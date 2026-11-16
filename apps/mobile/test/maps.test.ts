@@ -559,8 +559,12 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
   assert.match(sheetSource,/Modal transparent visible/);
   assert.match(sheetSource,/importantForAccessibility="no-hide-descendants"/);
   assert.match(sheetSource,/restoreFocusOnCollapse/);
-  assert.match(sheetSource,/restoreOpenerFocus|scheduleReturnFocus|returnFocusRef/);
+  assert.match(sheetSource,/createReturnFocusLifecycle|restoreOpenerFocus|returnFocusRef/);
+  assert.match(sheetSource,/armDismissRestore|disposeSheetUnmount/);
   assert.match(sheetSource,/ScrollView \{\.\.\.compactResponder\.panHandlers\}/);
+  // Handle panHandlers on View host — not spread onto Pressable (RN Pressable overrides responders).
+  assert.match(sheetSource,/View \{\.\.\.handleResponder\.panHandlers\}/);
+  assert.doesNotMatch(sheetSource,/Pressable ref=\{handleFocus\} \{\.\.\.handleResponder\.panHandlers\}/);
   assert.match(sheetSource,/translateY: lift/);
 
   assert.match(detailSource,/mediaFailureApplies\(activeIdentity\.current, identity\)/);
@@ -580,9 +584,15 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
   const gestures = await import('../src/venue-gestures.ts');
   const {
     canonicalSheetOriginY, compactLiveGrowthHeight, createCompactSheetHandlers, createGalleryGestureHandlers,
-    createHandleSheetHandlers, decideCompactRelease, decideHandleSettle, eventClockAgeMs, measuredSheetTravel,
-    mediaFailureApplies, secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress, gestureGenerationActive,
+    createHandleSheetHandlers, createReturnFocusLifecycle, decideCompactRelease, decideHandleSettle, eventClockAgeMs,
+    measuredSheetTravel, mediaFailureApplies, secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress,
+    gestureGenerationActive,
   } = gestures;
+  type SheetDrag = import('../src/venue-gestures.ts').SheetDrag;
+  type GalleryAxis = import('../src/venue-gestures.ts').GalleryAxis;
+  type CompactSheetAction = import('../src/venue-gestures.ts').CompactSheetAction;
+  type HandleSettleAction = import('../src/venue-gestures.ts').HandleSettleAction;
+  type GallerySwipeAction = import('../src/venue-gestures.ts').GallerySwipeAction;
   assert.equal(measuredSheetTravel(172, 0, Math.floor(800 * 0.88)), Math.floor(800 * 0.88) - 172);
   assert.equal(compactLiveGrowthHeight(172, 80, 704), 252);
   assert.equal(secondTouchCancels(2), true);
@@ -598,16 +608,17 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
   assert.equal(gestureGenerationActive(2, 1, true), false);
 
   // Production compact handler trace: delayed grant origin recovers full -60 expand.
-  /** @type {import('../src/venue-gestures.ts').SheetDrag | null} */
-  let drag = null;
-  const compactActions = [];
+  let drag: SheetDrag | null = null;
+  const compactActions: CompactSheetAction[] = [];
   const compact = createCompactSheetHandlers({
     isExpanded: () => false, isHandleActive: () => false, getControlOrigin: () => false,
     getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
-    getDrag: () => drag, setDrag: (next) => { drag = next; },
+    getDrag: () => drag, setDrag: (next: SheetDrag | null) => { drag = next; },
     beginFreshTouch: () => {}, retireGesture: () => { drag = null; },
     applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
-    endCompact: (axis, dy) => { compactActions.push(decideCompactRelease(axis, dy)); drag = null; },
+    endCompact: (axis: import('../src/venue-gestures.ts').SheetAxis, dy: number) => {
+      compactActions.push(decideCompactRelease(axis, dy)); drag = null;
+    },
     endHandle: () => {},
   });
   compact.onPanResponderGrant({ nativeEvent: { pageY: 490, timestamp: 1000 } }, { dx: 0, dy: -10, numberActiveTouches: 1 });
@@ -618,15 +629,15 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
 
   // Production handle: terminal release clock crosses dismiss after earlier move.
   drag = null;
-  const handleActions = [];
+  const handleActions: HandleSettleAction[] = [];
   const handle = createHandleSheetHandlers({
     isExpanded: () => false, isHandleActive: () => true, getControlOrigin: () => false,
     getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
-    getDrag: () => drag, setDrag: (next) => { drag = next; },
+    getDrag: () => drag, setDrag: (next: SheetDrag | null) => { drag = next; },
     beginFreshTouch: () => {}, retireGesture: () => { drag = null; },
     applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
     endCompact: () => {},
-    endHandle: (_gen, dy, velocity, velocityAgeMs) => {
+    endHandle: (_gen: number, dy: number, velocity: number, velocityAgeMs: number) => {
       handleActions.push(decideHandleSettle({
         originExpanded: false, dy, start: 0, travel: 300, velocity, velocityAgeMs,
       }));
@@ -639,17 +650,16 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
   assert.equal(handleActions.at(-1), 'dismiss');
 
   // Gallery second finger + release0 cannot reconstruct commit; fresh single finger recovers.
-  /** @type {import('../src/venue-gestures.ts').GalleryAxis} */
-  let axis = 'pending';
+  let axis: GalleryAxis = 'pending';
   let retired = false;
   let generation = 1;
-  const commits = [];
+  const commits: Array<Exclude<GallerySwipeAction, 'none'>> = [];
   const gallery = createGalleryGestureHandlers({
     canPage: () => true, isMounted: () => true, getGeneration: () => generation,
     bumpGeneration: () => { generation += 1; },
-    isRetired: () => retired, setRetired: (value) => { retired = value; },
-    getAxis: () => axis, setAxis: (next) => { axis = next; },
-    onGrantFresh: () => {}, onCommit: (action) => { commits.push(action); },
+    isRetired: () => retired, setRetired: (value: boolean) => { retired = value; },
+    getAxis: () => axis, setAxis: (next: GalleryAxis) => { axis = next; },
+    onGrantFresh: () => {}, onCommit: (action: Exclude<GallerySwipeAction, 'none'>) => { commits.push(action); },
   });
   const gEvent = { nativeEvent: { pageY: 0, timestamp: 0 } };
   gallery.onPanResponderGrant();
@@ -661,6 +671,19 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
   gallery.onPanResponderMove(gEvent, { dx: -50, dy: 0, numberActiveTouches: 1 });
   gallery.onPanResponderRelease(gEvent, { dx: -50, dy: 0, numberActiveTouches: 1 });
   assert.equal(commits.at(-1), 'next');
+
+  // Deferred dismiss → unmount dispose → flush: opener focus survives (P2).
+  const focusCalls: string[] = [];
+  let focusQueued: (() => void) | null = null;
+  const focusLife = createReturnFocusLifecycle();
+  focusLife.armDismissRestore(() => { focusCalls.push('opener'); }, (cb) => {
+    focusQueued = cb;
+    return { cancel: () => { if (focusQueued === cb) focusQueued = null; } };
+  });
+  focusLife.disposeSheetUnmount();
+  assert.equal(typeof focusQueued, 'function');
+  focusQueued!();
+  assert.deepEqual(focusCalls, ['opener']);
 
   // Existing close seam still extracts without generation/retire helpers.
   const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';

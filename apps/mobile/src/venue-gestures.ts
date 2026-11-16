@@ -235,6 +235,8 @@ export type SheetResponderPorts = {
   markSuppress: () => void;
   endCompact: (axis: SheetAxis, dy: number, gen: number) => void;
   endHandle: (gen: number, dy: number, velocity: number, velocityAgeMs: number) => void;
+  /** Ordinary handle activate when grant/release never locked vertical (View host; Pressable is a11y child). */
+  activateHandle?: () => void;
 };
 
 /**
@@ -340,6 +342,13 @@ export function createHandleSheetHandlers(ports: SheetResponderPorts) {
       const releaseTime = event.nativeEvent.timestamp;
       const dy = sheetReleaseDy(releaseY, current.startY);
       const velocityAgeMs = eventClockAgeMs(releaseTime, current.time);
+      // Pending axis + under lock: ordinary tap on the View host (Pressable child is a11y-only).
+      if (current.axis === 'pending' && Math.abs(dy) < VENUE_SHEET_AXIS_LOCK) {
+        ports.setDrag(null);
+        ports.settleLift();
+        ports.activateHandle?.();
+        return;
+      }
       ports.endHandle(current.generation, dy, current.velocity, velocityAgeMs);
     },
     onPanResponderTerminate: () => { ports.retireGesture(true); ports.settleLift(); },
@@ -422,13 +431,51 @@ export function createGalleryGestureHandlers(ports: GalleryResponderPorts) {
   };
 }
 
+export type FocusSchedulePort = (cb: () => void) => { cancel: () => void };
+
+const defaultFocusSchedule: FocusSchedulePort = (cb) => {
+  const id = setTimeout(cb, 0);
+  return { cancel: () => clearTimeout(id) };
+};
+
 /** Unmount-safe opener/fallback focus restoration scheduling (RN focus semantics). */
 export function scheduleReturnFocus(
   restore: () => void,
-  schedule: (cb: () => void) => { cancel: () => void } = (cb) => {
-    const id = setTimeout(cb, 0);
-    return { cancel: () => clearTimeout(id) };
-  },
+  schedule: FocusSchedulePort = defaultFocusSchedule,
 ): { cancel: () => void } {
   return schedule(restore);
+}
+
+/**
+ * Production dismiss/opener focus lifecycle shared with owning tests.
+ * Intentional dismiss restore survives sheet unmount disposal; obsolete nav/scope cancels.
+ */
+export function createReturnFocusLifecycle() {
+  let pending: { cancel: () => void; kind: 'dismiss' | 'transient' } | null = null;
+  return {
+    /** Final compact dismiss: one deferred restore that must outlive sheet unmount cleanup. */
+    armDismissRestore(restore: () => void, schedule: FocusSchedulePort = defaultFocusSchedule) {
+      pending?.cancel();
+      const handle = schedule(() => {
+        pending = null;
+        restore();
+      });
+      pending = { cancel: handle.cancel, kind: 'dismiss' };
+    },
+    /** Cancel pending restore (genuine obsolete navigation / destroyed scope). */
+    cancelObsolete() {
+      pending?.cancel();
+      pending = null;
+    },
+    /**
+     * Sheet unmount disposal: keep intentional dismiss armed; cancel transient work only.
+     * Does not invent a restore when dismiss was never armed.
+     */
+    disposeSheetUnmount() {
+      if (!pending) return;
+      if (pending.kind === 'dismiss') return;
+      pending.cancel();
+      pending = null;
+    },
+  };
 }
