@@ -286,6 +286,9 @@ class RootSourceCustody:
                          and p.lower() not in ('home', 'auth', 'out', 'agents.md', 'gemini.md')
                          for p in n.split('/')) for n in allowed))
         self.binding, self.allowed, self.uid = binding, sorted(set(allowed)), uid
+        # Checkpoint owner identity: AGY/CustodyClient expects executor self.uid;
+        # DirectSourceCustody overrides to the trusted parent writer (geteuid).
+        self.expected_checkpoint_owner = uid
         self.nonce = secrets.token_hex(32)
         self.boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
         self.outer = Path(tempfile.mkdtemp(prefix='gb-source-custody-', dir=_QA_RESULTS))
@@ -368,11 +371,12 @@ class RootSourceCustody:
             self.prove_stop()  # Never trust a child-supplied reap boolean.
         fd = _directory(self.cap, 'source-checkpoint')
         try:
+            owner = self.expected_checkpoint_owner
             info = os.fstat(fd)
-            need(info.st_uid == self.uid and stat.S_IMODE(info.st_mode) == 0o700)
+            need(info.st_uid == owner and stat.S_IMODE(info.st_mode) == 0o700)
             for leaf in os.listdir(fd):
                 info = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
-                need(stat.S_ISREG(info.st_mode) and info.st_uid == self.uid
+                need(stat.S_ISREG(info.st_mode) and info.st_uid == owner
                      and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1)
             raw = _bounded_file(fd, 'manifest.json', 2 << 20)
             m = loads(raw)
@@ -612,6 +616,9 @@ class CustodyClient(SourceQuarantine):
 class DirectSourceCustody(SourceQuarantine):
     def __init__(self, root):
         self.root = root
+        # Trusted Root parent persists the checkpoint in-process; collect must
+        # expect that writer identity, not the executor uid used by AGY.
+        root.expected_checkpoint_owner = os.geteuid()
         super().__init__(os.dup(root.cap), root.allowed, root.uid)
 
     def prepare(self, work):
