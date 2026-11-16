@@ -32,7 +32,7 @@ export class VenuesController {
   @Get("venues/:venueId/community-rating/me")
   @Header("Cache-Control", "no-store")
   async communityOwn(@Req() request: FastifyRequest, @Param("venueId") venueId: string) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.venues.getCommunityOwnVote(venueId, actor.userId);
   }
 
@@ -43,7 +43,7 @@ export class VenuesController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("venueId") venueId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.venues.upsertCommunityRating(
       venueId,
       actor.userId,
@@ -62,7 +62,7 @@ export class VenuesController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("venueId") venueId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.venues.withdrawCommunityRating(
       venueId,
       actor.userId,

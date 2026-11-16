@@ -1,3 +1,4 @@
+import { VenueCommunityProvider } from '../src/venue-community-runtime.tsx';
 import { RadarProvider } from '../src/radar-runtime.tsx';
 import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
@@ -25,7 +26,7 @@ export default function RootLayout() {
   }, [attempt]);
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
-      <AuthProvider><RadarProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }} /></MainNavigation></MessagesOwner></RadarProvider></AuthProvider>
+      <AuthProvider><RadarProvider><VenueCommunityProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }} /></MainNavigation></MessagesOwner></VenueCommunityProvider></RadarProvider></AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />
       {font === 'error' && <><Label>Не удалось загрузить шрифт приложения.</Label>

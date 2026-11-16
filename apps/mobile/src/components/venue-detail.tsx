@@ -1,3 +1,4 @@
+import { NativeVenueCommunity } from './venue-community.tsx';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Image, Linking, PanResponder, Pressable, ScrollView, View } from 'react-native';
@@ -237,6 +238,7 @@ export function VenueContent({ venue, schedule, mapSheet = false, selected = nul
       {venue.contacts.length ? venue.contacts.map(link => <PublicLink key={link.url} {...link} onControlTouch={onControlTouch} onControlTouchEnd={onControlTouchEnd} />) : <Label>Контакты пока не добавлены</Label>}
     </View>
     {schedule}
+    <NativeVenueCommunity venueId={venue.id} name={venue.name} />
   </>;
   return <>
     <Label accessibilityRole="header" style={styles.title}>{venue.name}</Label><Label>{venue.address}</Label>
@@ -251,6 +253,7 @@ export function VenueContent({ venue, schedule, mapSheet = false, selected = nul
       {venue.contacts.length ? venue.contacts.map(link => <PublicLink key={link.url} {...link} />) : <Label>Контакты пока не добавлены</Label>}
     </View>
     {schedule ?? <Schedule venue={venue} />}
+    <NativeVenueCommunity venueId={venue.id} name={venue.name} />
   </>;
 }
 function CompactSourceLink({name,url,onControlTouch,onControlTouchEnd}:{

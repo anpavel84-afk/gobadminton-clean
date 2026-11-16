@@ -1,4 +1,4 @@
-# Native UI behavior contract · H-01 / V-01 / V-02
+# Native UI behavior contract · H-01 / V-01 / V-02 / V-03
 
 Bounded #522 record. Authority order: Owner decision → `SITEWIDE_UI_STYLE_GUIDE.md` → `VENUE_GALLERY.md` → accepted web `VenuePopup` / `VenueGallery` / `RootNav` → native adapters. Route inventory is source-presence evidence, not finished-screen acceptance.
 
@@ -41,8 +41,23 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Scenario V7 |
 | Status | **VERIFIED_SOURCE** web gallery; native controlled selection + swipe + media-identity errors (**was GAP** button-only local index); **UNVERIFIED_DEVICE** axis arbitration on device |
 
+## V-03 · Venue ratings and comments (expanded only)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web StyleGuide + existing native primitives; API venue-community public targets; Owner #522 / OD-017 carryforward |
+| Entry | Expanded verified venue only — after contacts and schedule; compact preview has **no** UGC and keeps the current compact shape |
+| Surfaces | Inline community rating summary/own vote + public comments/replies; report subject/reason/detail freeze; anonymous guest read; native bearer closed to venue-community public targets before lookup (never global private player/game enable) |
+| Writes | Exact explicit review → commit; UNKNOWN retain frozen human context across venue switch/back and pagination omission; retry exact packet only; no GET-inferred success; refresh never sends or settles a write |
+| Authority retirement | Explicit logout or actor/session/generation change removes private frozen text/report/context from root history; late ACK/error must not reinsert retired operations or repaint/reload for a new actor; same-id reentry does not resurrect retired context; no auto replay |
+| Edits | Compatible collapse/schedule/cancel/reopen retains edit drafts; authoritative revision/deletion/private/permission or actor retirement clears incompatible edits; successful masked edit clears only its matching draft (photos preserved via existing photoIds) |
+| Non-scope | Photos authoring and verified postgame reviews remain separate unfinished scope; no generic ShareExperience CTA; cookie/guest/CSRF/server moderation rights unchanged |
+| Evidence | Scenarios V8–V10; mobile unit `venue-community` / auth community ports |
+| Status | **VERIFIED_SOURCE** coordinator + expanded host seam + native venue principal opt-in; **UNVERIFIED_DEVICE** Owner UI / Xiaomi; code12 is TARGET SOURCE ONLY until genuine gates/build/delivery |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.
 - Emulator success is not Xiaomi success; Owner Xiaomi FAIL stays separate.
 - This scope does not close full native parity for the rest of #522.
+- code11 phone+x86 publication remains actual; code12 is target source only — no full #522 / OTA / iOS PASS claim.

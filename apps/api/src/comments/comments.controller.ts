@@ -27,7 +27,9 @@ export class CommentsController {
   @Get("comments/:commentId")
   @Header("Cache-Control", "no-store")
   async detail(@Req() request: FastifyRequest,@Param("commentId") id: string) {
-    const viewer=await this.auth.optionalSession(request);
+    const viewer = request.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(request) : await this.auth.optionalSession(request);
+    if (viewer && "transport" in viewer && viewer.transport === "bearer") await this.comments.assertNativeVenueTarget(id);
     return projectCommentAvatar(await this.comments.detail(id,viewer?.userId??null));
   }
 
@@ -80,7 +82,8 @@ export class CommentsController {
     @Query("order") order?: string,
     @Query("parentCommentId") parentCommentId?: string,
   ) {
-    const viewer = await this.auth.optionalSession(request);
+    const viewer = request.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(request) : await this.auth.optionalSession(request);
     return this.comments.list("venue", venueId, viewer?.userId ?? null, {
       cursor,
       limit,
@@ -96,7 +99,7 @@ export class CommentsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("venueId") venueId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.comments.create(
       "venue",
       venueId,
@@ -116,7 +119,8 @@ export class CommentsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("commentId") commentId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
+    if (actor.transport === "bearer") await this.comments.assertNativeVenueTarget(commentId);
     const result = await this.comments.update(
       commentId,
       actor.userId,
@@ -135,7 +139,8 @@ export class CommentsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("commentId") commentId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
+    if (actor.transport === "bearer") await this.comments.assertNativeVenueTarget(commentId);
     const result = await this.comments.remove(
       commentId,
       actor.userId,

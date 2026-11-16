@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -20,7 +21,7 @@ import { VenuesModule } from "../../src/venues/venues.module";
 import { buildTestCoreModule } from "./test-core.module";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
@@ -45,6 +46,7 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
+  let native: NativeSessionService;
   let pairs: PairFenceService;
   let author: Actor;
   let peer: Actor;
@@ -77,9 +79,11 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
       APP_ENV: "local",
       HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:"venue-community-fixture",redirectUris:["https://app.example.test/auth/callback"]}]),
       AUTH_PEPPER: "comments-synthetic-fixture-pepper!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "comments-synthetic-fingerprint-fixture-only",
@@ -107,6 +111,7 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     sessions = ref.get(SessionService);
+    native = ref.get(NativeSessionService);
     pairs = ref.get(PairFenceService);
   }, 120000);
 
@@ -135,6 +140,13 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     peer = await actor("Comment peer");
     outsider = await actor("Comment outsider");
   });
+
+  async function nativeCredentials(who: Actor) {
+    return native.transaction(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, "venue-community-fixture");
+    });
+  }
 
   async function actor(name: string): Promise<Actor> {
     const userId = randomUUID();
@@ -246,6 +258,52 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
       venueId: venue.json().id as string,
     };
   }
+
+  it("native venue create/reply/edit/delete/report; shared game target refused before content; no invalid bearer fallback", async () => {
+    const {game,venueId} = await createPublishedGame(author);
+    const credentials = await nativeCredentials(author), other = await nativeCredentials(peer);
+    const headers = {authorization:`Bearer ${credentials.accessToken}`,"idempotency-key":key()};
+    const url = `/v1/venues/${venueId}/comments`;
+    const command = {method:"POST" as const,url,headers,payload:{text:"Synthetic venue question"}};
+    const created = await app.inject(command); expect(created.statusCode).toBe(201);
+    const root = created.json(); expect(root.mine).toBe(true);
+    expect((await app.inject(command)).json()).toEqual(root);
+    const list = await app.inject({url,headers}); expect(list.statusCode).toBe(200); expect(list.json().canCreate).toBe(true);
+    const reply = await app.inject({...command,headers:{...headers,"idempotency-key":key()},payload:{text:"Synthetic one-level reply",parentCommentId:root.id}});
+    expect(reply.statusCode).toBe(201); expect(reply.json().parentCommentId).toBe(root.id);
+    const detailUrl = `/v1/comments/${root.id}`;
+    expect((await app.inject({url:detailUrl,headers})).statusCode).toBe(200);
+    const edited = await app.inject({method:"PUT",url:detailUrl,headers:{...headers,"idempotency-key":key()},payload:{text:"Synthetic changed question",photoIds:[],expectedVersion:1}});
+    expect(edited.statusCode).toBe(200); expect(edited.json().version).toBe(2);
+    const conflict = await app.inject({method:"PUT",url:detailUrl,headers:{...headers,"idempotency-key":key()},payload:{text:"Stale edit",expectedVersion:1}});
+    expect(conflict.statusCode).toBe(409);
+    const foreign = await app.inject({method:"DELETE",url:detailUrl,headers:{authorization:`Bearer ${other.accessToken}`,"idempotency-key":key()},payload:{expectedVersion:2}});
+    expect(foreign.statusCode).toBe(404);
+    const report = await app.inject({method:"POST",url:"/v1/reports",headers:{authorization:`Bearer ${other.accessToken}`,"idempotency-key":key()},payload:{targetKind:"venue_community",subjectKind:"venue_comment",venueId,commentId:reply.json().id,expectedVersion:1,reasonCode:"spam",detail:"Synthetic private detail"}});
+    expect(report.statusCode).toBe(201); expect(report.json().status).toBe("submitted");
+    const removed = await app.inject({method:"DELETE",url:detailUrl,headers:{...headers,"idempotency-key":key()},payload:{expectedVersion:2}});
+    expect(removed.statusCode).toBe(200); expect(removed.json().deleted).toBe(true); expect(removed.json().body).toBeNull();
+    const branch = await app.inject({url:`${url}?parentCommentId=${root.id}`,headers}); expect(branch.statusCode).toBe(200); expect(branch.json().items[0].id).toBe(reply.json().id);
+    const gameComment = await post(author,`/v1/games/${game.id}/comments`,{text:"PRIVATE NATIVE GAME SENTINEL"}); expect(gameComment.statusCode).toBe(201);
+    for (const target of [gameComment.json().id,randomUUID()]) {
+      for (const method of ["GET","PUT","DELETE"] as const) {
+        const refused = await app.inject({method,url:`/v1/comments/${target}`,headers:{...headers,"idempotency-key":key()},...(method === "GET" ? {} : {payload:method === "PUT" ? {text:"Rejected native edit",expectedVersion:1} : {expectedVersion:1}})});
+        expect(refused.statusCode).toBe(404); expect(refused.body).not.toContain("PRIVATE NATIVE GAME SENTINEL");
+      }
+    }
+    expect((await app.inject({url:`/v1/comments/${gameComment.json().id}`,headers:{cookie:author.cookie}})).statusCode).toBe(200);
+    expect((await app.inject({method:"POST",url,headers:{cookie:author.cookie,origin,"idempotency-key":key()},payload:{text:"Missing csrf"}})).statusCode).toBe(403);
+    expect((await app.inject({url})).statusCode).toBe(200);
+    for (const target of [url,`/v1/comments/${reply.json().id}`]) {
+      expect((await app.inject({url:target,headers:{authorization:"Bearer invalid"}})).statusCode).toBe(401);
+      expect((await app.inject({url:target,headers:{authorization:"Bearer invalid",cookie:author.cookie}})).statusCode).toBe(403);
+    }
+    await pool.query("UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[credentials.sessionId]);
+    expect((await app.inject({url,headers})).statusCode).toBe(401);
+    const expired = await nativeCredentials(author);
+    await pool.query("UPDATE native_access_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE session_id=$1",[expired.sessionId]);
+    expect((await app.inject({url,headers:{authorization:`Bearer ${expired.accessToken}`}})).statusCode).toBe(401);
+  });
 
   it("create/read/reply/own edit/tombstone, foreign denial, unavailable parent, block and replay/CAS", async () => {
     const { game, venueId } = await createPublishedGame(author);

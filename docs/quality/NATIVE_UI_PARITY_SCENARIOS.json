@@ -2,7 +2,7 @@
   "status": "DECLARATIVE_CAPTURE_MANIFEST",
   "issue": 522,
   "contract": "docs/product/NATIVE_UI_BEHAVIOR_CONTRACT.md",
-  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery"],
+  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery", "venue.ratings-comments"],
   "fixture": {
     "data_revision": null,
     "actor_auth_state": "guest_or_dedicated_DEV_actor_supplied_by_Root",
@@ -94,6 +94,30 @@
       "expect": "Horizontal changes only photo; vertical changes sheet; media identity/credit persists",
       "expected_state": "venue.gallery.continuity",
       "artifact": "07-alternate-gallery-expanded + 08-alternate-gallery-compact"
+    },
+    {
+      "id": "V8",
+      "start": "compact selected verified venue",
+      "action": "Inspect compact body; expand; scroll past contacts/schedule",
+      "expect": "Compact has no ratings/comments UGC; expanded shows inline ratings/comments after contacts/schedule; sticky Create unchanged",
+      "expected_state": "venue.expanded.ugc.after_contacts",
+      "artifact": "09-expanded-ugc"
+    },
+    {
+      "id": "V9",
+      "start": "expanded authenticated own comment",
+      "action": "Begin edit; collapse/reopen; cancel editor; submit masked text edit without photo change",
+      "expect": "Compatible draft resumes; successful masked edit clears only matching draft; existing photoIds preserved; no ShareExperience CTA",
+      "expected_state": "venue.ugc.edit_draft",
+      "artifact": "step log"
+    },
+    {
+      "id": "V10",
+      "start": "expanded write that becomes UNKNOWN",
+      "action": "Lose network mid-commit; switch venue and back; refresh; revoke then restore permission; rotate actor/session",
+      "expect": "Frozen context reachable for same actor; refresh does not write; permission-unavailable disables retry honestly; actor retirement erases private history without late reinsert",
+      "expected_state": "venue.ugc.unknown_authority",
+      "artifact": "step log"
     }
   ],
   "pass_rule": "Missing runtime capture => NOT_TESTED. Unit/export/build success does not invent device PASS. Emulator ≠ Xiaomi.",
