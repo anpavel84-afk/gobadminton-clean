@@ -268,6 +268,10 @@ class RootSourceCustody:
     The 0700 outer sink is inaccessible to executor UID. Inner FD is CLOEXEC,
     SDK-only with dumpability zero. No task object can supply this capability.
     """
+    # Class default: None means executor self.uid. Instances built via
+    # object.__new__ (CI seams) omit __init__; DirectSourceCustody sets geteuid().
+    expected_checkpoint_owner = None
+
     @staticmethod
     def preflight():
         from live import _QA_RESULTS
@@ -371,7 +375,7 @@ class RootSourceCustody:
             self.prove_stop()  # Never trust a child-supplied reap boolean.
         fd = _directory(self.cap, 'source-checkpoint')
         try:
-            owner = self.expected_checkpoint_owner
+            owner = self.uid if self.expected_checkpoint_owner is None else self.expected_checkpoint_owner
             info = os.fstat(fd)
             need(info.st_uid == owner and stat.S_IMODE(info.st_mode) == 0o700)
             for leaf in os.listdir(fd):

@@ -4906,6 +4906,46 @@ class DirectSourceCustodyCollectOwnerTests(unittest.TestCase):
             attempt(extra_leaf='payload-extra')
             attempt(mode_leaf=0o644)
 
+    def test_new_without_expected_owner_falls_back_to_uid(self):
+        """CI seams use object.__new__ without __init__; None -> self.uid."""
+        import author_handoff as ah
+        writer = os.geteuid()
+        executor = self._executor_uid()
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding()
+            allowed = ['tools/train/author_handoff.py']
+            # Accept: uid == current euid, no expected_checkpoint_owner set.
+            custody_ok, incoming_ok = self._custody(
+                td, uid=writer, expected_owner=None,
+                binding=binding, allowed=allowed)
+            del custody_ok.expected_checkpoint_owner
+            self.assertIsNone(custody_ok.expected_checkpoint_owner)
+            self._write_checkpoint(incoming_ok, binding, {
+                'tools/train/author_handoff.py': b'new-fallback-ok\n',
+            })
+            st = os.stat(Path(incoming_ok) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertEqual(st.st_uid, custody_ok.uid)
+            self._collect(custody_ok)
+            self.assertTrue(custody_ok.record.get('checkpoint_ready'))
+
+            # Reject: uid differs from file owner (writer), still no override.
+            sub = tempfile.mkdtemp(dir=td)
+            custody_bad, incoming_bad = self._custody(
+                sub, uid=executor, expected_owner=None,
+                binding=binding, allowed=allowed)
+            del custody_bad.expected_checkpoint_owner
+            self.assertIsNone(custody_bad.expected_checkpoint_owner)
+            self._write_checkpoint(incoming_bad, binding, {
+                'tools/train/author_handoff.py': b'new-fallback-bad\n',
+            })
+            st = os.stat(Path(incoming_bad) / 'source-checkpoint')
+            self.assertEqual(st.st_uid, writer)
+            self.assertNotEqual(st.st_uid, custody_bad.uid)
+            with self.assertRaises(ah.RetentionError):
+                self._collect(custody_bad)
+            self.assertFalse(custody_bad.record.get('checkpoint_ready'))
+
 
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
