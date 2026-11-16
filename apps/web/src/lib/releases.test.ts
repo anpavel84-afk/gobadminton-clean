@@ -2024,7 +2024,7 @@ describe("alpha.97 UGC metadata preparation", () => {
     const delta = CURRENT_NAMED_RELEASE.additions.join(" ");
     expect(delta).toMatch(/раскрытых сведениях.*оценка сообщества и текстовое обсуждение.*компактной карточке.*не показываются/);
     expect(delta).toMatch(/поставить или отозвать.*обычную оценку.*пожаловаться на оценку/);
-    expect(delta).toMatch(/комментарий или ответ.*пожаловаться.*изменить или удалить свой корневой комментарий.*сервер подтверждает право/);
+    expect(delta).toMatch(/комментарий или ответ.*пожаловаться.*отредактировать или удалить свой корневой комментарий.*сервер подтверждает право/);
     expect(delta).not.toMatch(/receipt|source.?guard|NativeBearer|APK|code12|PASS|ACCEPTED|фотограф|подтверждённым участием|полный.*#522/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations[0]).toMatch(/Оценки сообщества.*в установленной версии и на физическом телефоне ещё не подтверждена.*фотографий.*подтверждённым участием.*не предоставляются/);
     for (const field of ["deployments", "accepted_at", "release_id", "candidate_APK_urls", "native_evidence"]) {
