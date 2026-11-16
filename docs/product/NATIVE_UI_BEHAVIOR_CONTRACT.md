@@ -55,9 +55,21 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Scenarios V8–V10; mobile unit `venue-community` / auth community ports |
 | Status | **VERIFIED_SOURCE** coordinator + expanded host seam + native venue principal opt-in; **UNVERIFIED_DEVICE** Owner UI / Xiaomi; code12 is TARGET SOURCE ONLY until genuine gates/build/delivery |
 
+## P-01 · Own profile level / район-метро / О себе
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `ProfilePage.tsx` editor fields + `LevelGuide` / `lib/level-guide.ts` identities; native `profile.ts` / `ProfileEditor` / existing Label·chip·sheet·keyboard patterns |
+| Entry | Authenticated `/profile` existing «Игровой профиль» editor (name/city already present) |
+| Trigger | Explicit level choice (Keep / Не знаю / pilot / ntrp half-step), район/метро ≤64, О себе ≤500; one Save / Cancel |
+| Expected | Unknown scale/version preserved until explicit change; wire omits unchanged level/area/bio; explicit null clears; saving these fields does not mutate visibility/contact/consent/trainer/looking; frozen packet + exact retry; actor/session retirement unchanged |
+| Accessibility | Labelled controls; multiline bio; level sheet uses existing DiscoverySheet focus return |
+| Evidence | Scenario P1; mobile unit `profile.test.ts` |
+| Status | **VERIFIED_SOURCE** coordinator/editor/transport for this slice; **UNVERIFIED_DEVICE** no current device/emulator PASS; photos/privacy/contactPolicy/linked identity remain unfinished |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.
 - Emulator success is not Xiaomi success; Owner Xiaomi FAIL stays separate.
 - This scope does not close full native parity for the rest of #522.
-- code11 phone+x86 publication remains actual; code12 is target source only — no full #522 / OTA / iOS PASS claim.
+- code12 publication receipt satisfied the conditional counter; code13 is planned source value only — not built/installed/device/public release; no full #522 / OTA / iOS PASS claim.

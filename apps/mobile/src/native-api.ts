@@ -10,7 +10,7 @@ import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
 import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
 import type { ContactPacket } from './contact.ts';
-import { ProfileError, parseOwnProfile } from './profile.ts';
+import { ProfileError, parseOwnProfile, profileWireBody } from './profile.ts';
 import type { ProfilePacket } from './profile.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
@@ -217,9 +217,8 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       })() : {}),
     }, access, packet.key, false, false, true), packet.body.targetPublicPlayerId),
     ownProfile: async (access: string) => parseOwnProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, false, false, false, true)),
-    saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH', {
-      expectedVersion: packet.body.expectedVersion, displayName: packet.body.displayName, cityId: packet.body.cityId,
-    }, access, packet.key, false, false, false, true)),
+    saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH',
+      profileWireBody(packet.body), access, packet.key, false, false, false, true)),
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),
