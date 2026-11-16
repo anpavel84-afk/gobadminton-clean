@@ -1,6 +1,38 @@
 # iOS и Android
 
-## #522: metadata-preparation checkpoint alpha.97 · 2026-11-16
+## #522: metadata-preparation checkpoint alpha.98 · 2026-11-16T06:46:52Z
+
+Приложение `0.1.0-alpha.98` — «Игровой профиль: уровень, район и О себе».
+В native source подготовлены селектор самостоятельно заявленного уровня и короткая справка,
+сохранение идентичности уровня другой/неизвестной шкалы без подмены, район / метро и «О себе».
+Обычный приватный черновик содержит все поля; выход и смена игрока убирают прежние закрытые
+сведения из редактора. При неизвестном результате доступен только явный повтор исходного
+неизменяемого запроса с теми же actor, данными, версией и ключом. Это самооценка игрока,
+без автоматического повышения уровня, подтверждения квалификации или нового публичного рейтинга.
+
+Это **SOURCE_ONLY** подготовка по предоставленным фактам на указанный UTC checkpoint,
+без сетевой проверки runtime. Source, metadata M, server merge, build/sign/publication и
+установленная версия — отдельные факты. Успех source-тестов или Expo export не является
+проверкой телефона/эмулятора либо приёмкой владельца.
+
+| Стадия | Факт на этом checkpoint / открытая граница |
+|---|---|
+| Принятый DEV / rollback | `0.1.0-alpha.97`, source `dc89c6e2106fbcac0c6bc154877925633938d3c8`, release `r43810285109-a1`, ACCEPTED `2026-11-16T05:43:13Z`. ALL10 seed `ACTUAL-ALPHA97-HISTORY-SEED.json`: **11371 bytes**, SHA256 `b45ab40bc897b97bdac6b46554da0943a669e4af9df393af89790833307f2a08`; все десять полей и прежние записи/digests сохранены. Raw Owner UAT **FAIL_RECHECK_PENDING**, существующая публичная wire-проекция **FAIL**, без нового PASS |
+| Qualified native source | `210edb97082baf0ee613ae01587f6976f8e4604b`, mobile tree `a76e4524172bbb807b2b7dc2277df5bf6bdfcc11`, versionName `0.1.0`, source target versionCode **13**. Summary SHA256 `56f6c5bf4aa9b33f1e48b958d978361b7bd516ea637b7b2a5384660257eb3d51` (**2326 bytes**). Native source не принят на DEV как alpha.98 |
+| Авторство / custody | Source author **Cursor Auto**, underlying model/effort **UNKNOWN**; source вручную восстановлен, оба genuine custody HOLD/manual recovery сохранены. Это не source авторства gpt-6.1. Metadata gpt-6.1/high — отдельное выполнение со своим фактическим receipt; metadata не квалифицирует source, binary или device |
+| Source selfcheck / независимая QA | Actual owning **372 PASS**, TSC/lint/Expo2/archive; RS `a8c8be12549f973e041c1fdfbbb21ce62a755a9153b4221fdfa3ac10460e5c77`, parent PASS `c790adb6dca660467ee463ecdab630f3ae7f3b770a11442015cb853876a240a5`. FIRST cumulative10 independent **gpt-6-sol/medium PASS, no findings**, receipt `4fad5b219c38be6b6778e8db61052de7de2382267ccd731677bc253c68d9fc2d`. Retained R3D syntax FAIL `a4570c10636242af4269135adeb89c1e84a4ffb6ea20797242a3f140051e9c13` и packet/probe FAIL `c856e88e0d0bbd6e55c20e88469152b01ef7c31d3564ded0282960d3e69c7d05` не заменяются PASS |
+| Metadata / будущая приёмка | `prepared_source_sha` указывает на `210edb9…`, `source_sha: null`. Будущие metadata M и server merge SHA, release_id/accepted_at alpha.98 и source counter **UNKNOWN**, не назначены. Авторская самопроверка не является independent metadata QA |
+| API / schema / bearer inventory | API-контракт **0.44.0**, schema inventory **72**, whole OpenAPI NativeBearer **72**, selected native **30** — уже установлены на принятом alpha.97 и сохранены в profile source без расширения |
+| Android code13 | **FACTS_NOT_SUPPLIED_AT_THIS_DATED_PREPARATION_CHECKPOINT**: actual arm64/x86_64 build receipts, owned-sign receipts и candidate APK URLs **null**. Фактический APK13, его URL/hash/size/signature, установка или device result не заявляются. Отсутствие фактов в этом пакете не доказывает, что сборка/подпись не состоятся позже; их receipts отдельно предоставляет Root |
+| Текущий публичный binary | **APK12** остаётся текущим публичным до реальной следующей публикации. Его source `3e3e3e25d5067f1acc7b5b72fe43e43efd4042f6` и прежние URL/hash/size/signature/history неизменны; publication receipt SHA256 `df885baed1140902ebc6f51fe9d6411e6ca8de03e1e29c8f0711abcce6515634`. Новая ссылка из target13 не выводится. Исторический checkpoint alpha.97 ниже описывает более раннюю подготовку, до этой публикации |
+| Устройство / Owner UAT | Profile/code13 **NOT_TESTED**, native visual **NOT_VERIFIED**, Owner UAT **FAIL_RECHECK_PENDING**. Samsung S23/alpha.85 FAIL, Xiaomi gesture/header FAIL, marker remarks и неподтверждённая причина PlayerSwipe two-gesture error сохранены до фактического retest |
+| Оставшийся объём | Full #522 **PARTIAL**; full native parity **MANDATORY_NOT_COMPLETE**. Фотографии и настройки приватности профиля, остальные неперенесённые WEB-сценарии, установленный authenticated journey/verified links и device acceptance обязательны. Real signed OTA **NOT_IMPLEMENTED**, iOS **NOT_DONE**; аккаунт/средства OTA подписи остаются неизвестными. PROD/stores не разрешены |
+| Следующие отдельные gates | Root: fresh release-owning126+ и type/lint/history ALL10 → FIRST independent exactFIVE metadata QA → обычный CI7 → trusted merge dev → DEV ACCEPTED / STRICT selected30/whole72 и smoke. Фактические paired native build/sign/publication receipts и device/Owner UAT проверяются отдельно; эти стадии здесь не объявляются пройденными |
+
+Native source, profile10, API/contracts, зависимости, versionCode и binaries этим metadata-кандидатом
+не меняются. Ниже сохранены исторические checkpoints и их временные границы.
+
+## Исторический checkpoint подготовки alpha.97 · 2026-11-16 (сохранён)
 
 Снимок предоставленных фактов на момент подготовки metadata, без сетевой проверки runtime.
 Приложение `0.1.0-alpha.97` описывает native оценку сообщества и текстовое обсуждение внутри

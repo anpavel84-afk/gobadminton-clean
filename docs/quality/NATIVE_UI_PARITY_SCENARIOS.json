@@ -2,7 +2,7 @@
   "status": "DECLARATIVE_CAPTURE_MANIFEST",
   "issue": 522,
   "contract": "docs/product/NATIVE_UI_BEHAVIOR_CONTRACT.md",
-  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery", "venue.ratings-comments"],
+  "scope": ["header.actions", "map.venue-sheet", "map.venue-gallery", "venue.ratings-comments", "profile.level-area-bio"],
   "fixture": {
     "data_revision": null,
     "actor_auth_state": "guest_or_dedicated_DEV_actor_supplied_by_Root",
@@ -118,6 +118,14 @@
       "expect": "Frozen context reachable for same actor; refresh does not write; permission-unavailable disables retry honestly; actor retirement erases private history without late reinsert",
       "expected_state": "venue.ugc.unknown_authority",
       "artifact": "step log"
+    },
+    {
+      "id": "P1",
+      "start": "authenticated /profile with existing name/city editor",
+      "action": "Open level chooser/help; keep unknown scale; choose Не знаю; select ntrp half-step and pilot; edit район/метро and О себе; save and cancel; retry UNKNOWN",
+      "expect": "Accepted labels/copy; unchanged fields omitted on PATCH; explicit null distinct from keep; unrelated visibility/contact flags untouched; same-actor frozen packet retry only",
+      "expected_state": "profile.level_area_bio.editor",
+      "artifact": "step log / future device capture"
     }
   ],
   "pass_rule": "Missing runtime capture => NOT_TESTED. Unit/export/build success does not invent device PASS. Emulator ≠ Xiaomi.",
