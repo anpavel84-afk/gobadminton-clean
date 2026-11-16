@@ -9,6 +9,14 @@ import { createPublicApi, gamesResourceKey } from '../src/public-api.ts';
 import type { MapSnapshot, MapOverlay, SheetMeasurement } from '../src/maps.ts';
 import { LatestResource } from '../src/resource.ts';
 import { parseVenue } from '../src/venues.ts';
+import type {
+  CompactSheetAction,
+  GalleryAxis,
+  GallerySwipeAction,
+  HandleSettleAction,
+  SheetAxis,
+  SheetDrag,
+} from '../src/venue-gestures.ts';
 import { game } from './fixtures.ts';
 const pack = mapPackForCity('a0000000-0000-4000-8000-000000000001')!;
 const id = '11111111-1111-4111-8111-111111111111', alias = '22222222-2222-4222-8222-222222222222';
@@ -588,11 +596,6 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
     measuredSheetTravel, mediaFailureApplies, secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress,
     gestureGenerationActive,
   } = gestures;
-  type SheetDrag = import('../src/venue-gestures.ts').SheetDrag;
-  type GalleryAxis = import('../src/venue-gestures.ts').GalleryAxis;
-  type CompactSheetAction = import('../src/venue-gestures.ts').CompactSheetAction;
-  type HandleSettleAction = import('../src/venue-gestures.ts').HandleSettleAction;
-  type GallerySwipeAction = import('../src/venue-gestures.ts').GallerySwipeAction;
   assert.equal(measuredSheetTravel(172, 0, Math.floor(800 * 0.88)), Math.floor(800 * 0.88) - 172);
   assert.equal(compactLiveGrowthHeight(172, 80, 704), 252);
   assert.equal(secondTouchCancels(2), true);
@@ -608,40 +611,42 @@ test('venue sheet/gallery UX seams: production handlers, media identity, local M
   assert.equal(gestureGenerationActive(2, 1, true), false);
 
   // Production compact handler trace: delayed grant origin recovers full -60 expand.
-  let drag: SheetDrag | null = null;
+  // Typed fixture port: callback-mutated state read via getter so TS keeps SheetDrag | null.
+  const dragPort: { current: SheetDrag | null } = { current: null };
+  const readDrag = (): SheetDrag | null => dragPort.current;
   const compactActions: CompactSheetAction[] = [];
   const compact = createCompactSheetHandlers({
     isExpanded: () => false, isHandleActive: () => false, getControlOrigin: () => false,
     getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
-    getDrag: () => drag, setDrag: (next: SheetDrag | null) => { drag = next; },
-    beginFreshTouch: () => {}, retireGesture: () => { drag = null; },
+    getDrag: readDrag, setDrag: (next: SheetDrag | null) => { dragPort.current = next; },
+    beginFreshTouch: () => {}, retireGesture: () => { dragPort.current = null; },
     applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
-    endCompact: (axis: import('../src/venue-gestures.ts').SheetAxis, dy: number) => {
-      compactActions.push(decideCompactRelease(axis, dy)); drag = null;
+    endCompact: (axis: SheetAxis, dy: number) => {
+      compactActions.push(decideCompactRelease(axis, dy)); dragPort.current = null;
     },
     endHandle: () => {},
   });
   compact.onPanResponderGrant({ nativeEvent: { pageY: 490, timestamp: 1000 } }, { dx: 0, dy: -10, numberActiveTouches: 1 });
-  assert.equal(drag?.startY, canonicalSheetOriginY(490, -10));
+  assert.equal(readDrag()?.startY, canonicalSheetOriginY(490, -10));
   compact.onPanResponderMove({ nativeEvent: { pageY: 450, timestamp: 1040 } }, { dx: 0, dy: -50, numberActiveTouches: 1 });
   compact.onPanResponderRelease({ nativeEvent: { pageY: 440, timestamp: 1050 } }, { dx: 0, dy: -60, numberActiveTouches: 1 });
   assert.equal(compactActions.at(-1), 'expand');
 
   // Production handle: terminal release clock crosses dismiss after earlier move.
-  drag = null;
+  dragPort.current = null;
   const handleActions: HandleSettleAction[] = [];
   const handle = createHandleSheetHandlers({
     isExpanded: () => false, isHandleActive: () => true, getControlOrigin: () => false,
     getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
-    getDrag: () => drag, setDrag: (next: SheetDrag | null) => { drag = next; },
-    beginFreshTouch: () => {}, retireGesture: () => { drag = null; },
+    getDrag: readDrag, setDrag: (next: SheetDrag | null) => { dragPort.current = next; },
+    beginFreshTouch: () => {}, retireGesture: () => { dragPort.current = null; },
     applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
     endCompact: () => {},
     endHandle: (_gen: number, dy: number, velocity: number, velocityAgeMs: number) => {
       handleActions.push(decideHandleSettle({
         originExpanded: false, dy, start: 0, travel: 300, velocity, velocityAgeMs,
       }));
-      drag = null;
+      dragPort.current = null;
     },
   });
   handle.onPanResponderGrant({ nativeEvent: { pageY: 100, timestamp: 4000 } });

@@ -466,7 +466,8 @@ test('return-focus lifecycle: deferred dismiss survives unmount disposal; obsole
   life.armDismissRestore(() => { calls.push('stale'); }, deferred);
   life.cancelObsolete();
   assert.equal(queued, null);
-  assert.deepEqual(calls, []);
+  // length check keeps calls: string[] (deepEqual([],) narrows to never[] and breaks later push)
+  assert.equal(calls.length, 0);
 
   host = { focus: () => { calls.push('alive'); } };
   life.armDismissRestore(() => { host?.focus(); }, deferred);
