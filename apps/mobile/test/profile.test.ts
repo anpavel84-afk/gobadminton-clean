@@ -353,3 +353,73 @@ test('profileWireBody omits unchanged optional fields and includes explicit null
     ...base, areaKey: 'sokol', bio: 'hi', level, patch: { areaKey: true, bio: true, level: true },
   }), { expectedVersion: 1, displayName: 'A', cityId: city.id, areaKey: 'sokol', bio: 'hi', level });
 });
+
+test('createProfileDraft is ordinary enumerable five-field state; spread keeps area/bio/levelChoice', () => {
+  const draft = createProfileDraft('Имя', city.id, 'район', 'био', { kind: 'ntrp', levelId: '4.0' });
+  assert.deepEqual(Object.keys(draft).sort(), ['areaKey', 'bio', 'cityId', 'displayName', 'levelChoice']);
+  assert.deepEqual({ ...draft }, draft);
+  assert.deepEqual(emptyDraft, { displayName: '', cityId: '', areaKey: '', bio: '', levelChoice: { kind: 'none' } });
+});
+
+test('save freezes cloned Level identity; caller/profile/draft aliases cannot mutate packet wire or exact retry', async () => {
+  const foreign = { scaleId: 'future-scale', scaleVersion: 9, levelId: 'opaque-level', provenance: 'self_declared' as const };
+  const stored: OwnProfile = {
+    ...emptyProfile, version: 2, displayName: 'Игрок', cityId: city.id, level: foreign, areaKey: 'sokol', bio: 'было',
+  };
+  let recovered = false;
+  const s = setup({
+    read: async () => ({ ...stored, level: foreign }),
+    send: async p => { if (!recovered) throw new ProfileError('network'); return ackFrom(p, stored); },
+  });
+  await s.owner.load();
+  const draftLevel = s.owner.getSnapshot().draft.levelChoice;
+  assert.equal(draftLevel.kind, 'keep');
+  await s.owner.save();
+  const original = s.sent[0]!.packet;
+  const bodyLevel = original.body.level!;
+  const wireBefore = JSON.stringify(profileWireBody(original.body));
+  const keyBefore = original.key;
+  assert.ok(Object.isFrozen(original));
+  assert.ok(Object.isFrozen(original.body));
+  assert.ok(Object.isFrozen(bodyLevel));
+  assert.notStrictEqual(bodyLevel, foreign);
+  assert.notStrictEqual(bodyLevel, s.owner.getSnapshot().profile?.level);
+  assert.deepEqual(bodyLevel, { scaleId: 'future-scale', scaleVersion: 9, levelId: 'opaque-level', provenance: 'self_declared' });
+  assert.equal(original.body.patch.level, false);
+
+  foreign.levelId = 'mutated-caller';
+  foreign.scaleId = 'mutated-scale';
+  (s.owner.getSnapshot().profile!.level as { levelId: string }).levelId = 'mutated-profile';
+  if (draftLevel.kind === 'keep') (draftLevel.level as { levelId: string }).levelId = 'mutated-draft';
+  assert.throws(() => { (bodyLevel as { levelId: string }).levelId = 'mutated-packet'; });
+  assert.deepEqual(bodyLevel, { scaleId: 'future-scale', scaleVersion: 9, levelId: 'opaque-level', provenance: 'self_declared' });
+  assert.equal(JSON.stringify(profileWireBody(original.body)), wireBefore);
+  assert.equal(original.key, keyBefore);
+
+  recovered = true;
+  await s.owner.reconcile();
+  assert.strictEqual(s.sent[1]!.packet, original);
+  assert.equal(s.sent[1]!.packet.key, keyBefore);
+  assert.equal(JSON.stringify(profileWireBody(s.sent[1]!.packet.body)), wireBefore);
+  assert.deepEqual(s.sent[1]!.packet.body.level, {
+    scaleId: 'future-scale', scaleVersion: 9, levelId: 'opaque-level', provenance: 'self_declared',
+  });
+});
+
+test('explicit ntrp save freezes new Level; retained selection aliases cannot rewrite frozen wire', async () => {
+  const s = setup();
+  await edit(s.owner);
+  s.owner.update({ levelChoice: { kind: 'ntrp', levelId: '4.5' } });
+  const choice = s.owner.getSnapshot().draft.levelChoice;
+  await s.owner.save();
+  const packet = s.sent[0]!.packet;
+  const level = packet.body.level!;
+  const wire = JSON.stringify(profileWireBody(packet.body));
+  assert.ok(Object.isFrozen(level));
+  assert.deepEqual(level, ntrpSelfDeclaredLevel('4.5'));
+  assert.equal(packet.body.patch.level, true);
+  if (choice.kind === 'ntrp') (choice as { levelId: string }).levelId = '1.0';
+  assert.throws(() => { (level as { levelId: string }).levelId = '1.0'; });
+  assert.deepEqual(level, ntrpSelfDeclaredLevel('4.5'));
+  assert.equal(JSON.stringify(profileWireBody(packet.body)), wire);
+});

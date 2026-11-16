@@ -93,6 +93,6 @@ export function ProfileEditor() {
         <PrimaryButton title="Сохранить" disabled={locked || !state.draft.displayName.trim() || !selected} onPress={() => { Keyboard.dismiss(); void owner.save(); }} />
         {!locked && <TextButton title="Отменить изменения" onPress={() => { Keyboard.dismiss(); setQuery(''); setHelpOpen(false); owner.cancel(); }} />}
       </>}
-    </>
+    </>}
   </View>;
 }

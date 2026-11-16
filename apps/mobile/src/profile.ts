@@ -225,15 +225,16 @@ export type ProfileDraft = { displayName: string; cityId: string; areaKey: strin
 type Snapshot = { actor: Actor | null; profile: OwnProfile | null; cities: City[]; draft: ProfileDraft;
   status: 'idle' | 'loading' | 'ready' | 'error' | 'stale'; command?: { packet: ProfilePacket; status: 'sending' | 'unknown' };
   notice: string | null };
-/** Name/city stay enumerable for existing auth draft equality; level/area/bio are readable but non-enumerable. */
+/** Ordinary enumerable draft — displayName/cityId/areaKey/bio/levelChoice copy and spread without dropped fields. */
 export function createProfileDraft(displayName: string, cityId: string, areaKey = '', bio = '', levelChoice: LevelGuideChoice = { kind: 'none' }): ProfileDraft {
-  const draft = { displayName, cityId } as ProfileDraft;
-  Object.defineProperties(draft, {
-    areaKey: { value: areaKey, enumerable: false, writable: true, configurable: true },
-    bio: { value: bio, enumerable: false, writable: true, configurable: true },
-    levelChoice: { value: levelChoice, enumerable: false, writable: true, configurable: true },
+  return { displayName, cityId, areaKey, bio, levelChoice };
+}
+/** Domain-level copy+freeze of the four-field Level identity for immutable save packets. */
+function copyFrozenLevel(level: Level | null): Level | null {
+  if (!level) return null;
+  return Object.freeze({
+    scaleId: level.scaleId, scaleVersion: level.scaleVersion, levelId: level.levelId, provenance: level.provenance,
   });
-  return draft;
 }
 const initial = (): Snapshot => ({ actor: null, profile: null, cities: [], draft: createProfileDraft('', ''), status: 'idle', notice: null });
 const form = (p: OwnProfile): ProfileDraft => createProfileDraft(
@@ -321,7 +322,7 @@ export class ProfileCoordinator {
     if (bio !== null && bio.length > 500) {
       this.show({ notice: 'О себе — до 500 символов.' }); return;
     }
-    const level = resolveProfileLevelForSave(draft.levelChoice, profile.level);
+    const level = copyFrozenLevel(resolveProfileLevelForSave(draft.levelChoice, profile.level));
     const packet = Object.freeze({ actor: Object.freeze({ ...actor }), key: this.random(), cityName: city.nameRu,
       body: Object.freeze({
         expectedVersion: profile.version, displayName, cityId: draft.cityId, areaKey, bio, level,

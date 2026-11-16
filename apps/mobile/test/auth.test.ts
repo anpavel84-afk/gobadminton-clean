@@ -463,15 +463,20 @@ test('root profile owner never copies email-looking auth name; UNKNOWN reauth re
     }
     return path === '/auth/native/logout' ? {ok:true} : credentials;
   });
+  const emptyFive = {displayName:'',cityId:'',areaKey:'',bio:'',levelChoice:{kind:'none' as const}};
   await s.auth.hydrate(); await s.auth.profile.load();
-  assert.deepEqual(s.auth.profile.getSnapshot().draft,{displayName:'',cityId:''});
+  assert.deepEqual(s.auth.profile.getSnapshot().draft,emptyFive);
+  assert.deepEqual(Object.keys(s.auth.profile.getSnapshot().draft).sort(),['areaKey','bio','cityId','displayName','levelChoice']);
   assert.doesNotMatch(JSON.stringify(s.auth.profile.getSnapshot()),/private@example/);
-  s.auth.profile.update({displayName:'Публичное имя',cityId:'city'}); await s.auth.profile.save(); assert.equal(lost,true);
+  s.auth.profile.update({displayName:'Публичное имя',cityId:'city',areaKey:'sokol',bio:'О себе частное',levelChoice:{kind:'ntrp',levelId:'3.5'}});
+  await s.auth.profile.save(); assert.equal(lost,true);
   const packet = s.auth.profile.getSnapshot().command!.packet;
+  assert.equal(packet.body.areaKey,'sokol'); assert.equal(packet.body.bio,'О себе частное');
+  assert.deepEqual(packet.body.level,{scaleId:'ntrp',scaleVersion:1,levelId:'3.5',provenance:'self_declared'});
   // Loss of verified identity quarantines private state. Starting reauth is not explicit logout.
   s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
   assert.equal(s.auth.profile.getSnapshot().actor,null); assert.equal(s.auth.profile.getSnapshot().command,undefined);
-  assert.equal(s.auth.profile.getSnapshot().draft.displayName,'');
+  assert.deepEqual(s.auth.profile.getSnapshot().draft,emptyFive);
   const start = await (async () => {
     s.setHandler(async path => path === '/auth/methods' ? {items:[{method:'vk',type:'oauth',available:true}]}
       : {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`});
@@ -483,19 +488,22 @@ test('root profile owner never copies email-looking auth name; UNKNOWN reauth re
   assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
   assert.strictEqual(s.auth.profile.getSnapshot().command?.packet,packet);
   assert.equal(s.calls.filter(c => c.init.method === 'PATCH').length,1);
-  s.setHandler(async () => ({...dto,version:1,displayName:packet.body.displayName,cityId:packet.body.cityId}));
+  s.setHandler(async () => ({...dto,version:1,displayName:packet.body.displayName,cityId:packet.body.cityId,
+    areaKey:packet.body.areaKey,bio:packet.body.bio,level:packet.body.level}));
   await s.auth.profile.reconcile();
   const sent = s.calls.filter(c => c.init.method === 'PATCH');
   assert.equal(sent.length,2); assert.equal(sent[0]?.init.body,sent[1]?.init.body);
   assert.equal((sent[1]?.init.headers as Record<string,string>)['Idempotency-Key'],packet.key);
   assert.equal(s.auth.profile.getSnapshot().actor?.sessionId,'profile-returned-session');
   assert.equal(s.auth.profile.getSnapshot().profile?.version,1);
-  // A subsequent independent UNKNOWN is erased by explicit logout.
-  await s.auth.profile.load(); s.auth.profile.update({displayName:'Следующее имя'});
+  // A subsequent independent UNKNOWN is erased by explicit logout; private draft fields clear.
+  await s.auth.profile.load();
+  s.auth.profile.update({displayName:'Следующее имя',areaKey:'метро',bio:'второе',levelChoice:{kind:'pilot',levelId:'beginner'}});
   s.setHandler(async () => { throw new Error('unknown again'); }); await s.auth.profile.save();
   assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
+  assert.equal(s.auth.profile.getSnapshot().command?.packet.body.areaKey,'метро');
   await s.auth.logout(); assert.equal(s.auth.profile.getSnapshot().command,undefined); assert.equal(s.auth.profile.getSnapshot().profile,null);
-  assert.equal(s.auth.profile.getSnapshot().draft.displayName,'');
+  assert.deepEqual(s.auth.profile.getSnapshot().draft,emptyFive);
 });
 
 test('root unsent contact draft survives unverifiable reauth only after authoritative same-owner new-session callback; logout erases quarantine', async () => {

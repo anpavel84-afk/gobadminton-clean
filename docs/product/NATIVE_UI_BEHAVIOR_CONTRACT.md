@@ -65,7 +65,7 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Expected | Unknown scale/version preserved until explicit change; wire omits unchanged level/area/bio; explicit null clears; saving these fields does not mutate visibility/contact/consent/trainer/looking; frozen packet + exact retry; actor/session retirement unchanged |
 | Accessibility | Labelled controls; multiline bio; level sheet uses existing DiscoverySheet focus return |
 | Evidence | Scenario P1; mobile unit `profile.test.ts` |
-| Status | **VERIFIED_SOURCE** coordinator/editor/transport for this slice; **UNVERIFIED_DEVICE** no current device/emulator PASS; photos/privacy/contactPolicy/linked identity remain unfinished |
+| Status | **SOURCE_ONLY** implementation/source for this slice pending actual owning review, independent QA, and device gates; parse/selftest is not independent QA or device PASS; **UNVERIFIED_DEVICE** no current device/emulator PASS; photos/privacy/contactPolicy/linked identity remain unfinished |
 
 ## Explicit non-claims
 
