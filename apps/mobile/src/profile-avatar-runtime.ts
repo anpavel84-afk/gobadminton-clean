@@ -235,11 +235,11 @@ export function isClosedSdkAppCacheUri(uri: string, cacheRoots: readonly string[
 /** Live Expo 58 adapter — genuine SDK module types for lazy require; injectable test port stays separate. */
 export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const picker = require('expo-image-picker') as ExpoImagePickerModule;
+  const picker = require('expo-image-picker') as typeof ExpoImagePickerModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const manipulator = require('expo-image-manipulator') as ExpoImageManipulatorModule;
+  const manipulator = require('expo-image-manipulator') as typeof ExpoImageManipulatorModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const fs = require('expo-file-system') as ExpoFileSystemModule;
+  const fs = require('expo-file-system') as typeof ExpoFileSystemModule;
   const preferred =
     picker.UIImagePickerPreferredAssetRepresentationMode?.Current ??
     ('current' as const);
