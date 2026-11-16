@@ -261,6 +261,14 @@ export function createCompactSheetHandlers(ports: SheetResponderPorts) {
         generation: ports.getGeneration(), controlOrigin: ports.getControlOrigin(),
       });
     },
+    /** Additional finger START (RN onResponderStart) retires before MOVE; release 0/1 must not commit. */
+    onPanResponderStart: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const current = ports.getDrag();
+      if (!current || current.kind !== 'compact' || current.generation !== ports.getGeneration()) return;
+      if (!secondTouchCancels(gesture.numberActiveTouches)) return;
+      ports.retireGesture(true);
+      ports.settleLift();
+    },
     onPanResponderMove: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
       const current = ports.getDrag();
       if (!current || current.kind !== 'compact' || current.generation !== ports.getGeneration()) return;
@@ -312,6 +320,14 @@ export function createHandleSheetHandlers(ports: SheetResponderPorts) {
         time: event.nativeEvent.timestamp, velocity: 0, originExpanded, start, travel,
         generation: ports.getGeneration(), controlOrigin: false,
       });
+    },
+    /** Additional finger START retires sticky; do not wait for MOVE or trust release touch count. */
+    onPanResponderStart: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const current = ports.getDrag();
+      if (!current || current.kind !== 'handle' || current.generation !== ports.getGeneration()) return;
+      if (!secondTouchCancels(gesture.numberActiveTouches)) return;
+      ports.retireGesture(true);
+      ports.settleLift();
     },
     onPanResponderMove: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
       const current = ports.getDrag();
@@ -388,6 +404,14 @@ export function createGalleryGestureHandlers(ports: GalleryResponderPorts) {
       ports.onGrantFresh();
       ports.setRetired(false);
       ports.setAxis('pending');
+    },
+    /** Additional finger START sticky-retires until genuine fresh grant; release 0/1 must not page. */
+    onPanResponderStart: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      if (ports.isRetired()) return;
+      if (!secondTouchCancels(gesture.numberActiveTouches)) return;
+      ports.setRetired(true);
+      ports.setAxis('pending');
+      ports.bumpGeneration();
     },
     onPanResponderMove: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
       if (ports.isRetired()) return;

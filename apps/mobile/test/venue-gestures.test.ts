@@ -278,6 +278,7 @@ function handleFactoryAsPanHandlers(handlers: ReturnType<typeof createHandleShee
     onStartShouldSetResponder: handlers.onStartShouldSetPanResponder,
     onMoveShouldSetResponder: handlers.onMoveShouldSetPanResponder,
     onResponderGrant: handlers.onPanResponderGrant,
+    onResponderStart: handlers.onPanResponderStart,
     onResponderMove: handlers.onPanResponderMove,
     onResponderRelease: handlers.onPanResponderRelease,
     onResponderTerminate: handlers.onPanResponderTerminate,
@@ -335,6 +336,110 @@ test('production handle handlers: fresh short flick, delayed release clock, fina
   compactDismiss.handle.onPanResponderMove(compactDismiss.touch(150, 4050), compactDismiss.gesture(0, 50));
   compactDismiss.handle.onPanResponderRelease(compactDismiss.touch(170, 4100), compactDismiss.gesture(0, 70));
   assert.equal(compactDismiss.actions.at(-1), 'dismiss');
+});
+
+test('production additional-touch START: grant1→START2→lift(no MOVE)→release0/1 commits nothing; fresh grant recovers', () => {
+  // Compact expand threshold via reconstructed release axis — START cancel must clear drag first.
+  const compactUp = createSheetFixture({});
+  compactUp.compact.onPanResponderGrant(compactUp.touch(500, 1000), compactUp.gesture(0, 0));
+  assert.equal(compactUp.getDrag()?.kind, 'compact');
+  // Initial single-finger START must leave the granted owner intact.
+  compactUp.compact.onPanResponderStart(compactUp.touch(500, 1005), compactUp.gesture(0, 0, 1));
+  assert.equal(compactUp.getDrag()?.kind, 'compact');
+  compactUp.compact.onPanResponderStart(compactUp.touch(500, 1010), compactUp.gesture(0, 0, 2));
+  assert.equal(compactUp.getDrag(), null);
+  compactUp.compact.onPanResponderRelease(compactUp.touch(500 + VENUE_SHEET_EXPAND_DY, 1020), compactUp.gesture(0, VENUE_SHEET_EXPAND_DY, 0));
+  compactUp.compact.onPanResponderRelease(compactUp.touch(500 + VENUE_SHEET_EXPAND_DY, 1030), compactUp.gesture(0, VENUE_SHEET_EXPAND_DY, 1));
+  assert.equal(compactUp.actions.length, 0);
+
+  const compactDown = createSheetFixture({});
+  compactDown.compact.onPanResponderGrant(compactDown.touch(200, 2000), compactDown.gesture(0, 0));
+  compactDown.compact.onPanResponderStart(compactDown.touch(200, 2010), compactDown.gesture(0, 0, 2));
+  compactDown.compact.onPanResponderRelease(compactDown.touch(200 + VENUE_SHEET_DISMISS_DY, 2020), compactDown.gesture(0, VENUE_SHEET_DISMISS_DY, 0));
+  compactDown.compact.onPanResponderRelease(compactDown.touch(200 + VENUE_SHEET_DISMISS_DY, 2030), compactDown.gesture(0, VENUE_SHEET_DISMISS_DY, 1));
+  assert.equal(compactDown.actions.length, 0);
+
+  compactUp.compact.onPanResponderGrant(compactUp.touch(500, 1100), compactUp.gesture(0, -10));
+  compactUp.compact.onPanResponderMove(compactUp.touch(440, 1140), compactUp.gesture(0, -60));
+  compactUp.compact.onPanResponderRelease(compactUp.touch(440, 1150), compactUp.gesture(0, -60));
+  assert.equal(compactUp.actions.at(-1), 'expand');
+
+  // Handle: lock vertical with first finger, then second START without further MOVE; release 0/1 must not settle.
+  const handleDown = createSheetFixture({ expanded: true });
+  handleDown.handle.onPanResponderGrant(handleDown.touch(300, 3000));
+  handleDown.handle.onPanResponderMove(handleDown.touch(308, 3010), handleDown.gesture(0, 8));
+  handleDown.handle.onPanResponderMove(handleDown.touch(380, 3030), handleDown.gesture(0, 80));
+  assert.equal(handleDown.getDrag()?.axis, 'vertical');
+  handleDown.handle.onPanResponderStart(handleDown.touch(380, 3040), handleDown.gesture(0, 80, 2));
+  assert.equal(handleDown.getDrag(), null);
+  handleDown.handle.onPanResponderRelease(handleDown.touch(390, 3050), handleDown.gesture(0, 90, 0));
+  handleDown.handle.onPanResponderRelease(handleDown.touch(390, 3060), handleDown.gesture(0, 90, 1));
+  assert.equal(handleDown.actions.length, 0);
+
+  const handleUp = createSheetFixture({ expanded: true });
+  handleUp.handle.onPanResponderGrant(handleUp.touch(500, 4000));
+  handleUp.handle.onPanResponderMove(handleUp.touch(492, 4010), handleUp.gesture(0, -8));
+  handleUp.handle.onPanResponderMove(handleUp.touch(440, 4030), handleUp.gesture(0, -60));
+  handleUp.handle.onPanResponderStart(handleUp.touch(440, 4040), handleUp.gesture(0, -60, 2));
+  handleUp.handle.onPanResponderRelease(handleUp.touch(430, 4050), handleUp.gesture(0, -70, 0));
+  handleUp.handle.onPanResponderRelease(handleUp.touch(430, 4060), handleUp.gesture(0, -70, 1));
+  assert.equal(handleUp.actions.length, 0);
+
+  // Host panHandlers mapping forwards onResponderStart to the same production callback.
+  const mapped = createSheetFixture({ expanded: false });
+  const host = handleFactoryAsPanHandlers(mapped.handle);
+  (host.onResponderGrant as (e: ResponderTouchEvent) => void)(mapped.touch(100, 4100));
+  (host.onResponderMove as (e: ResponderTouchEvent, g: ResponderGestureSnapshot) => void)(
+    mapped.touch(108, 4110), mapped.gesture(0, 8),
+  );
+  (host.onResponderStart as (e: ResponderTouchEvent, g: ResponderGestureSnapshot) => void)(
+    mapped.touch(108, 4120), mapped.gesture(0, 8, 2),
+  );
+  assert.equal(mapped.getDrag(), null);
+  (host.onResponderRelease as (e: ResponderTouchEvent, g: ResponderGestureSnapshot) => void)(
+    mapped.touch(170, 4130), mapped.gesture(0, 70, 0),
+  );
+  assert.equal(mapped.actions.length, 0);
+
+  handleDown.handle.onPanResponderGrant(handleDown.touch(300, 3100));
+  handleDown.handle.onPanResponderMove(handleDown.touch(308, 3110), handleDown.gesture(0, 8));
+  handleDown.handle.onPanResponderMove(handleDown.touch(380, 3130), handleDown.gesture(0, 80));
+  handleDown.handle.onPanResponderRelease(handleDown.touch(390, 3140), handleDown.gesture(0, 90));
+  assert.equal(handleDown.actions.at(-1), 'collapse');
+
+  // Gallery: START2 sticky-retires; release 0/1 with dx threshold must not page; fresh grant recovers.
+  let axis: GalleryAxis = 'pending';
+  let generation = 1;
+  let retired = false;
+  const commits: string[] = [];
+  const gallery = createGalleryGestureHandlers({
+    canPage: () => true,
+    isMounted: () => true,
+    getGeneration: () => generation,
+    bumpGeneration: () => { generation += 1; },
+    isRetired: () => retired,
+    setRetired: (value) => { retired = value; },
+    getAxis: () => axis,
+    setAxis: (next) => { axis = next; },
+    onGrantFresh: () => {},
+    onCommit: (action) => { commits.push(action); },
+  });
+  const gTouch = { nativeEvent: { pageY: 0, timestamp: 0 } };
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderStart(gTouch, { dx: 0, dy: 0, numberActiveTouches: 2 });
+  assert.equal(retired, true);
+  const retiredGen = generation;
+  gallery.onPanResponderRelease(gTouch, { dx: -VENUE_GALLERY_SWIPE, dy: 0, numberActiveTouches: 0 });
+  gallery.onPanResponderRelease(gTouch, { dx: VENUE_GALLERY_SWIPE, dy: 0, numberActiveTouches: 1 });
+  assert.equal(commits.length, 0);
+  assert.equal(retired, true);
+  assert.equal(generation, retiredGen);
+
+  gallery.onPanResponderGrant();
+  assert.equal(retired, false);
+  gallery.onPanResponderMove(gTouch, { dx: -VENUE_GALLERY_SWIPE, dy: 0, numberActiveTouches: 1 });
+  gallery.onPanResponderRelease(gTouch, { dx: -VENUE_GALLERY_SWIPE, dy: 0, numberActiveTouches: 1 });
+  assert.equal(commits.at(-1), 'next');
 });
 
 test('production callbacks: cancelled control, gallery second finger including release0, retired unmount/Back, normal tap, focus ports', () => {
