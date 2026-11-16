@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { completeStory, emptyPreferences, entryRoute, filterCities, parsePreferences, selectedCity } from '../src/entry.ts';
+import { completeStory, emptyPreferences, entryRoute, hydratedEntryRoute, filterCities, parsePreferences, selectedCity } from '../src/entry.ts';
 import { cities } from './fixtures.ts';
 
 test('first entry, immediate story skip/guest completion and returning entry', () => {
@@ -66,5 +66,13 @@ test('R3 exact My Games hub/results Entry recovery retains hydration, signing-in
   }
   for(const path of ['/my-games/','/my-games?x=1','/my-games#history','/my-games\n','/my-games/a/results\n','/my-games/a/results?section=attendance','/my-games/a/results#x','/my-games/%61/results','/my-games/a%2Fb/results','/my-games/a/results/acknowledgements','/my-games//results','https://dev.gobadminton.ru/my-games','//evil/my-games','/messages']) {
     assert.equal(hydratedEntryRoute(emptyPreferences,true,{status:'authenticated',returnPath:path}),'/games',path);
+  }
+});
+
+test('cold Entry retains exact bare venue intent without action/query/hash/encoding/newline', () => {
+  const venue = '/venues/00000000-0000-4000-8000-000000000001';
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,{status:'authenticated',returnPath:venue}),venue);
+  for (const value of [venue+'\n',venue+'?vote=5',venue+'#comment',venue+'/comments',venue.replace('venues','%76enues'),'https://evil.test'+venue]) {
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,{status:'authenticated',returnPath:value}),'/games');
   }
 });

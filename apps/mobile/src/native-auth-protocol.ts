@@ -61,7 +61,11 @@ export function canonicalPostgamePath(value: unknown): string | null {
   if (value === '/my-games') return value;
   return typeof value === 'string' && value.match(/^\/my-games\/[A-Za-z0-9_-]{1,128}\/results$/)?.[0] === value ? value : null;
 }
-export function canonicalReturnPath(value: unknown): string | null { return canonicalPostgamePath(value) ?? (value === '/players/browse' ? value : null) ?? canonicalVenueCreatePath(value) ?? (value === '/games/create' || typeof value === 'string' && /^\/games\/manage\/[A-Za-z0-9_-]{1,128}$/.test(value) ? value : canonicalGamePath(value) ?? canonicalMessagePath(value)); }
+/** Bare, fully matched venue intent only. No action, query, encoding or external URL. */
+export function canonicalVenuePath(value: unknown): string | null {
+  return typeof value === 'string' && value.match(/^\/venues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] === value ? value : null;
+}
+export function canonicalReturnPath(value: unknown): string | null { return canonicalVenuePath(value) ?? canonicalPostgamePath(value) ?? (value === '/players/browse' ? value : null) ?? canonicalVenueCreatePath(value) ?? (value === '/games/create' || typeof value === 'string' && /^\/games\/manage\/[A-Za-z0-9_-]{1,128}$/.test(value) ? value : canonicalGamePath(value) ?? canonicalMessagePath(value)); }
 export function gamePath(id: string): string | null { return canonicalGamePath(`/games/${encodeURIComponent(id)}`); }
 export function publicGameUrl(id: string): string {
   const path = gamePath(id); if (!path) throw new NativeAuthError('invalid');

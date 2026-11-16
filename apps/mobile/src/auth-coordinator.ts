@@ -1,3 +1,4 @@
+import type { Packet as CommunityPacket, Query as CommunityQuery } from './venue-community.ts';
 import { PostgameCoordinator } from './postgame-coordinator.ts';
 import type { RadarCommand, RadarRead } from './radar.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
@@ -150,6 +151,13 @@ export class AuthCoordinator {
   playInterestMutation = (packet: PlayInterestPacket, permit: () => boolean) => this.participationRead(access => {
     if (!permit()) throw new ParticipationError('stale');
     return this.deps.api.playInterestMutation(access, packet);
+  }, packet.actor);
+  /** Closed venue-only ports use the same actor/session/generation gate as participation. */
+  communityOwn = (venueId: string, actor: Actor) => this.participationRead(access => this.deps.api.communityOwn(access, venueId), actor);
+  communityComments = (query: CommunityQuery, actor: Actor) => this.participationRead(access => this.deps.api.communityComments(access, query), actor);
+  communityMutation = (packet: CommunityPacket, permit: () => boolean) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.communityMutation(access, packet);
   }, packet.actor);
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
   private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {

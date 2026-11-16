@@ -1,3 +1,5 @@
+import { CommunityError, commentsPath, id as communityId } from './venue-community.ts';
+import type { Query as CommunityQuery } from './venue-community.ts';
 import type { Venue } from './game-management.ts';
 import { parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
 import type { PlayerFilters } from './players.ts';
@@ -109,6 +111,11 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
     }
   }
   return {
+    communitySummary: (venueId: string) => get(`/venue-community-summaries?venueIds=${communityId(venueId)}`),
+    communityComments: (query: CommunityQuery) => get(commentsPath(query)).catch(error => {
+      if (error instanceof PublicApiError && error.kind === 'unavailable') throw new CommunityError('private', error.status);
+      throw error;
+    }),
     async venue(id: string, signal?: AbortSignal) {
       if (!isVenueId(id)) throw new PublicApiError('invalid');
       return parseVenue(await get(`/venues/${id}`, signal), id);

@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -17,7 +18,7 @@ import { VenuesModule } from "../../src/venues/venues.module";
 import { buildTestCoreModule } from "./test-core.module";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
@@ -41,6 +42,7 @@ run("#507 I1 venue community ratings — disposable", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
+  let native: NativeSessionService;
   let actorA: Actor;
   let actorB: Actor;
   let venueId: string;
@@ -72,9 +74,11 @@ run("#507 I1 venue community ratings — disposable", () => {
       APP_ENV: "local",
       HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:"venue-community-fixture",redirectUris:["https://app.example.test/auth/callback"]}]),
       AUTH_PEPPER: "venue-community-synthetic-pepper!!!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "venue-community-fingerprint-fixture",
@@ -94,6 +98,7 @@ run("#507 I1 venue community ratings — disposable", () => {
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     sessions = ref.get(SessionService);
+    native = ref.get(NativeSessionService);
   }, 120000);
 
   async function migrate(file: string) {
@@ -141,6 +146,13 @@ run("#507 I1 venue community ratings — disposable", () => {
     expect([200, 201]).toContain(created.statusCode);
     venueId = created.json().id as string;
   });
+
+  async function nativeCredentials(who: Actor) {
+    return native.transaction(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, "venue-community-fixture");
+    });
+  }
 
   async function actor(name: string): Promise<Actor> {
     const userId = randomUUID();
@@ -193,6 +205,39 @@ run("#507 I1 venue community ratings — disposable", () => {
       payload: body,
     });
   }
+
+  it("real native rating/withdraw/replay/current rights, bearer rejection and cookie CSRF", async () => {
+    const credentials = await nativeCredentials(actorA);
+    const headers = {authorization:`Bearer ${credentials.accessToken}`,"idempotency-key":key()};
+    const url = `/v1/venues/${venueId}/community-rating`;
+    const own = await app.inject({url:`${url}/me`,headers});
+    expect(own.statusCode).toBe(200); expect(own.json().own.version).toBe(0);
+    expect(own.json().own.allowedActions.upsert).toBe(true);
+    const command = {method:"PUT" as const,url,headers,payload:{value:4,expectedVersion:0}};
+    const first = await app.inject(command); expect(first.statusCode).toBe(201);
+    const replay = await app.inject(command); expect(replay.json()).toEqual(first.json());
+    const conflict = await app.inject({...command,headers:{...headers,"idempotency-key":key()}});
+    expect(conflict.statusCode).toBe(409);
+    await pool.query("UPDATE venue_community_votes SET moderation_state='withheld' WHERE user_id=$1 AND canonical_venue_id=$2",[actorA.userId,venueId]);
+    const withheld = await app.inject({url:`${url}/me`,headers});
+    expect(withheld.json().own.moderationState).toBe("withheld");
+    const changed = await app.inject({...command,headers:{...headers,"idempotency-key":key()},payload:{value:5,expectedVersion:1}});
+    expect(changed.statusCode).toBe(200); expect(changed.json().own.moderationState).toBe("withheld");
+    const report = await app.inject({method:"POST",url:"/v1/reports",headers:{...headers,"idempotency-key":key()},payload:{targetKind:"venue_community",subjectKind:"own_vote",venueId,expectedVersion:2,reasonCode:"other",detail:"Synthetic review request"}});
+    expect(report.statusCode).toBe(201); expect(report.json().status).toBe("submitted");
+    const withdrawal = await app.inject({method:"DELETE",url,headers:{...headers,"idempotency-key":key()},payload:{expectedVersion:2}});
+    expect(withdrawal.statusCode).toBe(200); expect(withdrawal.json().own.withdrawn).toBe(true);
+    expect((await app.inject({method:"PUT",url,headers:{cookie:actorA.cookie,origin,"idempotency-key":key()},payload:{value:3,expectedVersion:3}})).statusCode).toBe(403);
+    for (const invalid of ["invalid",credentials.accessToken]) {
+      if (invalid === credentials.accessToken) await pool.query("UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[credentials.sessionId]);
+      expect((await app.inject({url:`${url}/me`,headers:{authorization:`Bearer ${invalid}`}})).statusCode).toBe(401);
+    }
+    expect((await app.inject({url:`${url}/me`,headers:{authorization:"Bearer invalid",cookie:actorA.cookie}})).statusCode).toBe(403);
+    const expired = await nativeCredentials(actorA);
+    await pool.query("UPDATE native_access_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE session_id=$1",[expired.sessionId]);
+    expect((await app.inject({url:`${url}/me`,headers:{authorization:`Bearer ${expired.accessToken}`}})).statusCode).toBe(401);
+    const guest = await app.inject({url:`/v1/venue-community-summaries?venueIds=${venueId}`}); expect(guest.statusCode).toBe(200);
+  });
 
   it("supports standalone votes, rounding, withdraw, batch, and withheld exclusion", async () => {
     const guestBatch = await app.inject({

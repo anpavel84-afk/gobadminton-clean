@@ -1329,3 +1329,32 @@ test('real root postgame ports fence actor/game/context receipts and quarantine 
   await s.auth.postgame.reconcile('selected-game');assert.equal(writes,2);assert.equal(s.auth.postgame.getSnapshot().command,null);
   await s.auth.logout();assert.equal(s.auth.postgame.getSnapshot().actor,null);assert.equal(s.auth.postgame.getSnapshot().command,null);
 });
+
+test('bare venue login and cold restore never auto write or expand arbitrary routes', async () => {
+  const path = '/venues/00000000-0000-4000-8000-000000000001';
+  const f = setup(); await f.auth.hydrate();
+  await f.auth.beginLogin(path); assert.equal(f.auth.getSnapshot().returnPath,path);
+  await f.auth.callback(callback); assert.equal(f.auth.getSnapshot().returnPath,path);
+  assert.equal(f.calls.filter(c => /community-rating|\/comments|\/reports/.test(c.path)).length,0);
+  for (const value of [path+'\n',path+'?vote=4',path+'#reply',path+'/comments',path.replace('venues','%76enues')]) assert.equal(canonicalReturnPath(value),null);
+});
+
+test('closed community ports use real same-actor auth, exact packet and permit; invalid bearer does not fetch guest comments', async () => {
+  const {freezePacket} = await import('../src/venue-community.ts');
+  const venueId='00000000-0000-4000-8000-000000000001';
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const actor=s.auth.participation.getSnapshot().actor!;
+  const packet=freezePacket(actor,{venueId,canonicalVenueId:venueId},{kind:'upsert',value:4,expectedVersion:0},'00000000-0000-4000-8000-000000000002');
+  s.setHandler(async()=>({ok:true}));
+  await s.auth.communityOwn(venueId,actor);
+  await assert.rejects(s.auth.communityMutation(packet,()=>false));
+  assert.equal(s.calls.filter(c=>c.path===`/venues/${venueId}/community-rating`).length,0);
+  await s.auth.communityMutation(packet,()=>true);
+  const write=s.calls.find(c=>c.path===`/venues/${venueId}/community-rating`)!;
+  assert.deepEqual(JSON.parse(String(write.init.body)),{expectedVersion:0,value:4});assert.equal(write.init.method,'PUT');
+  s.setHandler(async()=>new Response('{}',{status:401}));
+  const before=s.calls.length;
+  await assert.rejects(s.auth.communityComments({venueId,order:'asc',parentCommentId:null,cursor:null},actor));
+  assert.equal(s.auth.participation.getSnapshot().actor,null);
+  const comments=s.calls.slice(before).filter(c=>c.path.includes('/comments'));
+  assert.equal(comments.length,1);assert.match((comments[0]!.init.headers as Record<string,string>).Authorization!,/^Bearer /);
+});

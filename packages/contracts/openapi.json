@@ -21162,10 +21162,13 @@
           "Comments"
         ],
         "summary": "List public comments for a venue",
-        "description": "#507 I1. Guest-readable public venue discussion on canonical physical venue (and merged-origin family). Empty only when no eligible comments. canCreate reflects current capability (no attendance).",
+        "description": "#507 I1. Guest-readable public venue discussion on canonical physical venue (and merged-origin family). Empty only when no eligible comments. canCreate reflects current capability (no attendance). Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           },
           {}
         ],
@@ -21277,10 +21280,13 @@
           "Comments"
         ],
         "summary": "Create a comment or one-level reply on a venue",
-        "description": "#507 I1. Authorized registered users may create/reply on a canonical public physical venue without attendance. Same comment_body gate: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Guest read. Experience reviews stay on /experience-reviews. Photo attachments remain #507 I2. I2b: venue-only optional text/photoIds; one transaction publishes exact new revision and full ordered approved set. Legacy text-only hashes/replays preserved. Image moderation is not repeated.",
+        "description": "#507 I1. Authorized registered users may create/reply on a canonical public physical venue without attendance. Same comment_body gate: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Guest read. Experience reviews stay on /experience-reviews. Photo attachments remain #507 I2. I2b: venue-only optional text/photoIds; one transaction publishes exact new revision and full ordered approved set. Legacy text-only hashes/replays preserved. Image moderation is not repeated. Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21299,19 +21305,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -21418,10 +21425,13 @@
           "Comments"
         ],
         "summary": "Edit own comment (CAS)",
-        "description": "#394 + #506 B1a. Author-only edit with expectedVersion. Cookie mutation + CSRF/Origin/Idempotency-Key. Ownership/parent/version fences run before text moderation; final CAS revalidates and binds publication evidence to the comment UUID/new version. Reject/unavailable keeps prior accepted body. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Stale version → conflict, not false success. Same-key replay skips provider I/O. I2b venue only: text-or-photos, optional photoIds retain current set; [] removes it. Omitted/null/blank text clears text. Approved stages attach atomically, rejection/timeout preserves previous body and photos; no repeated image classification. Game remains strict text-required with no photoIds.",
+        "description": "#394 + #506 B1a. Author-only edit with expectedVersion. Cookie mutation + CSRF/Origin/Idempotency-Key. Ownership/parent/version fences run before text moderation; final CAS revalidates and binds publication evidence to the comment UUID/new version. Reject/unavailable keeps prior accepted body. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Stale version → conflict, not false success. Same-key replay skips provider I/O. I2b venue only: text-or-photos, optional photoIds retain current set; [] removes it. Omitted/null/blank text clears text. Approved stages attach atomically, rejection/timeout preserves previous body and photos; no repeated image classification. Game remains strict text-required with no photoIds. Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21440,19 +21450,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -21585,10 +21596,13 @@
           "Comments"
         ],
         "summary": "Tombstone own comment (CAS)",
-        "description": "#394 + #506 B1a. Author-only soft delete. Public body becomes null; audit retained privately. expectedVersion required in JSON body. Provider-independent — deletion/withdrawal works without moderation I/O.",
+        "description": "#394 + #506 B1a. Author-only soft delete. Public body becomes null; audit retained privately. expectedVersion required in JSON body. Provider-independent — deletion/withdrawal works without moderation I/O. Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21607,19 +21621,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -21724,7 +21739,15 @@
           "Comments"
         ],
         "summary": "Current permitted source comment for deep linking",
-        "security": [],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          },
+          {}
+        ],
         "parameters": [
           {
             "name": "commentId",
@@ -21753,7 +21776,8 @@
           "409": {
             "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
           }
-        }
+        },
+        "description": " Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest."
       }
     },
     "/reviews/{reviewId}/report": {
@@ -24714,9 +24738,17 @@
       "get": {
         "operationId": "getVenueCommunityOwnRating",
         "summary": "Own community rating for a venue",
-        "description": "#507 I1 authenticated no-store own vote + fresh aggregate. Guests must not call.",
+        "description": "#507 I1 authenticated no-store own vote + fresh aggregate. Guests must not call. Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "tags": [
           "Venues"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "parameters": [
           {
@@ -24747,9 +24779,17 @@
       "put": {
         "operationId": "upsertVenueCommunityRating",
         "summary": "Upsert community rating 1–5",
-        "description": "#507 I1 standalone vote without mandatory comment/photo/attendance. Idempotent.",
+        "description": "#507 I1 standalone vote without mandatory comment/photo/attendance. Idempotent. Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "tags": [
           "Venues"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "parameters": [
           {
@@ -24772,10 +24812,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {
@@ -24814,9 +24855,17 @@
       "delete": {
         "operationId": "withdrawVenueCommunityRating",
         "summary": "Withdraw community rating",
-        "description": "#507 I1 withdraw independent of moderation provider. Retains current withdrawn row.",
+        "description": "#507 I1 withdraw independent of moderation provider. Retains current withdrawn row. Native bearer is supported for venue community only; shared comment IDs must belong to a venue. Invalid explicit bearer never falls back to cookie or guest.",
         "tags": [
           "Venues"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "parameters": [
           {
@@ -24839,10 +24888,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookie mutations; existing CSRF and Origin checks apply. Omitted for native bearer."
           }
         ],
         "requestBody": {

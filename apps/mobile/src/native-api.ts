@@ -1,3 +1,5 @@
+import { CommunityError, communityWire, commentsPath, id as communityId } from './venue-community.ts';
+import type { Packet as CommunityPacket, Query as CommunityQuery } from './venue-community.ts';
 import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders } from './postgame.ts';
 import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
@@ -131,7 +133,34 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       throw new PostgameError(error instanceof SyntaxError ? 'invalid' : 'network');
     } finally { clearTimeout(timer); }
   }
+  async function communityRequest(path: string, access: string, packet?: CommunityPacket): Promise<unknown> {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
+        method: packet?.method ?? 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'application/json', Authorization: `Bearer ${access}`,
+          ...(packet ? {'Content-Type':'application/json', 'Idempotency-Key':packet.key} : {}) },
+        ...(packet ? {body: JSON.stringify(packet.body)} : {}),
+      });
+      if (response.status === 401) throw new NativeAuthError('authority');
+      if (!response.ok) {
+        let code = '';
+        try { const row = await response.json(); if (typeof row?.code === 'string' && /^[A-Z_]{1,80}$/.test(row.code)) code = row.code; } catch { /* Never retain private error/detail. */ }
+        const moderationFailure = ['MODERATION_TEMPORARILY_UNAVAILABLE','MODERATION_POLICY_MISMATCH'].includes(code);
+        throw new CommunityError(moderationFailure ? 'refused' : [403,404].includes(response.status) ? 'private'
+          : [400,409,422,429].includes(response.status) && code !== 'COMMAND_IN_PROGRESS' ? 'refused' : 'network', response.status, code);
+      }
+      if (![200,201].includes(response.status)) throw new CommunityError('invalid');
+      return await response.json();
+    } catch (error) {
+      if (error instanceof CommunityError || error instanceof NativeAuthError) throw error;
+      throw new CommunityError(error instanceof SyntaxError ? 'invalid' : 'network');
+    } finally { clearTimeout(timer); }
+  }
   return {
+    communityOwn: (access: string, venueId: string) => communityRequest(`/venues/${communityId(venueId)}/community-rating/me`, access),
+    communityComments: (access: string, query: CommunityQuery) => communityRequest(commentsPath(query), access),
+    communityMutation: (access: string, packet: CommunityPacket) => { const wire = communityWire(packet); return communityRequest(wire.path, access, packet); },
     postgameOwn: async (access: string, cursor?: string) => parseOwnResults(await postgameRequest(`/me/game-results?limit=20${cursor ? `&cursor=${encodeURIComponent(postgameCursor(cursor))}` : ''}`,access)),
     postgameResults: async (access: string, gameId: string, query?: ResultsQuery) => parseResults(await postgameRequest(`/games/${postgameId(gameId)}/results${resultsQuery(query)}`,access)),
     postgameReminders: async (access: string) => parseReminders(await postgameRequest('/me/postgame-reminders?limit=20',access)),
