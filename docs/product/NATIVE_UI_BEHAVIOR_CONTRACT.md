@@ -23,10 +23,10 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Authority | Owner map-popup decision; web `VenuePopup.tsx` compact/handle thresholds; native `maps.ts` Back/close hierarchy |
 | Entry | Games/Players map venue selection (no venue-route navigation merely to expand) |
 | States | none → compact → expanded; expanded info/schedule; selected media owned above branches |
-| Gestures | Compact UP expands with live lift; compact DOWN dismisses; expanded HANDLE DOWN collapses; expanded BODY keeps ScrollView. Axis lock 8dp; compact dy≤−56 / dy≥64; handle half measured/available travel or ≥0.5 dp/ms (same native event clock; stale >100ms ignored). Follow-on tap suppress is gesture-local; control origins and second touch cancel/ignore; retired generation ignores late release |
+| Gestures | Compact UP expands with live height growth toward measured/available expanded (web VenuePopup); compact DOWN dismisses; expanded HANDLE DOWN collapses via translateY; expanded BODY keeps ScrollView. Axis lock 8dp; compact origin is touch-down even after delayed grant; dy≤−56 / dy≥64 with terminal release sample; handle half measured/available travel or ≥0.5 dp/ms (same native event clock; stale >100ms ignored). Follow-on tap suppress is gesture-local; control origins retire on press-out/cancel; gallery second finger irrevocably retires until new grant; retired generation ignores late release |
 | Close hierarchy | Filter Back → expanded collapse → compact deselect → map exit; X expanded collapses, compact closes |
 | Layout | One expanded body scroll; sticky Create only expanded verified venue; compact has no Create; safe bottom reserved once; compact overflow ScrollView without a new gallery strip below the settled row |
-| Accessibility | Named expand/collapse/close; expanded state exposed; local Modal + obscured-background isolation when expanded; escape/Back; focus to handle on expand and restore compact/opener focus on collapse |
+| Accessibility | Named expand/collapse/close; expanded state exposed; local Modal + obscured-background isolation when expanded; escape/Back; focus to handle on expand, compact control on collapse, and host `returnFocusRef` opener/fallback on final dismiss (unmount-safe rAF) |
 | Evidence | Scenarios V1–V6 |
 | Status | **VERIFIED_SOURCE** close/measurement owners; native responders + local Modal lifecycle (**was GAP** tap-only / entry-only focus); **UNVERIFIED_DEVICE** real touch/scroll/safe-area/TalkBack/keyboard |
 

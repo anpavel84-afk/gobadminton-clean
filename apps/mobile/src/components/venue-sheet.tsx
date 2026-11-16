@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ComponentRef } from 'react';
+import type { ComponentRef, RefObject } from 'react';
 import {
   AccessibilityInfo, findNodeHandle, Modal, PanResponder, Platform, Pressable, ScrollView, useWindowDimensions, View,
 } from 'react-native';
-import type { GestureResponderEvent, PanResponderGestureState } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { publicApi } from '../public-api.ts';
@@ -13,32 +12,33 @@ import { closeVenueSheet, expandedVenueCreate, venueScheduleDays, venueSheetSpac
 import { discoveryDateLabel, levelLabel } from '../presentation.ts';
 import { useReduceMotion, useResource } from '../hooks.ts';
 import {
-  clampSheetLift,
+  compactLiveGrowthHeight,
   consumeFollowOnSuppress,
+  createCompactSheetHandlers,
+  createHandleSheetHandlers,
   decideCompactRelease,
   decideHandleSettle,
-  decideSheetAxis,
-  eventClockAgeMs,
-  expandedHandleLift,
   gallerySelectionOf,
   gestureGenerationActive,
   measuredSheetTravel,
   resolveGallerySelection,
-  sampleHandleVelocity,
-  secondTouchCancels,
+  scheduleReturnFocus,
   suppressAfterFreshTouch,
   type GallerySelection,
   type SheetAxis,
   type SheetDrag,
+  type SheetResponderPorts,
 } from '../venue-gestures.ts';
 import { colors } from '../theme.ts';
 import { VenueContent, VenueFailure, VenuePreview } from './venue-detail.tsx';
 import { DiscoveryIcon } from './discovery-icon.tsx';
 import { DiscoveryChip, Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
-export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRetrySchedule, onMeasure }: {
+export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRetrySchedule, onMeasure, returnFocusRef }: {
   selection: MapVenue; expanded: boolean; games: readonly PublicGame[] | null;
   onExpand:(value:boolean) => void; onClose:() => void; onRetrySchedule:() => void; onMeasure:(height:number) => void;
+  /** Host opener/fallback (e.g. map filterTrigger) restored after final compact dismiss. */
+  returnFocusRef?: RefObject<ComponentRef<typeof Pressable> | null>;
 }) {
   const router = useRouter(), insets = useSafeAreaInsets(), spacing = venueSheetSpacing(insets.bottom);
   const reduceMotion = useReduceMotion();
@@ -56,6 +56,8 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   const generation = useRef(0);
   const expandedRef = useRef(expanded); expandedRef.current = expanded;
   const wasExpanded = useRef(expanded);
+  const returnFocus = useRef(returnFocusRef); returnFocus.current = returnFocusRef;
+  const focusCancel = useRef<{ cancel: () => void } | null>(null);
 
   const retireGesture = useCallback((clearSuppress = true) => {
     drag.current = null;
@@ -69,6 +71,8 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     return () => {
       mounted.current = false;
       drag.current = null;
+      focusCancel.current?.cancel();
+      focusCancel.current = null;
       onMeasure(0);
     };
   }, [onMeasure]);
@@ -128,10 +132,29 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     AccessibilityInfo.announceForAccessibility(venue?.name ? `Площадка: ${venue.name}` : 'Площадка');
   };
 
+  const restoreOpenerFocus = useCallback(() => {
+    focusCancel.current?.cancel();
+    focusCancel.current = scheduleReturnFocus(() => {
+      const target = returnFocus.current?.current;
+      if (!target) return;
+      target.focus?.();
+      const node = findNodeHandle(target);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    }, (cb) => {
+      const id = requestAnimationFrame(cb);
+      return { cancel: () => cancelAnimationFrame(id) };
+    });
+  }, []);
+
+  const dismissSheet = useCallback(() => {
+    restoreOpenerFocus();
+    onClose();
+  }, [onClose, restoreOpenerFocus]);
+
   const changeView = (next:'info'|'schedule') => {setView(next);scroll.current?.scrollTo({y:0,animated:false});};
   const close = () => {
     const next = closeVenueSheet({filter:false,expanded,selected:selection.id});
-    if (next.selected) onExpand(next.expanded); else onClose();
+    if (next.selected) onExpand(next.expanded); else dismissSheet();
   };
   const consumeSuppress = () => {
     const result = consumeFollowOnSuppress(suppressTap.current);
@@ -145,13 +168,14 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     heights.current.expanded,
     Math.floor(windowHeight * 0.88),
   );
+  const availableExpanded = () => Math.floor(windowHeight * 0.88);
   const beginFreshTouch = () => {
     suppressTap.current = suppressAfterFreshTouch(drag.current !== null, suppressTap.current);
   };
 
   const liftRef = useRef(0); liftRef.current = lift;
   const reduceMotionRef = useRef(reduceMotion); reduceMotionRef.current = reduceMotion;
-  const actions = useRef({ onExpand, onClose }); actions.current = { onExpand, onClose };
+  const actions = useRef({ onExpand, dismissSheet }); actions.current = { onExpand, dismissSheet };
   const gestureApi = useRef({
     applyLift: (value: number) => { setLift(reduceMotionRef.current ? 0 : value); },
     settleLift: () => { setLift(0); },
@@ -166,7 +190,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       if (action === 'none' || action === 'origin') { setLift(0); return; }
       suppressTap.current = true;
       setLift(0);
-      if (action === 'dismiss') actions.current.onClose();
+      if (action === 'dismiss') actions.current.dismissSheet();
       else actions.current.onExpand(true);
     },
     endHandle: (gen: number, dy: number, velocity: number, velocityAgeMs: number) => {
@@ -188,111 +212,70 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       drag.current = null;
       suppressTap.current = true;
       setLift(0);
-      if (action === 'dismiss') actions.current.onClose();
+      if (action === 'dismiss') actions.current.dismissSheet();
       else if (action === 'expand') actions.current.onExpand(true);
       else actions.current.onExpand(false);
     },
   });
 
-  const [compactResponder] = useState(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
-      if (expandedRef.current || drag.current?.kind === 'handle' || controlOrigin.current) return false;
-      if (secondTouchCancels(gesture.numberActiveTouches)) return false;
-      return decideSheetAxis(gesture.dx, gesture.dy) === 'vertical';
-    },
-    onPanResponderGrant: (event) => {
-      beginFreshTouch();
-      const travel = travelFor();
-      drag.current = {
-        kind: 'compact', axis: 'pending', startY: event.nativeEvent.pageY, lastY: event.nativeEvent.pageY,
-        time: event.nativeEvent.timestamp, velocity: 0, originExpanded: false, start: 0, travel,
-        generation: generation.current, controlOrigin: controlOrigin.current,
-      };
-    },
-    onPanResponderMove: (event, gesture) => {
-      const current = drag.current;
-      if (!current || current.kind !== 'compact' || current.generation !== generation.current) return;
-      if (secondTouchCancels(gesture.numberActiveTouches)) {
-        retireGesture(true);
-        gestureApi.current.settleLift();
-        return;
-      }
-      if (current.controlOrigin) return;
-      if (current.axis === 'pending') {
-        const axis = decideSheetAxis(gesture.dx, gesture.dy);
-        if (axis === 'pending') return;
-        if (axis === 'horizontal') { drag.current = null; gestureApi.current.settleLift(); return; }
-        current.axis = 'vertical';
-        suppressTap.current = true;
-      }
-      const sampled = sampleHandleVelocity(current, event.nativeEvent.pageY, event.nativeEvent.timestamp);
-      current.lastY = sampled.lastY; current.time = sampled.time; current.velocity = sampled.velocity;
-      if (current.travel > 0) gestureApi.current.applyLift(clampSheetLift(gesture.dy, current.travel));
-    },
-    onPanResponderRelease: (event, gesture) => {
-      const current = drag.current;
-      if (!current || current.kind !== 'compact') { gestureApi.current.settleLift(); return; }
-      if (secondTouchCancels(gesture.numberActiveTouches)) {
-        retireGesture(true); gestureApi.current.settleLift(); return;
-      }
-      const axis = current.axis === 'pending' ? decideSheetAxis(gesture.dx, gesture.dy) : current.axis;
-      const dy = event.nativeEvent.pageY - current.startY;
-      gestureApi.current.endCompact(axis, dy, current.generation);
-    },
-    onPanResponderTerminate: () => { retireGesture(true); gestureApi.current.settleLift(); },
-    onPanResponderTerminationRequest: () => true,
-  }));
+  const portsRef = useRef<SheetResponderPorts | null>(null);
+  portsRef.current = {
+    isExpanded: () => expandedRef.current,
+    isHandleActive: () => drag.current?.kind === 'handle',
+    getControlOrigin: () => controlOrigin.current,
+    getGeneration: () => generation.current,
+    getTravel: () => travelFor(),
+    getLift: () => liftRef.current,
+    getDrag: () => drag.current,
+    setDrag: (next) => { drag.current = next; },
+    beginFreshTouch,
+    retireGesture,
+    applyLift: (value) => gestureApi.current.applyLift(value),
+    settleLift: () => gestureApi.current.settleLift(),
+    markSuppress: () => { suppressTap.current = true; },
+    endCompact: (axis, dy, gen) => gestureApi.current.endCompact(axis, dy, gen),
+    endHandle: (gen, dy, velocity, velocityAgeMs) => gestureApi.current.endHandle(gen, dy, velocity, velocityAgeMs),
+  };
 
-  const [handleResponder] = useState(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (event) => {
-      beginFreshTouch();
-      const originExpanded = expandedRef.current;
-      const travel = travelFor();
-      const start = originExpanded ? travel : (liftRef.current > 0 ? Math.min(travel, liftRef.current) : 0);
-      drag.current = {
-        kind: 'handle', axis: 'pending', startY: event.nativeEvent.pageY, lastY: event.nativeEvent.pageY,
-        time: event.nativeEvent.timestamp, velocity: 0, originExpanded, start, travel,
-        generation: generation.current, controlOrigin: false,
-      };
-    },
-    onPanResponderMove: (event, gesture) => {
-      const current = drag.current;
-      if (!current || current.kind !== 'handle' || current.generation !== generation.current) return;
-      if (secondTouchCancels(gesture.numberActiveTouches)) {
-        retireGesture(true); gestureApi.current.settleLift(); return;
-      }
-      if (current.axis === 'pending') {
-        const axis = decideSheetAxis(gesture.dx, gesture.dy);
-        if (axis === 'pending') return;
-        if (axis === 'horizontal') { drag.current = null; gestureApi.current.settleLift(); suppressTap.current = true; return; }
-        current.axis = 'vertical';
-        suppressTap.current = true;
-      }
-      if (current.travel <= 0) return;
-      const sampled = sampleHandleVelocity(current, event.nativeEvent.pageY, event.nativeEvent.timestamp);
-      current.lastY = sampled.lastY; current.time = sampled.time; current.velocity = sampled.velocity;
-      const dy = event.nativeEvent.pageY - current.startY;
-      gestureApi.current.applyLift(expandedHandleLift(current.originExpanded, current.start, current.travel, dy));
-    },
-    onPanResponderRelease: (event, gesture) => {
-      const current = drag.current;
-      if (!current || current.kind !== 'handle') { gestureApi.current.settleLift(); return; }
-      if (secondTouchCancels(gesture.numberActiveTouches)) {
-        retireGesture(true); gestureApi.current.settleLift(); return;
-      }
-      const releaseY = event.nativeEvent.pageY;
-      const releaseTime = event.nativeEvent.timestamp;
-      const dy = releaseY - current.startY;
-      // Terminal release shares the move event clock; dy from actual release coordinates.
-      const velocityAgeMs = eventClockAgeMs(releaseTime, current.time);
-      gestureApi.current.endHandle(current.generation, dy, current.velocity, velocityAgeMs);
-    },
-    onPanResponderTerminate: () => { retireGesture(true); gestureApi.current.settleLift(); },
-    onPanResponderTerminationRequest: () => false,
-  }));
+  const [compactResponder] = useState(() => PanResponder.create(
+    createCompactSheetHandlers({
+      isExpanded: () => portsRef.current!.isExpanded(),
+      isHandleActive: () => portsRef.current!.isHandleActive(),
+      getControlOrigin: () => portsRef.current!.getControlOrigin(),
+      getGeneration: () => portsRef.current!.getGeneration(),
+      getTravel: () => portsRef.current!.getTravel(),
+      getLift: () => portsRef.current!.getLift(),
+      getDrag: () => portsRef.current!.getDrag(),
+      setDrag: (next) => portsRef.current!.setDrag(next),
+      beginFreshTouch: () => portsRef.current!.beginFreshTouch(),
+      retireGesture: (clear) => portsRef.current!.retireGesture(clear),
+      applyLift: (value) => portsRef.current!.applyLift(value),
+      settleLift: () => portsRef.current!.settleLift(),
+      markSuppress: () => portsRef.current!.markSuppress(),
+      endCompact: (axis, dy, gen) => portsRef.current!.endCompact(axis, dy, gen),
+      endHandle: (gen, dy, velocity, age) => portsRef.current!.endHandle(gen, dy, velocity, age),
+    }),
+  ));
+
+  const [handleResponder] = useState(() => PanResponder.create(
+    createHandleSheetHandlers({
+      isExpanded: () => portsRef.current!.isExpanded(),
+      isHandleActive: () => portsRef.current!.isHandleActive(),
+      getControlOrigin: () => portsRef.current!.getControlOrigin(),
+      getGeneration: () => portsRef.current!.getGeneration(),
+      getTravel: () => portsRef.current!.getTravel(),
+      getLift: () => portsRef.current!.getLift(),
+      getDrag: () => portsRef.current!.getDrag(),
+      setDrag: (next) => portsRef.current!.setDrag(next),
+      beginFreshTouch: () => portsRef.current!.beginFreshTouch(),
+      retireGesture: (clear) => portsRef.current!.retireGesture(clear),
+      applyLift: (value) => portsRef.current!.applyLift(value),
+      settleLift: () => portsRef.current!.settleLift(),
+      markSuppress: () => portsRef.current!.markSuppress(),
+      endCompact: (axis, dy, gen) => portsRef.current!.endCompact(axis, dy, gen),
+      endHandle: (gen, dy, velocity, age) => portsRef.current!.endHandle(gen, dy, velocity, age),
+    }),
+  ));
 
   const onSheetLayout = (height: number) => {
     if (!mounted.current) return;
@@ -326,10 +309,14 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       onOpen={() => { if (consumeSuppress()) return; onExpand(true); }} />)}
   </>;
 
+  // Compact UP live-grows height toward measured/available expanded (web VenuePopup); expanded handle still translates.
   const dragStyle = lift > 0
     ? (expanded
       ? { transform: [{ translateY: lift }] as const }
-      : { transform: [{ translateY: -lift }] as const })
+      : {
+          height: compactLiveGrowthHeight(heights.current.compact, lift, availableExpanded()) || undefined,
+          maxHeight: availableExpanded(),
+        })
     : null;
 
   const sheet = (
@@ -344,7 +331,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
         bottom: expanded ? 0 : insets.bottom + 12,
         left: expanded ? 0 : 12,
         right: expanded ? 0 : 12,
-        maxHeight: expanded ? '88%' : '60%',
+        maxHeight: expanded ? '88%' : (lift > 0 ? availableExpanded() : '60%'),
         backgroundColor: colors.card,
         borderRadius: 20,
         borderWidth: 1,

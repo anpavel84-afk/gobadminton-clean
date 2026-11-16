@@ -290,7 +290,7 @@ test('expanded X preserves selection; compact dismiss clears it; real measured o
   const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';
   let collapsed:boolean|null=null, dismissed=0;
   const makeClose=(expanded:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{closeVenueSheet,expanded,selection:venue,
-    onExpand:(value:boolean)=>{collapsed=value;},onClose:()=>{dismissed++;}}) as ()=>void;
+    onExpand:(value:boolean)=>{collapsed=value;},dismissSheet:()=>{dismissed++;}}) as ()=>void;
   makeClose(true)();assert.equal(collapsed,false);assert.equal(dismissed,0);
   makeClose(false)();assert.equal(dismissed,1);
 
@@ -542,64 +542,134 @@ test('actual native/accessible people bindings reuse onPerson only for the curre
   unauthorized.native();unauthorized.accessible();assert.equal(selected.length,3);
 });
 
-test('venue sheet/gallery UX seams: release clock, fresh suppress clear, control origin, media identity, local Modal focus', async () => {
+test('venue sheet/gallery UX seams: production handlers, media identity, local Modal focus, host returnFocus', async () => {
   const {readFileSync}=await import('node:fs');
   const {stripTypeScriptTypes}=await import('node:module');
   const {runInNewContext}=await import('node:vm');
   const sheetSource=readFileSync(new URL('../src/components/venue-sheet.tsx',import.meta.url),'utf8');
   const detailSource=readFileSync(new URL('../src/components/venue-detail.tsx',import.meta.url),'utf8');
-  const gesturesSource=readFileSync(new URL('../src/venue-gestures.ts',import.meta.url),'utf8');
+  const gamesMap=readFileSync(new URL('../app/games/map.tsx',import.meta.url),'utf8');
+  const playersMap=readFileSync(new URL('../app/players/index.tsx',import.meta.url),'utf8');
 
-  assert.match(sheetSource,/eventClockAgeMs\(releaseTime, current\.time\)/);
-  assert.match(sheetSource,/pageY - current\.startY/);
-  assert.match(sheetSource,/beginFreshTouch/);
-  assert.match(sheetSource,/secondTouchCancels/);
-  assert.match(sheetSource,/controlOrigin/);
-  assert.match(sheetSource,/measuredSheetTravel/);
+  // Retained composition seams (not mirrored algorithm assertions).
   assert.doesNotMatch(sheetSource,/compact \+ 200|compact \* 2\.5/);
-  assert.match(sheetSource,/translateY: lift/);
+  assert.match(sheetSource,/createCompactSheetHandlers/);
+  assert.match(sheetSource,/createHandleSheetHandlers/);
+  assert.match(sheetSource,/compactLiveGrowthHeight/);
   assert.match(sheetSource,/Modal transparent visible/);
   assert.match(sheetSource,/importantForAccessibility="no-hide-descendants"/);
   assert.match(sheetSource,/restoreFocusOnCollapse/);
+  assert.match(sheetSource,/restoreOpenerFocus|scheduleReturnFocus|returnFocusRef/);
   assert.match(sheetSource,/ScrollView \{\.\.\.compactResponder\.panHandlers\}/);
+  assert.match(sheetSource,/translateY: lift/);
 
   assert.match(detailSource,/mediaFailureApplies\(activeIdentity\.current, identity\)/);
+  assert.match(detailSource,/createGalleryGestureHandlers/);
+  assert.match(detailSource,/onPressOut=\{onControlTouchEnd\}/);
   assert.match(detailSource,/accessibilityActions/);
   const previewSlice=detailSource.slice(detailSource.indexOf('export function VenuePreview'),detailSource.indexOf('export function VenueDetail'));
   assert.doesNotMatch(previewSlice,/accessibilityLabel="Предыдущее изображение"/);
   assert.doesNotMatch(previewSlice,/accessibilityLabel="Следующее изображение"/);
   assert.match(previewSlice,/accessibilityActions/);
-  assert.match(detailSource,/onPressIn=\{onControlTouch\}/);
   assert.match(detailSource,/VenueMediaSurface/);
   assert.match(detailSource,/VenueImageCredits/);
 
-  assert.match(gesturesSource,/export function eventClockAgeMs/);
-  assert.match(gesturesSource,/export function measuredSheetTravel/);
-  assert.match(gesturesSource,/export function secondTouchCancels/);
-  assert.match(gesturesSource,/export function mediaFailureApplies/);
+  assert.match(gamesMap,/returnFocusRef=\{filterTrigger\}/);
+  assert.match(playersMap,/returnFocusRef=\{filterTrigger\}/);
 
+  const gestures = await import('../src/venue-gestures.ts');
   const {
-    decideCompactRelease, decideHandleSettle, eventClockAgeMs, measuredSheetTravel, mediaFailureApplies,
-    secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress, gestureGenerationActive,
-  } = await import('../src/venue-gestures.ts');
+    canonicalSheetOriginY, compactLiveGrowthHeight, createCompactSheetHandlers, createGalleryGestureHandlers,
+    createHandleSheetHandlers, decideCompactRelease, decideHandleSettle, eventClockAgeMs, measuredSheetTravel,
+    mediaFailureApplies, secondTouchCancels, suppressAfterFreshTouch, consumeFollowOnSuppress, gestureGenerationActive,
+  } = gestures;
   assert.equal(measuredSheetTravel(172, 0, Math.floor(800 * 0.88)), Math.floor(800 * 0.88) - 172);
+  assert.equal(compactLiveGrowthHeight(172, 80, 704), 252);
   assert.equal(secondTouchCancels(2), true);
   assert.equal(suppressAfterFreshTouch(false, true), false);
   assert.equal(consumeFollowOnSuppress(true).blocked, true);
   assert.equal(mediaFailureApplies('/a', '/b'), false);
   assert.equal(mediaFailureApplies('/a', '/a'), true);
-  // Delayed release age on event clock; final dy still decides compact dismiss.
   const age = eventClockAgeMs(4500, 4200);
   assert.equal(decideHandleSettle({
     originExpanded: false, dy: 70, start: 0, travel: 300, velocity: 0.9, velocityAgeMs: age,
   }), 'dismiss');
   assert.equal(decideCompactRelease('vertical', -60), 'expand');
   assert.equal(gestureGenerationActive(2, 1, true), false);
+
+  // Production compact handler trace: delayed grant origin recovers full -60 expand.
+  /** @type {import('../src/venue-gestures.ts').SheetDrag | null} */
+  let drag = null;
+  const compactActions = [];
+  const compact = createCompactSheetHandlers({
+    isExpanded: () => false, isHandleActive: () => false, getControlOrigin: () => false,
+    getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
+    getDrag: () => drag, setDrag: (next) => { drag = next; },
+    beginFreshTouch: () => {}, retireGesture: () => { drag = null; },
+    applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
+    endCompact: (axis, dy) => { compactActions.push(decideCompactRelease(axis, dy)); drag = null; },
+    endHandle: () => {},
+  });
+  compact.onPanResponderGrant({ nativeEvent: { pageY: 490, timestamp: 1000 } }, { dx: 0, dy: -10, numberActiveTouches: 1 });
+  assert.equal(drag?.startY, canonicalSheetOriginY(490, -10));
+  compact.onPanResponderMove({ nativeEvent: { pageY: 450, timestamp: 1040 } }, { dx: 0, dy: -50, numberActiveTouches: 1 });
+  compact.onPanResponderRelease({ nativeEvent: { pageY: 440, timestamp: 1050 } }, { dx: 0, dy: -60, numberActiveTouches: 1 });
+  assert.equal(compactActions.at(-1), 'expand');
+
+  // Production handle: terminal release clock crosses dismiss after earlier move.
+  drag = null;
+  const handleActions = [];
+  const handle = createHandleSheetHandlers({
+    isExpanded: () => false, isHandleActive: () => true, getControlOrigin: () => false,
+    getGeneration: () => 1, getTravel: () => 300, getLift: () => 0,
+    getDrag: () => drag, setDrag: (next) => { drag = next; },
+    beginFreshTouch: () => {}, retireGesture: () => { drag = null; },
+    applyLift: () => {}, settleLift: () => {}, markSuppress: () => {},
+    endCompact: () => {},
+    endHandle: (_gen, dy, velocity, velocityAgeMs) => {
+      handleActions.push(decideHandleSettle({
+        originExpanded: false, dy, start: 0, travel: 300, velocity, velocityAgeMs,
+      }));
+      drag = null;
+    },
+  });
+  handle.onPanResponderGrant({ nativeEvent: { pageY: 100, timestamp: 4000 } });
+  handle.onPanResponderMove({ nativeEvent: { pageY: 150, timestamp: 4050 } }, { dx: 0, dy: 50, numberActiveTouches: 1 });
+  handle.onPanResponderRelease({ nativeEvent: { pageY: 170, timestamp: 4100 } }, { dx: 0, dy: 70, numberActiveTouches: 1 });
+  assert.equal(handleActions.at(-1), 'dismiss');
+
+  // Gallery second finger + release0 cannot reconstruct commit; fresh single finger recovers.
+  /** @type {import('../src/venue-gestures.ts').GalleryAxis} */
+  let axis = 'pending';
+  let retired = false;
+  let generation = 1;
+  const commits = [];
+  const gallery = createGalleryGestureHandlers({
+    canPage: () => true, isMounted: () => true, getGeneration: () => generation,
+    bumpGeneration: () => { generation += 1; },
+    isRetired: () => retired, setRetired: (value) => { retired = value; },
+    getAxis: () => axis, setAxis: (next) => { axis = next; },
+    onGrantFresh: () => {}, onCommit: (action) => { commits.push(action); },
+  });
+  const gEvent = { nativeEvent: { pageY: 0, timestamp: 0 } };
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderMove(gEvent, { dx: -40, dy: 0, numberActiveTouches: 1 });
+  gallery.onPanResponderMove(gEvent, { dx: -55, dy: 0, numberActiveTouches: 2 });
+  gallery.onPanResponderRelease(gEvent, { dx: -55, dy: 0, numberActiveTouches: 0 });
+  assert.equal(commits.length, 0);
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderMove(gEvent, { dx: -50, dy: 0, numberActiveTouches: 1 });
+  gallery.onPanResponderRelease(gEvent, { dx: -50, dy: 0, numberActiveTouches: 1 });
+  assert.equal(commits.at(-1), 'next');
+
   // Existing close seam still extracts without generation/retire helpers.
   const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  const consumeSuppress'))+'\nclose;';
   let collapsed:boolean|null=null, dismissed=0;
-  const makeClose=(expandedFlag:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{closeVenueSheet,expanded:expandedFlag,selection:venue,
-    onExpand:(value:boolean)=>{collapsed=value;},onClose:()=>{dismissed++;}}) as ()=>void;
+  const makeClose=(expandedFlag:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{
+    closeVenueSheet,expanded:expandedFlag,selection:venue,
+    onExpand:(value:boolean)=>{collapsed=value;},
+    dismissSheet:()=>{dismissed++;},
+  }) as ()=>void;
   makeClose(true)();assert.equal(collapsed,false);assert.equal(dismissed,0);
   makeClose(false)();assert.equal(dismissed,1);
 });

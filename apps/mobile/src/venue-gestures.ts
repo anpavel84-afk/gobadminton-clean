@@ -194,3 +194,241 @@ export function sampleHandleVelocity(
   const velocity = elapsed > 0 ? (previous.lastY - pageY) / elapsed : previous.velocity;
   return { lastY: pageY, time: timestamp, velocity };
 }
+
+/**
+ * Recover the original touch-down Y when PanResponder grant is delayed past axis lock.
+ * `pageY - gesture.dy` is the canonical origin even if grant fires after 8dp recognition.
+ */
+export function canonicalSheetOriginY(pageY: number, gestureDy: number): number {
+  return pageY - gestureDy;
+}
+
+/** Terminal release displacement from canonical origin (includes final release coordinate). */
+export function sheetReleaseDy(releasePageY: number, originY: number): number {
+  return releasePageY - originY;
+}
+
+/** Compact live growth height: settled compact + upward lift, capped by available expanded bound. */
+export function compactLiveGrowthHeight(compactHeight: number, lift: number, availableExpanded: number): number {
+  if (!(compactHeight > 0) || !(lift > 0)) return compactHeight > 0 ? compactHeight : 0;
+  const cap = availableExpanded > compactHeight ? availableExpanded : compactHeight + lift;
+  return Math.min(cap, compactHeight + lift);
+}
+
+/** Minimal event/gesture shapes shared by production PanResponder wiring and owning tests. */
+export type ResponderTouchEvent = { nativeEvent: { pageY: number; timestamp: number } };
+export type ResponderGestureSnapshot = { dx: number; dy: number; numberActiveTouches: number };
+
+export type SheetResponderPorts = {
+  isExpanded: () => boolean;
+  isHandleActive: () => boolean;
+  getControlOrigin: () => boolean;
+  getGeneration: () => number;
+  getTravel: () => number;
+  getLift: () => number;
+  getDrag: () => SheetDrag | null;
+  setDrag: (next: SheetDrag | null) => void;
+  beginFreshTouch: () => void;
+  retireGesture: (clearSuppress?: boolean) => void;
+  applyLift: (value: number) => void;
+  settleLift: () => void;
+  markSuppress: () => void;
+  endCompact: (axis: SheetAxis, dy: number, gen: number) => void;
+  endHandle: (gen: number, dy: number, velocity: number, velocityAgeMs: number) => void;
+};
+
+/**
+ * Production compact-surface responder callbacks — used directly by PanResponder.create
+ * and by owning tests with injected ports (no copied harness).
+ */
+export function createCompactSheetHandlers(ports: SheetResponderPorts) {
+  return {
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      if (ports.isExpanded() || ports.isHandleActive() || ports.getControlOrigin()) return false;
+      if (secondTouchCancels(gesture.numberActiveTouches)) return false;
+      return decideSheetAxis(gesture.dx, gesture.dy) === 'vertical';
+    },
+    onPanResponderGrant: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      ports.beginFreshTouch();
+      const travel = ports.getTravel();
+      const originY = canonicalSheetOriginY(event.nativeEvent.pageY, gesture.dy);
+      ports.setDrag({
+        kind: 'compact', axis: 'pending', startY: originY, lastY: event.nativeEvent.pageY,
+        time: event.nativeEvent.timestamp, velocity: 0, originExpanded: false, start: 0, travel,
+        generation: ports.getGeneration(), controlOrigin: ports.getControlOrigin(),
+      });
+    },
+    onPanResponderMove: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const current = ports.getDrag();
+      if (!current || current.kind !== 'compact' || current.generation !== ports.getGeneration()) return;
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        ports.retireGesture(true);
+        ports.settleLift();
+        return;
+      }
+      if (current.controlOrigin) return;
+      if (current.axis === 'pending') {
+        const axis = decideSheetAxis(gesture.dx, gesture.dy);
+        if (axis === 'pending') return;
+        if (axis === 'horizontal') { ports.setDrag(null); ports.settleLift(); return; }
+        current.axis = 'vertical';
+        ports.markSuppress();
+      }
+      const sampled = sampleHandleVelocity(current, event.nativeEvent.pageY, event.nativeEvent.timestamp);
+      current.lastY = sampled.lastY; current.time = sampled.time; current.velocity = sampled.velocity;
+      if (current.travel > 0) ports.applyLift(clampSheetLift(gesture.dy, current.travel));
+    },
+    onPanResponderRelease: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const current = ports.getDrag();
+      if (!current || current.kind !== 'compact') { ports.settleLift(); return; }
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        ports.retireGesture(true); ports.settleLift(); return;
+      }
+      const axis = current.axis === 'pending' ? decideSheetAxis(gesture.dx, gesture.dy) : current.axis;
+      const dy = sheetReleaseDy(event.nativeEvent.pageY, current.startY);
+      ports.endCompact(axis, dy, current.generation);
+    },
+    onPanResponderTerminate: () => { ports.retireGesture(true); ports.settleLift(); },
+    onPanResponderTerminationRequest: () => true,
+  };
+}
+
+/** Production handle responder callbacks shared by PanResponder.create and owning tests. */
+export function createHandleSheetHandlers(ports: SheetResponderPorts) {
+  return {
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (event: ResponderTouchEvent) => {
+      ports.beginFreshTouch();
+      const originExpanded = ports.isExpanded();
+      const travel = ports.getTravel();
+      const lift = ports.getLift();
+      const start = originExpanded ? travel : (lift > 0 ? Math.min(travel, lift) : 0);
+      ports.setDrag({
+        kind: 'handle', axis: 'pending', startY: event.nativeEvent.pageY, lastY: event.nativeEvent.pageY,
+        time: event.nativeEvent.timestamp, velocity: 0, originExpanded, start, travel,
+        generation: ports.getGeneration(), controlOrigin: false,
+      });
+    },
+    onPanResponderMove: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const current = ports.getDrag();
+      if (!current || current.kind !== 'handle' || current.generation !== ports.getGeneration()) return;
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        ports.retireGesture(true); ports.settleLift(); return;
+      }
+      if (current.axis === 'pending') {
+        const axis = decideSheetAxis(gesture.dx, gesture.dy);
+        if (axis === 'pending') return;
+        if (axis === 'horizontal') { ports.setDrag(null); ports.settleLift(); ports.markSuppress(); return; }
+        current.axis = 'vertical';
+        ports.markSuppress();
+      }
+      if (current.travel <= 0) return;
+      const sampled = sampleHandleVelocity(current, event.nativeEvent.pageY, event.nativeEvent.timestamp);
+      current.lastY = sampled.lastY; current.time = sampled.time; current.velocity = sampled.velocity;
+      const dy = event.nativeEvent.pageY - current.startY;
+      ports.applyLift(expandedHandleLift(current.originExpanded, current.start, current.travel, dy));
+    },
+    onPanResponderRelease: (event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const current = ports.getDrag();
+      if (!current || current.kind !== 'handle') { ports.settleLift(); return; }
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        ports.retireGesture(true); ports.settleLift(); return;
+      }
+      const releaseY = event.nativeEvent.pageY;
+      const releaseTime = event.nativeEvent.timestamp;
+      const dy = sheetReleaseDy(releaseY, current.startY);
+      const velocityAgeMs = eventClockAgeMs(releaseTime, current.time);
+      ports.endHandle(current.generation, dy, current.velocity, velocityAgeMs);
+    },
+    onPanResponderTerminate: () => { ports.retireGesture(true); ports.settleLift(); },
+    onPanResponderTerminationRequest: () => false,
+  };
+}
+
+export type GalleryResponderPorts = {
+  canPage: () => boolean;
+  isMounted: () => boolean;
+  getGeneration: () => number;
+  bumpGeneration: () => void;
+  isRetired: () => boolean;
+  setRetired: (retired: boolean) => void;
+  getAxis: () => GalleryAxis;
+  setAxis: (axis: GalleryAxis) => void;
+  onGrantFresh: () => void;
+  onCommit: (action: Exclude<GallerySwipeAction, 'none'>) => void;
+};
+
+/**
+ * Production gallery/image swipe callbacks. Second finger irrevocably retires the
+ * current gesture until a genuine new grant; late releases check generation/mount.
+ */
+export function createGalleryGestureHandlers(ports: GalleryResponderPorts) {
+  return {
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      if (!ports.canPage()) return false;
+      // Do not gate on retired here — a genuine new pointer that wins must reach grant to clear retirement.
+      if (secondTouchCancels(gesture.numberActiveTouches)) return false;
+      const next = decideGalleryAxis(gesture.dx, gesture.dy);
+      ports.setAxis(next);
+      return next === 'horizontal';
+    },
+    onPanResponderGrant: () => {
+      ports.onGrantFresh();
+      ports.setRetired(false);
+      ports.setAxis('pending');
+    },
+    onPanResponderMove: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      if (ports.isRetired()) return;
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        ports.setRetired(true);
+        ports.setAxis('pending');
+        ports.bumpGeneration();
+        return;
+      }
+      if (ports.getAxis() === 'pending') ports.setAxis(decideGalleryAxis(gesture.dx, gesture.dy));
+    },
+    onPanResponderRelease: (_event: ResponderTouchEvent, gesture: ResponderGestureSnapshot) => {
+      const gen = ports.getGeneration();
+      if (!ports.isMounted() || ports.getGeneration() !== gen) {
+        ports.setAxis('pending');
+        return;
+      }
+      if (ports.isRetired()) {
+        ports.setAxis('pending');
+        return;
+      }
+      if (secondTouchCancels(gesture.numberActiveTouches)) {
+        ports.setRetired(true);
+        ports.setAxis('pending');
+        ports.bumpGeneration();
+        return;
+      }
+      const locked = ports.getAxis() === 'pending' ? decideGalleryAxis(gesture.dx, gesture.dy) : ports.getAxis();
+      ports.setAxis('pending');
+      const action = decideGallerySwipe(locked, gesture.dx);
+      if (action === 'none') return;
+      if (!ports.isMounted() || ports.getGeneration() !== gen || ports.isRetired()) return;
+      ports.onCommit(action);
+    },
+    onPanResponderTerminate: () => {
+      ports.setRetired(true);
+      ports.setAxis('pending');
+      ports.bumpGeneration();
+    },
+    onPanResponderTerminationRequest: () => true,
+  };
+}
+
+/** Unmount-safe opener/fallback focus restoration scheduling (RN focus semantics). */
+export function scheduleReturnFocus(
+  restore: () => void,
+  schedule: (cb: () => void) => { cancel: () => void } = (cb) => {
+    const id = setTimeout(cb, 0);
+    return { cancel: () => clearTimeout(id) };
+  },
+): { cancel: () => void } {
+  return schedule(restore);
+}

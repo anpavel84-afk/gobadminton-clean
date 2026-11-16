@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Image, Linking, PanResponder, Pressable, ScrollView, View } from 'react-native';
-import type { GestureResponderEvent, PanResponderGestureState } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useResource, useUpcomingItems } from '../hooks.ts';
@@ -9,15 +8,14 @@ import type { PublicGame } from '../public-api.ts';
 import { API_ORIGIN, PublicApiError, publicApi } from '../public-api.ts';
 import {
   consumeFollowOnSuppress,
-  decideGalleryAxis,
-  decideGallerySwipe,
+  createGalleryGestureHandlers,
   galleryMediaIdentity,
   gallerySelectionOf,
   mediaFailureApplies,
   resolveGallerySelection,
-  secondTouchCancels,
   stepGallerySelection,
   suppressAfterFreshTouch,
+  type GalleryAxis,
   type GallerySelection,
 } from '../venue-gestures.ts';
 import { VenueSchedule, safeCatalogSource, venueCreatePath } from '../venues.ts';
@@ -39,7 +37,7 @@ function PublicLink({ label, url, onControlTouch, onControlTouchEnd }: {
 }) {
   const [failed, setFailed] = useState(false);
   return <View>
-    <Pressable accessibilityRole="button" onPressIn={onControlTouch}
+    <Pressable accessibilityRole="button" onPressIn={onControlTouch} onPressOut={onControlTouchEnd}
       onPress={() => { onControlTouchEnd?.(); setFailed(false); void Linking.openURL(url).catch(() => setFailed(true)); }}
       style={({ pressed }) => [styles.textButton, pressed && { backgroundColor: colors.paper }]}>
       <Label style={{ color: colors.ink, textAlign: 'center' }}>{label}</Label>
@@ -73,7 +71,7 @@ function VenueMediaSurface({ item, name, mapSheet = false, onControlTouch, onCon
       onError={() => { if (mediaFailureApplies(active.current, identity) && attemptRef.current === attempt) setPhase('error'); }} />}
     {phase === 'loading' && <Label accessibilityLiveRegion="polite">Загружаем изображение…</Label>}
     {phase === 'error' && <><Label>Изображение не загрузилось.</Label>
-      <Pressable accessibilityRole="button" accessibilityLabel="Повторить загрузку изображения" onPressIn={onControlTouch}
+      <Pressable accessibilityRole="button" accessibilityLabel="Повторить загрузку изображения" onPressIn={onControlTouch} onPressOut={onControlTouchEnd}
         onPress={() => {
           onControlTouchEnd?.();
           if (!mediaFailureApplies(active.current, identity)) return;
@@ -102,51 +100,47 @@ export function VenueGallery({ venue, mapSheet = false, selected, onSelect, onCo
   const item = resolveGallerySelection(venue.gallery, venue.mainImage, selected);
   const index = item ? Math.max(0, venue.gallery.findIndex(entry => entry.url === item.url || entry.id === item.id)) : 0;
   const suppress = useRef(false);
-  const axis = useRef<'pending' | 'horizontal' | 'vertical'>('pending');
+  const axis = useRef<GalleryAxis>('pending');
   const generation = useRef(0);
+  const retired = useRef(false);
+  const mounted = useRef(true);
+  const scopeKey = `${venue.id}:${venue.cityId}`;
+  const scopeRef = useRef(scopeKey);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; retired.current = true; generation.current += 1; };
+  }, []);
+  useEffect(() => {
+    if (scopeRef.current === scopeKey) return;
+    scopeRef.current = scopeKey;
+    // New venue/city scope retires any in-flight gallery gesture without blocking the next grant.
+    retired.current = true;
+    generation.current += 1;
+    axis.current = 'pending';
+  }, [scopeKey]);
   const go = useCallback((delta: 1 | -1) => {
     if (venue.gallery.length <= 1) return;
     const next = stepGallerySelection(venue.gallery, item, delta);
     onSelect(gallerySelectionOf(next));
   }, [venue.gallery, item, onSelect]);
-  const responder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
-      if (venue.gallery.length <= 1) return false;
-      if (secondTouchCancels(gesture.numberActiveTouches)) return false;
-      const next = decideGalleryAxis(gesture.dx, gesture.dy);
-      axis.current = next;
-      return next === 'horizontal';
-    },
-    onPanResponderGrant: () => {
-      // Fresh pointer on the image surface clears stale follow-on suppress.
-      suppress.current = false;
-      axis.current = 'pending';
-    },
-    onPanResponderMove: (_event, gesture) => {
-      if (secondTouchCancels(gesture.numberActiveTouches)) {
-        axis.current = 'pending';
-        generation.current += 1;
-        return;
-      }
-      if (axis.current === 'pending') axis.current = decideGalleryAxis(gesture.dx, gesture.dy);
-    },
-    onPanResponderRelease: (_event, gesture) => {
-      if (secondTouchCancels(gesture.numberActiveTouches)) {
-        axis.current = 'pending';
-        return;
-      }
-      const locked = axis.current === 'pending' ? decideGalleryAxis(gesture.dx, gesture.dy) : axis.current;
-      const action = decideGallerySwipe(locked, gesture.dx);
-      axis.current = 'pending';
-      if (action === 'none') return;
+  const portsRef = useRef({ go, galleryLength: venue.gallery.length });
+  portsRef.current = { go, galleryLength: venue.gallery.length };
+  const responder = useMemo(() => PanResponder.create(createGalleryGestureHandlers({
+    canPage: () => portsRef.current.galleryLength > 1,
+    isMounted: () => mounted.current,
+    getGeneration: () => generation.current,
+    bumpGeneration: () => { generation.current += 1; },
+    isRetired: () => retired.current,
+    setRetired: (value) => { retired.current = value; },
+    getAxis: () => axis.current,
+    setAxis: (next) => { axis.current = next; },
+    onGrantFresh: () => { suppress.current = false; },
+    onCommit: (action) => {
       // Follow-on suppress only for the originating image surface, not arrow controls.
       suppress.current = true;
-      go(action === 'next' ? 1 : -1);
+      portsRef.current.go(action === 'next' ? 1 : -1);
     },
-    onPanResponderTerminate: () => { axis.current = 'pending'; suppress.current = false; },
-    onPanResponderTerminationRequest: () => true,
-  }), [venue.gallery.length, go]);
+  })), []);
   const step = (delta: 1 | -1) => {
     // Fresh arrow activation is never discarded for a prior image-surface swipe.
     go(delta);
@@ -176,12 +170,12 @@ export function VenueGallery({ venue, mapSheet = false, selected, onSelect, onCo
       {(!mapSheet || venue.gallery.length > 1) && <Label accessibilityLiveRegion="polite">Изображение {index + 1} из {venue.gallery.length}</Label>}
       {venue.gallery.length > 1 && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <Pressable accessibilityRole="button" accessibilityLabel="Предыдущее изображение"
-          onPressIn={onControlTouch} onPress={() => { onControlTouchEnd?.(); step(-1); }}
+          onPressIn={onControlTouch} onPressOut={onControlTouchEnd} onPress={() => { onControlTouchEnd?.(); step(-1); }}
           style={{ minWidth: 44, minHeight: 44, paddingHorizontal: 10, justifyContent: 'center' }}>
           <Label>←</Label>
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Следующее изображение"
-          onPressIn={onControlTouch} onPress={() => { onControlTouchEnd?.(); step(1); }}
+          onPressIn={onControlTouch} onPressOut={onControlTouchEnd} onPress={() => { onControlTouchEnd?.(); step(1); }}
           style={{ minWidth: 44, minHeight: 44, paddingHorizontal: 10, justifyContent: 'center' }}>
           <Label>→</Label>
         </Pressable>
@@ -264,7 +258,7 @@ function CompactSourceLink({name,url,onControlTouch,onControlTouchEnd}:{
 }) {
   const [failed,setFailed] = useState(false);
   return <><Pressable accessibilityRole="link" accessibilityLabel={`Источник: badminton4u.ru · ${name}`}
-    onPressIn={onControlTouch}
+    onPressIn={onControlTouch} onPressOut={onControlTouchEnd}
     onPress={() => {onControlTouchEnd?.();setFailed(false);void Linking.openURL(url).catch(() => setFailed(true));}}
     style={{minHeight:44,justifyContent:'center'}}><Label style={{fontSize:12,lineHeight:18,color:colors.secondary}}>Источник: badminton4u.ru · {name}</Label></Pressable>
     {failed && <Label accessibilityRole="alert">Не удалось открыть источник. Попробуйте ещё раз.</Label>}</>;
@@ -285,40 +279,36 @@ export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMe
   activeIdentity.current = identity;
   const failed = failedIdentity !== null && failedIdentity === identity;
   const source = safeCatalogSource(venue.catalogSource), club = source?.clubs[0];
-  const axis = useRef<'pending' | 'horizontal' | 'vertical'>('pending');
+  const axis = useRef<GalleryAxis>('pending');
+  const generation = useRef(0);
+  const retired = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; retired.current = true; generation.current += 1; };
+  }, []);
   const index = item ? Math.max(0, venue.gallery.findIndex(entry => entry.url === item.url || entry.id === item.id)) : 0;
   const page = (delta: 1 | -1) => {
     if (!onSelectMedia || venue.gallery.length <= 1) return;
     const next = stepGallerySelection(venue.gallery, item, delta);
     onSelectMedia(gallerySelectionOf(next));
   };
-  const imageSwipe = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: (_event, gesture) => {
-      if (!onSelectMedia || venue.gallery.length <= 1) return false;
-      if (secondTouchCancels(gesture.numberActiveTouches)) return false;
-      const next = decideGalleryAxis(gesture.dx, gesture.dy);
-      axis.current = next;
-      return next === 'horizontal';
+  const pageRef = useRef({ page, canPage: !!(onSelectMedia && venue.gallery.length > 1), item });
+  pageRef.current = { page, canPage: !!(onSelectMedia && venue.gallery.length > 1), item };
+  const imageSwipe = useMemo(() => PanResponder.create(createGalleryGestureHandlers({
+    canPage: () => pageRef.current.canPage,
+    isMounted: () => mounted.current,
+    getGeneration: () => generation.current,
+    bumpGeneration: () => { generation.current += 1; },
+    isRetired: () => retired.current,
+    setRetired: (value) => { retired.current = value; },
+    getAxis: () => axis.current,
+    setAxis: (next) => { axis.current = next; },
+    onGrantFresh: () => {},
+    onCommit: (action) => {
+      pageRef.current.page(action === 'next' ? 1 : -1);
     },
-    onPanResponderGrant: () => { axis.current = 'pending'; },
-    onPanResponderMove: (_event, gesture) => {
-      if (secondTouchCancels(gesture.numberActiveTouches)) { axis.current = 'pending'; return; }
-      if (axis.current === 'pending') axis.current = decideGalleryAxis(gesture.dx, gesture.dy);
-    },
-    onPanResponderRelease: (_event, gesture) => {
-      if (secondTouchCancels(gesture.numberActiveTouches)) { axis.current = 'pending'; return; }
-      const locked = axis.current === 'pending' ? decideGalleryAxis(gesture.dx, gesture.dy) : axis.current;
-      axis.current = 'pending';
-      if (!onSelectMedia) return;
-      const action = decideGallerySwipe(locked, gesture.dx);
-      if (action === 'none') return;
-      const next = stepGallerySelection(venue.gallery, item, action === 'next' ? 1 : -1);
-      onSelectMedia(gallerySelectionOf(next));
-    },
-    onPanResponderTerminate: () => { axis.current = 'pending'; },
-    onPanResponderTerminationRequest: () => true,
-  }), [onSelectMedia, venue.gallery, item]);
+  })), []);
   const open = () => { if (suppressTap?.()) return; onOpen(); };
   const thumbLabel = item
     ? `${item.credit.kind === 'illustration' ? 'Иллюстрация' : item.credit.kind === 'logo' ? 'Логотип площадки' : 'Фото площадки'}${venue.gallery.length > 1 ? `, ${index + 1} из ${venue.gallery.length}` : ''}`
@@ -344,7 +334,7 @@ export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMe
           }} style={{width:64,height:64}} />
           : <Label style={{fontSize:11}}>{failed ? 'Фото не загрузилось' : 'Нет изображения'}</Label>}
         {failed && item && <Pressable accessibilityRole="button" accessibilityLabel="Повторить загрузку изображения"
-          onPressIn={onControlTouch}
+          onPressIn={onControlTouch} onPressOut={onControlTouchEnd}
           onPress={() => {
             onControlTouchEnd?.();
             if (!mediaFailureApplies(activeIdentity.current, identity)) return;

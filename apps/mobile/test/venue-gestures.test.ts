@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GalleryItem } from '../src/venues.ts';
 import {
+  canonicalSheetOriginY,
   clampSheetLift,
+  compactLiveGrowthHeight,
   consumeFollowOnSuppress,
+  createCompactSheetHandlers,
+  createGalleryGestureHandlers,
+  createHandleSheetHandlers,
   decideCompactRelease,
   decideGalleryAxis,
   decideGallerySwipe,
@@ -18,7 +23,9 @@ import {
   mediaFailureApplies,
   resolveGallerySelection,
   sampleHandleVelocity,
+  scheduleReturnFocus,
   secondTouchCancels,
+  sheetReleaseDy,
   stepGallerySelection,
   suppressAfterFreshTouch,
   VENUE_GALLERY_AXIS_LOCK,
@@ -28,6 +35,9 @@ import {
   VENUE_SHEET_AXIS_LOCK,
   VENUE_SHEET_DISMISS_DY,
   VENUE_SHEET_EXPAND_DY,
+  type GalleryAxis,
+  type SheetDrag,
+  type SheetResponderPorts,
 } from '../src/venue-gestures.ts';
 
 const photo = (id: string, url: string): GalleryItem => ({
@@ -116,23 +126,19 @@ test('gallery selection survives refresh of surviving URL/id and falls back to m
 test('event clock age never mixes wall clock; fresh short flicks and delayed release use one timeline', () => {
   assert.equal(eventClockAgeMs(1100, 1000), 100);
   assert.equal(eventClockAgeMs(1000, 1100), 0);
-  // Fresh short fast up: last move at t=1050, release at t=1060 → age 10 < stale.
   assert.equal(decideHandleSettle({
     originExpanded: false, dy: -40, start: 0, travel: 200,
     velocity: VENUE_HANDLE_VELOCITY, velocityAgeMs: eventClockAgeMs(1060, 1050),
   }), 'expand');
-  // Fresh short fast down.
   assert.equal(decideHandleSettle({
     originExpanded: true, dy: 40, start: 200, travel: 200,
     velocity: -VENUE_HANDLE_VELOCITY, velocityAgeMs: eventClockAgeMs(2060, 2050),
   }), 'collapse');
-  // Delayed release: last move aged beyond stale window → velocity ignored.
   assert.equal(decideHandleSettle({
     originExpanded: true, dy: 40, start: 200, travel: 200,
     velocity: -VENUE_HANDLE_VELOCITY,
     velocityAgeMs: eventClockAgeMs(2200, 2050),
   }), 'expand');
-  // Final release dy crosses compact-down threshold even when last move was earlier.
   assert.equal(decideHandleSettle({
     originExpanded: false, dy: VENUE_SHEET_DISMISS_DY, start: 0, travel: 200,
     velocity: 0, velocityAgeMs: eventClockAgeMs(1500, 1200),
@@ -143,13 +149,16 @@ test('event clock age never mixes wall clock; fresh short flicks and delayed rel
   assert.equal(sampled.lastY, 360);
 });
 
-test('measured travel rejects +200/×2.5 guesses; expanded handle lift tracks before settle', () => {
+test('measured travel rejects +200/×2.5 guesses; expanded handle lift tracks before settle; compact live growth', () => {
   assert.equal(measuredSheetTravel(0, 500, 700), 0);
   assert.equal(measuredSheetTravel(172, 500, 700), 328);
   assert.equal(measuredSheetTravel(172, 0, 700), 528);
   assert.equal(measuredSheetTravel(172, 100, 100), 0);
   assert.equal(expandedHandleLift(true, 200, 200, 80), 80);
   assert.equal(expandedHandleLift(false, 0, 200, -80), 80);
+  assert.equal(compactLiveGrowthHeight(172, 80, 700), 252);
+  assert.equal(compactLiveGrowthHeight(172, 0, 700), 172);
+  assert.equal(compactLiveGrowthHeight(172, 600, 400), 400);
 });
 
 test('follow-on suppress clears on fresh touch; second pointer cancels; retired generation ignores late callbacks', () => {
@@ -171,102 +180,205 @@ test('selected media identity owns load/error/retry; late prior failure ignored'
   assert.equal(mediaFailureApplies('', '/a.jpg'), false);
 });
 
-/** Owning adapter harness: executes responder lifecycle with a shared event clock. */
-function createHandleAdapter() {
-  const drag: {
-    startY: number; lastY: number; time: number; velocity: number; start: number; travel: number;
-    originExpanded: boolean; axis: 'pending' | 'vertical' | 'horizontal'; generation: number;
-  } | null = { startY: 0, lastY: 0, time: 0, velocity: 0, start: 200, travel: 200, originExpanded: true, axis: 'pending', generation: 1 };
-  let state = drag;
+/** Strongly typed production fixture ports — same handlers PanResponder.create receives. */
+function createSheetFixture(options: {
+  expanded?: boolean;
+  controlOrigin?: boolean;
+  travel?: number;
+  generation?: number;
+}) {
+  let drag: SheetDrag | null = null;
+  let lift = 0;
+  const lifts: number[] = [];
   const actions: string[] = [];
-  const grant = (pageY: number, timestamp: number) => {
-    state = {
-      startY: pageY, lastY: pageY, time: timestamp, velocity: 0, start: 200, travel: 200,
-      originExpanded: true, axis: 'pending', generation: 1,
-    };
+  let suppress = false;
+  let controlOrigin = options.controlOrigin ?? false;
+  let generation = options.generation ?? 1;
+  const travel = options.travel ?? 200;
+  const ports: SheetResponderPorts = {
+    isExpanded: () => options.expanded ?? false,
+    isHandleActive: () => drag?.kind === 'handle',
+    getControlOrigin: () => controlOrigin,
+    getGeneration: () => generation,
+    getTravel: () => travel,
+    getLift: () => lift,
+    getDrag: () => drag,
+    setDrag: (next) => { drag = next; },
+    beginFreshTouch: () => { suppress = suppressAfterFreshTouch(drag !== null, suppress); },
+    retireGesture: (clearSuppress = true) => {
+      drag = null;
+      controlOrigin = false;
+      if (clearSuppress) suppress = false;
+      lift = 0;
+    },
+    applyLift: (value) => { lift = value; lifts.push(value); },
+    settleLift: () => { lift = 0; },
+    markSuppress: () => { suppress = true; },
+    endCompact: (axis, dy, gen) => {
+      if (!gestureGenerationActive(generation, gen, true)) { drag = null; lift = 0; return; }
+      if (drag?.controlOrigin) { drag = null; lift = 0; return; }
+      const action = decideCompactRelease(axis, dy);
+      drag = null;
+      lift = 0;
+      if (action === 'none' || action === 'origin') { actions.push(action === 'origin' ? 'origin' : 'none'); return; }
+      suppress = true;
+      actions.push(action);
+    },
+    endHandle: (gen, dy, velocity, velocityAgeMs) => {
+      const current = drag;
+      if (!current || current.kind !== 'handle' || !gestureGenerationActive(generation, gen, true)) {
+        drag = null; lift = 0; return;
+      }
+      if (current.controlOrigin || current.axis !== 'vertical' || current.travel <= 0) {
+        drag = null; lift = 0; return;
+      }
+      const action = decideHandleSettle({
+        originExpanded: current.originExpanded, dy, start: current.start, travel: current.travel,
+        velocity, velocityAgeMs,
+      });
+      drag = null;
+      suppress = true;
+      lift = 0;
+      actions.push(action);
+    },
   };
-  const move = (pageY: number, timestamp: number, dx: number, dy: number) => {
-    if (!state) return;
-    if (state.axis === 'pending') {
-      const axis = decideSheetAxis(dx, dy);
-      if (axis === 'pending') return;
-      if (axis === 'horizontal') { state = null; return; }
-      state.axis = 'vertical';
-    }
-    const sampled = sampleHandleVelocity(state, pageY, timestamp);
-    state.lastY = sampled.lastY; state.time = sampled.time; state.velocity = sampled.velocity;
+  const touch = (pageY: number, timestamp: number) => ({ nativeEvent: { pageY, timestamp } });
+  const gesture = (dx: number, dy: number, touches = 1) => ({ dx, dy, numberActiveTouches: touches });
+  return {
+    ports, actions, lifts,
+    getDrag: () => drag,
+    getLift: () => lift,
+    getSuppress: () => suppress,
+    setControlOrigin: (value: boolean) => { controlOrigin = value; },
+    bumpGeneration: () => { generation += 1; },
+    touch, gesture,
+    compact: createCompactSheetHandlers(ports),
+    handle: createHandleSheetHandlers(ports),
   };
-  const release = (pageY: number, timestamp: number) => {
-    if (!state || state.axis !== 'vertical') { state = null; return; }
-    const dy = pageY - state.startY;
-    const velocityAgeMs = eventClockAgeMs(timestamp, state.time);
-    actions.push(decideHandleSettle({
-      originExpanded: state.originExpanded, dy, start: state.start, travel: state.travel,
-      velocity: state.velocity, velocityAgeMs,
-    }));
-    state = null;
-  };
-  return { grant, move, release, actions, getState: () => state };
 }
 
-test('adapter: fresh short fast up/down, delayed release, final release crossing threshold after earlier move', () => {
-  const up = createHandleAdapter();
-  up.grant(500, 1000);
-  up.move(492, 1010, 0, -8);
-  up.move(460, 1030, 0, -40);
-  up.release(455, 1040);
-  assert.equal(up.actions.at(-1), 'expand');
-
-  const down = createHandleAdapter();
-  down.grant(300, 2000);
-  down.move(308, 2010, 0, 8);
-  down.move(380, 2030, 0, 80);
-  down.release(390, 2040);
-  assert.equal(down.actions.at(-1), 'collapse');
-
-  const delayed = createHandleAdapter();
-  delayed.grant(300, 3000);
-  delayed.move(308, 3010, 0, 8);
-  delayed.move(340, 3030, 0, 40);
-  // Release 150ms after last move — stale velocity; progress still below half → expand.
-  delayed.release(345, 3180);
+test('production compact handlers: delayed grant origin, full -60 expand, first large move then release', () => {
+  // Grant after 8dp recognition at dy=-10; full gesture is -60 from touch origin → expand.
+  const delayed = createSheetFixture({});
+  assert.equal(delayed.compact.onMoveShouldSetPanResponder(delayed.touch(490, 1000), delayed.gesture(0, -10)), true);
+  delayed.compact.onPanResponderGrant(delayed.touch(490, 1010), delayed.gesture(0, -10));
+  assert.equal(delayed.getDrag()?.startY, canonicalSheetOriginY(490, -10));
+  delayed.compact.onPanResponderMove(delayed.touch(450, 1040), delayed.gesture(0, -50));
+  delayed.compact.onPanResponderRelease(delayed.touch(440, 1050), delayed.gesture(0, -60));
   assert.equal(delayed.actions.at(-1), 'expand');
+  assert.equal(sheetReleaseDy(440, canonicalSheetOriginY(490, -10)), -60);
 
-  const crossing = createHandleAdapter();
-  // Compact dismiss path via handle adapter with originExpanded false.
-  const compact = createHandleAdapter();
-  compact.grant(100, 4000);
-  const state = compact.getState()!;
-  state.originExpanded = false;
-  state.start = 0;
-  compact.move(108, 4010, 0, 8);
-  compact.move(150, 4050, 0, 50);
-  // Final release crosses 64 even though last move was only +50.
-  compact.release(170, 4100);
-  assert.equal(compact.actions.at(-1), 'dismiss');
-  assert.ok(crossing);
+  // First large move already past threshold, then release near that grant sample — must not lose full gesture.
+  // Bug was: startY=grant pageY ⇒ release dy≈0; fixed origin keeps touch-down so dy≈-60.
+  const firstLarge = createSheetFixture({});
+  firstLarge.compact.onPanResponderGrant(firstLarge.touch(440, 2000), firstLarge.gesture(0, -60));
+  assert.equal(firstLarge.getDrag()?.startY, 500);
+  firstLarge.compact.onPanResponderMove(firstLarge.touch(440, 2010), firstLarge.gesture(0, -60));
+  firstLarge.compact.onPanResponderRelease(firstLarge.touch(442, 2020), firstLarge.gesture(0, -58));
+  assert.equal(firstLarge.actions.at(-1), 'expand');
+  assert.ok(Math.abs(sheetReleaseDy(442, 500)) >= Math.abs(VENUE_SHEET_EXPAND_DY));
 });
 
-test('adapter: control-origin and second pointer cancel; late retired callback ignored', () => {
+test('production handle handlers: fresh short flick, delayed release clock, final release crossing threshold', () => {
+  const up = createSheetFixture({ expanded: true });
+  up.handle.onPanResponderGrant(up.touch(500, 1000));
+  up.handle.onPanResponderMove(up.touch(492, 1010), up.gesture(0, -8));
+  up.handle.onPanResponderMove(up.touch(460, 1030), up.gesture(0, -40));
+  up.handle.onPanResponderRelease(up.touch(455, 1040), up.gesture(0, -45));
+  assert.equal(up.actions.at(-1), 'expand');
+
+  const down = createSheetFixture({ expanded: true });
+  down.handle.onPanResponderGrant(down.touch(300, 2000));
+  down.handle.onPanResponderMove(down.touch(308, 2010), down.gesture(0, 8));
+  down.handle.onPanResponderMove(down.touch(380, 2030), down.gesture(0, 80));
+  down.handle.onPanResponderRelease(down.touch(390, 2040), down.gesture(0, 90));
+  assert.equal(down.actions.at(-1), 'collapse');
+
+  const delayed = createSheetFixture({ expanded: true });
+  delayed.handle.onPanResponderGrant(delayed.touch(300, 3000));
+  delayed.handle.onPanResponderMove(delayed.touch(308, 3010), delayed.gesture(0, 8));
+  delayed.handle.onPanResponderMove(delayed.touch(340, 3030), delayed.gesture(0, 40));
+  delayed.handle.onPanResponderRelease(delayed.touch(345, 3180), delayed.gesture(0, 45));
+  assert.equal(delayed.actions.at(-1), 'expand');
+
+  const compactDismiss = createSheetFixture({ expanded: false });
+  compactDismiss.handle.onPanResponderGrant(compactDismiss.touch(100, 4000));
+  compactDismiss.handle.onPanResponderMove(compactDismiss.touch(108, 4010), compactDismiss.gesture(0, 8));
+  compactDismiss.handle.onPanResponderMove(compactDismiss.touch(150, 4050), compactDismiss.gesture(0, 50));
+  compactDismiss.handle.onPanResponderRelease(compactDismiss.touch(170, 4100), compactDismiss.gesture(0, 70));
+  assert.equal(compactDismiss.actions.at(-1), 'dismiss');
+});
+
+test('production callbacks: cancelled control, gallery second finger including release0, retired unmount/Back, normal tap, focus ports', () => {
+  // R4a: controlOrigin latched then cleared (press-out) — body swipe expands; control drag never does.
+  const control = createSheetFixture({ controlOrigin: true });
+  assert.equal(control.compact.onMoveShouldSetPanResponder(control.touch(400, 1000), control.gesture(0, -20)), false);
+  control.setControlOrigin(false);
+  assert.equal(control.compact.onMoveShouldSetPanResponder(control.touch(400, 1100), control.gesture(0, -20)), true);
+  control.compact.onPanResponderGrant(control.touch(400, 1110), control.gesture(0, -20));
+  control.compact.onPanResponderMove(control.touch(340, 1140), control.gesture(0, -60));
+  control.compact.onPanResponderRelease(control.touch(340, 1150), control.gesture(0, -60));
+  assert.equal(control.actions.at(-1), 'expand');
+
+  const latched = createSheetFixture({ controlOrigin: true });
+  latched.compact.onPanResponderGrant(latched.touch(400, 1200), latched.gesture(0, -20));
+  assert.equal(latched.getDrag()?.controlOrigin, true);
+  latched.compact.onPanResponderMove(latched.touch(340, 1230), latched.gesture(0, -60));
+  latched.compact.onPanResponderRelease(latched.touch(340, 1240), latched.gesture(0, -60));
+  assert.equal(latched.actions.length, 0);
+
+  // R4b: gallery second finger retires; release with 0/1 touches and dx>=48 must not page; fresh grant recovers.
+  let axis: GalleryAxis = 'pending';
   let generation = 1;
+  let retired = false;
   let mounted = true;
-  let suppress = false;
-  const controlOrigin = true;
-  // Control origin never commits vertical sheet action.
-  assert.equal(controlOrigin, true);
-  assert.equal(decideCompactRelease('vertical', VENUE_SHEET_EXPAND_DY), 'expand');
-  // Fresh press after complete gesture clears suppress.
-  suppress = true;
-  suppress = suppressAfterFreshTouch(false, suppress);
-  assert.equal(suppress, false);
-  const blocked = consumeFollowOnSuppress(true);
-  assert.equal(blocked.blocked, true);
-  // Second finger.
-  assert.equal(secondTouchCancels(2), true);
-  // Back/retire while dragging: bump generation; late release ignored.
-  const lateGen = generation;
-  generation += 1;
-  assert.equal(gestureGenerationActive(generation, lateGen, mounted), false);
-  mounted = false;
-  assert.equal(gestureGenerationActive(generation, generation, mounted), false);
+  const commits: string[] = [];
+  const gallery = createGalleryGestureHandlers({
+    canPage: () => true,
+    isMounted: () => mounted,
+    getGeneration: () => generation,
+    bumpGeneration: () => { generation += 1; },
+    isRetired: () => retired,
+    setRetired: (value) => { retired = value; },
+    getAxis: () => axis,
+    setAxis: (next) => { axis = next; },
+    onGrantFresh: () => {},
+    onCommit: (action) => { commits.push(action); },
+  });
+  const gTouch = { nativeEvent: { pageY: 0, timestamp: 0 } };
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderMove(gTouch, { dx: -30, dy: 0, numberActiveTouches: 1 });
+  assert.equal(axis, 'horizontal');
+  gallery.onPanResponderMove(gTouch, { dx: -50, dy: 0, numberActiveTouches: 2 });
+  assert.equal(retired, true);
+  gallery.onPanResponderRelease(gTouch, { dx: -60, dy: 0, numberActiveTouches: 0 });
+  assert.equal(commits.length, 0);
+  gallery.onPanResponderGrant();
+  gallery.onPanResponderMove(gTouch, { dx: -50, dy: 0, numberActiveTouches: 1 });
+  gallery.onPanResponderRelease(gTouch, { dx: -50, dy: 0, numberActiveTouches: 1 });
+  assert.equal(commits.at(-1), 'next');
+
+  // Retired generation / unmount / Back ignores late compact release.
+  const retiredSheet = createSheetFixture({ generation: 2 });
+  retiredSheet.compact.onPanResponderGrant(retiredSheet.touch(500, 5000), retiredSheet.gesture(0, -10));
+  const lateGen = retiredSheet.getDrag()!.generation;
+  retiredSheet.bumpGeneration();
+  retiredSheet.compact.onPanResponderRelease(retiredSheet.touch(440, 5060), retiredSheet.gesture(0, -60));
+  assert.equal(gestureGenerationActive(3, lateGen, true), false);
+  assert.equal(retiredSheet.actions.length, 0);
+
+  // Normal handle tap path: pending axis release does not invent settle; Pressable onPress remains separate.
+  const tap = createSheetFixture({ expanded: false });
+  tap.handle.onPanResponderGrant(tap.touch(200, 6000));
+  tap.handle.onPanResponderRelease(tap.touch(200, 6010), tap.gesture(0, 0));
+  assert.equal(tap.actions.length, 0);
+
+  // Local focus port scheduling (unmount-safe).
+  let focused = 0;
+  const handle = scheduleReturnFocus(() => { focused += 1; }, (cb) => {
+    cb();
+    return { cancel: () => {} };
+  });
+  assert.equal(focused, 1);
+  handle.cancel();
 });

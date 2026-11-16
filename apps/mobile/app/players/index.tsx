@@ -272,7 +272,7 @@ export default function Players() {
           <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={{gap:12}}>{personContent}</ScrollView>
         </View>}
         {selection && venueSheetKey && <VenueSheet key={venueSheetKey} selection={selection} expanded={expanded} games={schedules?.get(selection.id) ?? (schedules ? [] : null)}
-          onExpand={setExpanded} onClose={() => setSelectedVenue(null)} onRetrySchedule={mapResource.retry} onMeasure={measureSheet} />}
+          onExpand={setExpanded} onClose={() => setSelectedVenue(null)} onRetrySchedule={mapResource.retry} onMeasure={measureSheet} returnFocusRef={filterTrigger} />}
         <DiscoverySheet visible={mapFilter} title="Фильтры карты" onClose={() => setMapFilter(false)} returnFocusRef={filterTrigger}>
           <DiscoveryChip title="Все площадки" selected={venueMode==='all'} onPress={() => setVenueMode('all')} />
           <DiscoveryChip title="С играми" selected={venueMode==='with_games'} onPress={() => setVenueMode('with_games')} />
