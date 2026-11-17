@@ -371,7 +371,7 @@ test('raw binary native avatar port never JSON.stringifies body; logout forgets 
   assert.equal(pkg.dependencies['expo-image-manipulator'], '58.0.16');
   assert.equal(pkg.dependencies['expo-file-system'], '58.0.13');
   const app = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8'));
-  assert.equal(app.expo.android.versionCode, 14);
+  assert.equal(app.expo.android.versionCode, 15);
   const picker = app.expo.plugins.find((p: unknown) => Array.isArray(p) && p[0] === 'expo-image-picker');
   assert.deepEqual(picker[1], { photosPermission: false, cameraPermission: false, microphonePermission: false });
   assert.ok(app.expo.android.blockedPermissions.includes('android.permission.RECORD_AUDIO'));
