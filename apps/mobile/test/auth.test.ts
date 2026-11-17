@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
 import { runInNewContext } from 'node:vm';
+import { headerAvatarPresentation } from '../src/header-avatar.ts';
 import { playerInitials } from '../src/presentation.ts';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
@@ -930,7 +931,12 @@ test('permanent Header profile action preserves only typed venue intent through 
     let destination: {pathname:string;params:{returnTo?:string}} | undefined;
     const render = runInNewContext(`(${stripTypeScriptTypes(headerBody)})`, {
       useRouter:() => ({push:(path: typeof destination) => { destination = path; }}),usePathname:() => pathname,
-      canonicalGamePath,canonicalVenueCreatePath, useAuth: () => ({ status: 'authenticated', me }), playerInitials,
+      canonicalGamePath,canonicalVenueCreatePath,
+      useAuth: () => ({ status: 'authenticated', me, profile: { subscribe: () => () => {}, getSnapshot: () => ({ status: 'ready', profile: null }), load: async () => {} } }),
+      playerInitials, headerAvatarPresentation,
+      useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => {}],
+      useEffect: () => {},
+      useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
     }) as (props: object) => () => void;
     render({})(); return destination!;
   }

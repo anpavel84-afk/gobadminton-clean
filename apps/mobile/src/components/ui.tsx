@@ -1,7 +1,7 @@
 import { RadarControls } from './radar-controls.tsx';
 import { AccessibilityInfo, findNodeHandle, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentProps, ComponentRef, PropsWithChildren, ReactNode, RefObject } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -12,7 +12,7 @@ import { brandMarkXml } from '../../assets/brand-mark.ts';
 import { colors, interaction, primaryLabelStyle, primarySurface, typography } from '../theme.ts';
 import { PlayersError } from '../players.ts';
 import { useAuth } from '../auth.tsx';
-import { playerInitials } from '../presentation.ts';
+import { headerAvatarPresentation } from '../header-avatar.ts';
 import { CreateShape, DiscoveryArrow, DiscoveryIcon } from './discovery-icon.tsx';
 import { PublicApiError } from '../public-api.ts';
 
@@ -73,7 +73,17 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
   const pathname = usePathname();
   const returnTo = canonicalVenueCreatePath(pathname) ?? canonicalGamePath(pathname);
   const auth = useAuth();
-  const initials = auth.status === 'authenticated' && auth.me ? playerInitials(auth.me.displayName) : '?';
+  const profileSnapshot = useSyncExternalStore(auth.profile.subscribe, auth.profile.getSnapshot, auth.profile.getSnapshot);
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  useEffect(() => {
+    if (auth.status === 'authenticated' && profileSnapshot.status === 'idle') void auth.profile.load();
+  }, [auth.status, auth.profile, profileSnapshot.status]);
+  const { uri, initials } = headerAvatarPresentation({
+    authenticated: auth.status === 'authenticated',
+    meDisplayName: auth.me?.displayName,
+    profile: profileSnapshot.profile,
+    failedUri,
+  });
   return <View style={styles.header}>
     <View style={styles.headerRow}>
       {light ? <BrandLockup light /> : <Pressable accessibilityRole="button" accessibilityLabel="GoBadminton — Игры" onPress={() => router.navigate('/games')} style={{ minWidth: 112, minHeight: 64 }}><BrandLockup /></Pressable>}
@@ -81,7 +91,9 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
         {!light && <RadarControls compact />}
         {!light && pathname !== '/profile' && <Pressable accessibilityRole="button" accessibilityLabel="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })}
           style={styles.profileAction}>
-          <View style={styles.headerAvatar}><Label style={{ fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{initials}</Label></View>
+          <View style={styles.headerAvatar}>{uri
+            ? <Image key={uri} source={{ uri }} style={{ width: 40, height: 40, borderRadius: 20, overflow: 'hidden' }} accessibilityIgnoresInvertColors onError={() => setFailedUri(uri)} />
+            : <Label style={{ fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{initials}</Label>}</View>
         </Pressable>}
         {action}
       </View>

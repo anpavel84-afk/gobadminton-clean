@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
-import { Image, Keyboard, Pressable, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Keyboard, Pressable, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import {
   LEVEL_GUIDE_DISCLAIMER, PILOT_LEVEL_OPTIONS, formatPreservedLevelChoiceLabel, levelChoiceLabel,
@@ -19,19 +19,21 @@ export function ProfileEditor() {
   const [query, setQuery] = useState('');
   const [levelOpen, setLevelOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [avatarImageState, setAvatarImageState] = useState<'loading' | 'loaded' | 'failed'>('loading');
   const levelTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const actor = state.actor;
+  const uploaded = state.profile?.avatar.uploadedUrl ?? null;
+  const avatarUri = playerMediaUrl(uploaded, 'avatar');
   useEffect(() => {
     if (auth.status === 'authenticated' && owner.getSnapshot().status === 'idle') void owner.load();
   }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation]);
+  useEffect(() => { setAvatarImageState('loading'); }, [avatarUri]);
   const locked = !!state.command || state.status !== 'ready' || avatarOwner.blocksEdits();
   const selected = state.cities.find(c => c.id === state.draft.cityId);
   const preserved = state.profile?.level ?? null;
   const showPreserved = shouldOfferPreservedLevel(preserved);
   const choice = state.draft.levelChoice;
   const selectedSkill = choice.kind === 'ntrp' ? levelGuideSkillFor(choice.levelId) : null;
-  const uploaded = state.profile?.avatar.uploadedUrl ?? null;
-  const avatarUri = playerMediaUrl(uploaded, 'avatar');
   const displayName = state.draft.displayName.trim() || state.profile?.displayName || '';
   function pick(next: string) {
     if (locked) return;
@@ -54,9 +56,11 @@ export function ProfileEditor() {
       {state.profile && <>
         <View accessible accessibilityLabel="Фото профиля" accessibilityState={{ busy: avatarOwner.busy() }} style={{ gap: 8 }}>
           <View style={{ width: 96, height: 96, borderRadius: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.yellow }}>
-            {avatarUri
-              ? <Image source={{ uri: avatarUri }} style={{ width: 96, height: 96 }} accessibilityIgnoresInvertColors />
-              : <Label style={{ fontSize: 32, lineHeight: 42 }}>{playerInitials(displayName || 'Игрок')}</Label>}
+            {(!avatarUri || avatarImageState !== 'loaded') && <Label style={{ fontSize: 32, lineHeight: 42 }}>{playerInitials(displayName || 'Игрок')}</Label>}
+            {avatarUri && avatarImageState === 'loading' && <ActivityIndicator style={{ position: 'absolute' }} accessibilityLabel="Загружаем фото…" />}
+            {avatarUri && avatarImageState !== 'failed' && <Image key={avatarUri} source={{ uri: avatarUri }}
+              style={{ position: 'absolute', left: 0, top: 0, width: 96, height: 96 }} accessibilityIgnoresInvertColors
+              onLoad={() => setAvatarImageState('loaded')} onError={() => setAvatarImageState('failed')} />}
           </View>
           <Label style={styles.subtitle}>Фото профиля</Label>
           <Label>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации и без прозрачности. Фото обрезается до квадрата на устройстве и доступно по ссылке. HEIC/HEIF сохраните как JPEG.</Label>
