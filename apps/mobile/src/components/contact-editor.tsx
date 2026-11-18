@@ -2,7 +2,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { TextInput } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
-import { Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
+import { BackLink, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 function useContact(target: string, composer = false) {
   const auth = useAuth(), owner = auth.contact;
@@ -38,7 +38,8 @@ export function ContactEditor({ target }: { target: string }) {
   }, [auth.status, conversation, router, owner, state]);
   const command = state.command, ownCommand = command?.packet.body.targetPublicPlayerId === target;
   const text = current ? state.drafts[target] ?? '' : '';
-  return <Page keyboard header={<Header back={() => router.canGoBack() ? router.back() : router.replace('/messages')} />}>
+  return <Page keyboard header={<Header />}>
+    <BackLink title="← К сообщениям" onPress={() => router.canGoBack() ? router.back() : router.replace('/messages')} accessibilityLabel="Назад к сообщениям" />
     <Label accessibilityRole="header">Сообщение</Label>
     {auth.status !== 'authenticated' ? <><Label>Войдите, чтобы написать.</Label><PrimaryButton title="Войти" onPress={() => { void auth.signIn(`/messages/new/${target}`); }} /></>
       : !current || state.status === 'loading' ? <Loading title="Загружаем профиль…" />

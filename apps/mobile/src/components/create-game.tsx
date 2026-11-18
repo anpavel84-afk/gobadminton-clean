@@ -3,7 +3,7 @@ import { TextInput, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { usePreferences } from '../state.tsx';
-import { Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
+import { BackLink, Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 import { colors, typography } from '../theme.ts';
 import { ManagementCommand, ManagedTerms } from './game-management.tsx';
 import type { CreationForm } from '../game-management.ts';
@@ -54,7 +54,8 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const choice = <K extends keyof CreationForm,>(key: K, value: CreationForm[K], label: string) => <TextButton key={String(value)} title={`${f[key] === value ? '✓ ' : ''}${label}`} onPress={() => owner.update({ [key]: value })} />;
   const active = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
   const blocked = ['sending','unknown'].includes(state.command?.status ?? '');
-  return <Page keyboard header={<Header back={() => router.canGoBack() ? router.back() : router.replace('/games')} />}>
+  return <Page keyboard header={<Header />}>
+    <BackLink title="← Все игры" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />
     <Label style={styles.title} accessibilityRole="header">Создать игру</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !active ? <><Label>Войдите, чтобы создать игру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(returnTo)} /></>
       : blocked && state.command ? <>

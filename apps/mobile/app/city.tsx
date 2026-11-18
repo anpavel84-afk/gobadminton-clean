@@ -5,7 +5,7 @@ import { publicApi } from '../src/public-api.ts';
 import { filterCities } from '../src/entry.ts';
 import { useResource } from '../src/hooks.ts';
 import { usePreferences } from '../src/state.tsx';
-import { ErrorState, Header, Label, Loading, Page, TextButton, styles } from '../src/components/ui.tsx';
+import { BackLink, ErrorState, Header, Label, Loading, Page, TextButton, styles } from '../src/components/ui.tsx';
 export default function ManualCity() {
   const [query, setQuery] = useState('');
   const [all, setAll] = useState(false);
@@ -15,7 +15,8 @@ export default function ManualCity() {
   const router = useRouter();
   const matches = filterCities(state.data ?? [], all ? '' : query);
   function back() { if (router.canGoBack()) router.back(); else router.replace('/games'); }
-  return <Page keyboard header={<Header back={back} />}>
+  return <Page keyboard header={<Header />}>
+    <BackLink title="← К играм" onPress={back} />
     <Label accessibilityRole="header" style={styles.title}>Выберите город</Label>
     <Label>Выберите город вручную — без входа и геопозиции.</Label>
     <Label nativeID="city-label">Название города</Label>

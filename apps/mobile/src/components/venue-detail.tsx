@@ -22,7 +22,7 @@ import {
 import { VenueSchedule, safeCatalogSource, venueCreatePath } from '../venues.ts';
 import type { GalleryItem, PublicVenue } from '../venues.ts';
 import { GameCard } from './game-card.tsx';
-import { Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
+import { BackLink, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 import { colors } from '../theme.ts';
 
 export function VenueFailure({ error, retry }: { error: unknown; retry: () => void }) {
@@ -361,9 +361,10 @@ export function VenueDetail({ id }: { id: string }) {
   const task = useCallback((signal: AbortSignal) => publicApi.venue(id, signal), [id]);
   const { state, retry } = useResource(`venue:${id}`, task);
   const venue = state.status === 'ready' ? state.data : undefined;
-  return <ScreenFrame header={<Header back={() => router.canGoBack() ? router.back() : router.replace('/games')} />}>
+  return <ScreenFrame header={<Header />}>
     <View style={{ flex: 1 }}>
       <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={{ padding: 16, paddingBottom: 32, gap: 16 }}>
+        <BackLink title="← Назад к карте" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />
         {(state.status === 'loading' || state.status === 'idle') && <Loading title="Загружаем площадку…" />}
         {state.status === 'error' && <VenueFailure error={state.error} retry={retry} />}
         {venue && <VenueContent key={`${id}:${JSON.stringify(venue)}`} venue={venue} />}
