@@ -36,7 +36,7 @@ export default function Profile() {
     }
     router.replace(intent as '/games');
   }
-  return <Page keyboard header={<Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />}>
+  return <Page keyboard header={<Header />}>
     <Label accessibilityRole="header" style={styles.title}>Профиль</Label>
     {notice && <Label accessibilityLiveRegion="polite">{notice}</Label>}
     {auth.status === 'hydrating' && <Loading title="Проверяем сохранённую сессию…" />}

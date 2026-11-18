@@ -25,7 +25,7 @@ export default function MyGames() {
   const {rows,attention,empty}=hubView(all,s.filter), target=attention[0];
   const complete=p.own.status === 'ready' && p.managed.status === 'ready' && s.own.status === 'ready' && s.reminders.status === 'ready';
   const groups=[['upcoming','Предстоящие'],['draft','Черновики'],['past','История'],['terminal','Завершённые заявки и отмены'],['unknown','Дата недоступна']] as const;
-  return <PostgameSurface><Page header={<Header back={()=>router.canGoBack() ? router.back() : router.replace('/games')} />}>
+  return <PostgameSurface><Page header={<Header />}>
     <Label accessibilityRole="header" style={styles.title}>Мои игры</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <>
       <Label>Войдите, чтобы видеть свои игры</Label><TextButton title="Войти" onPress={()=>void auth.signIn('/my-games')} />

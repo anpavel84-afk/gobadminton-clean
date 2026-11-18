@@ -7,7 +7,7 @@ import { useAuth } from '../../src/auth.tsx';
 import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
 import { PlayerProfile } from '../../src/components/player-card.tsx';
-import { ErrorState, Header, Label, Loading, Page, TextButton } from '../../src/components/ui.tsx';
+import { BackLink, ErrorState, Header, Label, Loading, Page, TextButton } from '../../src/components/ui.tsx';
 
 export default function PlayerDetail() {
   const params = useLocalSearchParams<{ publicPlayerId: string }>(), router = useRouter();
@@ -19,7 +19,8 @@ export default function PlayerDetail() {
   useEffect(() => { if (id && snapshot.scope) void coordinator.loadDetail(id); }, [coordinator, id, snapshot.scope]);
   const detail = snapshot.scope && snapshot.detail.id === id ? snapshot.detail : null;
   const back = () => router.canGoBack() ? router.back() : router.replace('/players');
-  return <Page header={<Header back={back} />}>
+  return <Page header={<Header />}>
+    <BackLink title="← Все игроки" onPress={back} />
     {!id ? <Label>Профиль недоступен.</Label> : auth.status === 'hydrating' || (snapshot.scope && (!detail || detail.status === 'loading'))
       ? <Loading title="Загружаем профиль…" /> : !snapshot.scope
       ? <><Label>Профиль для текущей сессии недоступен. Проверьте вход.</Label><TextButton title="Профиль" onPress={() => router.push('/profile')} /></>

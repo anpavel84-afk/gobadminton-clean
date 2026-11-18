@@ -5,7 +5,7 @@ import type { Game } from '@gobadminton/contracts/game-types';
 import { useAuth } from '../auth.tsx';
 import { formatLabel, levelLabel, gameTime, deadline, settlementLabel } from '../presentation.ts';
 import { participationLabels } from '../participation.ts';
-import { Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
+import { BackLink, Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 import { colors, typography } from '../theme.ts';
 export function ManagedTerms({ game }: { game: Game }) {
   const format = formatLabel(game.formatKey);
@@ -37,7 +37,7 @@ export function GameManagement({ id }: { id: string }) {
   const current = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
   const locked = ['sending','unknown'].includes(state.command?.status ?? '');
   const mutable = d?.status === 'ready' && d.roster === 'ready' && d.game?.status === 'published' && Date.parse(d.game.startsAt) > Date.now() && !locked;
-  return <Page keyboard header={<Header back={() => router.replace('/my-games')} />}><Label style={styles.title}>Управление игрой</Label>
+  return <Page keyboard header={<Header />}><BackLink title="← Мои игры" onPress={() => router.replace('/my-games')} /><Label style={styles.title}>Управление игрой</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <><Label>Сводка доступна создателю или менеджеру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(`/games/manage/${id}`)} /></>
       : !d || d.status === 'loading' ? <Loading title="Загружаем сводку…" />
       : d.status !== 'ready' || !d.game ? <><Label>{d.status === 'denied' ? 'Игра не в вашем списке управления. Возможно, доступ изменился.' : 'Не удалось загрузить сводку.'}</Label><TextButton title="Обновить" onPress={() => void owner.loadDetail(id)} /></>

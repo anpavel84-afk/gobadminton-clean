@@ -8,7 +8,7 @@ import { publicApi } from '../../src/public-api.ts';
 import { PublicGameMedia } from '../../src/components/game-card.tsx';
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { canApply, dominantParticipation, participationLabels } from '../../src/participation.ts';
-import { ErrorState, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from '../../src/components/ui.tsx';
+import { BackLink, ErrorState, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from '../../src/components/ui.tsx';
 
 export default function PublicGameDetails() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
@@ -32,7 +32,8 @@ export default function PublicGameDetails() {
   const retryDetail = authenticated ? () => void auth.participation.loadDetail(id) : retry;
   const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
-  return <Page header={<Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />}>
+  return <Page header={<Header />}>
+    <BackLink title="← Все игры" onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />
     {loading && <Loading title="Загружаем условия игры…" />}
     {error && <ErrorState error={authenticated ? gameRead?.error : state.error} retry={retryDetail} />}
     {game && <>

@@ -68,7 +68,7 @@ export function Page({ children, purple = false, keyboard = false, header }: Pro
     </ScrollView>
   </ScreenFrame>;
 }
-export function Header({ back, light = false, action }: { back?: () => void; light?: boolean; action?: ReactNode }) {
+export function Header({ light = false, action }: { light?: boolean; action?: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const returnTo = canonicalVenueCreatePath(pathname) ?? canonicalGamePath(pathname);
@@ -98,8 +98,14 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
         {action}
       </View>
     </View>
-    {back && <TextButton title="Назад" onPress={back} light={light} />}
   </View>;
+}
+/** Web-parity contextual back link: left-aligned «← …» in page content, not a full-width header bar. */
+export function BackLink({ title, onPress, accessibilityLabel }: { title: string; onPress: () => void; accessibilityLabel?: string }) {
+  return <Pressable accessibilityRole="link" accessibilityLabel={accessibilityLabel} onPress={onPress}
+    style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, minWidth: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
+    <Label style={{ color: colors.secondary, fontWeight: '600', textAlign: 'left' }}>{title}</Label>
+  </Pressable>;
 }
 /** Real create route; auth/typed return stays owned by the existing create screen. */
 export function DiscoveryCreateBanner({ onPress }: { onPress: () => void }) {
@@ -166,11 +172,7 @@ export function TrajectoryArtwork({ diameter }: { diameter: number }) {
   </View>;
 }
 export function Loading({ title = 'Загружаем игры…' }: { title?: string }) {
-  return <View accessibilityState={{ busy: true }} accessibilityLiveRegion="polite" style={styles.card}>
-    <Label>{title}</Label>
-    <View accessible={false} style={styles.placeholder} />
-    <View accessible={false} style={styles.placeholder} />
-  </View>;
+  return <Label accessibilityLiveRegion="polite" accessibilityState={{ busy: true }}>{title}</Label>;
 }
 export function ErrorState({ error, retry }: { error: unknown; retry: () => void }) {
   const apiError = error instanceof PublicApiError || error instanceof PlayersError;
@@ -202,6 +204,5 @@ export const styles = StyleSheet.create({
   chrome: { paddingHorizontal: 16, paddingVertical: 4, minHeight: 72, justifyContent: 'center', backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.line },
   orbit: { position: 'absolute', borderWidth: 2, borderColor: '#E1D1FF' },
   card: { borderRadius: 18, padding: 18, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, gap: 12 },
-  placeholder: { minHeight: 48, backgroundColor: colors.lavender, borderRadius: 12 },
   input: { fontFamily: 'Onest', fontSize: 18, color: colors.ink, minHeight: 52, borderWidth: 1, borderColor: colors.lineDark, backgroundColor: colors.card, borderRadius: 12, padding: 14 },
 });

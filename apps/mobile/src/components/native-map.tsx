@@ -11,7 +11,7 @@ import type { MapVenue } from '../venues.ts';
 import { loadNativeStyle, nativeMapCamera, validMapCamera, venueMarkerLabel } from '../maps.ts';
 import { useResource } from '../hooks.ts';
 import { colors } from '../theme.ts';
-import { Label, Loading, TextButton } from './ui.tsx';
+import { Label, TextButton } from './ui.tsx';
 
 const digest = async (bytes: Uint8Array) => {
   const owned = new ArrayBuffer(bytes.byteLength);
@@ -98,7 +98,7 @@ export function NativeMap({ pack, venues, counts, selected, camera, controlBotto
       </Marker>)}
       {phase === 'loaded' && venues.map(venue => <VenueMarker key={venue.id} venue={venue} counts={counts} selected={selected === venue.id} onSelect={selectVenue} />)}
     </MapLibreMap>}
-    {statusTop !== undefined && !failed && (state.status !== 'ready' || phase !== 'loaded') && <View style={[mapStyles.status,{top:statusTop}]}><Loading title="Загружаем карту…" /></View>}
+    {statusTop !== undefined && !failed && (state.status !== 'ready' || phase !== 'loaded') && <View pointerEvents="none" accessibilityLiveRegion="polite" style={{position:'absolute',width:1,height:1,overflow:'hidden',top:statusTop,left:0}}><Label>Загружаем карту…</Label></View>}
     {statusTop !== undefined && failed && <View style={[mapStyles.status,{top:statusTop}]} accessibilityRole="alert">
       <Label>Карта не загрузилась</Label><Label>{nativeError || 'Не удалось проверить или получить ресурсы карты.'}</Label>
       <TextButton title="Повторить загрузку карты" onPress={restart} /><TextButton title="Площадки списком" onPress={onCatalog} />
