@@ -27,7 +27,14 @@ export default function RootLayout() {
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
       <AuthProvider><RadarProvider><VenueCommunityProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
-        <Stack.Screen name="games/create/venue/[venueId]" options={{ presentation: 'formSheet', headerShown: false }} />
+        <Stack.Screen name="games/create/venue/[venueId]" options={{
+          presentation: 'formSheet',
+          headerShown: false,
+          sheetAllowedDetents: [0.9],
+          sheetCornerRadius: 20,
+          sheetGrabberVisible: true,
+          sheetExpandsWhenScrolledToEdge: false,
+        }} />
       </Stack></MainNavigation></MessagesOwner></VenueCommunityProvider></RadarProvider></AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />

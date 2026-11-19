@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { ReactNode } from 'react';
+import type { ComponentRef, ReactNode } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,6 +11,7 @@ import { ManagementCommand, ManagedTerms } from './game-management.tsx';
 import { API_ORIGIN, publicApi } from '../public-api.ts';
 import { useResource } from '../hooks.ts';
 import { venueCreatePath } from '../venues.ts';
+import { createGameInstant } from '../presentation.ts';
 import {
   CreateGameFormSections,
   CreateGameSheetHeader,
@@ -27,6 +28,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const actor = state.actor;
   const view = useRef(0);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const [selecting, setSelecting] = useState(false);
   // Blur/refocus fences local reads; returning to a mounted form must not reload or replace its draft.
   useFocusEffect(useCallback(() => { view.current++; setSelecting(false); return () => { view.current++; }; }, []));
@@ -72,6 +74,11 @@ export function CreateGame({ venueId }: { venueId?: string }) {
     ? `${API_ORIGIN}${venueState.data.mainImage}` : null;
   const timezone = state.venues.find(v => v.id === f.venueId)?.timezone ?? sheetVenue?.timezone ?? null;
   const awaitingVenue = Boolean(venueId && !selected && !attempted && !state.created && !state.creationReference);
+  const contactAlert = state.notice && !f.contact.trim()
+    ? 'Укажите публичный контакт для этой игры.'
+    : null;
+  const previewTerms = state.preview?.settlement.terms.trim() ?? '';
+  const termsLabel = state.preview?.activityKind === 'regular' ? 'Условия площадки: ' : 'Оплата тренеру: ';
   // continueOrdinaryForm remains for the mounted lifecycle harness (explicit Continue CTA removed from UI).
   void continueOrdinaryForm;
 
@@ -82,7 +89,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       onBack={closeSheet}
       onClose={closeSheet}
     />}
-    <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
+    <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
       contentContainerStyle={{ flexGrow: 1, paddingTop: 16, paddingBottom: (opts?.footer ? 16 : insets.bottom + 24), paddingHorizontal: 16, gap: 16 }}>
       {!sheet && <BackLink title="← Все игры" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />}
       {body}
@@ -101,7 +108,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
     : blocked && state.command ? <>
       <Label>Сначала проверьте результат прежнего действия. Проверка повторит только его; следующее действие не выполнится автоматически.</Label>
       {state.command.packet.kind === 'create' && <>
-        <Label>{state.command.packet.body.title || 'Игра'} · {new Date(state.command.packet.body.startsAt).toLocaleString('ru-RU', { timeZone: state.command.packet.body.timezone })} · {state.command.packet.body.timezone}</Label>
+        <Label>{state.command.packet.body.title || 'Игра'} · {createGameInstant(state.command.packet.body.startsAt, state.command.packet.body.timezone)} · {state.command.packet.body.timezone}</Label>
         <Label>Вместимость: {state.command.packet.body.capacity} · Публичный контакт: {state.command.packet.body.hostPublicContact}</Label>
         <Label>{state.command.packet.body.settlement.terms}</Label>
       </>}
@@ -139,17 +146,17 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       <View style={[styles.card, { gap: 12 }]}>
         <Label style={{ textAlign: 'left', fontWeight: '700' }}>{state.preview.title || (state.preview.activityKind === 'regular' ? 'Игра' : 'Игра с тренером')}</Label>
         <Label style={{ textAlign: 'left' }}>{state.venues.find(v => v.id === state.preview!.venueId)?.name}</Label>
-        <Label style={{ textAlign: 'left' }}>{new Date(state.preview.startsAt).toLocaleString('ru-RU', { timeZone: state.preview.timezone })} · {state.preview.timezone}</Label>
+        <Label style={{ textAlign: 'left' }}>{createGameInstant(state.preview.startsAt, state.preview.timezone)} · {state.preview.timezone}</Label>
         <Label style={{ textAlign: 'left' }}>Длительность: {f.duration} мин · Количество мест: {state.preview.capacity}</Label>
         <Label style={{ textAlign: 'left' }}>{({ doubles: 'Парная игра', singles: 'Одиночная игра', mixed: 'Микст' })[f.format]} · Уровни игроков: от {f.lower.toFixed(1)} до {f.upper.toFixed(1)}</Label>
         <Label style={{ textAlign: 'left' }}>{f.visibility === 'public' ? 'В поиске' : 'Только по ссылке'}</Label>
         <Label style={{ textAlign: 'left' }}>Публичный контакт: {state.preview.hostPublicContact}</Label>
-        <Label style={{ textAlign: 'left' }}>{state.preview.settlement.terms}</Label>
+        {!!previewTerms && <Label style={{ textAlign: 'left' }}>{`${termsLabel}${previewTerms}`}</Label>}
         {!!state.preview.trainingDescription && <Label style={{ textAlign: 'left' }}>{state.preview.trainingDescription}</Label>}
       </View>
       <ManagementCommand />
       <LeftLink title="Назад к редактированию" onPress={owner.edit} />
-      <PrimaryButton title="Опубликовать" disabled={blocked} onPress={() => void owner.publishPreview()} />
+      <PrimaryButton title="Создать игру" disabled={blocked} onPress={() => void owner.publishPreview()} />
     </> : <>
       <StepIndicator step={1} />
       <Label accessibilityRole="header" style={[styles.title, { textAlign: 'left' }]}>Создать игру</Label>
@@ -161,7 +168,10 @@ export function CreateGame({ venueId }: { venueId?: string }) {
         coverUrl={coverUrl}
         onUpdate={patch => owner.update(patch)}
         onOpenCity={() => router.push('/city')}
+        contactAlert={contactAlert}
       />
-      {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
+      {state.notice && <Label accessibilityRole="alert" onLayout={e => {
+        scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 24), animated: true });
+      }}>{state.notice}</Label>}
     </>, showFormFooter ? { footer: formFooter } : undefined);
 }

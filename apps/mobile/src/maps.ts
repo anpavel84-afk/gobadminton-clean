@@ -274,6 +274,10 @@ export function publicGamesIntent(path: string): string | null {
   return `${route.pathname}?${query}`;
 }
 export function fullscreenGamesMap(path: string): boolean { return path === '/games/map'; }
+/** Venue create formSheet over the map — hide bottom nav like the fullscreen games map. */
+export function venueCreateSheetPath(path: string): boolean {
+  return path === '/games/create/venue' || path.startsWith('/games/create/venue/');
+}
 export type MapOverlay = { filter: boolean; expanded: boolean; selected: string | null };
 export function mapBack(state: MapOverlay): MapOverlay | null {
   if (state.filter) return {...state,filter:false};

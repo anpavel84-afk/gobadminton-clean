@@ -52,6 +52,12 @@ export function gameTime(game: PublicGame) {
   });
   return `${format.format(new Date(game.startsAt))} — ${format.format(new Date(game.endsAt))} (${game.timezone})`;
 }
+/** Create-flow preview / blocked-command instant: date + HH:MM, no seconds. */
+export function createGameInstant(iso: string, timeZone: string): string {
+  return new Date(iso).toLocaleString('ru-RU', {
+    day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone,
+  });
+}
 export function deadline(game: PublicGame) {
   return new Intl.DateTimeFormat('ru-RU', { timeZone: game.timezone, dateStyle: 'medium', timeStyle: 'short' })
     .format(new Date(game.applicationDeadlineAt));

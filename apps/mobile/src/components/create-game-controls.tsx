@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
 import { Image, Pressable, TextInput, View } from 'react-native';
 import { DiscoveryChip, DiscoverySheet, Label, styles } from './ui.tsx';
+import { LevelRange } from './level-range.tsx';
 import { colors, typography } from '../theme.ts';
 import type { CreationForm, Venue } from '../game-management.ts';
 import {
@@ -82,9 +83,12 @@ const FORMAT_OPTIONS: { value: CreationForm['format']; label: string }[] = [
   { value: 'singles', label: 'Одиночная игра' },
   { value: 'mixed', label: 'Микст' },
 ];
-const LEVELS = Array.from({ length: 13 }, (_, i) => 1 + i * 0.5);
+const VISIBILITY_OPTIONS: { value: CreationForm['visibility']; label: string }[] = [
+  { value: 'public', label: 'В поиске' },
+  { value: 'unlisted', label: 'Только по ссылке' },
+];
 
-export function CreateGameFormSections({ form, venues, trainer, timezone, coverUrl, onUpdate, onOpenCity }: {
+export function CreateGameFormSections({ form, venues, trainer, timezone, coverUrl, onUpdate, onOpenCity, contactAlert = null }: {
   form: CreationForm;
   venues: Venue[];
   trainer: boolean;
@@ -92,22 +96,26 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
   coverUrl?: string | null;
   onUpdate: (patch: Partial<CreationForm>) => void;
   onOpenCity: () => void;
+  contactAlert?: string | null;
 }) {
   const selected = venues.find(v => v.id === form.venueId);
   const catalogueTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const dateTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const timeTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const formatTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const visibilityTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
   const [formatOpen, setFormatOpen] = useState(false);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [customDuration, setCustomDuration] = useState(() => durationChipSelected(form.duration, false) === 'custom');
   const dates = timezone ? createGameDateOptions(timezone) : null;
   const dateChoice = timezone && form.date ? createGameDateChoice(form.date, timezone) : 'custom';
   const durationSelected = durationChipSelected(form.duration, customDuration);
   const capacity = clampCapacity(/^\d+$/.test(form.capacity) ? Number(form.capacity) : 1);
   const formatLabel = FORMAT_OPTIONS.find(o => o.value === form.format)?.label ?? 'Парная игра';
+  const visibilityLabel = VISIBILITY_OPTIONS.find(o => o.value === form.visibility)?.label ?? 'В поиске';
 
   return <>
     <FormSection title="Основное">
@@ -196,31 +204,20 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
           </Pressable>
         </View>
       </View>
-      <View style={{ gap: 8 }}>
-        <Label style={{ textAlign: 'left' }}>Уровни игроков · от {form.lower.toFixed(1)} до {form.upper.toFixed(1)}</Label>
-        <Label style={{ textAlign: 'left' }}>От</Label>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {LEVELS.map(level => <DiscoveryChip key={`lo-${level}`} title={level.toFixed(1)} selected={form.lower === level}
-            onPress={() => onUpdate({ lower: level, upper: Math.max(form.upper, level) })} />)}
-        </View>
-        <Label style={{ textAlign: 'left' }}>До</Label>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {LEVELS.map(level => <DiscoveryChip key={`hi-${level}`} title={level.toFixed(1)} selected={form.upper === level}
-            onPress={() => onUpdate({ upper: level, lower: Math.min(form.lower, level) })} />)}
-        </View>
-      </View>
+      <LevelRange lower={form.lower} upper={form.upper} onUpdate={({ lower, upper }) => onUpdate({ lower, upper })} />
       <View style={{ gap: 8 }}>
         <Label style={{ textAlign: 'left' }}>Видимость</Label>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          <DiscoveryChip title="В поиске" selected={form.visibility === 'public'} onPress={() => onUpdate({ visibility: 'public' })} />
-          <DiscoveryChip title="Только по ссылке" selected={form.visibility === 'unlisted'} onPress={() => onUpdate({ visibility: 'unlisted' })} />
-        </View>
+        <Pressable ref={visibilityTrigger} accessibilityRole="button" accessibilityLabel="Видимость" onPress={() => setVisibilityOpen(true)}
+          style={({ pressed }) => ({ minHeight: 48, borderRadius: 12, borderWidth: 1, borderColor: colors.lineDark, padding: 12, backgroundColor: pressed ? colors.paper : colors.card })}>
+          <Label style={{ textAlign: 'left' }}>{visibilityLabel}</Label>
+        </Pressable>
         <Label style={{ textAlign: 'left', color: colors.secondary }}>«В поиске» — публичная игра. «Только по ссылке» не добавляет игру в поиск.</Label>
       </View>
     </FormSection>
 
     <FormSection title="Условия участия">
       <GameField label="Публичный контакт для этой игры" value={form.contact} onChange={contact => onUpdate({ contact })} maxLength={320} />
+      {!!contactAlert && <Label accessibilityRole="alert" style={{ textAlign: 'left', color: colors.secondary }}>{contactAlert}</Label>}
       <Label style={{ textAlign: 'left', color: colors.secondary }}>Будет виден на странице игры.</Label>
       <Pressable accessibilityRole="button" onPress={() => onUpdate({ saveContact: !form.saveContact })}
         style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
@@ -263,6 +260,12 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
       {FORMAT_OPTIONS.map(option => <Pressable key={option.value} accessibilityRole="button" onPress={() => { onUpdate({ format: option.value }); setFormatOpen(false); }}
         style={({ pressed }) => [{ minHeight: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
         <Label style={{ textAlign: 'left', fontWeight: form.format === option.value ? '700' : '500' }}>{`${form.format === option.value ? '✓ ' : ''}${option.label}`}</Label>
+      </Pressable>)}
+    </DiscoverySheet>
+    <DiscoverySheet visible={visibilityOpen} title="Видимость" onClose={() => setVisibilityOpen(false)} returnFocusRef={visibilityTrigger}>
+      {VISIBILITY_OPTIONS.map(option => <Pressable key={option.value} accessibilityRole="button" onPress={() => { onUpdate({ visibility: option.value }); setVisibilityOpen(false); }}
+        style={({ pressed }) => [{ minHeight: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
+        <Label style={{ textAlign: 'left', fontWeight: form.visibility === option.value ? '700' : '500' }}>{`${form.visibility === option.value ? '✓ ' : ''}${option.label}`}</Label>
       </Pressable>)}
     </DiscoverySheet>
   </>;

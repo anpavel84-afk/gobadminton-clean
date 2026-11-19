@@ -85,7 +85,10 @@ test('create-game UI source: section cards, sticky footer, no intermediate venue
   assert.match(venueDetail, /from === ['"]game['"]/);
   assert.match(venueDetail, /← К игре/);
   assert.match(venueDetail, /← Назад к карте/);
-  assert.match(venueRoute, /presentation:\s*'formSheet'/);
+  const layout = read('../app/_layout.tsx');
+  assert.match(layout, /presentation:\s*'formSheet'/);
+  assert.match(layout, /sheetAllowedDetents:\s*\[0\.9\]/);
+  assert.doesNotMatch(venueRoute, /Stack\.Screen/);
   assert.match(venueRoute, /← Все игры/);
   assert.match(create, /← Все игры/);
 });
