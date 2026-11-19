@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useRef, useState, type ComponentRef, type ReactNode, type RefObject } from 'react';
 import { BackHandler, Pressable, ScrollView, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,7 +28,7 @@ function ProfileHardwareBack({ editing, onClose }: { editing: boolean; onClose: 
 }
 
 function ProfileScroll({ scrollRef, children }: {
-  scrollRef: RefObject<ScrollView | null>; children: ReactNode;
+  scrollRef: RefObject<ComponentRef<typeof ScrollView> | null>; children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
   return <ScrollView
@@ -52,7 +52,7 @@ export default function Profile() {
   const [editing, setEditing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const locked = useRef(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const settingsY = useRef(0);
   const scrollSettingsOnLayout = useRef(false);
   async function act(work: () => Promise<void>) {
