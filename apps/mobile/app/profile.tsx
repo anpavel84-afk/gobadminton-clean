@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../src/auth.tsx';
 import { usePreferences } from '../src/state.tsx';
+import { OwnProfileCard } from '../src/components/own-profile.tsx';
 import { ProfileEditor } from '../src/components/profile-editor.tsx';
 import { canonicalReturnPath } from '../src/native-auth-protocol.ts';
+import { colors } from '../src/theme.ts';
 import { Header, Label, Loading, Page, TextButton, styles } from '../src/components/ui.tsx';
 
 const providerNames: Record<string, string> = { vk: 'VK', yandex: 'Яндекс', email: 'Email' };
@@ -16,6 +18,8 @@ export default function Profile() {
   const requested = canonicalReturnPath(params.returnTo);
   const intent = requested?.startsWith('/games/') ? requested : auth.returnPath;
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const locked = useRef(false);
   async function act(work: () => Promise<void>) {
     if (locked.current) return;
@@ -37,7 +41,8 @@ export default function Profile() {
     router.replace(intent as '/games');
   }
   return <Page keyboard header={<Header />}>
-    <Label accessibilityRole="header" style={styles.title}>Профиль</Label>
+    <Label accessibilityRole="header" style={styles.title}>{auth.status === 'authenticated' && auth.me ? 'Мой профиль' : 'Профиль'}</Label>
+    {auth.status === 'authenticated' && auth.me && <Label style={{ color: colors.secondary, fontSize: 15, lineHeight: 22 }}>Управляйте игровыми данными и тем, что видят другие.</Label>}
     {notice && <Label accessibilityLiveRegion="polite">{notice}</Label>}
     {auth.status === 'hydrating' && <Loading title="Проверяем сохранённую сессию…" />}
     {auth.status === 'signing-in' && <View style={styles.card}>
@@ -51,25 +56,34 @@ export default function Profile() {
       {auth.status === 'unverifiable' && !busy && <TextButton title="Проверить соединение и сессию" onPress={() => void act(auth.validate)} />}
     </View>}
     {auth.status === 'authenticated' && auth.me && <>
-      <ProfileEditor />
-      <View style={styles.card}>
-        <Label accessibilityRole="header" style={styles.subtitle}>Вход в аккаунт</Label>
-        <Label>Язык: {auth.me.locale}</Label>
-        <Label>Связанные провайдеры: {auth.me.linkedProviders.length ? auth.me.linkedProviders.map(providerLabel).join(', ') : 'Нет связанных провайдеров'}</Label>
-      </View>
-      <View style={styles.card}>
-        <Label accessibilityRole="header" style={styles.subtitle}>Сессии</Label>
-        {!busy && <TextButton title="Загрузить / обновить сессии" onPress={() => void act(auth.loadSessions)} />}
-        {auth.sessions.map(session => <View key={session.id} style={{ gap: 8 }}>
-          <Label>{session.current ? 'Текущая сессия' : 'Другая сессия'}</Label>
-          <Label>Создана: {new Date(session.createdAt).toLocaleString('ru')}</Label>
-          <Label>Последняя активность: {new Date(session.lastSeenAt).toLocaleString('ru')}</Label>
-          <Label>Истекает: {new Date(session.expiresAt).toLocaleString('ru')}</Label>
-          {!busy && <TextButton title={session.current ? 'Завершить текущую сессию' : 'Завершить сессию'} onPress={() => void act(() => auth.revokeSession(session.id))} />}
-        </View>)}
-        {!busy && <TextButton title="Завершить другие сессии" onPress={() => void act(() => auth.revokeSession(null))} />}
-      </View>
-      <TextButton title="Выйти" onPress={() => void auth.logout()} />
+      {!editing && <OwnProfileCard onEdit={() => setEditing(true)} onSettings={() => setSettingsOpen(open => !open)} settingsOpen={settingsOpen} />}
+      {editing && <>
+        <Pressable accessibilityRole="button" accessibilityLabel="Мой профиль" onPress={() => setEditing(false)}
+          style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, minWidth: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
+          <Label style={{ color: colors.secondary, fontWeight: '600', textAlign: 'left' }}>← Мой профиль</Label>
+        </Pressable>
+        <ProfileEditor />
+      </>}
+      {settingsOpen && <>
+        <View style={styles.card}>
+          <Label accessibilityRole="header" style={styles.subtitle}>Вход в аккаунт</Label>
+          <Label>Язык: {auth.me.locale}</Label>
+          <Label>Связанные провайдеры: {auth.me.linkedProviders.length ? auth.me.linkedProviders.map(providerLabel).join(', ') : 'Нет связанных провайдеров'}</Label>
+        </View>
+        <View style={styles.card}>
+          <Label accessibilityRole="header" style={styles.subtitle}>Сессии</Label>
+          {!busy && <TextButton title="Загрузить / обновить сессии" onPress={() => void act(auth.loadSessions)} />}
+          {auth.sessions.map(session => <View key={session.id} style={{ gap: 8 }}>
+            <Label>{session.current ? 'Текущая сессия' : 'Другая сессия'}</Label>
+            <Label>Создана: {new Date(session.createdAt).toLocaleString('ru')}</Label>
+            <Label>Последняя активность: {new Date(session.lastSeenAt).toLocaleString('ru')}</Label>
+            <Label>Истекает: {new Date(session.expiresAt).toLocaleString('ru')}</Label>
+            {!busy && <TextButton title={session.current ? 'Завершить текущую сессию' : 'Завершить сессию'} onPress={() => void act(() => auth.revokeSession(session.id))} />}
+          </View>)}
+          {!busy && <TextButton title="Завершить другие сессии" onPress={() => void act(() => auth.revokeSession(null))} />}
+        </View>
+        <TextButton title="Выйти" onPress={() => void auth.logout()} />
+      </>}
     </>}
     {busy && <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Подождите…</Label>}
     {intent && <TextButton title="Вернуться к игре" onPress={() => void act(returnToGame)} />}

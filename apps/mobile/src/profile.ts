@@ -29,7 +29,7 @@ export type OwnProfile = { publicPlayerId: string | null; version: number; displ
   areaKey: string | null; level: Level | null; bio: string | null; directoryVisible: boolean; contactPolicy: 'requests' | 'closed';
   consentPolicyVersion: string | null; optedInAt: string | null; radarConsented: boolean; radarConsentPolicyVersion: string | null;
   radarConsentedAt: string | null; socialEligible: boolean; trainer: boolean; lookingForGame: Looking | null;
-  avatar: OwnAvatar };
+  avatar: OwnAvatar; cover?: { uploadedUrl: string | null } };
 const row = (v: unknown): Record<string, unknown> => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new ProfileError('invalid');
   return v as Record<string, unknown>;
@@ -61,13 +61,24 @@ export function parseOwnProfile(value: unknown): OwnProfile {
     lookingForGame = { version: l.version, state: l.state as Looking['state'], cityId: l.cityId, areaKey: l.areaKey,
       startsAt: l.startsAt as string | null, endsAt: l.endsAt as string | null, expiresAt: l.expiresAt as string | null, formatKeys: [...l.formatKeys] };
   }
-  return { publicPlayerId: r.publicPlayerId as string | null, version: r.version, displayName: r.displayName, cityId: r.cityId as string | null,
+  const profile: OwnProfile = { publicPlayerId: r.publicPlayerId as string | null, version: r.version, displayName: r.displayName, cityId: r.cityId as string | null,
     areaKey: r.areaKey as string | null, level, bio: r.bio as string | null, directoryVisible: r.directoryVisible as boolean,
     contactPolicy: r.contactPolicy as OwnProfile['contactPolicy'], consentPolicyVersion: r.consentPolicyVersion as string | null,
     optedInAt: r.optedInAt as string | null, radarConsented: r.radarConsented as boolean, radarConsentPolicyVersion: r.radarConsentPolicyVersion as string | null,
     radarConsentedAt: r.radarConsentedAt as string | null, socialEligible: r.socialEligible as boolean, trainer: r.trainer as boolean, lookingForGame,
     // Missing avatar defaults to initials; providerUrl is always quarantined to null for own receipts.
     avatar: parseOwnAvatar(r.avatar) };
+  // Optional cover: set only when wire has cover; invalid path → null; non-object → invalid (same rule as playerMediaUrl cover).
+  if (r.cover != null) {
+    if (typeof r.cover !== 'object' || Array.isArray(r.cover)) throw new ProfileError('invalid');
+    const c = r.cover as Record<string, unknown>;
+    if (!(c.uploadedUrl === null || typeof c.uploadedUrl === 'string')) throw new ProfileError('invalid');
+    const uploadedUrl = typeof c.uploadedUrl === 'string'
+      && /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/.test(c.uploadedUrl) && !c.uploadedUrl.includes('..')
+      ? c.uploadedUrl : null;
+    profile.cover = { uploadedUrl };
+  }
+  return profile;
 }
 
 /** Accepted web LevelGuide identities — pure helpers in the existing profile module. */
