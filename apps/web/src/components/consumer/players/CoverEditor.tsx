@@ -124,25 +124,27 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
   return <section className={actionRow ? "profile-cover-controls profile-cover-controls--action-row" : "profile-cover-controls"} aria-label="Обложка профиля" aria-busy={saving || preparing}>
     <Button variant="outline" disabled={disabled || saving} onClick={() => { setOpen(true); setError(""); }}>Изменить обложку</Button>
     {notice && <p role="status" className={actionRow ? "profile-cover-controls__notice" : undefined}>{notice}</p>}
-    {open && <ProfileDialog title="Обложка профиля" onClose={() => { if (!saving) { setOpen(false); setFile(null); setPreview(null); } }}>
-      <p>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации. На сервер отправляется только выбранный фрагмент. Обложка следует видимости профиля.</p>
-      <input ref={input} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Выбрать изображение обложки" disabled={saving} onChange={event => { const next = event.target.files?.[0]; event.target.value = ""; if (next) { setFile(next); setCrop({ x: .5, y: .5 }); } }} />
-      <Button variant="outline" disabled={saving} onClick={() => input.current?.click()}>Выбрать изображение</Button>
-      {file && <>
-        <label className="profile-field">По горизонтали<input type="range" min="0" max="1" step="0.01" value={crop.x} disabled={saving} onChange={e => setCrop({ ...crop, x: Number(e.target.value) })} /></label>
-        <label className="profile-field">По вертикали<input type="range" min="0" max="1" step="0.01" value={crop.y} disabled={saving} onChange={e => setCrop({ ...crop, y: Number(e.target.value) })} /></label>
-      </>}
-      {preparing && <p role="status">Готовим фрагмент…</p>}
-      {preview && frameRatio && <div aria-label="Предпросмотр обложки"><p>Фрагмент в шапке профиля при текущем размере экрана</p><div className="profile-cover profile-cover--preview" style={{ aspectRatio: frameRatio }}><img src={preview.url} alt="Выбранный фрагмент в шапке профиля" /></div></div>}
-      {!file && <ProfileCover url={cover?.uploadedUrl} />}
-      {saving && <p role="status">{reconciling ? "Проверяем обложку…" : "Сохраняем обложку…"}</p>}
-      {error && <p role="alert">{error}</p>}
-      <div className="profile-form-actions">
-        {uncertain ? <Button disabled={disabled || saving} onClick={() => void reconcile()}>Обновить данные</Button> : <>
-          <Button disabled={disabled || saving || preparing || !preview || !frameRatio} onClick={() => void save(preview!.blob)}>Сохранить фрагмент</Button>
-          {cover?.uploadedUrl && <Button variant="ghost" disabled={disabled || saving} onClick={() => void save(null)}>Удалить обложку</Button>}
-        </>}
-        <Button variant="outline" disabled={saving} onClick={() => { setOpen(false); setFile(null); setPreview(null); }}>Отмена</Button>
+    {open && <ProfileDialog className="profile-dialog--cover" title="Обложка профиля" onClose={() => { if (!saving) { setOpen(false); setFile(null); setPreview(null); } }}>
+      <div className="profile-cover-editor">
+        <p>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации. На сервер отправляется только выбранный фрагмент. Обложка следует видимости профиля.</p>
+        {preview && frameRatio
+          ? <div aria-label="Предпросмотр обложки"><div className="profile-cover profile-cover--preview" style={{ aspectRatio: frameRatio }}><img src={preview.url} alt="Выбранный фрагмент в шапке профиля" /></div></div>
+          : <ProfileCover url={cover?.uploadedUrl} />}
+        <p className="profile-cover-editor__caption">Предпросмотр обложки · фрагмент в шапке профиля при текущем размере экрана</p>
+        <input ref={input} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Выбрать изображение обложки" disabled={saving} onChange={event => { const next = event.target.files?.[0]; event.target.value = ""; if (next) { setFile(next); setCrop({ x: .5, y: .5 }); } }} />
+        <Button variant="outline" disabled={saving} onClick={() => input.current?.click()}>Выбрать изображение</Button>
+        <label className="profile-field">По горизонтали<input type="range" min="0" max="1" step="0.01" value={crop.x} disabled={!file || saving} onChange={e => setCrop({ ...crop, x: Number(e.target.value) })} /></label>
+        <label className="profile-field">По вертикали<input type="range" min="0" max="1" step="0.01" value={crop.y} disabled={!file || saving} onChange={e => setCrop({ ...crop, y: Number(e.target.value) })} /></label>
+        {preparing && <p role="status">Готовим фрагмент…</p>}
+        {saving && <p role="status">{reconciling ? "Проверяем обложку…" : "Сохраняем обложку…"}</p>}
+        {error && <p role="alert">{error}</p>}
+        <div className="profile-form-actions">
+          {uncertain ? <Button disabled={disabled || saving} onClick={() => void reconcile()}>Обновить данные</Button> : <>
+            <Button disabled={disabled || saving || preparing || !preview || !frameRatio} onClick={() => void save(preview!.blob)}>Сохранить фрагмент</Button>
+            {cover?.uploadedUrl && <Button variant="ghost" disabled={disabled || saving} onClick={() => void save(null)}>Удалить обложку</Button>}
+          </>}
+          <Button variant="outline" disabled={saving} onClick={() => { setOpen(false); setFile(null); setPreview(null); }}>Отмена</Button>
+        </div>
       </div>
     </ProfileDialog>}
   </section>;

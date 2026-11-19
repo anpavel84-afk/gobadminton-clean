@@ -503,6 +503,9 @@
   }
   .fr3 .profile-form-actions > .gb-c23-btn { flex:1; }
   .fr3 .profile-safety .profile-form-actions > .gb-c23-btn { flex:1 1 auto; }
+  /* #607: cover sheet long primary stays one line; other dialogs keep flex:1. */
+  .fr3 .profile-dialog--cover .profile-form-actions > .gb-c23-btn,
+  .profile-dialog--cover .profile-form-actions > .gb-c23-btn { flex:1 1 auto; white-space:nowrap; }
 }
 @media (prefers-reduced-motion:reduce) { .fr3 *, .fr3 *::before, .fr3 *::after { animation:none !important; transition:none !important; } }
 
@@ -635,3 +638,14 @@
 
 /* Ratio comes from the real responsive header, not a separate preview recipe. */
 .fr3 .profile-cover--preview { max-width: 100%; }
+
+/* #608 Style Guide template 22 «Обложка профиля»: vertical stack with gap. */
+.profile-cover-editor { display:flex; flex-direction:column; gap:16px; }
+.profile-cover-editor > p { margin:0; }
+.profile-cover-editor__caption { color:var(--gb-ink-soft); font-size:13px; line-height:1.5; }
+.profile-cover-editor > .gb-c23-btn { align-self:flex-start; width:auto; }
+.fr3 .profile-cover-editor .profile-field { margin:0; }
+.fr3 .profile-cover-editor .profile-form-actions { margin-top:0; }
+/* #607: cover dialog footer — do not squeeze mid-label; buttons wrap as wholes. */
+.fr3 .profile-dialog--cover .profile-form-actions > .gb-c23-btn,
+.profile-dialog--cover .profile-form-actions > .gb-c23-btn { flex:1 1 auto; white-space:nowrap; }
