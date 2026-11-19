@@ -4,16 +4,18 @@ import { CoverController } from "../../src/profiles/cover.controller";
 import { coverDeleteVersion } from "../../src/profiles/cover-command";
 import { describe, expect, it, vi } from "vitest";
 const contract=JSON.parse(readFileSync(path.resolve(__dirname,"../../../../packages/contracts/openapi.json"),"utf8"));
+const avatarSecurity=contract.paths["/me/avatar"].put.security;
 describe("cover wire contract",()=>{
-  it("specifies shared CAS, cookie/CSRF/replay and binary-only uploads",()=>{
+  it("specifies shared CAS, cookie/CSRF/replay and binary-only uploads with native bearer parity",()=>{
     const route=contract.paths["/me/cover"];
     for(const method of ["put","delete"]){
-      const op=route[method];expect(op.security).toEqual([{cookieSession:[]}]);
+      const op=route[method];expect(op.security).toEqual(avatarSecurity);
       expect(op.parameters).toContainEqual(expect.objectContaining({name:"X-Profile-Version",required:true}));
-      expect(op.parameters).toContainEqual(expect.objectContaining({name:"X-CSRF-Token",required:true}));
+      expect(op.parameters).toContainEqual(expect.objectContaining({name:"X-CSRF-Token",required:false}));
       expect(op.parameters).toContainEqual({$ref:"#/components/parameters/IdempotencyKey"});
       expect(op.responses["200"].content["application/json"].schema.$ref).toBe("#/components/schemas/CoverReceipt");
     }
+    expect(route.get.security).toEqual(avatarSecurity);
     expect(route.delete.requestBody.required).toBe(true);
     expect(route.delete.requestBody.content["application/json"].schema.$ref).toBe("#/components/schemas/DeleteCoverCommand");
     const schema=contract.components.schemas.DeleteCoverCommand;
@@ -22,6 +24,7 @@ describe("cover wire contract",()=>{
     expect(ids.every(Boolean)).toBe(true);expect(new Set(ids).size).toBe(ids.length);
     expect(Object.keys(route.put.requestBody.content).sort()).toEqual(["image/jpeg","image/png","image/webp"]);
     expect(contract.paths["/media/covers/{key}"].get.responses["404"]).toBeDefined();
+    expect(contract.paths["/media/covers/{key}"].get.security).toEqual(avatarSecurity);
   });
 });
 
@@ -37,12 +40,48 @@ describe("cover DELETE command validation",()=>{
 describe("cover DELETE runtime",()=>{
   it("passes the validated command version to the mutation and rejects invalid bodies before media work",async()=>{
     const actor={userId:"synthetic"};const mutate=vi.fn().mockResolvedValue({version:5,cover:{uploadedUrl:null}});
-    const controller=new CoverController({requireCookieMutation:vi.fn().mockResolvedValue(actor)} as never,{mutate} as never,{requireKey:()=>"key"} as never,{} as never);
+    const controller=new CoverController({requirePrincipalMutation:vi.fn().mockResolvedValue(actor)} as never,{mutate} as never,{requireKey:()=>"key"} as never,{} as never);
     const request=(body:unknown)=>({body,headers:{"x-profile-version":"4","idempotency-key":"key"}} as never);
     await expect(controller.remove(request(undefined))).rejects.toThrow();expect(mutate).not.toHaveBeenCalled();
     await expect(controller.remove(request({expectedVersion:3}))).rejects.toThrow();expect(mutate).not.toHaveBeenCalled();
     await expect(controller.remove(request({expectedVersion:4}))).resolves.toEqual({version:5,cover:{uploadedUrl:null}});
     expect(mutate).toHaveBeenCalledWith(actor,"key","4",undefined,"cover");
+  });
+  it("bearer path calls requirePrincipalMutation for PUT/DELETE",async()=>{
+    const actor={userId:"synthetic",sessionId:"s"};const mutate=vi.fn().mockResolvedValue({version:1,cover:{uploadedUrl:null}});
+    const requirePrincipalMutation=vi.fn().mockResolvedValue(actor);
+    const controller=new CoverController({requirePrincipalMutation} as never,{mutate} as never,{requireKey:()=>"key"} as never,{} as never);
+    const request={body:Buffer.from([1]),headers:{"authorization":"Bearer t","x-profile-version":"0","idempotency-key":"key","content-type":"image/png"}} as never;
+    await controller.replace(request);
+    expect(requirePrincipalMutation).toHaveBeenCalledWith(request);
+    await controller.remove({body:{expectedVersion:0},headers:{"authorization":"Bearer t","x-profile-version":"0","idempotency-key":"key"}} as never);
+    expect(requirePrincipalMutation).toHaveBeenCalledTimes(2);
+  });
+  it("GET me/cover uses requirePrincipal; media/covers uses requirePrincipal when Authorization present else optionalSession; Vary includes Authorization",async()=>{
+    const actor={userId:"owner",sessionId:"s"};
+    const requirePrincipal=vi.fn().mockResolvedValue(actor);
+    const optionalSession=vi.fn().mockResolvedValue(null);
+    const pool={query:vi.fn().mockResolvedValue({rows:[]})};
+    const media={readCover:vi.fn().mockRejectedValue(new Error("stop-after-auth")),readVenueCover:vi.fn()};
+    const auth={requirePrincipal,optionalSession,requirePrincipalMutation:vi.fn()};
+    const controller=new CoverController(auth as never,media as never,{requireKey:()=>"key"} as never,pool as never);
+    await expect(controller.getOwn({headers:{authorization:"Bearer t"}} as never)).resolves.toEqual({version:0,cover:{uploadedUrl:null}});
+    expect(requirePrincipal).toHaveBeenCalled();
+    const replyHeaders: Record<string,string>={};
+    const reply={
+      header(k:string,v:string){replyHeaders[k.toLowerCase()]=v;return reply;},
+      type(){return reply;},
+      send(body:unknown){return body;},
+    };
+    requirePrincipal.mockClear();
+    await expect(controller.read({headers:{}} as never,"a".repeat(64)+".png",reply as never)).rejects.toThrow("stop-after-auth");
+    expect(optionalSession).toHaveBeenCalled();
+    expect(requirePrincipal).not.toHaveBeenCalled();
+    expect(replyHeaders.vary).toBe("Authorization, Cookie, Accept");
+    optionalSession.mockClear();requirePrincipal.mockClear();
+    await expect(controller.read({headers:{authorization:"Bearer t"}} as never,"a".repeat(64)+".png",reply as never)).rejects.toThrow("stop-after-auth");
+    expect(requirePrincipal).toHaveBeenCalled();
+    expect(optionalSession).not.toHaveBeenCalled();
   });
 });
 

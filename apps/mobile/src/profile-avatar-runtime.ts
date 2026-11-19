@@ -4,18 +4,63 @@ import {
   AVATAR_PREPROCESS_MS,
   AVATAR_SIZE,
   AVATAR_SOURCE_MAX_BYTES,
+  AVATAR_TRANSPARENCY_USER,
   AvatarSourceError,
   assertDerivativeReady,
   assertOpaqueAvatarSource,
   avatarDeadline,
   avatarOrientedSize,
+  cloneDerivativeBytes,
   inspectAvatarSource,
+  stripAvatarMetadata,
   type AvatarDerivative,
   type AvatarMetadata,
 } from './profile-avatar.ts';
 import type * as ExpoFileSystemModule from 'expo-file-system';
 import type * as ExpoImageManipulatorModule from 'expo-image-manipulator';
 import type * as ExpoImagePickerModule from 'expo-image-picker';
+
+/** Server cover output size (sanitized 1200×400 PNG). */
+export const COVER_WIDTH = 1200;
+export const COVER_HEIGHT = 400;
+/** Server cover upload ceiling; native derivative stays at or below this. */
+export const COVER_DERIVATIVE_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Largest 3:1 rectangle positioned by x,y ∈ [0,1] (0.5 = centre). Pure crop math. */
+export function coverCrop(width: number, height: number, x: number, y: number): {
+  originX: number; originY: number; width: number; height: number;
+} {
+  const cropW = Math.min(width, height * 3);
+  const cropH = cropW / 3;
+  const cx = Math.min(1, Math.max(0, x));
+  const cy = Math.min(1, Math.max(0, y));
+  return {
+    originX: Math.max(0, Math.floor((width - cropW) * cx)),
+    originY: Math.max(0, Math.floor((height - cropH) * cy)),
+    width: Math.max(1, Math.round(cropW)),
+    height: Math.max(1, Math.round(cropH)),
+  };
+}
+
+export function assertCoverDerivativeReady(bytes: Uint8Array, mime: string): AvatarDerivative {
+  const meta = inspectAvatarSource(bytes, mime);
+  if (meta.width !== COVER_WIDTH || meta.height !== COVER_HEIGHT || meta.orientation !== 1) {
+    throw new AvatarSourceError('Не удалось подготовить фрагмент обложки 1200×400. Выберите другое фото.');
+  }
+  if (meta.hasAlpha) throw new AvatarSourceError(AVATAR_TRANSPARENCY_USER, 'WHITE_FLATTEN_UNPROVEN');
+  const stripped = stripAvatarMetadata(bytes, meta.mime);
+  if (stripped.byteLength > COVER_DERIVATIVE_MAX_BYTES) {
+    throw new AvatarSourceError(AVATAR_DERIVATIVE_OVERSIZE, 'DERIVATIVE_OVERSIZE');
+  }
+  const verified = inspectAvatarSource(stripped, meta.mime);
+  if (verified.width !== COVER_WIDTH || verified.height !== COVER_HEIGHT || verified.orientation !== 1) {
+    throw new AvatarSourceError('Не удалось очистить метаданные фото.');
+  }
+  return Object.freeze({
+    mime: meta.mime,
+    bytes: cloneDerivativeBytes(stripped),
+  });
+}
 
 /** Exact verified picker options for Expo image-picker 58.0.10. */
 export const AVATAR_PICKER_OPTIONS = Object.freeze({
@@ -59,6 +104,13 @@ export type AvatarRuntimeDeps = {
   centerSquare512: (
     inputUri: string,
     meta: Pick<AvatarMetadata, 'width' | 'height' | 'orientation'>,
+    maxEdge: number,
+  ) => Promise<{ uri: string; width: number; height: number }>;
+  /** Largest 3:1 crop at (x,y) then resize to exactly 1200×400. Required for cover prepare. */
+  coverFrame1200x400?: (
+    inputUri: string,
+    meta: Pick<AvatarMetadata, 'width' | 'height' | 'orientation'>,
+    position: { x: number; y: number },
     maxEdge: number,
   ) => Promise<{ uri: string; width: number; height: number }>;
   saveDerivative: (
@@ -125,6 +177,99 @@ export function avatarDownsampleCrop(
     height: side,
     decodeMax,
   };
+}
+
+/**
+ * Cover derivative: same source gates as avatar, 3:1 crop at (x,y), output exactly 1200×400 ≤ 5 MiB.
+ */
+export async function prepareOwnCoverDerivative(
+  deps: AvatarRuntimeDeps,
+  asset: PickedAvatarAsset,
+  position: { x: number; y: number },
+  retired: () => boolean,
+): Promise<AvatarDerivative> {
+  const tracked: string[] = [];
+  let localRetired = false;
+  const effectivelyRetired = () => retired() || localRetired;
+  const track = (uri: string) => {
+    if (!uri) return;
+    if (uri === asset.uri && !deps.isOwnedCacheUri(uri)) return;
+    if (!tracked.includes(uri)) tracked.push(uri);
+  };
+  if (deps.isOwnedCacheUri(asset.uri)) track(asset.uri);
+  const cleanup = async () => {
+    for (const uri of tracked.splice(0)) {
+      try {
+        await deps.deleteTracked(uri);
+      } catch {
+        /* Best-effort app-owned cache only. */
+      }
+    }
+  };
+  try {
+    const work = (async () => {
+      const sourceBytes = await readBoundedAvatarBytes(deps.openReadOnly, asset.uri);
+      if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+      const meta = inspectAvatarSource(sourceBytes, asset.mimeType ?? '');
+      assertOpaqueAvatarSource(meta);
+      if (!deps.coverFrame1200x400) {
+        throw new AvatarSourceError('Не удалось подготовить фрагмент обложки 1200×400. Выберите другое фото.');
+      }
+      const oriented = avatarOrientedSize(meta);
+      const maxEdge = Math.min(2048, Math.max(oriented.width, oriented.height));
+      const rendered = await deps.coverFrame1200x400(asset.uri, meta, position, maxEdge);
+      track(rendered.uri);
+      if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+      if (rendered.width !== COVER_WIDTH || rendered.height !== COVER_HEIGHT) {
+        throw new AvatarSourceError('Не удалось подготовить фрагмент обложки 1200×400. Выберите другое фото.');
+      }
+      const qualities = [0.9, 0.8, 0.65, 0.5, 0.35];
+      for (const format of ['webp', 'jpeg'] as const) {
+        for (const compress of qualities) {
+          if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+          const saved = await deps.saveDerivative(rendered.uri, format, compress);
+          track(saved.uri);
+          let out: Uint8Array;
+          try {
+            out = await readBoundedAvatarBytes(
+              deps.openReadOnly,
+              saved.uri,
+              COVER_DERIVATIVE_MAX_BYTES,
+              AVATAR_DERIVATIVE_OVERSIZE,
+            );
+          } catch (error) {
+            if (error instanceof AvatarSourceError && error.code === 'OVERSIZE') continue;
+            throw error;
+          }
+          try {
+            return assertCoverDerivativeReady(out, `image/${format}`);
+          } catch (error) {
+            if (error instanceof AvatarSourceError && error.code === 'DERIVATIVE_OVERSIZE') continue;
+            if (error instanceof AvatarSourceError && error.message.includes('уменьшить')) continue;
+            if (error instanceof AvatarSourceError && error.code === 'WHITE_FLATTEN_UNPROVEN') throw error;
+            continue;
+          }
+        }
+      }
+      throw new AvatarSourceError(AVATAR_DERIVATIVE_OVERSIZE, 'DERIVATIVE_OVERSIZE');
+    })();
+    return await avatarDeadline(
+      work,
+      AVATAR_PREPROCESS_MS,
+      () => {
+        localRetired = true;
+        void cleanup();
+      },
+      () => {
+        void cleanup();
+      },
+      () => {
+        void cleanup();
+      },
+    );
+  } finally {
+    await cleanup();
+  }
 }
 
 /**
@@ -285,6 +430,31 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
           height: crop.height,
         })
         .resize({ width: AVATAR_SIZE, height: AVATAR_SIZE })
+        .renderAsync();
+      const saved = await image.saveAsync({
+        format: manipulator.SaveFormat.JPEG,
+        compress: 1,
+      });
+      return { uri: saved.uri, width: image.width, height: image.height };
+    },
+    coverFrame1200x400: async (inputUri, meta, position, maxEdge) => {
+      const oriented = avatarOrientedSize(meta);
+      const decodeMax = Math.max(1, Math.min(maxEdge, Math.max(oriented.width, oriented.height)));
+      const scale = Math.min(1, decodeMax / Math.max(oriented.width, oriented.height));
+      const dw = Math.max(1, Math.round(oriented.width * scale));
+      const dh = Math.max(1, Math.round(oriented.height * scale));
+      const crop = coverCrop(dw, dh, position.x, position.y);
+      const image = await manipulator.ImageManipulator.manipulate(inputUri, {
+        maxWidth: decodeMax,
+        maxHeight: decodeMax,
+      })
+        .crop({
+          originX: crop.originX,
+          originY: crop.originY,
+          width: crop.width,
+          height: crop.height,
+        })
+        .resize({ width: COVER_WIDTH, height: COVER_HEIGHT })
         .renderAsync();
       const saved = await image.saveAsync({
         format: manipulator.SaveFormat.JPEG,

@@ -42,7 +42,7 @@ test('#605 app/profile.tsx own card default; editor and account conditional', ()
   assert.doesNotMatch(route, /auth\.me\.displayName|auth\.me\.email/);
 });
 
-test('#605 own-profile.tsx identity card copy and no cover editor', () => {
+test('#605 own-profile.tsx identity card copy and cover editor', () => {
   const source = read('../src/components/own-profile.tsx');
   assert.match(source, /Изменить профиль/);
   assert.match(source, /Настройки/);
@@ -51,7 +51,7 @@ test('#605 own-profile.tsx identity card copy and no cover editor', () => {
   assert.match(source, /Игровой профиль/);
   assert.match(source, /Не указан/);
   assert.match(source, /Не заполнено/);
-  assert.doesNotMatch(source, /Изменить обложку/);
+  assert.match(source, /Изменить обложку/);
 });
 
 test('#605 player-card.tsx exports PlayerCover used by PlayerProfile', () => {

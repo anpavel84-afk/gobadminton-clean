@@ -47,11 +47,18 @@ export function PlayerCard({ player, city, onOpen }: { player: PublicPlayer; cit
 
 // Exact accepted WEB canonical/ce252.svg; no invented fallback cover artwork.
 const defaultCoverXml = "<svg preserveAspectRatio=\"none\" overflow=\"visible\" style=\"display: block;\" width=\"200\" height=\"200\" viewBox=\"0 0 200 200\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#208;&#164;&#208;&#184;&#208;&#179;&#209;&#131;&#209;&#128;&#208;&#176; 3\">\n<circle id=\"Ellipse 63\" cx=\"25\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 64\" cx=\"75\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 65\" cx=\"125\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 66\" cx=\"175\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 67\" cx=\"25\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 68\" cx=\"75\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 69\" cx=\"125\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 70\" cx=\"175\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 71\" cx=\"25\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 72\" cx=\"75\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 73\" cx=\"125\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 74\" cx=\"175\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 75\" cx=\"25\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 76\" cx=\"75\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 77\" cx=\"125\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 78\" cx=\"175\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n</g>\n</svg>\n";
-export function PlayerCover({ uploadedUrl }: { uploadedUrl: string | null }) {
+export function PlayerCover({ uploadedUrl, source }: {
+  uploadedUrl: string | null;
+  /** Optional authenticated own-cover source (bearer headers). Public profiles omit this. */
+  source?: { uri: string; headers: { Authorization: string } } | null;
+}) {
   const [failed, setFailed] = useState<string | null>(null);
-  const uri = playerMediaUrl(uploadedUrl, 'cover');
+  const fallbackUri = playerMediaUrl(uploadedUrl, 'cover');
+  const imageSource = source ?? (fallbackUri ? { uri: fallbackUri } : null);
+  const failKey = imageSource?.uri ?? null;
   return <View style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden' }}>
-    {uri && uri !== failed ? <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" onError={() => setFailed(uri)} />
+    {imageSource && failKey !== failed
+      ? <Image source={imageSource} style={{ width: '100%', height: '100%' }} resizeMode="cover" onError={() => setFailed(failKey)} />
       : <SvgXml xml={defaultCoverXml} width="100%" height="100%" accessible={false} />}
   </View>;
 }

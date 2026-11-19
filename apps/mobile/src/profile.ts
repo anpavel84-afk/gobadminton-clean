@@ -11,6 +11,25 @@ export class ProfileError extends Error {
 /** Approved uploaded route or null; providerUrl always quarantined for own/public projection. */
 export type OwnAvatar = { uploadedUrl: string | null; providerUrl: null };
 export type AvatarReceipt = Readonly<{ version: number; avatar: OwnAvatar }>;
+export type OwnCover = { uploadedUrl: string | null };
+export type CoverReceipt = Readonly<{ version: number; cover: OwnCover }>;
+export function parseOwnCover(value: unknown): OwnCover {
+  if (value == null) return { uploadedUrl: null };
+  if (typeof value !== 'object' || Array.isArray(value)) throw new ProfileError('invalid');
+  const c = value as Record<string, unknown>;
+  if (c.uploadedUrl === null || c.uploadedUrl === undefined) return { uploadedUrl: null };
+  if (typeof c.uploadedUrl !== 'string') throw new ProfileError('invalid');
+  if (!/^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/.test(c.uploadedUrl) || c.uploadedUrl.includes('..')) {
+    return { uploadedUrl: null };
+  }
+  return { uploadedUrl: c.uploadedUrl };
+}
+export function parseCoverReceipt(value: unknown): CoverReceipt {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ProfileError('invalid');
+  const row = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(row.version) || Number(row.version) < 0) throw new ProfileError('invalid');
+  return { version: row.version as number, cover: parseOwnCover(row.cover) };
+}
 export function parseOwnAvatar(value: unknown): OwnAvatar {
   if (value == null) return { uploadedUrl: null, providerUrl: null };
   if (typeof value !== 'object' || Array.isArray(value)) throw new ProfileError('invalid');
@@ -312,6 +331,16 @@ export class ProfileCoordinator {
     if (receipt.version < profile.version) return;
     this.show({
       profile: { ...profile, version: receipt.version, avatar: { uploadedUrl: receipt.avatar.uploadedUrl, providerUrl: null } },
+      status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
+    });
+  };
+  /** Authoritative cover/version only — never replaces unsaved name/level/area/bio draft. Delayed older receipts ignored. */
+  applyCoverReceipt = (receipt: CoverReceipt) => {
+    const profile = this.state.profile;
+    if (!profile || this.state.command) return;
+    if (receipt.version < profile.version) return;
+    this.show({
+      profile: { ...profile, version: receipt.version, cover: { uploadedUrl: receipt.cover.uploadedUrl } },
       status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
     });
   };

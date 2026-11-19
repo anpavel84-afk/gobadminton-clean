@@ -1,9 +1,10 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { Pressable, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import type { PublicPlayer } from '../players.ts';
 import { playerLevelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
+import { CoverEditor } from './cover-editor.tsx';
 import { PlayerAvatar, PlayerBadges, PlayerCover } from './player-card.tsx';
 import { Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
@@ -21,6 +22,8 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
 }) {
   const auth = useAuth(), owner = auth.profile;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const [coverOpen, setCoverOpen] = useState(false);
+  const coverTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const actor = state.actor;
   useEffect(() => {
     if (auth.status === 'authenticated' && owner.getSnapshot().status === 'idle') void owner.load();
@@ -38,6 +41,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     lookingForGame: lookingActive(profile.lookingForGame),
     avatar: { uploadedUrl: profile.avatar.uploadedUrl, providerUrl: null },
   } : null;
+  const coverLocked = !!state.command || state.status !== 'ready' || auth.avatar.blocksEdits() || auth.cover.blocksEdits();
   return <View style={{ gap: 12 }}>
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}
     {(state.status === 'error' || state.status === 'idle') &&
@@ -46,7 +50,10 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.load()} />}
     {profile && player && <>
       <View style={{ borderRadius: 18, overflow: 'hidden', backgroundColor: colors.paper }}>
-        <PlayerCover uploadedUrl={profile.cover?.uploadedUrl ?? null} />
+        <PlayerCover
+          uploadedUrl={profile.cover?.uploadedUrl ?? null}
+          source={auth.cover.coverImageSource(profile.cover?.uploadedUrl)}
+        />
         <View style={{ padding: 16, gap: 12 }}>
           <PlayerAvatar key={`${player.publicPlayerId}:${player.avatar?.uploadedUrl}`} player={player} large />
           <PlayerBadges player={player} />
@@ -55,6 +62,24 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
           {profile.bio ? <Label>{profile.bio}</Label> : null}
           <View accessible accessibilityLabel="Действия профиля" style={{ gap: 8 }}>
             <PrimaryButton title="Изменить профиль" onPress={onEdit} />
+            <Pressable
+              ref={coverTrigger}
+              accessibilityRole="button"
+              accessibilityLabel="Изменить обложку"
+              disabled={coverLocked && !coverOpen}
+              onPress={() => setCoverOpen(true)}
+              style={({ pressed }) => [
+                styles.textButton,
+                {
+                  borderWidth: 1,
+                  borderColor: colors.lineDark,
+                  backgroundColor: pressed ? colors.paper : colors.card,
+                  opacity: coverLocked && !coverOpen ? 0.5 : 1,
+                },
+              ]}>
+              <Label style={{ color: colors.ink, textAlign: 'center', fontWeight: '600' }}>Изменить обложку</Label>
+            </Pressable>
+            <CoverEditor open={coverOpen} onOpenChange={setCoverOpen} returnFocusRef={coverTrigger} />
             <Pressable accessibilityRole="button" accessibilityLabel="Настройки"
               accessibilityState={{ expanded: settingsOpen }} onPress={onSettings}
               style={({ pressed }) => [styles.textButton, pressed && { backgroundColor: colors.paper }]}>
