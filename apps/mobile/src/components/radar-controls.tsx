@@ -6,6 +6,7 @@ import { useRadar } from '../radar-runtime.tsx';
 import { activationDeadline } from '../radar.ts';
 import type { RadarSnapshot } from '../radar-coordinator.ts';
 import { colors } from '../theme.ts';
+import { DiscoveryIcon } from './discovery-icon.tsx';
 import { Label, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 /** UI clock only: no permission, publication, heartbeat or renewal is dispatched here. */
 export function radarControlPresentation(state: RadarSnapshot, now: number) {
@@ -66,7 +67,13 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
     </Pressable>}
     <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet">
       <ScreenFrame><ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        <TextButton title="Закрыть" onPress={close} /><Label accessibilityRole="header" style={styles.title}>Radar</Label>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={close}
+            style={({ pressed }) => [{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
+            <DiscoveryIcon name="close" />
+          </Pressable>
+        </View>
+        <Label accessibilityRole="header" style={styles.title}>Radar</Label>
         <Label>{auth.me?.displayName && !auth.me.displayName.includes('@') ? auth.me.displayName : 'Ваш профиль'}</Label>
         {state.enabling && <Label accessible accessibilityLiveRegion="polite">Сейчас ищем ближайших игроков…</Label>}
         {state.phase === 'restoring' && <Label>Проверяем статус…</Label>}
