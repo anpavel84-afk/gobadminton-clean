@@ -1,0 +1,8 @@
+/** Exact accepted WEB canonical/bb5a8.svg bytes; do not invent artwork. */
+export const profileHeroDecorationXml =
+  '<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">\n' +
+  '<g id="&#208;&#164;&#208;&#184;&#208;&#179;&#209;&#131;&#209;&#128;&#208;&#176; 2">\n' +
+  '<rect id="Rectangle 48" width="200" height="200" fill="#FFEEC9"/>\n' +
+  '<path id="Polygon 9" d="M100 60L146 140H54L100 60Z" fill="#F7AB38"/>\n' +
+  '</g>\n' +
+  '</svg>\n';

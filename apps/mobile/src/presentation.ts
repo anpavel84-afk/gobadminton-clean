@@ -104,6 +104,19 @@ export function playerLevelLabel(level: { scaleId: string; scaleVersion: number;
   if (level.scaleId === 'ntrp' && ['1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0', '5.5', '6.0', '6.5', '7.0'].includes(level.levelId)) return `NTRP ${level.levelId}`;
   return 'Уровень не указан';
 }
+
+/** Web PlayerProfileHero meta: formatSocialLevel(null) = «не указан», then city · area. */
+export function profileHeroMeta(
+  level: { scaleId: string; scaleVersion: number; levelId: string } | null | undefined,
+  city?: string | null,
+  area?: string | null,
+): string {
+  const levelPart = !level ? 'не указан' : (() => {
+    const label = playerLevelLabel(level);
+    return label === 'Уровень не указан' ? 'не указан' : label;
+  })();
+  return [levelPart, city || null, area || null].filter(Boolean).join(' · ');
+}
 export function playerInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return parts.slice(0, 2).map(p => Array.from(p)[0]).join('').toLocaleUpperCase('ru') || '?';
