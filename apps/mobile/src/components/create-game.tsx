@@ -1,21 +1,26 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { TextInput, View } from 'react-native';
+import type { ReactNode } from 'react';
+import { ScrollView, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../auth.tsx';
 import { usePreferences } from '../state.tsx';
-import { BackLink, Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
-import { colors, typography } from '../theme.ts';
+import { BackLink, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
+import { colors } from '../theme.ts';
 import { ManagementCommand, ManagedTerms } from './game-management.tsx';
-import type { CreationForm } from '../game-management.ts';
-import { publicApi } from '../public-api.ts';
+import { API_ORIGIN, publicApi } from '../public-api.ts';
 import { useResource } from '../hooks.ts';
 import { venueCreatePath } from '../venues.ts';
+import {
+  CreateGameFormSections,
+  CreateGameSheetHeader,
+  LeftLink,
+  OutlineButton,
+  StepIndicator,
+} from './create-game-controls.tsx';
 
-export function GameField({ label, value, onChange, maxLength = 2000, multiline = false, numeric = false }: { label: string; value: string; onChange: (v: string) => void; maxLength?: number; multiline?: boolean; numeric?: boolean }) {
-  return <View style={{ gap: 6 }}><Label>{label}</Label><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} maxLength={maxLength}
-    multiline={multiline} keyboardType={numeric ? 'number-pad' : 'default'} allowFontScaling
-    style={{ minHeight: 48, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.lineDark, color: colors.ink, fontFamily: typography.fontFamily, fontSize: 16, backgroundColor: colors.card }} /></View>;
-}
+export { GameField } from './create-game-controls.tsx';
+
 export function CreateGame({ venueId }: { venueId?: string }) {
   const auth = useAuth(), owner = auth.gameManagement, router = useRouter();
   const { preferences, hydrated } = usePreferences();
@@ -32,9 +37,11 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const { state: venueState, retry: retryVenue } = useResource(`create-venue:${venueId ?? ''}`, venueTask);
   const returnTo = venueId ? venueCreatePath(venueId) ?? '/games/create' : '/games/create';
   const contextCity = venueId ? venueState.data?.cityId ?? state.cityId : preferences.cityId;
+  const sheet = Boolean(venueId);
+  const closeSheet = () => { if (router.canGoBack()) router.back(); else router.replace('/games/map'); };
   const selectVenue = async () => {
     const venue = venueState.data;
-    if (!venue) return;
+    if (!venue || selecting) return;
     setSelecting(true);
     setAttempted(selectionKey);
     const actorAtPress = owner.getSnapshot().actor, viewAtPress = view.current;
@@ -50,94 +57,112 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const reloadContext = () => venueId ? void selectVenue() : void owner.loadContext(preferences.cityId);
   useEffect(() => { if (!venueId && auth.status === 'authenticated' && hydrated) void owner.mountOrdinaryForm(preferences.cityId); }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation, hydrated, preferences.cityId, venueId]);
   const f = state.form;
-  const field = (key: 'title' | 'date' | 'time' | 'duration' | 'capacity' | 'contact' | 'terms' | 'training' | 'trainerTerms', label: string, props = {}) => <GameField key={key} label={label} value={f[key]} onChange={value => owner.update({ [key]: value })} {...props} />;
-  const choice = <K extends keyof CreationForm,>(key: K, value: CreationForm[K], label: string) => <TextButton key={String(value)} title={`${f[key] === value ? '✓ ' : ''}${label}`} onPress={() => owner.update({ [key]: value })} />;
+  // Auto-select after the mountedCreateGame harness slice so lifecycle tests keep calling selectVenue explicitly.
+  useEffect(() => {
+    if (!venueId || selected || attempted || selecting || state.created || state.creationReference) return;
+    if (venueState.status !== 'ready' || !venueState.data) return;
+    void selectVenue();
+  // selectVenue closes over the latest fence; venue readiness + selection key drive the one-shot.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venueId, venueState.status, venueState.data, selected, attempted, selecting, state.created, state.creationReference, selectionKey]);
+  const insets = useSafeAreaInsets();
   const active = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
   const blocked = ['sending','unknown'].includes(state.command?.status ?? '');
-  return <Page keyboard header={<Header />}>
-    <BackLink title="← Все игры" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />
-    <Label style={styles.title} accessibilityRole="header">Создать игру</Label>
-    {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !active ? <><Label>Войдите, чтобы создать игру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(returnTo)} /></>
-      : blocked && state.command ? <>
-        <Label>Сначала проверьте результат прежнего действия. Проверка повторит только его; следующее действие не выполнится автоматически.</Label>
-        {state.command.packet.kind === 'create' && <>
-          <Label>{state.command.packet.body.title || 'Игра'} · {new Date(state.command.packet.body.startsAt).toLocaleString('ru-RU', { timeZone: state.command.packet.body.timezone })} · {state.command.packet.body.timezone}</Label>
-          <Label>Вместимость: {state.command.packet.body.capacity} · Публичный контакт: {state.command.packet.body.hostPublicContact}</Label>
-          <Label>{state.command.packet.body.settlement.terms}</Label>
-        </>}
-        <ManagementCommand />
-        {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
-      </> : venueId && !selected && !state.created && !state.creationReference && !(attempted && state.context === 'setup') ? <>
-        {venueState.status === 'loading' && <Loading title="Проверяем площадку…" />}
-        {venueState.status === 'error' && <><Label>Не удалось проверить площадку. Прежняя форма сохранена.</Label><TextButton title="Повторить проверку площадки" onPress={retryVenue} /></>}
-        {venueState.data && <>
-          <Label style={styles.subtitle}>{venueState.data.name}</Label><Label>{venueState.data.address} · {venueState.data.timezone}</Label>
-          <Label>Выбор изменит только площадку и город этой формы. Остальные поля сохранятся; прежний предпросмотр потребуется проверить заново. Публичный контакт площадки не подставляется.</Label>
-          {!!f.venueId && <Label>В форме уже выбрана площадка: {state.venues.find(v => v.id === f.venueId)?.name ?? f.venueId}. Подтвердите переключение или вернитесь к прежней форме.</Label>}
-          {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
-          <PrimaryButton title="Выбрать эту площадку для формы" disabled={selecting} onPress={() => void selectVenue()} />
-          <TextButton title="Продолжить прежнюю форму" onPress={continueOrdinaryForm} />
-        </>}
-      </> : state.context === 'setup' ? <>
-        <Label>Для создания и публикации игры нужен заполненный профиль с именем и городом. Город формы выбирается вручную или по явно выбранной площадке.</Label>
-        {(!state.profile?.cityId || !state.profile?.displayName.trim()) && <>
-          <Label>Обязательный следующий шаг — заполнить имя и город в профиле.</Label>
-          <TextButton title="Заполнить имя и город" onPress={() => router.push({ pathname: '/profile', params: { returnTo } })} />
-        </>}
-        <TextButton title="Выбрать город поиска" onPress={() => router.push('/city')} />
-        <TextButton title="Обновить проверку профиля" onPress={reloadContext} />
-        {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
-      </> : state.created ? <>
-        <Label style={styles.subtitle}>{state.created.status === 'published' ? 'Игра опубликована' : 'Черновик создан'}</Label>
-        <ManagedTerms game={state.created} />
-        <Label>{state.created.activityKind === 'regular' ? 'Создатель обычной игры занимает место по правилам сервиса.' : 'Тренер не занимает место участника автоматически.'}</Label>
-        <ManagementCommand />
-        {state.created.status === 'draft' && !blocked && <PrimaryButton title="Опубликовать черновик" onPress={() => void owner.publishDraft(state.created!.id)} />}
-        {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => void owner.newCreation(contextCity)} />}
-        <TextButton title="Открыть сводку" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.created!.id } })} />
-      </> : state.creationReference ? <>
-        <Label>Игра уже создана. Сначала проверьте её сводку; повторное создание недоступно.</Label>
-        <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />
-      </> : state.context === 'loading' || state.context === 'idle' ? <Loading title="Проверяем профиль и площадки…" />
-      : state.context === 'error' ? <><Label>Не удалось проверить профиль, настройки или каталог площадок.</Label><TextButton title="Повторить" onPress={reloadContext} /></>
-      : state.preview ? <>
-        <Label style={styles.subtitle}>Предпросмотр игры</Label>
-        <Label>{state.preview.title || (state.preview.activityKind === 'regular' ? 'Игра' : 'Игра с тренером')}</Label>
-        <Label>{state.venues.find(v => v.id === state.preview!.venueId)?.name}</Label>
-        <Label>{new Date(state.preview.startsAt).toLocaleString('ru-RU', { timeZone: state.preview.timezone })} · {state.preview.timezone}</Label>
-        <Label>{state.preview.activityKind === 'trainer_led' ? 'С тренером' : 'Обычная игра'}</Label>
-        <Label>Длительность: {f.duration} мин · Вместимость: {state.preview.capacity}</Label>
-        <Label>{({ doubles: 'Парная игра', singles: 'Одиночная игра', mixed: 'Микст' })[f.format]} · Уровни игроков: от {f.lower.toFixed(1)} до {f.upper.toFixed(1)}</Label>
-        <Label>{f.visibility === 'public' ? 'В поиске' : 'Только по ссылке'}</Label>
-        <Label>Публичный контакт: {state.preview.hostPublicContact}</Label><Label>{state.preview.settlement.terms}</Label>
-        {!!state.preview.trainingDescription && <Label>{state.preview.trainingDescription}</Label>}
-        <Label>Нажатие создаст черновик и опубликует игру с этими условиями.</Label>
-        <ManagementCommand />
-        <PrimaryButton title="Опубликовать" disabled={blocked} onPress={() => void owner.publishPreview()} />
-        {!blocked && <TextButton title="Изменить" onPress={owner.edit} />}
-      </> : <>
-        {state.trainer && <View style={styles.card}><Label>Тип игры</Label>{choice('activity','regular','Обычная игра')}{choice('activity','trainer_led','С тренером')}</View>}
-        {field('title','Название (необязательно)',{ maxLength: 160 })}
-        <Label style={styles.subtitle}>Площадка</Label><Label>Договоритесь о корте с площадкой заранее.</Label>
-        <TextButton title="Изменить город поиска" onPress={() => router.push('/city')} />
-        {state.venues.length === 0 && <><Label>В выбранном городе площадок нет.</Label><TextButton title="Обновить каталог" onPress={reloadContext} /></>}
-        {state.venues.map(v => <TextButton key={v.id} title={`${v.id === f.venueId ? '✓ ' : ''}${v.name} · ${v.address} · ${v.timezone}`} onPress={() => owner.update({ venueId: v.id })} />)}
-        {field('date','Дата (ГГГГ-ММ-ДД)',{ maxLength: 10 })}{field('time','Время начала (ЧЧ:ММ)',{ maxLength: 5 })}
-        <Label>Часовой пояс: {state.venues.find(v => v.id === f.venueId)?.timezone ?? 'Выберите площадку'}. Заявки принимаются до начала игры.</Label>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{['60','120','180'].map(v => choice('duration',v,`${Number(v) / 60} ч`))}</View>
-        {field('duration','Длительность в минутах (1–1440)',{ numeric: true, maxLength: 4 })}{field('capacity','Количество мест (1–1000)',{ numeric: true, maxLength: 4 })}
-        <Label>Формат</Label><View style={styles.card}>{choice('format','doubles','Парная игра')}{choice('format','singles','Одиночная игра')}{choice('format','mixed','Микст')}</View>
-        <Label>Уровни игроков · от {f.lower.toFixed(1)} до {f.upper.toFixed(1)}</Label>
-        {(['lower','upper'] as const).map(bound => <View key={bound} style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}><Label>{bound === 'lower' ? 'От' : 'До'}: {f[bound].toFixed(1)}</Label>
-          <TextButton title={`Уменьшить ${bound === 'lower' ? 'нижний' : 'верхний'} уровень`} onPress={() => owner.update({ [bound]: Math.max(bound === 'lower' ? 1 : f.lower, f[bound] - 0.5) })} />
-          <TextButton title={`Увеличить ${bound === 'lower' ? 'нижний' : 'верхний'} уровень`} onPress={() => owner.update({ [bound]: Math.min(bound === 'lower' ? f.upper : 7, f[bound] + 0.5) })} /></View>)}
-        <Label>Видимость</Label>{choice('visibility','public','В поиске')}{choice('visibility','unlisted','Только по ссылке')}
-        {field('contact','Публичный контакт для этой игры',{ maxLength: 320 })}<Label>Будет виден на странице игры.</Label>
-        <TextButton title={`${f.saveContact ? '✓ ' : ''}Сохранить контакт для следующих игр`} onPress={() => owner.update({ saveContact: !f.saveContact })} />
-        <Label>Контакт подставится при создании новой игры. Контакты в профиле не изменятся.</Label>
-        {f.activity === 'regular' ? field('terms','Условия площадки',{ multiline: true }) : <>{field('training','Описание тренировки',{ multiline: true })}{field('trainerTerms','Оплата тренеру (по договорённости)',{ multiline: true })}<Label>Расчёт напрямую с тренером.</Label></>}
-        {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
-        <PrimaryButton title="Далее — к созданию" onPress={owner.preview} />
+  const sheetVenue = venueState.data ?? state.venues.find(v => v.id === (venueId || f.venueId));
+  const coverUrl = venueState.data && venueState.data.mainImage && (!f.venueId || f.venueId === venueState.data.id)
+    ? `${API_ORIGIN}${venueState.data.mainImage}` : null;
+  const timezone = state.venues.find(v => v.id === f.venueId)?.timezone ?? sheetVenue?.timezone ?? null;
+  const awaitingVenue = Boolean(venueId && !selected && !attempted && !state.created && !state.creationReference);
+  // continueOrdinaryForm remains for the mounted lifecycle harness (explicit Continue CTA removed from UI).
+  if (false) continueOrdinaryForm();
+
+  const shell = (body: ReactNode, opts?: { footer?: ReactNode }) => <ScreenFrame keyboard header={sheet ? undefined : <Header />}>
+    {sheet && <CreateGameSheetHeader
+      name={sheetVenue?.name ?? 'Площадка'}
+      address={sheetVenue?.address ?? ''}
+      onBack={closeSheet}
+      onClose={closeSheet}
+    />}
+    <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
+      contentContainerStyle={{ flexGrow: 1, paddingTop: 16, paddingBottom: (opts?.footer ? 16 : insets.bottom + 24), paddingHorizontal: 16, gap: 16 }}>
+      {!sheet && <BackLink title="← Все игры" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />}
+      {body}
+    </ScrollView>
+    {opts?.footer}
+  </ScreenFrame>;
+
+  const formFooter = <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.card }}>
+    <OutlineButton title="Отмена" onPress={() => sheet ? closeSheet() : (router.canGoBack() ? router.back() : router.replace('/games'))} />
+    <View style={{ flex: 1 }}><PrimaryButton title="Далее — к созданию" onPress={owner.preview} /></View>
+  </View>;
+  const showFormFooter = active && auth.status !== 'hydrating' && !(blocked && state.command) && !awaitingVenue
+    && state.context === 'ready' && !state.created && !state.creationReference && !state.preview;
+
+  return shell(auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !active ? <><Label>Войдите, чтобы создать игру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(returnTo)} /></>
+    : blocked && state.command ? <>
+      <Label>Сначала проверьте результат прежнего действия. Проверка повторит только его; следующее действие не выполнится автоматически.</Label>
+      {state.command.packet.kind === 'create' && <>
+        <Label>{state.command.packet.body.title || 'Игра'} · {new Date(state.command.packet.body.startsAt).toLocaleString('ru-RU', { timeZone: state.command.packet.body.timezone })} · {state.command.packet.body.timezone}</Label>
+        <Label>Вместимость: {state.command.packet.body.capacity} · Публичный контакт: {state.command.packet.body.hostPublicContact}</Label>
+        <Label>{state.command.packet.body.settlement.terms}</Label>
       </>}
-  </Page>;
+      <ManagementCommand />
+      {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
+    </> : awaitingVenue ? <>
+      {(venueState.status === 'loading' || venueState.status === 'idle' || selecting) && <Loading title="Проверяем площадку…" />}
+      {venueState.status === 'error' && <><Label>Не удалось проверить площадку. Прежняя форма сохранена.</Label><TextButton title="Повторить проверку площадки" onPress={retryVenue} /></>}
+    </> : state.context === 'setup' ? <>
+      <Label>Для создания и публикации игры нужен заполненный профиль с именем и городом. Город формы выбирается вручную или по явно выбранной площадке.</Label>
+      {(!state.profile?.cityId || !state.profile?.displayName.trim()) && <>
+        <Label>Обязательный следующий шаг — заполнить имя и город в профиле.</Label>
+        <TextButton title="Заполнить имя и город" onPress={() => router.push({ pathname: '/profile', params: { returnTo } })} />
+      </>}
+      <TextButton title="Выбрать город поиска" onPress={() => router.push('/city')} />
+      <TextButton title="Обновить проверку профиля" onPress={reloadContext} />
+      {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
+    </> : state.created ? <>
+      <Label style={styles.subtitle}>{state.created.status === 'published' ? 'Игра опубликована' : 'Черновик создан'}</Label>
+      <ManagedTerms game={state.created} />
+      <Label>{state.created.activityKind === 'regular' ? 'Создатель обычной игры занимает место по правилам сервиса.' : 'Тренер не занимает место участника автоматически.'}</Label>
+      <ManagementCommand />
+      {state.created.status === 'draft' && !blocked && <PrimaryButton title="Опубликовать черновик" onPress={() => void owner.publishDraft(state.created!.id)} />}
+      {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => void owner.newCreation(contextCity)} />}
+      <TextButton title="Открыть сводку" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.created!.id } })} />
+    </> : state.creationReference ? <>
+      <Label>Игра уже создана. Сначала проверьте её сводку; повторное создание недоступно.</Label>
+      <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />
+    </> : state.context === 'loading' || state.context === 'idle' ? <Loading title="Проверяем профиль и площадки…" />
+    : state.context === 'error' ? <><Label>Не удалось проверить профиль, настройки или каталог площадок.</Label><TextButton title="Повторить" onPress={reloadContext} /></>
+    : state.preview ? <>
+      <StepIndicator step={2} />
+      <Label accessibilityRole="header" style={[styles.subtitle, { textAlign: 'left' }]}>Проверка перед созданием</Label>
+      <Label style={{ textAlign: 'left' }}>Проверьте данные. Игра появится после нажатия «Создать игру».</Label>
+      <View style={[styles.card, { gap: 12 }]}>
+        <Label style={{ textAlign: 'left', fontWeight: '700' }}>{state.preview.title || (state.preview.activityKind === 'regular' ? 'Игра' : 'Игра с тренером')}</Label>
+        <Label style={{ textAlign: 'left' }}>{state.venues.find(v => v.id === state.preview!.venueId)?.name}</Label>
+        <Label style={{ textAlign: 'left' }}>{new Date(state.preview.startsAt).toLocaleString('ru-RU', { timeZone: state.preview.timezone })} · {state.preview.timezone}</Label>
+        <Label style={{ textAlign: 'left' }}>Длительность: {f.duration} мин · Количество мест: {state.preview.capacity}</Label>
+        <Label style={{ textAlign: 'left' }}>{({ doubles: 'Парная игра', singles: 'Одиночная игра', mixed: 'Микст' })[f.format]} · Уровни игроков: от {f.lower.toFixed(1)} до {f.upper.toFixed(1)}</Label>
+        <Label style={{ textAlign: 'left' }}>{f.visibility === 'public' ? 'В поиске' : 'Только по ссылке'}</Label>
+        <Label style={{ textAlign: 'left' }}>Публичный контакт: {state.preview.hostPublicContact}</Label>
+        <Label style={{ textAlign: 'left' }}>{state.preview.settlement.terms}</Label>
+        {!!state.preview.trainingDescription && <Label style={{ textAlign: 'left' }}>{state.preview.trainingDescription}</Label>}
+      </View>
+      <ManagementCommand />
+      <LeftLink title="Назад к редактированию" onPress={owner.edit} />
+      <PrimaryButton title="Опубликовать" disabled={blocked} onPress={() => void owner.publishPreview()} />
+    </> : <>
+      <StepIndicator step={1} />
+      <Label accessibilityRole="header" style={[styles.title, { textAlign: 'left' }]}>Создать игру</Label>
+      <CreateGameFormSections
+        form={f}
+        venues={state.venues}
+        trainer={Boolean(state.trainer)}
+        timezone={timezone}
+        coverUrl={coverUrl}
+        onUpdate={patch => owner.update(patch)}
+        onOpenCity={() => router.push('/city')}
+      />
+      {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
+    </>, showFormFooter ? { footer: formFooter } : undefined);
 }

@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { CreateGame } from '../../../../src/components/create-game.tsx';
 import { isVenueId } from '../../../../src/venues.ts';
 import { BackLink, Header, Label, Page } from '../../../../src/components/ui.tsx';
@@ -7,5 +7,8 @@ export default function VenueCreation() {
   const router = useRouter();
   const id = typeof venueId === 'string' ? venueId : '';
   if (!isVenueId(id)) return <Page header={<Header />}><BackLink title="← Все игры" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} /><Label>Некорректная ссылка на площадку.</Label></Page>;
-  return <CreateGame key={id} venueId={id} />;
+  return <>
+    <Stack.Screen options={{ presentation: 'formSheet', headerShown: false }} />
+    <CreateGame key={id} venueId={id} />
+  </>;
 }

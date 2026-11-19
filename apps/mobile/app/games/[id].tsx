@@ -43,7 +43,7 @@ export default function PublicGameDetails() {
       <View style={styles.card}>
         <Label accessibilityRole="header" style={styles.subtitle}>Когда и где</Label>
         <Label>{gameTime(game)}</Label>
-        <TextButton title={game.venue.name} onPress={() => router.push({ pathname: '/venues/[id]', params: { id: game.venue.id } })} />
+        <TextButton title={game.venue.name} onPress={() => router.push({ pathname: '/venues/[id]', params: { id: game.venue.id, from: 'game' } })} />
         <Label>{game.venue.address}</Label>
         <Label>Заявки до: {deadline(game)} ({game.timezone})</Label>
       </View>

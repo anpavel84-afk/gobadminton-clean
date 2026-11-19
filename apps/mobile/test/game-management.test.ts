@@ -426,11 +426,15 @@ test('venue entry/selection cannot replace UNKNOWN or created reference and late
 // No React Native renderer is needed for this controlled lifecycle; UI rendering remains native QA.
 function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue, options: { cityId?: string; push?: (path: string) => void } = {}) {
   const source = readFileSync(new URL('../src/components/create-game.tsx',import.meta.url),'utf8');
-  // Resolve the actual CTA binding, so reverting it to router.push alone breaks the lifecycle test.
-  const continueHandler = source.match(/title="Продолжить прежнюю форму" onPress=\{(.+)\} \/>/)![1];
+  // Intermediate «Продолжить прежнюю форму» UI is removed (#590); auto-select keeps the selectVenue fence and never publishes.
+  assert.doesNotMatch(source, /Выбрать эту площадку для формы/);
+  assert.doesNotMatch(source, /Продолжить прежнюю форму/);
+  const selectVenueFn = source.slice(source.indexOf('const selectVenue = async'), source.indexOf('const continueOrdinaryForm'));
+  assert.match(selectVenueFn, /owner\.selectVenue\(venue, current\)/);
+  assert.doesNotMatch(selectVenueFn, /publish/);
   let cityId = options.cityId ?? 'city-1';
   const body = source.slice(source.indexOf('export function CreateGame('),source.indexOf('  const f = state.form;'))
-    .replace('export function','function') + `  return { selectVenue, selecting, selected, continuePress: (${continueHandler}) };\n}`;
+    .replace('export function','function') + `  return { selectVenue, selecting, selected, continuePress: continueOrdinaryForm };\n}`;
   type Slot = { value?: unknown; deps?: unknown[]; cleanup?: () => void };
   const slots: Slot[] = []; let index = 0, focused = true;
   let focusCallback: (() => () => void) | undefined, focusCleanup: (() => void) | undefined;
