@@ -2,7 +2,7 @@ import { NativeVenueCommunity } from './venue-community.tsx';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Image, Linking, PanResponder, Pressable, ScrollView, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useResource, useUpcomingItems } from '../hooks.ts';
 import type { PublicGame } from '../public-api.ts';
@@ -353,9 +353,19 @@ export function VenueDetail({ id }: { id: string }) {
   const router = useRouter(), insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ from?: string | string[] }>();
   const from = typeof params.from === 'string' ? params.from : '';
+  const createNavLock = useRef(false);
   const task = useCallback((signal: AbortSignal) => publicApi.venue(id, signal), [id]);
   const { state, retry } = useResource(`venue:${id}`, task);
   const venue = state.status === 'ready' ? state.data : undefined;
+  useEffect(() => { createNavLock.current = false; }, [id]);
+  useFocusEffect(useCallback(() => { createNavLock.current = false; }, []));
+  const openVenueCreate = useCallback(() => {
+    if (!venue || createNavLock.current) return;
+    const path = venueCreatePath(venue.id);
+    if (!path) return;
+    createNavLock.current = true;
+    router.push(path);
+  }, [venue, router]);
   return <ScreenFrame header={<Header />}>
     <View style={{ flex: 1 }}>
       <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={{ padding: 16, paddingBottom: 32, gap: 16 }}>
@@ -365,7 +375,7 @@ export function VenueDetail({ id }: { id: string }) {
         {venue && <VenueContent key={`${id}:${JSON.stringify(venue)}`} venue={venue} />}
       </ScrollView>
       {venue && <View style={{ padding: 16, paddingBottom: insets.bottom + 16, backgroundColor: colors.card, borderTopWidth: 1, borderColor: colors.line }}>
-        <PrimaryButton title="Создать игру на этой площадке →" align="left" onPress={() => router.push(venueCreatePath(venue.id)!)} />
+        <PrimaryButton title="Создать игру на этой площадке →" align="left" onPress={openVenueCreate} />
       </View>}
     </View>
   </ScreenFrame>;

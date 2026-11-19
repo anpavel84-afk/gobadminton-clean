@@ -76,12 +76,26 @@ export default function GuestGames() {
   const dayLabel = day ? discoveryDateLabel(day) : 'Все ближайшие';
   const skill = levelGuideSkillFor(level);
   const closeSheet = () => setSheet(null);
+  const hasListItems = list.visible.length > 0;
+  const mapEntry = (floating: boolean) => city ? (
+    <Pressable accessibilityRole="button" accessibilityLabel="Показать площадки на карте" onPress={openMap}
+      onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
+      style={[floating
+        ? {position:'absolute',bottom:insets.bottom+16,alignSelf:'center'}
+        : {alignSelf:'center'},
+      {minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
+        backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
+        flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}]}>
+      <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
+      <Label style={{fontWeight:'600'}}>На карте</Label>
+    </Pressable>
+  ) : null;
   return <ScreenFrame header={<Header />}>
     <FlatList ref={listRef} onScroll={event => {listOffset.current=event.nativeEvent.contentOffset.y;restoreOffset.current=null;}} scrollEventThrottle={100}
       onContentSizeChange={(_width,height) => {const offset=restoreOffset.current;if (offset !== null && state.data && height >= offset) {listRef.current?.scrollToOffset({offset,animated:false});restoreOffset.current=null;}}}
       data={city ? list.visible : noGames} keyExtractor={game => game.id}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: mapEntryHeight + insets.bottom + 16, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: hasListItems ? mapEntryHeight + insets.bottom + 16 : 16, gap: 16 }}
       ListHeaderComponent={<View style={feed.header}>
         <View style={feed.copy}>
           <Label style={feed.eyebrow}>Игры рядом{city ? ` · ${city.nameRu}` : ''}</Label>
@@ -137,16 +151,12 @@ export default function GuestGames() {
       </View>}
       renderItem={({ item }) => <GameCard game={item} cityName={cities.state.data?.find(candidate => candidate.id === item.venue.cityId)?.nameRu}
         onOpen={() => router.push({ pathname: '/games/[id]', params: { id: item.id } })} />}
-      ListFooterComponent={city && list.canLoadMore && state.status !== 'error'
-        ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : undefined} />
-    {city && <Pressable accessibilityRole="button" accessibilityLabel="Показать площадки на карте" onPress={openMap}
-      onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
-      style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
-        backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
-        flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
-      <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
-      <Label style={{fontWeight:'600'}}>На карте</Label>
-    </Pressable>}
+      ListFooterComponent={<View style={{ gap: 16 }}>
+        {!hasListItems && mapEntry(false)}
+        {city && list.canLoadMore && state.status !== 'error'
+          ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : null}
+      </View>} />
+    {hasListItems && mapEntry(true)}
     <DiscoverySheet visible={sheet === 'day'} title="Когда играем" onClose={closeSheet} returnFocusRef={dayTrigger}>
       <DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => { setSelectedDay(''); closeSheet(); }} />
       {today && Array.from({ length: 7 }, (_, i) => nextCalendarDay(today, i)).map(value => <DiscoveryChip key={value} title={discoveryDateLabel(value)} selected={day === value} onPress={() => { setSelectedDay(value); closeSheet(); }} />)}

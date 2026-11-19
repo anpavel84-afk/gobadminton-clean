@@ -3,7 +3,7 @@ import type { ComponentRef, RefObject } from 'react';
 import {
   AccessibilityInfo, findNodeHandle, Modal, PanResponder, Platform, Pressable, ScrollView, useWindowDimensions, View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { publicApi } from '../public-api.ts';
 import type { PublicGame } from '../public-api.ts';
@@ -54,6 +54,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   const controlOrigin = useRef(false);
   const drag = useRef<SheetDrag | null>(null);
   const generation = useRef(0);
+  const createNavLock = useRef(false);
   const expandedRef = useRef(expanded); expandedRef.current = expanded;
   const wasExpanded = useRef(expanded);
   const returnFocus = useRef(returnFocusRef); returnFocus.current = returnFocusRef;
@@ -80,8 +81,13 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   useEffect(() => {
     generation.current += 1;
     retireGesture(true);
+    createNavLock.current = false;
     focusLife.cancelObsolete();
   }, [selection.id, selection.cityId, retireGesture, focusLife]);
+
+  useFocusEffect(useCallback(() => {
+    createNavLock.current = false;
+  }, []));
 
   // External expanded/Back/state replacement retires drag; measurement generation stays separate.
   // Do not clear follow-on suppress here — the completing gesture's synthetic press must still be consumable once.
@@ -152,6 +158,14 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   }, [onClose, restoreOpenerFocus]);
 
   const changeView = (next:'info'|'schedule') => {setView(next);scroll.current?.scrollTo({y:0,animated:false});};
+  const openExpandedCreate = useCallback(() => {
+    if (!create || createNavLock.current) return;
+    createNavLock.current = true;
+    const path = create;
+    // Retire Modal first so the create formSheet is never pushed under it; selection stays for Back.
+    onExpand(false);
+    requestAnimationFrame(() => { router.push(path); });
+  }, [create, onExpand, router]);
   const close = () => {
     const next = closeVenueSheet({filter:false,expanded,selected:selection.id});
     if (next.selected) onExpand(next.expanded); else dismissSheet();
@@ -378,7 +392,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
           contentContainerStyle={{paddingHorizontal:16,paddingBottom:16,gap:16}}>{body}</ScrollView>
       )}
       {create && <View style={{padding:16,paddingBottom:spacing.footerBottom,borderTopWidth:1,borderColor:colors.line}}>
-        <PrimaryButton title="Создать игру на этой площадке →" align="left" onPress={() => router.push(create)} />
+        <PrimaryButton title="Создать игру на этой площадке →" align="left" onPress={openExpandedCreate} />
       </View>}
     </View>
   );
