@@ -46,20 +46,21 @@ test('#605 own-profile.tsx identity card copy and cover editor', () => {
   const source = read('../src/components/own-profile.tsx');
   assert.match(source, /Изменить профиль/);
   assert.match(source, /Настройки/);
-  assert.match(source, /PlayerCover/);
-  assert.match(source, /PlayerAvatar/);
+  assert.match(source, /PlayerProfileHero/);
   assert.match(source, /Игровой профиль/);
   assert.match(source, /Не указан/);
   assert.match(source, /Не заполнено/);
   assert.match(source, /Изменить обложку/);
+  assert.match(source, /coverImageSource/);
 });
 
-test('#605 player-card.tsx exports PlayerCover used by PlayerProfile', () => {
+test('#605 player-card.tsx exports PlayerCover; PlayerProfile uses shared hero', () => {
   const source = read('../src/components/player-card.tsx');
   assert.match(source, /export function PlayerCover\(/);
   assert.match(source, /export function PlayerBadges\(/);
   assert.match(source, /export function PlayerAvatar\(/);
-  assert.match(source, /<PlayerCover/);
+  assert.match(source, /export const coverFailureXml/);
   const profileFn = source.slice(source.indexOf('export function PlayerProfile('));
-  assert.match(profileFn, /<PlayerCover\b/);
+  assert.match(profileFn, /<PlayerProfileHero\b/);
+  assert.match(read('../src/components/cover-editor.tsx'), /<PlayerCover\b/);
 });

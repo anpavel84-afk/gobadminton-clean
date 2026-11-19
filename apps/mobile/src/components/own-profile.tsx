@@ -5,7 +5,7 @@ import type { PublicPlayer } from '../players.ts';
 import { playerLevelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
 import { CoverEditor } from './cover-editor.tsx';
-import { PlayerAvatar, PlayerBadges, PlayerCover } from './player-card.tsx';
+import { PlayerProfileHero } from './player-hero.tsx';
 import { Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 function lookingActive(intent: { state: string; expiresAt: string | null } | null): boolean {
@@ -40,6 +40,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     trainer: profile.trainer,
     lookingForGame: lookingActive(profile.lookingForGame),
     avatar: { uploadedUrl: profile.avatar.uploadedUrl, providerUrl: null },
+    cover: profile.cover ?? { uploadedUrl: null },
   } : null;
   const coverLocked = !!state.command || state.status !== 'ready' || auth.avatar.blocksEdits() || auth.cover.blocksEdits();
   return <View style={{ gap: 12 }}>
@@ -49,44 +50,36 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     {state.status === 'stale' &&
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.load()} />}
     {profile && player && <>
-      <View style={{ borderRadius: 18, overflow: 'hidden', backgroundColor: colors.paper }}>
-        <PlayerCover
-          uploadedUrl={profile.cover?.uploadedUrl ?? null}
-          source={auth.cover.coverImageSource(profile.cover?.uploadedUrl)}
-        />
-        <View style={{ padding: 16, gap: 12 }}>
-          <PlayerAvatar key={`${player.publicPlayerId}:${player.avatar?.uploadedUrl}`} player={player} large />
-          <PlayerBadges player={player} />
-          <Label accessibilityRole="header" style={styles.title}>{profile.displayName}</Label>
-          <Label>{[playerLevelLabel(profile.level), cityName, profile.areaKey].filter(Boolean).join(' · ')}</Label>
-          {profile.bio ? <Label>{profile.bio}</Label> : null}
-          <View accessible accessibilityLabel="Действия профиля" style={{ gap: 8 }}>
-            <PrimaryButton title="Изменить профиль" onPress={onEdit} />
-            <Pressable
-              ref={coverTrigger}
-              accessibilityRole="button"
-              accessibilityLabel="Изменить обложку"
-              disabled={coverLocked && !coverOpen}
-              onPress={() => setCoverOpen(true)}
-              style={({ pressed }) => [
-                styles.textButton,
-                {
-                  borderWidth: 1,
-                  borderColor: colors.lineDark,
-                  backgroundColor: pressed ? colors.paper : colors.card,
-                  opacity: coverLocked && !coverOpen ? 0.5 : 1,
-                },
-              ]}>
-              <Label style={{ color: colors.ink, textAlign: 'center', fontWeight: '600' }}>Изменить обложку</Label>
-            </Pressable>
-            <CoverEditor open={coverOpen} onOpenChange={setCoverOpen} returnFocusRef={coverTrigger} />
-            <Pressable accessibilityRole="button" accessibilityLabel="Настройки"
-              accessibilityState={{ expanded: settingsOpen }} onPress={onSettings}
-              style={({ pressed }) => [styles.textButton, pressed && { backgroundColor: colors.paper }]}>
-              <Label style={{ color: colors.ink, textAlign: 'center' }}>Настройки</Label>
-            </Pressable>
-          </View>
-        </View>
+      <PlayerProfileHero
+        player={player}
+        city={cityName}
+        coverSource={auth.cover.coverImageSource(profile.cover?.uploadedUrl)}
+      />
+      <View accessible accessibilityLabel="Действия профиля" style={{ gap: 8 }}>
+        <PrimaryButton title="Изменить профиль" onPress={onEdit} />
+        <Pressable
+          ref={coverTrigger}
+          accessibilityRole="button"
+          accessibilityLabel="Изменить обложку"
+          disabled={coverLocked && !coverOpen}
+          onPress={() => setCoverOpen(true)}
+          style={({ pressed }) => [
+            styles.textButton,
+            {
+              borderWidth: 1,
+              borderColor: colors.lineDark,
+              backgroundColor: pressed ? colors.paper : colors.card,
+              opacity: coverLocked && !coverOpen ? 0.5 : 1,
+            },
+          ]}>
+          <Label style={{ color: colors.ink, textAlign: 'center', fontWeight: '600' }}>Изменить обложку</Label>
+        </Pressable>
+        <CoverEditor open={coverOpen} onOpenChange={setCoverOpen} returnFocusRef={coverTrigger} />
+        <Pressable accessibilityRole="button" accessibilityLabel="Настройки"
+          accessibilityState={{ expanded: settingsOpen }} onPress={onSettings}
+          style={({ pressed }) => [styles.textButton, pressed && { backgroundColor: colors.paper }]}>
+          <Label style={{ color: colors.ink, textAlign: 'center' }}>Настройки</Label>
+        </Pressable>
       </View>
       <View style={styles.card}>
         <Label style={{ color: colors.secondary, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>Публичные данные</Label>
