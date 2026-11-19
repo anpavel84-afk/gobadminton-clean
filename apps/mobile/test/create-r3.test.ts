@@ -13,7 +13,6 @@ import {
   snapLevel,
   stepLevel,
 } from '../src/level-range.ts';
-import { venueCreateSheetPath } from '../src/maps.ts';
 import { createGameInstant } from '../src/presentation.ts';
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
@@ -49,6 +48,12 @@ test('level-range track math maps position ↔ value and selected fill', () => {
 });
 
 test('venueCreateSheetPath hides bottom nav only on venue create sheet routes', () => {
+  const nav = read('../src/components/main-navigation.tsx');
+  assert.match(nav, /export function venueCreateSheetPath\(path: string\): boolean \{\s*return path === '\/games\/create\/venue' \|\| path\.startsWith\('\/games\/create\/venue\/'\);\s*\}/);
+  assert.match(nav, /!venueCreateSheetPath\(path\)/);
+  assert.doesNotMatch(read('../src/maps.ts'), /venueCreateSheetPath/);
+  const venueCreateSheetPath = (path: string): boolean =>
+    path === '/games/create/venue' || path.startsWith('/games/create/venue/');
   assert.equal(venueCreateSheetPath('/games/create/venue/11111111-1111-4111-8111-111111111111'), true);
   assert.equal(venueCreateSheetPath('/games/create/venue'), true);
   assert.equal(venueCreateSheetPath('/games/create'), false);
@@ -66,7 +71,6 @@ test('R3 source: #589 formSheet detents once in _layout; nav helper; no route St
   const layout = read('../app/_layout.tsx');
   const venueRoute = read('../app/games/create/venue/[venueId].tsx');
   const nav = read('../src/components/main-navigation.tsx');
-  const maps = read('../src/maps.ts');
   assert.match(layout, /sheetAllowedDetents:\s*\[0\.9\]/);
   assert.match(layout, /sheetCornerRadius:\s*20/);
   assert.match(layout, /sheetGrabberVisible:\s*true/);
@@ -75,8 +79,9 @@ test('R3 source: #589 formSheet detents once in _layout; nav helper; no route St
   assert.equal((layout.match(/games\/create\/venue\/\[venueId\]/g) ?? []).length, 1);
   assert.doesNotMatch(venueRoute, /Stack\.Screen/);
   assert.doesNotMatch(venueRoute, /presentation:\s*'formSheet'/);
-  assert.match(maps, /export function venueCreateSheetPath/);
+  assert.match(nav, /export function venueCreateSheetPath/);
   assert.match(nav, /venueCreateSheetPath\(path\)/);
+  assert.match(nav, /\/games\/create\/venue\//);
 });
 
 test('R3 source: #594 dual-thumb level-range + visibility select; chip grids gone', () => {

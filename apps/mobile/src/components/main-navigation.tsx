@@ -1,6 +1,6 @@
 import { fullscreenPlayerBrowse } from '../player-browse.ts';
 import { PlayInterestProvider } from '../play-interest-runtime.tsx';
-import { fullscreenGamesMap, venueCreateSheetPath } from '../maps.ts';
+import { fullscreenGamesMap } from '../maps.ts';
 import type { PropsWithChildren } from 'react';
 import { Pressable, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
@@ -9,6 +9,11 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { useMessages } from './messages.tsx';
 import { Label } from './ui.tsx';
 import { colors } from '../theme.ts';
+
+/** Venue create formSheet over the map — hide bottom nav like the fullscreen games map. */
+export function venueCreateSheetPath(path: string): boolean {
+  return path === '/games/create/venue' || path.startsWith('/games/create/venue/');
+}
 
 // Ported verbatim from WEB nav-items.ts / nav-icon-paths.tsx. Accepted fourth Messages tab uses the same root owner.
 export const MAIN_NAV_ITEMS = [
