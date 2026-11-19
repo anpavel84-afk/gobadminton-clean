@@ -10,6 +10,11 @@ import { useMessages } from './messages.tsx';
 import { Label } from './ui.tsx';
 import { colors } from '../theme.ts';
 
+/** Venue create formSheet over the map — hide bottom nav like the fullscreen games map. */
+export function venueCreateSheetPath(path: string): boolean {
+  return path === '/games/create/venue' || path.startsWith('/games/create/venue/');
+}
+
 // Ported verbatim from WEB nav-items.ts / nav-icon-paths.tsx. Accepted fourth Messages tab uses the same root owner.
 export const MAIN_NAV_ITEMS = [
   { path: '/games', label: 'Игры', icon: 'games' },
@@ -42,7 +47,7 @@ export function MainNavigation({ children }: PropsWithChildren) {
   const { state } = useMessages();
   const count = state.counts ? state.counts.pendingRequestCount + state.counts.pendingInvitationCount + state.counts.dmUnread + state.counts.gameChatUnread : null;
   const path = usePathname(), router = useRouter(), insets = useSafeAreaInsets();
-  const visible = !fullscreenGamesMap(path) && !fullscreenPlayerBrowse(path) && /^\/(games|players|my-games|messages|profile)(\/|$)/.test(path);
+  const visible = !fullscreenGamesMap(path) && !venueCreateSheetPath(path) && !fullscreenPlayerBrowse(path) && /^\/(games|players|my-games|messages|profile)(\/|$)/.test(path);
   return <PlayInterestProvider><View style={{ flex: 1, backgroundColor: colors.card }}>
     <View style={{ flex: 1 }}>{children}</View>
     {visible && <View accessibilityRole="tablist" accessibilityLabel="Основная навигация" style={{
