@@ -10,6 +10,7 @@ import { createExpoAvatarRuntime, pickOwnAvatarAsset, prepareOwnAvatarDerivative
 import { playerMediaUrl } from '../media.ts';
 import { playerInitials } from '../presentation.ts';
 import { colors } from '../theme.ts';
+import { CityRow } from './city-row.tsx';
 import { DiscoveryChip, DiscoverySheet, Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 export function ProfileEditor() {
@@ -90,8 +91,11 @@ export function ProfileEditor() {
         <Label>Город профиля: {selected?.nameRu ?? 'выберите из каталога'}</Label>
         {!locked && <>
           <TextInput accessibilityLabel="Найти город профиля" value={query} onChangeText={setQuery} allowFontScaling style={styles.input} />
-          {state.cities.filter(c => c.nameRu.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru'))).map(c =>
-            <TextButton key={c.id} title={`${c.id === state.draft.cityId ? '✓ ' : ''}${c.nameRu}`} onPress={() => { owner.update({ cityId: c.id }); Keyboard.dismiss(); }} />)}
+          <View style={{ gap: 0 }}>
+            {state.cities.filter(c => c.nameRu.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru'))).map(c =>
+              <CityRow key={c.id} name={c.nameRu} selected={c.id === state.draft.cityId}
+                onPress={() => { owner.update({ cityId: c.id }); Keyboard.dismiss(); }} />)}
+          </View>
           {!state.cities.some(c => c.nameRu.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru'))) && <Label>Город не найден в каталоге.</Label>}
         </>}
         <Label>Игровой уровень</Label>

@@ -284,7 +284,9 @@ async function nativeClose(owner: RadarCoordinator) {
   const start=controls.indexOf('  const close ='),end=controls.indexOf('  return <>',start);
   assert.ok(start>=0 && end>start);
   assert.match(controls,/<Modal visible=\{open\} onRequestClose=\{close\}/);
-  assert.match(controls,/<TextButton title="Закрыть" onPress=\{close\}/);
+  assert.match(controls,/accessibilityLabel="Закрыть"/);
+  assert.match(controls,/<DiscoveryIcon name="close"/);
+  assert.doesNotMatch(controls,/<TextButton title="Закрыть"/);
   let open=true,accepted=true;
   const close=runInNewContext(stripTypeScriptTypes(controls.slice(start,end)+'\nclose;'),{
     owner,state:owner.getSnapshot(),setOpen:(value:boolean)=>{open=value;},setAccepted:(value:boolean)=>{accepted=value;},
