@@ -123,7 +123,7 @@ test('compact VenuePreview/maps are exact pinned bytes; community follows schedu
   // Sheet keeps sticky Create + keyboardShouldPersistTaps; dialog keyboard is Page-owned in community UI.
   assert.match(sheet,/keyboardShouldPersistTaps="handled"/);
   assert.match(sheet,/returnFocusRef/);
-  assert.match(sheet,/PrimaryButton title="Создать игру на этой площадке"/);
+  assert.match(sheet,/PrimaryButton title="Создать игру на этой площадке →"/);
   assert.doesNotMatch(preview,/NativeVenueCommunity/);
   assert.match(community,/<Page keyboard/);
   // VC-UX1..5 composition: tombstone without author header; separate rating openers; long-text gate; compact order; single aggregate star.

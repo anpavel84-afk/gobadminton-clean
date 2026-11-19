@@ -13,6 +13,7 @@ import type { MapCamera, MapOverlay, SheetMeasurement } from '../../src/maps.ts'
 import { NativeMap } from '../../src/components/native-map.tsx';
 import { VenueSheet } from '../../src/components/venue-sheet.tsx';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
+import { RadarControls } from '../../src/components/radar-controls.tsx';
 import { DiscoveryChip, DiscoverySheet, ErrorState, Label, Loading, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
 import { colors } from '../../src/theme.ts';
 
@@ -113,17 +114,22 @@ export default function GamesMap() {
           <Label style={styles.subtitle}>{item.name}</Label><Label>{item.address}</Label><Label>{venueMarkerLabel(item,counts)}</Label>
         </Pressable>} />}
       <View pointerEvents="box-none" onLayout={event => setControlsBottom(event.nativeEvent.layout.y+event.nativeEvent.layout.height)}
-        style={{position:'absolute',top:12,left:16,right:16,alignItems:'flex-start',gap:8}}>
-        <Pressable accessibilityRole="button" accessibilityLabel="К списку игр" onPress={returnToList}
-          style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,padding:6,paddingRight:14,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
-          <View style={{minWidth:30,minHeight:30,borderRadius:999,backgroundColor:colors.purple,alignItems:'center',justifyContent:'center'}}><Label accessible={false} style={{color:colors.onPurple}}>←</Label></View>
-          <Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>К списку</Label>
-        </Pressable>
-        <Pressable ref={filterTrigger} accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:overlay.filter}}
-          onPress={() => setOverlay(v => ({...v,filter:true}))}
-          style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
-          <DiscoveryIcon name="filter" /><Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>Фильтры</Label>
-        </Pressable>
+        style={{position:'absolute',top:12,left:16,right:16,gap:8}}>
+        <View pointerEvents="box-none" style={{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+          <View pointerEvents="box-none" style={{flex:1,minWidth:0,alignItems:'flex-start',gap:8}}>
+            <Pressable accessibilityRole="button" accessibilityLabel="К списку игр" onPress={returnToList}
+              style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,padding:6,paddingRight:14,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
+              <View style={{minWidth:30,minHeight:30,borderRadius:999,backgroundColor:colors.purple,alignItems:'center',justifyContent:'center'}}><Label accessible={false} style={{color:colors.onPurple}}>←</Label></View>
+              <Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>К списку</Label>
+            </Pressable>
+            <Pressable ref={filterTrigger} accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:overlay.filter}}
+              onPress={() => setOverlay(v => ({...v,filter:true}))}
+              style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
+              <DiscoveryIcon name="filter" /><Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>Фильтры</Label>
+            </Pressable>
+          </View>
+          <RadarControls compact />
+        </View>
       </View>
       {statusTop !== undefined && (!hydrated || cities.state.status === 'loading') && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><Loading title="Загружаем города…" /></View>}
       {statusTop !== undefined && cities.state.status === 'error' && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><ErrorState error={cities.state.error} retry={cities.retry} /></View>}
@@ -132,7 +138,6 @@ export default function GamesMap() {
       {statusTop !== undefined && city && state.status === 'error' && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><ErrorState error={state.error} retry={retry} /></View>}
       {statusTop !== undefined && snapshot?.scheduleError && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Расписание недоступно. Количество игр не подтверждено.</Label><TextButton title="Повторить загрузку расписаний" onPress={retry} /></View>}
       {statusTop !== undefined && selectionError && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Выбранная площадка недоступна в этом городе.</Label><TextButton title="Площадки списком" onPress={() => setCatalog(true)} /></View>}
-      {!selection && <View style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',backgroundColor:colors.card,borderRadius:999}}><TextButton title="Обновить площадки" onPress={retry} /></View>}
       {selection && <VenueSheet key={`${routeKey}:${state.key}:${selection.id}`} onMeasure={measureSheet} selection={selection} expanded={overlay.expanded} games={schedules?.get(selection.id) ?? null}
         onExpand={expanded => setOverlay(v => ({...v,expanded}))} onClose={() => setOverlay(v => ({...v,selected:null,expanded:false}))} onRetrySchedule={retry} returnFocusRef={filterTrigger} />}
       <DiscoverySheet visible={overlay.filter} title="Фильтры карты" onClose={() => setOverlay(v => ({...v,filter:false}))} returnFocusRef={filterTrigger}>

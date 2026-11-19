@@ -58,13 +58,12 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
     {compact ? <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}. Открыть управление Radar`}
       accessibilityState={{expanded:open}} onPress={enter} style={{width:48,height:48,alignItems:'center',justifyContent:'center',flexShrink:0}}>
       {glyph}
-    </Pressable> : <View style={{flexDirection:'row',alignItems:'center',gap:10}}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Открыть управление Radar" onPress={enter} style={{minHeight:48,minWidth:48}}>{glyph}</Pressable>
-      <Pressable accessibilityRole="button" onPress={enter} accessibilityLabel={`Radar. ${presentation.caption}`} style={{flex:1,minHeight:48,justifyContent:'center'}}>
-        <Label style={{fontWeight:'600'}}>Radar</Label><Label style={{fontSize:12,lineHeight:18}}>{presentation.caption}</Label>
-      </Pressable>
-      <Switch accessibilityLabel="Radar" value={active} disabled={state.busy || !!state.command} onValueChange={value => { if (value) enter(); else void owner.stop(); }} />
-    </View>}
+    </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}`}
+      accessibilityState={{expanded:open,checked:active}} onPress={enter}
+      style={{alignSelf:'flex-start',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:active ? colors.limeSoft : colors.card}}>
+      <View style={{width:28,height:28,alignItems:'center',justifyContent:'center',transform:[{scale:0.55}]}}>{glyph}</View>
+      <Label style={{fontWeight:'600',fontSize:14,lineHeight:20}}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
+    </Pressable>}
     <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet">
       <ScreenFrame><ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
         <TextButton title="Закрыть" onPress={close} /><Label accessibilityRole="header" style={styles.title}>Radar</Label>
