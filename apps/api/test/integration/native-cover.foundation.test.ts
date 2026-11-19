@@ -138,8 +138,11 @@ run("native cover principal PUT/DELETE/GET foundation", () => {
     expect(removed.json().cover).toEqual({ uploadedUrl: null });
     // Negatives on a fresh actor so CAS state stays independent.
     const n = await actor();
-    expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(401);
-    expect((await app.inject({ method: "DELETE", url: "/v1/me/cover", headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "application/json" }, payload: { expectedVersion: 0 } })).statusCode).toBe(401);
+    // No auth + allowed Origin → 401 (session); no Origin → 403 (ORIGIN_REJECTED before session).
+    expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { origin, "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(401);
+    expect((await app.inject({ method: "DELETE", url: "/v1/me/cover", headers: { origin, "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "application/json" }, payload: { expectedVersion: 0 } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(403);
+    expect((await app.inject({ method: "DELETE", url: "/v1/me/cover", headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "application/json" }, payload: { expectedVersion: 0 } })).statusCode).toBe(403);
     expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { authorization: "Bearer invalid", "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(401);
     expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { ...bearer(n), cookie: n.cookie }, payload: png })).statusCode).toBe(403);
     const first = await app.inject({ method: "PUT", url: "/v1/me/cover", headers: bearer(n, randomUUID(), 0), payload: png });
