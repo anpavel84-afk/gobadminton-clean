@@ -108,7 +108,7 @@ run("native cover principal PUT/DELETE/GET foundation", () => {
     const put = await app.inject({ method: "PUT", url: "/v1/me/cover", headers: bearer(a, putKey, 0), payload: png });
     expect(put.statusCode, put.body).toBe(200);
     expect(put.json().cover.uploadedUrl).toMatch(/^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/);
-    let version = put.json().version as number;
+    const version = put.json().version as number;
     const url = put.json().cover.uploadedUrl as string;
     const own = await app.inject({ url: "/v1/me/cover", headers: { authorization: `Bearer ${a.accessToken}` } });
     expect(own.statusCode).toBe(200);
