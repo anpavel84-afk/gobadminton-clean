@@ -359,14 +359,14 @@ export default function Players() {
       style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
       <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
     </Pressable>
-    <Pressable accessibilityRole="button" accessibilityLabel="Показать игроков и площадки на карте"
+    {radarState.activation?.state === 'active' && <Pressable accessibilityRole="button" accessibilityLabel="Показать игроков и площадки на карте"
       onPress={() => {setSelectedPerson(null);setExpanded(false);router.setParams({view:'map',cityId:cityId ?? '',name:filters.name,areaKey:filters.areaKey ?? '',looking:looking?'1':'0',trainer:trainer?'1':'0'});}}
       style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
         flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
       <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
       <Label style={{flexShrink:1,fontWeight:'600'}}>На карте</Label>
-    </Pressable>
+    </Pressable>}
     </View>
   </ScreenFrame>;
 }
