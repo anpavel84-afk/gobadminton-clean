@@ -1,15 +1,42 @@
 import { Pressable, View } from 'react-native';
-import { colors } from '../theme.ts';
+import { colors, primaryLabelStyle, primarySurface } from '../theme.ts';
 import { Label } from './ui.tsx';
 
 /** Shared left-aligned city row for search-city and profile-city lists (#606). */
-export function CityRow({ name, region, selected = false, onPress, accessibilityLabel }: {
+export function CityRow({ name, region, selected = false, onPress, accessibilityLabel, variant = 'radio' }: {
   name: string;
   region?: string | null;
   selected?: boolean;
   onPress: () => void;
   accessibilityLabel?: string;
+  variant?: 'radio' | 'select';
 }) {
+  if (variant === 'select') {
+    return <View style={{
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+      minHeight: 56, paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: colors.line,
+    }}>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Label style={{ fontWeight: '600', textAlign: 'left' }}>{name}</Label>
+        {region ? <Label style={{ fontSize: 14, lineHeight: 20, color: colors.secondary, textAlign: 'left' }}>{region}</Label> : null}
+      </View>
+      <Pressable accessibilityRole="button" accessibilityState={{ selected }}
+        accessibilityLabel={accessibilityLabel ?? `Выбрать ${name}`}
+        onPress={onPress}
+        style={({ pressed }) => selected
+          ? {
+            minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: colors.lineDark,
+            backgroundColor: pressed ? colors.paper : colors.card,
+            justifyContent: 'center', paddingHorizontal: 14, paddingVertical: 10,
+          }
+          : [primarySurface(false, pressed), { minHeight: 44, paddingHorizontal: 14, paddingVertical: 10 }]}>
+        <Label style={selected
+          ? { fontWeight: '700', textAlign: 'center' }
+          : [primaryLabelStyle, { textAlign: 'center' }]}>Выбрать</Label>
+      </Pressable>
+    </View>;
+  }
   return <Pressable accessibilityRole="button" accessibilityState={{ selected }}
     accessibilityLabel={accessibilityLabel ?? name}
     onPress={onPress}

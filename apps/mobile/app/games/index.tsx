@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gamesContext, gamesRoute, retainedGamesOffset } from '../../src/maps.ts';
 import type { GamesListBookmark } from '../../src/maps.ts';
-import { selectedCity } from '../../src/entry.ts';
+import { cityFieldLabel, selectedCity } from '../../src/entry.ts';
 import { useResource, useUpcomingItems } from '../../src/hooks.ts';
 import { gamesResourceKey, publicApi } from '../../src/public-api.ts';
 import type { GameFilters, GamePage, PublicGame } from '../../src/public-api.ts';
@@ -104,7 +104,7 @@ export default function GuestGames() {
         </View>
         <View style={feed.selectors}>
           <Pressable accessibilityRole="button" accessibilityLabel="Выбрать другой город" onPress={selectCity} style={[feed.selector, { flex: 0.45 }]}>
-            <View style={{ flex: 1, minWidth: 0 }}><Label style={feed.hint}>Где играем</Label><Label style={feed.value}>{city?.nameRu ?? (preferences.cityId ? 'Выбор недоступен' : 'Не выбран')}</Label></View><DiscoveryIcon name="chevron" />
+            <View style={{ flex: 1, minWidth: 0 }}><Label style={feed.hint}>Где играем</Label><Label style={feed.value}>{cityFieldLabel({ hydrated, status: cities.state.status, city, savedCityId: preferences.cityId, emptyLabel: 'Не выбран' })}</Label></View><DiscoveryIcon name="chevron" />
           </Pressable>
           <Pressable ref={dayTrigger} accessibilityRole="button" accessibilityLabel={`Когда: ${dayLabel}`} accessibilityState={{ expanded: sheet === 'day', disabled: !city }} disabled={!city} onPress={() => setSheet('day')} style={[feed.selector, { flex: 0.55 }]}>
             <View style={{ flex: 1, minWidth: 0 }}><Label style={feed.hint}>Когда</Label><Label style={feed.value}>{dayLabel}</Label></View><DiscoveryIcon name="chevron" />
