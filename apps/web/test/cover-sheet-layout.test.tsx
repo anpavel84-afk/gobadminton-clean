@@ -54,7 +54,7 @@ describe("cover sheet layout (#607 #608 template 22)", () => {
       /\.profile-cover-editor\s*\{[^}]*display\s*:\s*flex[^}]*flex-direction\s*:\s*column[^}]*gap\s*:\s*16px/,
     );
     const coverFooterRule =
-      /\.profile-dialog--cover\s+\.profile-form-actions\s*>\s*\.gb-c23-btn[^\{]*\{[^}]*flex\s*:\s*1\s+1\s+auto[^}]*white-space\s*:\s*nowrap/;
+      /\.profile-dialog--cover\s+\.profile-form-actions\s*>\s*\.gb-c23-btn[^{]*\{[^}]*flex\s*:\s*1\s+1\s+auto[^}]*white-space\s*:\s*nowrap/;
     const allFooterRules = cssSource.match(new RegExp(coverFooterRule.source, "g"));
     expect(allFooterRules?.length ?? 0).toBeGreaterThanOrEqual(2);
 
