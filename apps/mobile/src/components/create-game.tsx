@@ -63,7 +63,6 @@ export function CreateGame({ venueId }: { venueId?: string }) {
     if (venueState.status !== 'ready' || !venueState.data) return;
     void selectVenue();
   // selectVenue closes over the latest fence; venue readiness + selection key drive the one-shot.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venueId, venueState.status, venueState.data, selected, attempted, selecting, state.created, state.creationReference, selectionKey]);
   const insets = useSafeAreaInsets();
   const active = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
@@ -74,7 +73,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const timezone = state.venues.find(v => v.id === f.venueId)?.timezone ?? sheetVenue?.timezone ?? null;
   const awaitingVenue = Boolean(venueId && !selected && !attempted && !state.created && !state.creationReference);
   // continueOrdinaryForm remains for the mounted lifecycle harness (explicit Continue CTA removed from UI).
-  if (false) continueOrdinaryForm();
+  void continueOrdinaryForm;
 
   const shell = (body: ReactNode, opts?: { footer?: ReactNode }) => <ScreenFrame keyboard header={sheet ? undefined : <Header />}>
     {sheet && <CreateGameSheetHeader
