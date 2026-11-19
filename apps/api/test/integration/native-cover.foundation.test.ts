@@ -138,11 +138,57 @@ run("native cover principal PUT/DELETE/GET foundation", () => {
     expect(removed.json().cover).toEqual({ uploadedUrl: null });
     // Negatives on a fresh actor so CAS state stays independent.
     const n = await actor();
-    // No auth + allowed Origin → 401 (session); no Origin → 403 (ORIGIN_REJECTED before session).
-    expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { origin, "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(401);
-    expect((await app.inject({ method: "DELETE", url: "/v1/me/cover", headers: { origin, "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "application/json" }, payload: { expectedVersion: 0 } })).statusCode).toBe(401);
-    expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(403);
-    expect((await app.inject({ method: "DELETE", url: "/v1/me/cover", headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "application/json" }, payload: { expectedVersion: 0 } })).statusCode).toBe(403);
+    // Cookie-mutation fence order: Origin → CSRF presence → session (mirror avatar-upload / requireCookieMutation).
+    const noSessionPut = await app.inject({
+      method: "PUT",
+      url: "/v1/me/cover",
+      headers: {
+        origin,
+        "x-csrf-token": "any-nonempty-csrf",
+        "idempotency-key": randomUUID(),
+        "x-profile-version": "0",
+        "content-type": "image/png",
+      },
+      payload: png,
+    });
+    expect(noSessionPut.statusCode).toBe(401);
+    const noSessionDel = await app.inject({
+      method: "DELETE",
+      url: "/v1/me/cover",
+      headers: {
+        origin,
+        "x-csrf-token": "any-nonempty-csrf",
+        "idempotency-key": randomUUID(),
+        "x-profile-version": "0",
+        "content-type": "application/json",
+      },
+      payload: { expectedVersion: 0 },
+    });
+    expect(noSessionDel.statusCode).toBe(401);
+    const missingCsrf = await app.inject({
+      method: "PUT",
+      url: "/v1/me/cover",
+      headers: { origin, "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" },
+      payload: png,
+    });
+    expect(missingCsrf.statusCode).toBe(403);
+    expect(missingCsrf.json().code).toBe("CSRF_REQUIRED");
+    const noOriginPut = await app.inject({
+      method: "PUT",
+      url: "/v1/me/cover",
+      headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" },
+      payload: png,
+    });
+    expect(noOriginPut.statusCode).toBe(403);
+    expect(noOriginPut.json().code).toBe("ORIGIN_REJECTED");
+    const noOriginDel = await app.inject({
+      method: "DELETE",
+      url: "/v1/me/cover",
+      headers: { "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "application/json" },
+      payload: { expectedVersion: 0 },
+    });
+    expect(noOriginDel.statusCode).toBe(403);
+    expect(noOriginDel.json().code).toBe("ORIGIN_REJECTED");
     expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { authorization: "Bearer invalid", "idempotency-key": randomUUID(), "x-profile-version": "0", "content-type": "image/png" }, payload: png })).statusCode).toBe(401);
     expect((await app.inject({ method: "PUT", url: "/v1/me/cover", headers: { ...bearer(n), cookie: n.cookie }, payload: png })).statusCode).toBe(403);
     const first = await app.inject({ method: "PUT", url: "/v1/me/cover", headers: bearer(n, randomUUID(), 0), payload: png });
