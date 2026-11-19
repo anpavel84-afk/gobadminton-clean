@@ -2,7 +2,7 @@ import { NativeVenueCommunity } from './venue-community.tsx';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Image, Linking, PanResponder, Pressable, ScrollView, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useResource, useUpcomingItems } from '../hooks.ts';
 import type { PublicGame } from '../public-api.ts';
@@ -358,13 +358,15 @@ export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMe
 }
 export function VenueDetail({ id }: { id: string }) {
   const router = useRouter(), insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ from?: string | string[] }>();
+  const from = typeof params.from === 'string' ? params.from : '';
   const task = useCallback((signal: AbortSignal) => publicApi.venue(id, signal), [id]);
   const { state, retry } = useResource(`venue:${id}`, task);
   const venue = state.status === 'ready' ? state.data : undefined;
   return <ScreenFrame header={<Header />}>
     <View style={{ flex: 1 }}>
       <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={{ padding: 16, paddingBottom: 32, gap: 16 }}>
-        <BackLink title="← Назад к карте" onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />
+        <BackLink title={from === 'game' ? '← К игре' : '← Назад к карте'} onPress={() => router.canGoBack() ? router.back() : router.replace('/games')} />
         {(state.status === 'loading' || state.status === 'idle') && <Loading title="Загружаем площадку…" />}
         {state.status === 'error' && <VenueFailure error={state.error} retry={retry} />}
         {venue && <VenueContent key={`${id}:${JSON.stringify(venue)}`} venue={venue} />}
