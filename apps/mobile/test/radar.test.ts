@@ -119,7 +119,7 @@ test('NativeApi closes selected transports: preview key, owning DELETE header an
   const app=JSON.parse(readFileSync(new NodeURL('../app.json',import.meta.url),'utf8')).expo;
   const plugin=app.plugins.find((p:unknown)=>Array.isArray(p)&&p[0]==='expo-location')[1];
   for(const key of ['locationAlwaysPermission','locationAlwaysAndWhenInUsePermission','motionUsagePermission','locationFullAccuracyPermission','isIosBackgroundLocationEnabled','isAndroidBackgroundLocationEnabled','isAndroidForegroundServiceEnabled','isAndroidMotionActivityEnabled'])assert.equal(plugin[key],false);
-  assert.equal(app.android.versionCode,16);
+  assert.equal(app.android.versionCode,17);
   assert.equal(JSON.parse(readFileSync(new NodeURL('../package.json',import.meta.url),'utf8')).dependencies['expo-location'],'58.0.22');
 });
 
@@ -209,9 +209,11 @@ test('actual contact handler gates row and fresh preview and opens explicit comp
 
 test('compact Radar remains a 48 by 48 glyph with accessible status; only expanded inspection composes profile and contact',async()=>{
   const {controls,players}=await uiFunctions();
-  const compact=controls.slice(controls.indexOf('{compact ?'),controls.indexOf('</Pressable> : <View'));
+  const compact=controls.slice(controls.indexOf('{compact ?'),controls.indexOf('</Pressable> : <Pressable'));
   assert.match(compact,/width:48,height:48/);assert.match(compact,/accessibilityLabel=.*presentation.caption/);
   assert.match(compact,/\{glyph\}/);assert.doesNotMatch(compact,/<Label|maxWidth:110|fontSize:10/);
+  assert.match(controls,/Включить Radar/);
+  assert.match(controls,/Radar включён/);
   const content=players.slice(players.indexOf('  const personContent ='),players.indexOf('  return <ScreenFrame'));
   const expansion=content.indexOf('{expanded && <>');
   assert.ok(expansion>0);assert.match(content.slice(0,expansion),/PlayerAvatar/);
@@ -282,7 +284,9 @@ async function nativeClose(owner: RadarCoordinator) {
   const start=controls.indexOf('  const close ='),end=controls.indexOf('  return <>',start);
   assert.ok(start>=0 && end>start);
   assert.match(controls,/<Modal visible=\{open\} onRequestClose=\{close\}/);
-  assert.match(controls,/<TextButton title="Закрыть" onPress=\{close\}/);
+  assert.match(controls,/accessibilityLabel="Закрыть"/);
+  assert.match(controls,/<DiscoveryIcon name="close"/);
+  assert.doesNotMatch(controls,/<TextButton title="Закрыть"/);
   let open=true,accepted=true;
   const close=runInNewContext(stripTypeScriptTypes(controls.slice(start,end)+'\nclose;'),{
     owner,state:owner.getSnapshot(),setOpen:(value:boolean)=>{open=value;},setAccepted:(value:boolean)=>{accepted=value;},

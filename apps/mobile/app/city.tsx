@@ -5,13 +5,14 @@ import { publicApi } from '../src/public-api.ts';
 import { filterCities } from '../src/entry.ts';
 import { useResource } from '../src/hooks.ts';
 import { usePreferences } from '../src/state.tsx';
+import { CityRow } from '../src/components/city-row.tsx';
 import { BackLink, ErrorState, Header, Label, Loading, Page, TextButton, styles } from '../src/components/ui.tsx';
 export default function ManualCity() {
   const [query, setQuery] = useState('');
   const [all, setAll] = useState(false);
   const task = useCallback((signal: AbortSignal) => publicApi.cities(signal), []);
   const { state, retry } = useResource('cities', task);
-  const { chooseCity, storageError } = usePreferences();
+  const { preferences, chooseCity, storageError } = usePreferences();
   const router = useRouter();
   const matches = filterCities(state.data ?? [], all ? '' : query);
   function back() { if (router.canGoBack()) router.back(); else router.replace('/games'); }
@@ -27,15 +28,14 @@ export default function ManualCity() {
     {storageError && <Label>Настройки не удалось сохранить или прочитать. Этот выбор будет действовать в текущем запуске.</Label>}
     {state.status === 'loading' && <Loading title="Загружаем города…" />}
     {state.status === 'error' && <ErrorState error={state.error} retry={retry} />}
-    {state.status === 'ready' && <View accessibilityLiveRegion="polite" style={{ gap: 8 }}>
+    {state.status === 'ready' && <View accessibilityLiveRegion="polite" style={{ gap: 0 }}>
       {!matches.length && <Label>{query.trim() ? 'Такой город пока недоступен. Выберите другой или откройте все города.' : 'Доступных городов пока нет.'}</Label>}
-      {matches.map(city => <View key={city.id} style={styles.card}>
-        <TextButton title={city.nameRu} onPress={() => {
+      {matches.map(city => <CityRow key={city.id} name={city.nameRu} selected={city.id === preferences.cityId}
+        onPress={() => {
           Keyboard.dismiss();
           chooseCity(city.id);
           if (router.canGoBack()) router.back(); else router.replace('/games');
-        }} />
-      </View>)}
+        }} />)}
     </View>}
   </Page>;
 }

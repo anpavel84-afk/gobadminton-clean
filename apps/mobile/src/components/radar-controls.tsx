@@ -6,6 +6,7 @@ import { useRadar } from '../radar-runtime.tsx';
 import { activationDeadline } from '../radar.ts';
 import type { RadarSnapshot } from '../radar-coordinator.ts';
 import { colors } from '../theme.ts';
+import { DiscoveryIcon } from './discovery-icon.tsx';
 import { Label, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 /** UI clock only: no permission, publication, heartbeat or renewal is dispatched here. */
 export function radarControlPresentation(state: RadarSnapshot, now: number) {
@@ -58,16 +59,21 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
     {compact ? <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}. Открыть управление Radar`}
       accessibilityState={{expanded:open}} onPress={enter} style={{width:48,height:48,alignItems:'center',justifyContent:'center',flexShrink:0}}>
       {glyph}
-    </Pressable> : <View style={{flexDirection:'row',alignItems:'center',gap:10}}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Открыть управление Radar" onPress={enter} style={{minHeight:48,minWidth:48}}>{glyph}</Pressable>
-      <Pressable accessibilityRole="button" onPress={enter} accessibilityLabel={`Radar. ${presentation.caption}`} style={{flex:1,minHeight:48,justifyContent:'center'}}>
-        <Label style={{fontWeight:'600'}}>Radar</Label><Label style={{fontSize:12,lineHeight:18}}>{presentation.caption}</Label>
-      </Pressable>
-      <Switch accessibilityLabel="Radar" value={active} disabled={state.busy || !!state.command} onValueChange={value => { if (value) enter(); else void owner.stop(); }} />
-    </View>}
+    </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}`}
+      accessibilityState={{expanded:open,checked:active}} onPress={enter}
+      style={{alignSelf:'flex-start',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:active ? colors.limeSoft : colors.card}}>
+      <View style={{width:28,height:28,alignItems:'center',justifyContent:'center',transform:[{scale:0.55}]}}>{glyph}</View>
+      <Label style={{fontWeight:'600',fontSize:14,lineHeight:20}}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
+    </Pressable>}
     <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet">
       <ScreenFrame><ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        <TextButton title="Закрыть" onPress={close} /><Label accessibilityRole="header" style={styles.title}>Radar</Label>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={close}
+            style={({ pressed }) => [{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
+            <DiscoveryIcon name="close" />
+          </Pressable>
+        </View>
+        <Label accessibilityRole="header" style={styles.title}>Radar</Label>
         <Label>{auth.me?.displayName && !auth.me.displayName.includes('@') ? auth.me.displayName : 'Ваш профиль'}</Label>
         {state.enabling && <Label accessible accessibilityLiveRegion="polite">Сейчас ищем ближайших игроков…</Label>}
         {state.phase === 'restoring' && <Label>Проверяем статус…</Label>}

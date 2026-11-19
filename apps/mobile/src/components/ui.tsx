@@ -33,7 +33,15 @@ export function BrandLockup({ launch = false, light = false }: { launch?: boolea
     </Text>}
   </View>;
 }
-export function PrimaryButton({ title, onPress, disabled = false }: { title: string; onPress?: () => void; disabled?: boolean }) {
+export function PrimaryButton({ title, onPress, disabled = false, align = 'center' }: {
+  title: string; onPress?: () => void; disabled?: boolean; align?: 'center' | 'left';
+}) {
+  if (align === 'left') {
+    return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+      style={({ pressed }) => [primarySurface(disabled, pressed), { alignItems: 'flex-start' as const }]}>
+      <Text allowFontScaling style={[primaryLabelStyle, { textAlign: 'left' as const }]}>{title}</Text>
+    </Pressable>;
+  }
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => primarySurface(disabled, pressed)}>
     <Text allowFontScaling style={primaryLabelStyle}>{title}</Text>

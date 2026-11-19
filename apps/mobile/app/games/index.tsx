@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gamesContext, gamesRoute, retainedGamesOffset } from '../../src/maps.ts';
 import type { GamesListBookmark } from '../../src/maps.ts';
 import { selectedCity } from '../../src/entry.ts';
@@ -21,6 +22,8 @@ const activities = [{ kind: 'all', label: 'Все' }, { kind: 'regular', label: 
 export default function GuestGames() {
   const { preferences, hydrated, storageError } = usePreferences();
   const router = useRouter(), params = useLocalSearchParams(), context = gamesContext(params);
+  const insets = useSafeAreaInsets();
+  const [mapEntryHeight, setMapEntryHeight] = useState(48);
   const routeKey = JSON.stringify(params);
   const listRef = useRef<FlatList<PublicGame>>(null), listOffset = useRef(0);
   const restoreOffset = useRef<number | null>(null), mapBookmark = useRef<GamesListBookmark | null>(null);
@@ -78,7 +81,7 @@ export default function GuestGames() {
       onContentSizeChange={(_width,height) => {const offset=restoreOffset.current;if (offset !== null && state.data && height >= offset) {listRef.current?.scrollToOffset({offset,animated:false});restoreOffset.current=null;}}}
       data={city ? list.visible : noGames} keyExtractor={game => game.id}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: 96, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: mapEntryHeight + insets.bottom + 16, gap: 16 }}
       ListHeaderComponent={<View style={feed.header}>
         <View style={feed.copy}>
           <Label style={feed.eyebrow}>Игры рядом{city ? ` · ${city.nameRu}` : ''}</Label>
@@ -117,10 +120,13 @@ export default function GuestGames() {
           {level && <Label accessibilityLiveRegion="polite" style={feed.body}>Уровень {skill?.label} · только загруженные игры (ntrp v1)</Label>}
           {state.status === 'loading' && <Loading />}
           {state.status === 'error' && <ErrorState error={state.error} retry={state.data?.nextCursor ? more : retry} />}
-          {state.status === 'ready' && !items.length && <View style={styles.card} accessibilityLiveRegion="polite">
-            <Label style={styles.subtitle}>Игр пока нет</Label>
-            <Label>По выбранным условиям нет предстоящих игр в загруженной части каталога.</Label>
-            <TextButton title="Обновить" onPress={retry} />
+          {state.status === 'ready' && !items.length && <View style={{ gap: 12, alignItems: 'flex-start' }} accessibilityLiveRegion="polite">
+            <Label accessible={false} style={{ fontSize: 28, lineHeight: 32, fontWeight: '700', color: colors.purple }}>↗</Label>
+            <Label accessibilityRole="header" style={styles.subtitle}>{activityKind !== 'all' ? 'По этим условиям игр пока нет' : 'Пока нет игр'}</Label>
+            <Label style={feed.body}>{day ? 'Выберите другую дату или вернитесь ко всем ближайшим играм.' : activityKind !== 'all' ? 'Сбросьте фильтр активности или соберите свою игру.' : 'Соберите своих на площадке — создайте игру.'}</Label>
+            {activityKind !== 'all'
+              ? <TextButton title="Сбросить фильтр" onPress={() => setActivityKind('all')} />
+              : <PrimaryButton title="Создать игру" onPress={() => router.push('/games/create')} />}
           </View>}
           {list.levelEmpty && <View style={styles.card} accessibilityLiveRegion="polite">
             <Label style={styles.subtitle}>Среди загруженных игр нет подходящих</Label>
@@ -134,7 +140,8 @@ export default function GuestGames() {
       ListFooterComponent={city && list.canLoadMore && state.status !== 'error'
         ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : undefined} />
     {city && <Pressable accessibilityRole="button" accessibilityLabel="Показать площадки на карте" onPress={openMap}
-      style={{position:'absolute',bottom:16,alignSelf:'center',minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
+      onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
+      style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
         flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
       <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>

@@ -63,7 +63,6 @@ test('#587 tabs have no BackLink; sub-screens use exact titles', () => {
     ['../app/games/create/venue/[venueId].tsx', '← Все игры'],
     ['../src/components/create-game.tsx', '← Все игры'],
     ['../src/components/game-management.tsx', '← Мои игры'],
-    ['../src/components/venue-detail.tsx', '← Назад к карте'],
     ['../src/components/contact-editor.tsx', '← К сообщениям'],
   ];
   for (const [rel, title] of cases) {
@@ -71,5 +70,9 @@ test('#587 tabs have no BackLink; sub-screens use exact titles', () => {
     assert.match(source, /<BackLink/, rel);
     assert.match(source, new RegExp(`title="${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`), rel);
   }
+  const venueDetail = read('../src/components/venue-detail.tsx');
+  assert.match(venueDetail, /<BackLink/);
+  assert.match(venueDetail, /← Назад к карте/);
+  assert.match(venueDetail, /← К игре/);
   assert.match(read('../src/components/contact-editor.tsx'), /accessibilityLabel="Назад к сообщениям"/);
 });
