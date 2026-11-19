@@ -209,9 +209,11 @@ test('actual contact handler gates row and fresh preview and opens explicit comp
 
 test('compact Radar remains a 48 by 48 glyph with accessible status; only expanded inspection composes profile and contact',async()=>{
   const {controls,players}=await uiFunctions();
-  const compact=controls.slice(controls.indexOf('{compact ?'),controls.indexOf('</Pressable> : <View'));
+  const compact=controls.slice(controls.indexOf('{compact ?'),controls.indexOf('</Pressable> : <Pressable'));
   assert.match(compact,/width:48,height:48/);assert.match(compact,/accessibilityLabel=.*presentation.caption/);
   assert.match(compact,/\{glyph\}/);assert.doesNotMatch(compact,/<Label|maxWidth:110|fontSize:10/);
+  assert.match(controls,/Включить Radar/);
+  assert.match(controls,/Radar включён/);
   const content=players.slice(players.indexOf('  const personContent ='),players.indexOf('  return <ScreenFrame'));
   const expansion=content.indexOf('{expanded && <>');
   assert.ok(expansion>0);assert.match(content.slice(0,expansion),/PlayerAvatar/);

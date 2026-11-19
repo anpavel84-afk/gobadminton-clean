@@ -308,11 +308,17 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
         <Label style={{fontSize:17,lineHeight:23,fontWeight:'700'}}>{game.title}</Label><Label>{levelLabel(game.levelRule)}</Label>
         <Label>Организатор: {game.organizer.displayName}</Label><Label style={{color:colors.limeDeep}}>Свободно мест: {game.availablePlaces}</Label>
       </Pressable>)}
-      <TextButton title="Обновить расписание" onPress={onRetrySchedule} />
     </> : <VenueContent venue={venue} mapSheet selected={media} onSelectMedia={setMedia} onControlTouch={noteControlOrigin} onControlTouchEnd={clearControlOrigin} schedule={<View style={{gap:8}}>
-      <Label>{games === null ? 'Расписание временно недоступно' : games.length ? `${games.length} доступных игр по выбранным условиям` : 'Нет доступных игр по выбранным условиям'}</Label>
-      {games !== null && games.length > 0 && <PrimaryButton title="Показать игры на этой площадке" onPress={() => changeView('schedule')} />}
-      <TextButton title={games === null ? 'Повторить загрузку расписания' : 'Обновить расписание'} onPress={onRetrySchedule} />
+      {games === null ? <>
+        <Label>Расписание временно недоступно</Label>
+        <TextButton title="Повторить загрузку расписания" onPress={onRetrySchedule} />
+      </> : games.length > 0 ? <>
+        <Label>{`${games.length} доступных игр по выбранным условиям`}</Label>
+        <PrimaryButton title="Показать игры на этой площадке" onPress={() => changeView('schedule')} />
+      </> : <View style={{gap:8}} accessibilityLabel="Ближайшие игры">
+        <Label style={{fontWeight:'700'}}>На этой площадке пока нет игр</Label>
+        <Label>Будьте первым, кто создаст игру и соберет компанию!</Label>
+      </View>}
     </View>} /> : <VenuePreview venue={venue} games={games} selected={media} onSelectMedia={setMedia} suppressTap={consumeSuppress}
       onControlTouch={noteControlOrigin} onControlTouchEnd={clearControlOrigin}
       onOpen={() => { if (consumeSuppress()) return; onExpand(true); }} />)}
@@ -372,7 +378,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
           contentContainerStyle={{paddingHorizontal:16,paddingBottom:16,gap:16}}>{body}</ScrollView>
       )}
       {create && <View style={{padding:16,paddingBottom:spacing.footerBottom,borderTopWidth:1,borderColor:colors.line}}>
-        <PrimaryButton title="Создать игру на этой площадке" onPress={() => router.push(create)} />
+        <PrimaryButton title="Создать игру на этой площадке →" align="left" onPress={() => router.push(create)} />
       </View>}
     </View>
   );

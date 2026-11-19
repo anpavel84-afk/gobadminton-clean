@@ -4,11 +4,40 @@
   "handoffSha256": "9e88883fa8c3d97daa48a81a648de4e9dfe2c5ffb5b7a75620fc9387046f7e5e",
   "assets": {
     "racket-v1.webp": "fa6573736c163e59542c7af37b53270079d1d3cd10ffc00863ff8fba43d0a670",
+    "hand-v1.webp": "cf4ac4c5183d8c2c188555564f5a53f391015f7d656645ffdba75bcc14c4b260",
+    "pair-v1.webp": "fc170857650259b212bc37144ac2c5a90a68069613d17fad94d0fb5956341d7a",
+    "shuttles-v1.webp": "8d0882fd5f645e9122b48d8f3b9bb8a1a78372ce7febf25f6cec5a3987647da1",
+    "badminton-courts.jpg": "1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd",
     "go-badminton.svg": "b168aeb3545164eb173b694b2caa5d0eff98d864d4482233af9bec1bb65c8827",
     "onest.ttf": "3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589",
     "icon.png": "76469bebd216158794f6c39643b143ba4f6d16886cd326297146bb5d46d835cd"
   },
   "assetSources": {
+    "racket-v1.webp": {
+      "source": "apps/web/public/discovery/venue-illustrations/racket-v1.webp",
+      "method": "Byte-exact cp from web discovery venue-illustrations.",
+      "sha256": "fa6573736c163e59542c7af37b53270079d1d3cd10ffc00863ff8fba43d0a670"
+    },
+    "hand-v1.webp": {
+      "source": "apps/web/public/discovery/venue-illustrations/hand-v1.webp",
+      "method": "Byte-exact cp from web discovery venue-illustrations.",
+      "sha256": "cf4ac4c5183d8c2c188555564f5a53f391015f7d656645ffdba75bcc14c4b260"
+    },
+    "pair-v1.webp": {
+      "source": "apps/web/public/discovery/venue-illustrations/pair-v1.webp",
+      "method": "Byte-exact cp from web discovery venue-illustrations.",
+      "sha256": "fc170857650259b212bc37144ac2c5a90a68069613d17fad94d0fb5956341d7a"
+    },
+    "shuttles-v1.webp": {
+      "source": "apps/web/public/discovery/venue-illustrations/shuttles-v1.webp",
+      "method": "Byte-exact cp from web discovery venue-illustrations.",
+      "sha256": "8d0882fd5f645e9122b48d8f3b9bb8a1a78372ce7febf25f6cec5a3987647da1"
+    },
+    "badminton-courts.jpg": {
+      "source": "apps/web/public/discovery/badminton-courts.jpg",
+      "method": "Byte-exact cp from web discovery; mirrors web provenance sha256 1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd.",
+      "sha256": "1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd"
+    },
     "icon.png": {
       "source": "apps/web/public/brand/pwa/icon-512.png",
       "method": "Byte-exact copy of the existing approved product asset for the native app icon and technical splash image.",

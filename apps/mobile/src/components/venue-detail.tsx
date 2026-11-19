@@ -22,6 +22,7 @@ import {
 import { VenueSchedule, safeCatalogSource, venueCreatePath } from '../venues.ts';
 import type { GalleryItem, PublicVenue } from '../venues.ts';
 import { GameCard } from './game-card.tsx';
+import { VenueCover } from './venue-cover.tsx';
 import { BackLink, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 import { colors } from '../theme.ts';
 
@@ -181,7 +182,7 @@ export function VenueGallery({ venue, mapSheet = false, selected, onSelect, onCo
           <Label>→</Label>
         </Pressable>
       </View>}
-    </> : <Label>Нет доступных изображений площадки.</Label>}
+    </> : <VenueCover venueId={venue.id} name={venue.name} photoUrl={venue.mainImage} size={mapSheet ? 'sheet' : 'page'} />}
     {venue.catalogSource && <><Label>Источник: badminton4u.ru</Label>{venue.catalogSource.clubs.map(club => <PublicLink key={club.id} label={club.name} url={club.url} onControlTouch={onControlTouch} onControlTouchEnd={onControlTouchEnd} />)}</>}
   </View>;
 }
@@ -213,10 +214,16 @@ function Schedule({ venue }: { venue: PublicVenue }) {
     {state.status === 'ready' && items.length === 0 && <Label>Нет предстоящих доступных игр</Label>}
     {items.map(game => <GameCard key={game.id} game={game} onOpen={() => router.push({ pathname: '/games/[id]', params: { id: game.id } })} />)}
     {state.data?.nextCursor && state.status !== 'loading' && <TextButton title="Загрузить ещё" onPress={() => void resource.more()} />}
-    <TextButton title="Обновить расписание" onPress={() => void resource.refresh()} />
   </View>;
 }
-const amenity = (value: boolean | null) => value === null ? 'Нет данных' : value ? 'Есть' : 'Нет';
+function VenueFacts({ venue }: { venue: PublicVenue }) {
+  return <>
+    {venue.courtCount !== null && <Label>Количество кортов: {venue.courtCount}</Label>}
+    {venue.parking !== null && <Label>Парковка: {venue.parking ? 'Есть' : 'Нет'}</Label>}
+    {venue.showers !== null && <Label>Душевые: {venue.showers ? 'Есть' : 'Нет'}</Label>}
+    {venue.updatedAt && <Label>Содержимое обновлено: {new Date(venue.updatedAt).toLocaleDateString('ru-RU', { timeZone: 'UTC' })}</Label>}
+  </>;
+}
 export function VenueContent({ venue, schedule, mapSheet = false, selected = null, onSelectMedia, onControlTouch, onControlTouchEnd }: {
   venue: PublicVenue; schedule?: ReactNode; mapSheet?: boolean;
   selected?: GallerySelection | null; onSelectMedia?: (next: GallerySelection | null) => void;
@@ -229,11 +236,7 @@ export function VenueContent({ venue, schedule, mapSheet = false, selected = nul
     <VenueGallery venue={venue} mapSheet selected={media} onSelect={setMedia} onControlTouch={onControlTouch} onControlTouchEnd={onControlTouchEnd} />
     {venue.description && <Label>{venue.description}</Label>}
     <Label accessibilityRole="header" style={{fontSize:24,lineHeight:32,fontWeight:'800'}}>{venue.name}</Label><Label>{venue.address}</Label>
-    <View style={{gap:8}}>
-      <Label>Количество кортов: {venue.courtCount ?? 'Нет данных'}</Label>
-      <Label>Парковка: {amenity(venue.parking)}</Label><Label>Душевые: {amenity(venue.showers)}</Label>
-      {venue.updatedAt && <Label>Содержимое обновлено: {new Date(venue.updatedAt).toLocaleDateString('ru-RU', {timeZone:'UTC'})}</Label>}
-    </View>
+    <View style={{gap:8}}><VenueFacts venue={venue} /></View>
     <View style={{gap:8}}><Label accessibilityRole="header" style={styles.subtitle}>Контакты площадки</Label>
       {venue.contacts.length ? venue.contacts.map(link => <PublicLink key={link.url} {...link} onControlTouch={onControlTouch} onControlTouchEnd={onControlTouchEnd} />) : <Label>Контакты пока не добавлены</Label>}
     </View>
@@ -245,9 +248,7 @@ export function VenueContent({ venue, schedule, mapSheet = false, selected = nul
     <VenueGallery venue={venue} selected={media} onSelect={setMedia} />
     <View style={styles.card}><Label accessibilityRole="header" style={styles.subtitle}>О площадке</Label>
       {venue.description && <Label>{venue.description}</Label>}
-      <Label>Количество кортов: {venue.courtCount ?? 'Нет данных'}</Label>
-      <Label>Парковка: {amenity(venue.parking)}</Label><Label>Душевые: {amenity(venue.showers)}</Label>
-      {venue.updatedAt && <Label>Содержимое обновлено: {new Date(venue.updatedAt).toLocaleDateString('ru-RU', { timeZone: 'UTC' })}</Label>}
+      <VenueFacts venue={venue} />
     </View>
     <View style={styles.card}><Label accessibilityRole="header" style={styles.subtitle}>Контакты площадки</Label>
       {venue.contacts.length ? venue.contacts.map(link => <PublicLink key={link.url} {...link} />) : <Label>Контакты пока не добавлены</Label>}
@@ -276,11 +277,11 @@ export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMe
   const item = resolveGallerySelection(venue.gallery, venue.mainImage, selected);
   const identity = galleryMediaIdentity(item);
   const [failedIdentity, setFailedIdentity] = useState<string | null>(null);
-  const [retryToken, setRetryToken] = useState(0);
   const [badgeHeight, setBadgeHeight] = useState(0);
   const activeIdentity = useRef(identity);
   activeIdentity.current = identity;
   const failed = failedIdentity !== null && failedIdentity === identity;
+  const showPhoto = !!(item && !failed);
   const source = safeCatalogSource(venue.catalogSource), club = source?.clubs[0];
   const axis = useRef<GalleryAxis>('pending');
   const generation = useRef(0);
@@ -313,9 +314,9 @@ export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMe
     },
   })), []);
   const open = () => { if (suppressTap?.()) return; onOpen(); };
-  const thumbLabel = item
-    ? `${item.credit.kind === 'illustration' ? 'Иллюстрация' : item.credit.kind === 'logo' ? 'Логотип площадки' : 'Фото площадки'}${venue.gallery.length > 1 ? `, ${index + 1} из ${venue.gallery.length}` : ''}`
-    : 'Нет изображения';
+  const thumbLabel = showPhoto
+    ? `${item!.credit.kind === 'illustration' ? 'Иллюстрация' : item!.credit.kind === 'logo' ? 'Логотип площадки' : 'Фото площадки'}${venue.gallery.length > 1 ? `, ${index + 1} из ${venue.gallery.length}` : ''}`
+    : 'Иллюстрация';
   return <View style={{gap:8}}>
     <Pressable accessibilityRole="button" accessibilityLabel={`Открыть площадку ${venue.name}`} onPress={open}
       style={{flexDirection:'row',alignItems:'center',gap:12,minHeight:84}}>
@@ -329,22 +330,14 @@ export function VenuePreview({ venue, games, onOpen, selected = null, onSelectMe
           if (event.nativeEvent.actionName === 'increment') page(1);
           if (event.nativeEvent.actionName === 'decrement') page(-1);
         }}>
-        {item && !failed ? <Image key={`${identity}:${retryToken}`} source={{uri:`${API_ORIGIN}${item.url}`}} resizeMode="cover"
+        {showPhoto ? <Image key={identity} source={{uri:`${API_ORIGIN}${item!.url}`}} resizeMode="cover"
           accessibilityLabel={thumbLabel}
           onError={() => {
             if (!mediaFailureApplies(activeIdentity.current, identity)) return;
             setFailedIdentity(identity);
           }} style={{width:64,height:64}} />
-          : <Label style={{fontSize:11}}>{failed ? 'Фото не загрузилось' : 'Нет изображения'}</Label>}
-        {failed && item && <Pressable accessibilityRole="button" accessibilityLabel="Повторить загрузку изображения"
-          onPressIn={onControlTouch} onPressOut={onControlTouchEnd}
-          onPress={() => {
-            onControlTouchEnd?.();
-            if (!mediaFailureApplies(activeIdentity.current, identity)) return;
-            setFailedIdentity(null);
-            setRetryToken(token => token + 1);
-          }} style={{position:'absolute',inset:0,alignItems:'center',justifyContent:'center'}} />}
-        {item?.credit.kind === 'illustration' && !failed && <Label onLayout={event => setBadgeHeight(event.nativeEvent.layout.height)}
+          : <VenueCover venueId={venue.id} name={venue.name} photoUrl={null} size="thumb" />}
+        {item?.credit.kind === 'illustration' && showPhoto && <Label onLayout={event => setBadgeHeight(event.nativeEvent.layout.height)}
           style={{position:'absolute',bottom:0,left:0,right:0,fontSize:10,lineHeight:14,backgroundColor:colors.card,textAlign:'center'}}>Иллюстрация</Label>}
       </View>
       <View style={{flex:1,minWidth:0,gap:0}}>
@@ -372,7 +365,7 @@ export function VenueDetail({ id }: { id: string }) {
         {venue && <VenueContent key={`${id}:${JSON.stringify(venue)}`} venue={venue} />}
       </ScrollView>
       {venue && <View style={{ padding: 16, paddingBottom: insets.bottom + 16, backgroundColor: colors.card, borderTopWidth: 1, borderColor: colors.line }}>
-        <PrimaryButton title="Создать игру на этой площадке" onPress={() => router.push(venueCreatePath(venue.id)!)} />
+        <PrimaryButton title="Создать игру на этой площадке →" align="left" onPress={() => router.push(venueCreatePath(venue.id)!)} />
       </View>}
     </View>
   </ScreenFrame>;

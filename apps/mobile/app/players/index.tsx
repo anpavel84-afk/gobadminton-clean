@@ -97,11 +97,11 @@ export default function Players() {
     return () => clearInterval(timer);
   },[focused]);
   const { preferences, hydrated } = usePreferences();
-  const [citySelection, setCitySelection] = useState<string | null | undefined>(routeContext?.filters.cityId);
+  const [citySelection, setCitySelection] = useState<string | null>(routeContext?.filters.cityId ?? null);
   const [cityPicker, setCityPicker] = useState(false), [citySearch, setCitySearch] = useState('');
   const [areaKey, setAreaKey] = useState(routeContext?.filters.areaKey ?? '');
   const [name, setName] = useState(routeContext?.filters.name ?? ''), [looking, setLooking] = useState(routeContext?.filters.looking ?? false), [trainer, setTrainer] = useState(routeContext?.filters.trainer ?? false);
-  const cityId = citySelection === undefined ? preferences.cityId : citySelection;
+  const cityId = citySelection;
   const filters = useMemo(() => ({ cityId, name: name.trim(), areaKey: areaKey.trim(), looking, trainer }), [cityId, name, areaKey, looking, trainer]);
   const key = playerFilterKey(filters), validName = !filters.name || Array.from(filters.name).length >= 2;
   const snapshot = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
@@ -352,16 +352,16 @@ export default function Players() {
         {list?.moreError != null && <><Label>Не удалось загрузить следующую страницу. Загруженные игроки сохранены.</Label><ErrorState error={list.moreError} retry={more} /></>}
         {list?.data?.nextCursor && !list.moreError && <PrimaryButton title={list.loadingMore ? 'Загружаем…' : 'Показать ещё'} disabled={list.loadingMore} onPress={more} />}
       </View>} />
-    <View onLayout={event => setFloatingEntryHeight(event.nativeEvent.layout.height)}
-      style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',width:Math.min(280,window.width-insets.left-insets.right-32),alignItems:'stretch',gap:8}}>
+    <View pointerEvents="box-none" onLayout={event => setFloatingEntryHeight(event.nativeEvent.layout.height)}
+      style={{position:'absolute',bottom:insets.bottom+16,left:0,right:0,alignItems:'center',paddingHorizontal:16,gap:8}}>
     <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
       onPress={() => { browse.stage(filters,list?.data ?? null); router.push('/players/browse'); }}
-      style={{minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
+      style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
       <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
     </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="Показать игроков и площадки на карте"
       onPress={() => {setSelectedPerson(null);setExpanded(false);router.setParams({view:'map',cityId:cityId ?? '',name:filters.name,areaKey:filters.areaKey ?? '',looking:looking?'1':'0',trainer:trainer?'1':'0'});}}
-      style={{minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
+      style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
         flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
       <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
