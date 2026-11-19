@@ -10,9 +10,10 @@ import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
 import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
 import type { ContactPacket } from './contact.ts';
-import { ProfileError, parseOwnAvatar, parseOwnProfile, profileWireBody } from './profile.ts';
-import type { AvatarReceipt, ProfilePacket } from './profile.ts';
+import { ProfileError, parseCoverReceipt, parseOwnAvatar, parseOwnProfile, profileWireBody } from './profile.ts';
+import type { AvatarReceipt, CoverReceipt, ProfilePacket } from './profile.ts';
 import type { AvatarPacket } from './profile-avatar.ts';
+import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
 import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
@@ -273,6 +274,63 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         clearTimeout(timeout);
       }
     },
+    /** Closed RAW BINARY cover port — PUT binary / DELETE JSON CAS command; never multipart/base64 image encoding. */
+    mutateOwnCover: async (access: string, packet: CoverPacket): Promise<CoverReceipt> => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const replace = packet.action === 'replace';
+        if (replace && (!packet.derivative || !packet.derivative.bytes.byteLength)) throw new ProfileError('invalid');
+        if (!replace && packet.derivative) throw new ProfileError('invalid');
+        let body: Uint8Array<ArrayBuffer> | string | undefined;
+        if (replace) {
+          const src = packet.derivative!.bytes;
+          const bytes = new Uint8Array(src.byteLength);
+          bytes.set(src);
+          body = bytes;
+        } else {
+          // Cover DELETE remains a JSON CAS command (coverDeleteVersion); image uploads stay raw binary.
+          body = JSON.stringify({ expectedVersion: packet.profileVersion });
+        }
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/cover`, {
+          method: replace ? 'PUT' : 'DELETE',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${access}`,
+            'Idempotency-Key': packet.key,
+            'X-Profile-Version': String(packet.profileVersion),
+            ...(replace
+              ? { 'Content-Type': packet.derivative!.mime }
+              : { 'Content-Type': 'application/json' }),
+          },
+          ...(body !== undefined ? { body } : {}),
+        });
+        if (!response.ok) {
+          let code = 'UNKNOWN';
+          try {
+            const problem = await response.json();
+            if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code;
+          } catch { /* No raw text retained. */ }
+          throw new ProfileError(
+            response.status >= 500 ? 'network' : response.status === 401 ? 'authority'
+              : code !== 'COMMAND_IN_PROGRESS' && [400, 403, 404, 409, 413, 415, 422, 429].includes(response.status) ? 'business' : 'network',
+            response.status,
+            code,
+          );
+        }
+        return parseCoverReceipt(await response.json());
+      } catch (error) {
+        if (error instanceof ProfileError) throw error;
+        throw new ProfileError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    ownCover: async (access: string): Promise<CoverReceipt> =>
+      parseCoverReceipt(await request('/me/cover', 'GET', undefined, access, undefined, false, false, false, true)),
+
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),

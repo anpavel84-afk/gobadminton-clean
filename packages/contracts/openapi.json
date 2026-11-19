@@ -15516,15 +15516,16 @@
         "tags": [
           "Profiles"
         ],
-        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
+        "summary": "Own cover mutation, cookie+Origin+CSRF or NativeBearer; shares social-profile version. Removal restores default header.",
         "parameters": [
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "X-Profile-Version",
@@ -15541,11 +15542,11 @@
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -15611,10 +15612,13 @@
             }
           }
         },
-        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block.",
+        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key, X-Profile-Version and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ]
       },
@@ -15623,15 +15627,16 @@
         "tags": [
           "Profiles"
         ],
-        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
+        "summary": "Own cover mutation, cookie+Origin+CSRF or NativeBearer; shares social-profile version. Removal restores default header.",
         "parameters": [
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "X-Profile-Version",
@@ -15649,11 +15654,11 @@
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -15692,10 +15697,13 @@
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
-        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block. Required JSON command expectedVersion must equal X-Profile-Version; missing, extra, malformed or disagreeing fields return 400 before mutation.",
+        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block. Required JSON command expectedVersion must equal X-Profile-Version; missing, extra, malformed or disagreeing fields return 400 before mutation. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key, X-Profile-Version and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "requestBody": {
@@ -15730,13 +15738,17 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
-        ]
+        ],
+        "description": "Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/media/covers/{key}": {
       "get": {
-        "summary": "Read current authorized cover derivative; no-store, Vary Cookie. Hidden profiles are owner-only; blocked viewers receive 404.",
+        "summary": "Read current authorized cover derivative; no-store, Vary Authorization, Cookie, Accept. Hidden profiles are owner-only; blocked viewers receive 404.",
         "parameters": [
           {
             "name": "key",
@@ -15764,7 +15776,16 @@
             "description": "Unavailable or unauthorized"
           }
         },
-        "operationId": "getProfileCoverMedia"
+        "operationId": "getProfileCoverMedia",
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": "Cookie session or NativeBearer may authorize owner reads of a hidden cover. Invalid explicit bearer is 401 and never falls back to guest. Public directory-visible covers remain readable without credentials."
       }
     },
     "/admin/venues/{id}/cover": {

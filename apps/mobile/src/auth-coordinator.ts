@@ -7,6 +7,7 @@ import { SafetyError } from './safety.ts';
 import { ContactCoordinator } from './contact-coordinator.ts';
 import { ProfileCoordinator, ProfileError } from './profile.ts';
 import { ProfileAvatarCoordinator } from './profile-avatar.ts';
+import { ProfileCoverCoordinator } from './profile-cover.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
@@ -49,6 +50,7 @@ export class AuthCoordinator {
   readonly gameManagement: GameManagementCoordinator;
   readonly profile: ProfileCoordinator;
   readonly avatar: ProfileAvatarCoordinator;
+  readonly cover: ProfileCoverCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
   readonly postgame: PostgameCoordinator;
@@ -77,16 +79,26 @@ export class AuthCoordinator {
       mutate: (packet, authority) => this.participationRead(access => deps.api.mutateOwnAvatar(access, packet), authority),
       reconcile: authority => this.participationRead(access => deps.api.ownProfile(access), authority),
     }, deps.random, {
-      isTextBusy: () => !!this.profile.getSnapshot().command,
+      isTextBusy: () => !!this.profile.getSnapshot().command || this.cover.blocksEdits(),
       currentProfile: () => this.profile.getSnapshot().profile,
       applyReceipt: receipt => this.profile.applyAvatarReceipt(receipt),
       rebaseProfile: fresh => this.profile.rebaseFromAuthoritative(fresh),
+    });
+    this.cover = new ProfileCoverCoordinator({
+      mutate: (packet, authority) => this.participationRead(access => deps.api.mutateOwnCover(access, packet), authority),
+      reconcile: authority => this.participationRead(access => deps.api.ownCover(access), authority),
+    }, deps.random, {
+      isTextBusy: () => !!this.profile.getSnapshot().command || this.avatar.blocksEdits(),
+      currentProfile: () => this.profile.getSnapshot().profile,
+      applyReceipt: receipt => this.profile.applyCoverReceipt(receipt),
+      accessToken: () => this.access?.token ?? null,
     });
     this.profile = new ProfileCoordinator({
       read: () => this.participationRead(access => deps.api.ownProfile(access)),
       cities: () => publicApi.cities(),
       send: (packet, authority) => this.participationRead(access => deps.api.saveOwnProfile(access, packet), authority),
-    }, deps.random, () => this.avatar.blocksEdits());
+    }, deps.random, () => this.avatar.blocksEdits() || this.cover.blocksEdits());
+    // avatar ↔ cover busy fences are closed over `this` and resolve after both fields exist.
     this.messages = new MessagesCoordinator({
       inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
       counts: () => this.participationRead(access => deps.api.inboxCounts(access)),
@@ -205,7 +217,7 @@ export class AuthCoordinator {
     const actor = this.participation.getSnapshot().actor;
     if (this.snapshot.status !== 'hydrating') {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
-      this.avatar.setActor(actor); this.contact.setActor(actor);
+      this.avatar.setActor(actor); this.cover.setActor(actor); this.contact.setActor(actor);
     }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
@@ -444,6 +456,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.gameManagement.forgetCreation();
     if (forgetCreation) this.profile.forget();
     if (forgetCreation) this.avatar.forget();
+    if (forgetCreation) this.cover.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
     if (forgetCreation) this.postgame.forget();

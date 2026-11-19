@@ -25,12 +25,21 @@ function hasUnsafeMediaCharacters(value: string, raw: boolean): boolean {
   return false;
 }
 
+/** Relative own/public cover path only — never absolute, query, or foreign hosts. */
+export function ownCoverPath(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 2048 || value.includes('..')) return null;
+  return /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/.test(value) ? value : null;
+}
+
 /** Same uploaded media authorities as accepted WEB ProfileComposition / CoverEditor. */
 export function playerMediaUrl(value: unknown, kind: 'avatar' | 'cover'): string | null {
   if (typeof value !== 'string' || value.length > 2048) return null;
-  const uploaded = kind === 'avatar' ? /^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/ : /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/;
+  if (kind === 'cover') {
+    const path = ownCoverPath(value);
+    return path ? `${API_ORIGIN}${path}` : null;
+  }
+  const uploaded = /^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/;
   if (uploaded.test(value)) return `${API_ORIGIN}${value}`;
-  if (kind !== 'avatar') return null;
   // Reject normalization tricks, empty userinfo, escaped authorities and control characters before URL parsing.
   if (!/^https:\/\/[a-z0-9.-]+(?::443)?(?:[/?#]|$)/i.test(value) || hasUnsafeMediaCharacters(value, true)) return null;
   try {
