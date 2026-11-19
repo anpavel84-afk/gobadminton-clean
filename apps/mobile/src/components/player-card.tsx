@@ -19,7 +19,7 @@ export function PlayerAvatar({ player, large = false }: { player: PublicPlayer; 
       : <Label style={{ fontSize: large ? 32 : 16, lineHeight: large ? 42 : 22 }}>{playerInitials(player.displayName)}</Label>}
   </View>;
 }
-function PlayerBadges({ player }: { player: PublicPlayer }) {
+export function PlayerBadges({ player }: { player: PublicPlayer }) {
   return <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
     {player.lookingForGame && <Label style={{ backgroundColor: colors.lime, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>Ищу игру</Label>}
     {player.trainer && <Label style={{ backgroundColor: colors.lavender, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>Тренер</Label>}
@@ -47,15 +47,18 @@ export function PlayerCard({ player, city, onOpen }: { player: PublicPlayer; cit
 
 // Exact accepted WEB canonical/ce252.svg; no invented fallback cover artwork.
 const defaultCoverXml = "<svg preserveAspectRatio=\"none\" overflow=\"visible\" style=\"display: block;\" width=\"200\" height=\"200\" viewBox=\"0 0 200 200\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#208;&#164;&#208;&#184;&#208;&#179;&#209;&#131;&#209;&#128;&#208;&#176; 3\">\n<circle id=\"Ellipse 63\" cx=\"25\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 64\" cx=\"75\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 65\" cx=\"125\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 66\" cx=\"175\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 67\" cx=\"25\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 68\" cx=\"75\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 69\" cx=\"125\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 70\" cx=\"175\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 71\" cx=\"25\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 72\" cx=\"75\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 73\" cx=\"125\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 74\" cx=\"175\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 75\" cx=\"25\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 76\" cx=\"75\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 77\" cx=\"125\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 78\" cx=\"175\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n</g>\n</svg>\n";
-export function PlayerProfile({ player, city }: { player: PublicPlayer; city?: string }) {
+export function PlayerCover({ uploadedUrl }: { uploadedUrl: string | null }) {
   const [failed, setFailed] = useState<string | null>(null);
-  const uri = playerMediaUrl(player.cover?.uploadedUrl, 'cover');
+  const uri = playerMediaUrl(uploadedUrl, 'cover');
+  return <View style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden' }}>
+    {uri && uri !== failed ? <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" onError={() => setFailed(uri)} />
+      : <SvgXml xml={defaultCoverXml} width="100%" height="100%" accessible={false} />}
+  </View>;
+}
+export function PlayerProfile({ player, city }: { player: PublicPlayer; city?: string }) {
   return <>
     <View style={{ borderRadius: 18, overflow: 'hidden', backgroundColor: colors.paper }}>
-      <View style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden' }}>
-        {uri && uri !== failed ? <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" onError={() => setFailed(uri)} />
-          : <SvgXml xml={defaultCoverXml} width="100%" height="100%" accessible={false} />}
-      </View>
+      <PlayerCover uploadedUrl={player.cover?.uploadedUrl ?? null} />
       <View style={{ padding: 16, gap: 12 }}>
         <PlayerAvatar key={`${player.publicPlayerId}:${player.avatar?.uploadedUrl}:${player.avatar?.providerUrl}`} player={player} large />
         <PlayerBadges player={player} />
