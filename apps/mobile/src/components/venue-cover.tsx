@@ -14,11 +14,18 @@ import { Label } from './ui.tsx';
 
 // Metro needs literal requires to bundle native image assets.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const racketIllustration: ImageSourcePropType = require('../../assets/racket-v1.webp');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const handIllustration: ImageSourcePropType = require('../../assets/hand-v1.webp');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shuttlesIllustration: ImageSourcePropType = require('../../assets/shuttles-v1.webp');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pairIllustration: ImageSourcePropType = require('../../assets/pair-v1.webp');
 const illustrationSources: Record<VenueIllustrationKey, ImageSourcePropType> = {
-  'racket-v1': require('../../assets/racket-v1.webp'),
-  'hand-v1': require('../../assets/hand-v1.webp'),
-  'shuttles-v1': require('../../assets/shuttles-v1.webp'),
-  'pair-v1': require('../../assets/pair-v1.webp'),
+  'racket-v1': racketIllustration,
+  'hand-v1': handIllustration,
+  'shuttles-v1': shuttlesIllustration,
+  'pair-v1': pairIllustration,
 };
 
 export function venueIllustrationSource(venueId: string): ImageSourcePropType {
