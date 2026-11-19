@@ -26,6 +26,20 @@ export function selectedCity(cities: City[], id: string | null): City | null {
   return cities.find(city => city.id === id) ?? null;
 }
 
+/** Cold-launch city field: loading placeholder until catalogue is ready (#624). */
+export function cityFieldLabel(opts: {
+  hydrated: boolean;
+  status: string;
+  city: { nameRu: string } | null | undefined;
+  savedCityId: string | null | undefined;
+  emptyLabel: string;
+}): string {
+  if (opts.city?.nameRu) return opts.city.nameRu;
+  if (!opts.hydrated || opts.status === 'loading' || opts.status === 'idle') return 'Загружаем…';
+  if (opts.savedCityId) return 'Выбор недоступен';
+  return opts.emptyLabel;
+}
+
 /** Only the icon entry resolves onboarding. Deep routes and callback retain their own owners. */
 export function hydratedEntryRoute(preferences: Preferences, preferencesHydrated: boolean,
   auth: { status: string; returnPath: string | null }, pathname = '/'): string | null {

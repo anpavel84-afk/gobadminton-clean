@@ -9,6 +9,8 @@ import { commentText } from '../venue-community.ts';
 import { API_ORIGIN } from '../public-api.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryChip, DiscoverySheet, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
+import { VenueReviewsSection } from './venue-reviews.tsx';
+import { VenueCommunityPhotosSection, commentPhotosFromThreads } from './venue-photos.tsx';
 type Trigger = ComponentRef<typeof Pressable>;
 const reasons = [ ['harassment','Оскорбления / давление'], ['spam','Спам'], ['fake_profile','Поддельный профиль'], ['inappropriate','Неприемлемый контент'], ['other','Другое'] ] as const;
 const orderOptions = [ ['asc','Сначала старые'], ['desc','Сначала новые'] ] as const;
@@ -154,6 +156,8 @@ function CommunityPanel({name}:{name:string}) {
         remove={(c,source) => {origin.current=source;confirm({kind:'delete',comment:c},'Удалить комментарий?','Текст комментария будет скрыт. Ответы в ветке сохранятся.');}} commit={commit} />)}
       {s.roots.pages.at(-1)?.page.nextCursor && <ActionButton title="Ещё комментарии" disabled={s.roots.phase === 'loading'} onPress={() => void owner.loadThread(null,true)} />}
     </View>
+    <VenueReviewsSection venueId={s.venueId!} />
+    <VenueCommunityPhotosSection photos={commentPhotosFromThreads(s.roots, s.replies)} />
     <Outcomes owner={owner} match={o => o.packet.action.kind === 'report'} />
     {s.operations.filter(o => o.status === 'refused' && o.packet.action.kind === 'report').map(o => <ActionButton key={o.packet.key} title="Изменить жалобу" disabled={locked} onPress={() => {
       const action = o.packet.action;

@@ -8,6 +8,7 @@ import { futureDiscoveryBounds } from './presentation.ts';
 import { futureItems } from './upcoming.ts';
 import { isVenueId, parseVenue, parseMapVenue, venueScheduleQuery } from './venues.ts';
 import type { PublicVenue } from './venues.ts';
+import { parseVenueReviewsSummary } from './venue-reviews.ts';
 
 // Type-only subpath: contracts' root index uses node:fs and must never enter Metro.
 export type PublicGame = Pick<Game, 'id' | 'title' | 'status' | 'visibility' | 'venue' |
@@ -182,6 +183,17 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
     async game(id: string, signal?: AbortSignal) {
       if (!id.trim()) throw new PublicApiError('unavailable');
       return game(await get(`/games/${encodeURIComponent(id)}`, signal));
+    },
+    async experienceReviews(venueId: string, cursor?: string, limit = 5, signal?: AbortSignal) {
+      if (!isVenueId(venueId)) throw new PublicApiError('invalid');
+      if (cursor !== undefined && (!cursor || cursor.length > 4096)) throw new PublicApiError('invalid');
+      if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new PublicApiError('invalid');
+      const qs = new URLSearchParams({ limit: String(limit) });
+      if (cursor) qs.set('cursor', cursor);
+      return parseVenueReviewsSummary(
+        await get(`/venues/${venueId}/experience-reviews?${qs}`, signal),
+        venueId,
+      );
     },
   };
 }

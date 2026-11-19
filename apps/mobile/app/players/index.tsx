@@ -22,7 +22,7 @@ import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
 import type { PlayersCoordinator, PlayersSnapshot } from '../../src/players.ts';
 import { playerFilterKey, resetPlayerFilters } from '../../src/players.ts';
-import { filterCities } from '../../src/entry.ts';
+import { cityFieldLabel, filterCities } from '../../src/entry.ts';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
 import { PlayerAvatar, PlayerCard, PlayerProfile } from '../../src/components/player-card.tsx';
 import { colors } from '../../src/theme.ts';
@@ -291,10 +291,10 @@ export default function Players() {
         <Label accessibilityRole="header" style={[styles.title, { fontSize: 32, lineHeight: 35 }]}>Игроки</Label>
         <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 19 }}>Найдите партнёров для хорошей игры.</Label>
         <RadarControls />
-        <Pressable accessibilityRole="button" accessibilityLabel={`Город: ${city?.nameRu ?? (cityId ? 'Выбор недоступен' : 'Все города')}`} accessibilityState={{ expanded: cityPicker }} onPress={() => setCityPicker(v => !v)}
+        <Pressable accessibilityRole="button" accessibilityLabel={`Город: ${cityFieldLabel({ hydrated, status: cities.state.status, city, savedCityId: cityId, emptyLabel: 'Все города' })}`} accessibilityState={{ expanded: cityPicker }} onPress={() => setCityPicker(v => !v)}
           style={{ minHeight: 66, borderWidth: 1, borderColor: colors.line, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ flex: 1, minWidth: 0 }}><Label style={{ fontSize: 11, lineHeight: 16, color: colors.secondary }}>Город</Label>
-            <Label style={{ fontSize: 14, lineHeight: 20, fontWeight: '600' }}>{city?.nameRu ?? (cityId ? 'Выбор недоступен' : 'Все города')}</Label></View><DiscoveryIcon name="chevron" />
+            <Label style={{ fontSize: 14, lineHeight: 20, fontWeight: '600' }}>{cityFieldLabel({ hydrated, status: cities.state.status, city, savedCityId: cityId, emptyLabel: 'Все города' })}</Label></View><DiscoveryIcon name="chevron" />
         </Pressable>
         {cityPicker && <View style={styles.card}>
           <TextInput accessibilityLabel="Поиск города" placeholder="Найти город" value={citySearch} onChangeText={setCitySearch} style={styles.input} />

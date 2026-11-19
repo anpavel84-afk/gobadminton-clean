@@ -52,6 +52,20 @@ export function TextButton({ title, onPress, light = false }: { title: string; o
     <Label style={{ color: light ? colors.onPurple : colors.ink, textAlign: 'center' }}>{title}</Label>
   </Pressable>;
 }
+/** Web ghost / outline pill — left-aligned by default for empty-state CTAs (#624). */
+export function OutlineButton({ title, onPress, disabled = false, align = 'left' }: {
+  title: string; onPress?: () => void; disabled?: boolean; align?: 'center' | 'left';
+}) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => [{
+      alignSelf: align === 'left' ? 'flex-start' as const : 'stretch' as const,
+      minHeight: 48, borderRadius: 12, borderWidth: 1, borderColor: colors.lineDark,
+      backgroundColor: pressed ? colors.paper : colors.card, justifyContent: 'center' as const,
+      paddingHorizontal: 16, paddingVertical: 12, opacity: disabled ? 0.5 : 1,
+    }]}>
+    <Label style={{ fontWeight: '700', textAlign: align }}>{title}</Label>
+  </Pressable>;
+}
 /** One owner for all safe edges. Chrome is outside and clips the scroll viewport. */
 export function ScreenFrame({ children, header, purple = false, keyboard = false }: PropsWithChildren<{
   header?: ReactNode; purple?: boolean; keyboard?: boolean;

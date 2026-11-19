@@ -24,6 +24,7 @@ test('#603 #604 #606 #588 Group B2 source assertions', () => {
   assert.match(myGames, /colors\.lavender/);
   assert.match(myGames, /title="Найти игру"/);
   assert.match(myGames, /router\.push\('\/games'\)/);
+  assert.doesNotMatch(myGames, /TextButton title="Найти игру"/);
   assert.doesNotMatch(myGames, /TextButton title="Создать игру"/);
   assert.doesNotMatch(myGames, /TextButton title="К итогам"/);
   assert.doesNotMatch(myGames, /в загруженных источниках/);
@@ -43,14 +44,18 @@ test('#603 #604 #606 #588 Group B2 source assertions', () => {
   assert.doesNotMatch(messages, /✓ \$\{|✓ '/);
   assert.doesNotMatch(messages, /title=\{`\$\{state\.filter === filter \? '✓ '/);
 
-  // #606 CITY-01
+  // #606 CITY-01 (R4: web-style «Город» card + «Выбрать»; profile keeps radio CityRow)
   assert.match(cityRow, /export function CityRow/);
   assert.match(cityRow, /textAlign:\s*'left'/);
   assert.match(cityRow, /region/);
   assert.match(cityRow, /borderBottomWidth:\s*1/);
+  assert.match(cityRow, /variant/);
   assert.match(city, /CityRow/);
+  assert.match(city, /Где хотите играть\?/);
+  assert.match(city, /styles\.card/);
+  assert.match(city, /Город/);
   assert.match(editor, /CityRow/);
-  assert.doesNotMatch(city, /styles\.card/);
+  assert.doesNotMatch(editor, /variant="select"/);
   assert.doesNotMatch(editor, /title=\{`\$\{c\.id === state\.draft\.cityId \? '✓ '/);
 
   // #588 BACK-02

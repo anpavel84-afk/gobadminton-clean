@@ -9,7 +9,7 @@ import { attendanceLabel, needsAttention } from '../src/postgame.ts';
 import { colors } from '../src/theme.ts';
 import { GameCard } from '../src/components/game-card.tsx';
 import { PostgameSurface, CommandReview, ReminderActions, SourceNotice } from '../src/components/postgame.tsx';
-import { DiscoveryChip, ErrorState, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from '../src/components/ui.tsx';
+import { DiscoveryChip, ErrorState, Header, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from '../src/components/ui.tsx';
 const filters = [
   { value: 'all', label: 'Все' },
   { value: 'manage', label: 'Создаю и управляю' },
@@ -55,7 +55,7 @@ export default function MyGames() {
       <SourceNotice title="Напоминания" status={s.reminders.status} retry={() => void owner.loadReminders()} />
       {s.reminders.status === 'ready' && s.reminders.data?.installed === false && <Label>Напоминания сейчас недоступны.</Label>}
       {complete && empty === 'filter' && <><Label>В выбранном фильтре нет загруженных игр.</Label><TextButton title="Показать все" onPress={() => owner.filter('all')} /></>}
-      {complete && empty === 'loaded' && <><Label>В загруженных источниках пока нет ваших игр.</Label><TextButton title="Найти игру" onPress={() => router.push('/games')} /></>}
+      {complete && empty === 'loaded' && <><Label>В загруженных источниках пока нет ваших игр.</Label><PrimaryButton title="Найти игру" align="left" onPress={() => router.push('/games')} /></>}
       {groups.map(([bucket, title]) => {
         const getGame = (r: HubRow) => p.games[r.gameId]?.game ?? r.managed;
         const items = sortHubRows(rows.filter(r => hubBucket(r, getGame(r)) === bucket), bucket, getGame);
@@ -63,7 +63,7 @@ export default function MyGames() {
         return <View key={bucket} style={{ gap: 16 }}><Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>{title}</Label>
           {bucket === 'past' && <Label>История показывает исход заявки или статус игры. Это не подтверждает присутствие на площадке и не означает оплату.</Label>}
           {!items.length && complete && (bucket === 'upcoming'
-            ? <><Label>В этом фильтре нет предстоящих игр.</Label><TextButton title="Найти игру" onPress={() => router.push('/games')} /></>
+            ? <><Label>В этом фильтре нет предстоящих игр.</Label><OutlineButton title="Найти игру" onPress={() => router.push('/games')} /></>
             : <Label>В загруженных источниках история этого фильтра пуста.</Label>)}
           {items.map(row => <OwnGame key={`${actor}:${session}:${row.gameId}`} row={row} />)}</View>;
       })}
