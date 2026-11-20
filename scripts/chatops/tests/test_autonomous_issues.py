@@ -382,22 +382,22 @@ class Contracts(unittest.TestCase):
         with patch.dict(os.environ, {'CODEX_HOME': '/srv/gobadminton-clean/runner/codex-home'}):
             self.assertEqual(a.clean_env()['CODEX_HOME'], '/home/agentagency-dev/.codex')
         with self.assertRaisesRegex(a.Hold, 'BLOCKED'):
-            a.run(['/bin/sh', '-c', 'echo Unauthorized 401 >&2; exit 1'], '/tmp', a.clean_env())
+            a.run(['/bin/sh', '-c', 'echo Unauthorized 401 >&2; exit 1'], tempfile.gettempdir(), a.clean_env())
 
     def test_successful_stderr_auth_words_are_not_rejection(self):
         self.assertEqual(a.run(
             ['/bin/sh', '-c', 'echo /tmp/unauthorized/path Unauthorized401 >&2; printf ok'],
-            '/tmp', a.clean_env()), 'ok')
+            tempfile.gettempdir(), a.clean_env()), 'ok')
 
     def test_nonzero_unauthorized_path_is_generic_failure(self):
         with self.assertRaisesRegex(a.Hold, '^command failed:'):
             a.run(['/bin/sh', '-c', 'echo /tmp/unauthorized/path >&2; exit 1'],
-                  '/tmp', a.clean_env())
+                  tempfile.gettempdir(), a.clean_env())
 
     def test_actual_unauthorized401_blocks(self):
         with self.assertRaisesRegex(a.Hold, 'BLOCKED: model authentication rejected'):
             a.run(['/bin/sh', '-c', 'echo Unauthorized401 >&2; exit 1'],
-                  '/tmp', a.clean_env())
+                  tempfile.gettempdir(), a.clean_env())
 
     def test_guard_setup_failure_never_executes_child(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,7 +486,9 @@ class Adversarial(unittest.TestCase):
         import tomllib
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); work = root/'work'; work.mkdir()
-            args = a.model_command(a.NATIVE_CODEX, work, root/'job', root/'git', root/'state')
+            # The synthetic project has only its fixture ancestor; do not probe the runner's config.
+            with patch.object(Path, 'parents', property(lambda path: (root,))):
+                args = a.model_command(a.NATIVE_CODEX, work, root/'job', root/'git', root/'state')
             self.assertNotIn('--sandbox', args)
             self.assertIn('--no-daemon', args)
             profile = tomllib.loads(next(x for x in args if x.startswith('permissions.')))['permissions']['gb-task']
@@ -1075,13 +1077,42 @@ class Park(unittest.TestCase):
                 finally:
                     os.close(store.lock)
 
+
+    def test_live_drift_park_requires_exact_head_and_durable_recovery(self):
+        for wrong in (False, True):
+            with self.subTest(wrong=wrong), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp, attempt=2, resume_phase='ci', reason='Actions failed')
+                try:
+                    bridge = self.bridge(tmp, store, [park_comment(active, **({'body': dict(head=DRIFT)} if wrong else {}))])
+                    bridge.remote_dev = lambda: DRIFT
+                    before = copy.deepcopy(store.data)
+                    self.assertEqual(self.do_park(bridge, active), not wrong)
+                    if wrong:
+                        self.assertEqual(store.data, before)
+                        self.assertFalse(store.parked_path.exists())
+                    else:
+                        self.assertIsNone(store.data['active'])
+                        self.assertNotIn(30, store.data['done'])
+                        self.assertEqual(store.parked[0]['snapshot'], before['active'])
+                        # Crash after parked.json but before clearing state: no new API/head lookup.
+                        a.atomic(store.path, before)
+                        os.close(store.lock)
+                        store = a.Store(Path(tmp) / 'state')
+                        bridge = self.bridge(tmp, store, [])
+                        bridge.remote_dev = lambda: (_ for _ in ()).throw(AssertionError('durable proof only'))
+                        self.assertTrue(bridge.park(store.data['active']))
+                        self.assertIsNone(store.data['active'])
+                finally:
+                    os.close(store.lock)
+
     def test_not_blocked_resumable_or_no_comment_do_not_park(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, active = self.setup_store(tmp, attempt=2, resume_phase='ci', reason='Actions failed')
             try:
                 bridge = self.bridge(tmp, store, [park_comment(active)])
+                bridge.remote_dev = lambda: BASE
                 with patch.object(a, 'pages', side_effect=AssertionError('no request expected')):
-                    self.assertFalse(bridge.park(active))  # resumable: RESUME only
+                    self.assertFalse(bridge.park(active))  # same dev: RESUME only
                 self.assertEqual(store.data['active']['phase'], 'blocked')
             finally:
                 os.close(store.lock)
@@ -1200,6 +1231,179 @@ class Park(unittest.TestCase):
                 (directory / 'parked.json').write_text(raw)
                 with self.subTest(raw=raw), self.assertRaises(a.Hold):
                     a.Store(directory)
+
+
+def headless_comment(active, **over):
+    body = dict(schema=a.PARK_MARKER, issue=active['issue'], head=None, base=active['base'],
+                attempt=active['attempt'], reason='zero diff; scope too wide, split by Owner',
+                allow_successors=[])
+    body.update(over.pop('body', {}))
+    stamp = NOW.isoformat()
+    comment = dict(id=777, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/{active["issue"]}',
+                   user={'id': 318610566}, created_at=stamp, updated_at=stamp,
+                   body=a.PARK_MARKER + '\n' + json.dumps(body))
+    return comment | over
+
+
+class ParkHeadless(unittest.TestCase):
+    """PARK_V1.1: only blocked + developing + zero diff + no head + no PR may be parked without a head."""
+
+    def setup_store(self, tmp, attempt=1, **blocked):
+        store = a.Store(Path(tmp) / 'state')
+        active = store.claim([issue()], SINCE)
+        active['task']['max_attempts'] = 3
+        fields = dict(head=None, base=BASE, pr=None, attempt=attempt, qa=None, ci=None,
+                      resume_phase='developing', reason='zero diff')
+        fields.update(blocked)
+        store.phase('blocked', **fields)
+        return store, active
+
+    bridge = Park.bridge
+    do_park = Park.do_park
+
+    def test_validate_headless_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                good = headless_comment(active)
+                self.assertEqual(a.validate_park(active, good, SINCE)['head'], None)
+                old = (SINCE - dt.timedelta(hours=1)).isoformat()
+                bad = [
+                    headless_comment(active, user={'id': 1}),
+                    headless_comment(active, updated_at=(NOW + dt.timedelta(seconds=1)).isoformat()),
+                    headless_comment(active, body=dict(attempt=2)),
+                    headless_comment(active, body=dict(attempt=True)),
+                    headless_comment(active, body=dict(base=DRIFT)),
+                    headless_comment(active, body=dict(base=None)),
+                    headless_comment(active, body=dict(head=HEAD)),
+                    headless_comment(active, body=dict(head='')),
+                    headless_comment(active, body=dict(issue=31)),
+                    headless_comment(active, body=dict(schema='X')),
+                    headless_comment(active, body=dict(reason='')),
+                    headless_comment(active, body=dict(extra=1)),
+                    headless_comment(active, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/31'),
+                    headless_comment(active, created_at=old, updated_at=old),
+                    headless_comment(active) | {'body': 'x' + headless_comment(active)['body']},
+                ]
+                missing = json.loads(headless_comment(active)['body'].partition('\n')[2])
+                del missing['base']
+                bad.append(headless_comment(active) | {'body': a.PARK_MARKER + '\n' + json.dumps(missing)})
+                for comment in bad:
+                    with self.subTest(comment=comment['body'][:100]), self.assertRaises(a.Hold):
+                        a.validate_park(active, comment, SINCE)
+                with self.assertRaises(a.Hold):
+                    a.validate_park(active, good, SINCE, used={777})
+                # A head-style comment (no base key) on a headless task is rejected too.
+                with self.assertRaises(a.Hold):
+                    a.validate_park(active, park_comment(active, body=dict(head=None)), SINCE)
+                # Only the exact headless shape is accepted.
+                for change in (dict(pr=74), dict(reason='QA FAIL'), dict(reason='zero diff '),
+                               dict(resume_phase='qa'), dict(resume_phase='ci'), dict(phase='developing'),
+                               dict(base=None), dict(head=HEAD), dict(attempt='1')):
+                    with self.subTest(change=change), self.assertRaises(a.Hold):
+                        a.validate_park(copy.deepcopy(active) | change, good, SINCE)
+                # Head-bearing task is not parkable by a headless comment.
+                withhead = copy.deepcopy(active) | dict(head=HEAD, pr=74, reason='QA FAIL')
+                with self.assertRaises(a.Hold):
+                    a.validate_park(withhead, headless_comment(withhead), SINCE)
+                # Headless task is never resumable.
+                self.assertFalse(a.resume_eligible(active | dict(resume_phase='ci', reason='Actions failed')))
+            finally:
+                os.close(store.lock)
+
+    def test_headless_park_records_null_head_and_is_not_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store, [headless_comment(active)])
+                before = copy.deepcopy(store.data)
+                self.assertTrue(self.do_park(bridge, active))
+                self.assertIsNone(store.data['active'])
+                self.assertEqual(store.data['done'], before['done'])
+                self.assertEqual(set(store.data), {'active', 'done'})
+                entry, = json.loads(store.parked_path.read_text())['parked']
+                self.assertIsNone(entry['head'])
+                self.assertEqual(entry['attempt'], 1)
+                self.assertEqual(entry['park_comment'], 777)
+                self.assertEqual(entry['snapshot']['base'], BASE)
+                self.assertEqual(json.loads((store.directory / 'before-park-30-a1.json').read_text()), before)
+                # Replay of the same comment/issue is ignored; parked issue is never re-claimed.
+                with self.assertRaises(a.Hold):
+                    a.validate_park(entry['snapshot'], headless_comment(entry['snapshot']), SINCE,
+                                    used={entry['park_comment']})
+                parent, comment = existing(30)
+                self.assertIsNone(store.claim([parent], SINCE, [comment]))
+                self.assertIsNone(store.claim([issue(30)], SINCE))
+                self.assertEqual(store.claim([issue(31)], SINCE)['issue'], 31)
+            finally:
+                os.close(store.lock)
+
+    def test_headless_negative_changes_nothing(self):
+        overrides = {'wrong author': dict(user={'id': 2}),
+                     'edited': dict(updated_at=(NOW + dt.timedelta(minutes=1)).isoformat()),
+                     'wrong attempt': dict(body=dict(attempt=2)),
+                     'wrong base': dict(body=dict(base=DRIFT)),
+                     'head mismatch': dict(body=dict(head=HEAD))}
+        for name, over in overrides.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp)
+                try:
+                    bridge = self.bridge(tmp, store, [headless_comment(active, **copy.deepcopy(over))])
+                    before = copy.deepcopy(store.data)
+                    self.assertFalse(self.do_park(bridge, active))
+                    self.assertEqual(store.data, before)
+                    self.assertFalse(store.parked_path.exists())
+                finally:
+                    os.close(store.lock)
+        for name, change in {'pr set': dict(pr=74), 'other reason': dict(reason='QA FAIL'),
+                             'other phase': dict(resume_phase='qa')}.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp, **change)
+                try:
+                    bridge = self.bridge(tmp, store, [headless_comment(active)])
+                    before = copy.deepcopy(store.data)
+                    self.assertFalse(self.do_park(bridge, active))
+                    self.assertEqual(store.data, before)
+                    self.assertFalse(store.parked_path.exists())
+                finally:
+                    os.close(store.lock)
+        with tempfile.TemporaryDirectory() as tmp:  # two valid comments -> ambiguous hold
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store, [headless_comment(active), headless_comment(active, id=778)])
+                with self.assertRaises(a.Hold):
+                    self.do_park(bridge, active)
+                self.assertFalse(store.parked_path.exists())
+            finally:
+                os.close(store.lock)
+
+    def test_headless_crash_recovery_finishes_from_durable_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store, [headless_comment(active)])
+                original = store.save
+
+                def crash():
+                    raise OSError('simulated crash before state save')
+                store.save = crash
+                with self.assertRaises(OSError):
+                    self.do_park(bridge, active)
+                self.assertEqual(len(store.parked), 1)
+                self.assertIsNone(store.parked[0]['head'])
+                self.assertEqual(json.loads(store.path.read_text())['active']['phase'], 'blocked')
+                store.save = original
+                store.data['active'] = json.loads(store.path.read_text())['active']
+                active = store.data['active']
+                bridge = self.bridge(tmp, store, [])
+                with patch.object(a, 'pages', side_effect=AssertionError('no request expected')), \
+                        patch.object(a, 'api', side_effect=AssertionError('no request expected')):
+                    self.assertTrue(bridge.park(active))
+                self.assertIsNone(json.loads(store.path.read_text())['active'])
+                self.assertNotIn(30, store.data['done'])
+                self.assertEqual(len(json.loads(store.parked_path.read_text())['parked']), 1)
+            finally:
+                os.close(store.lock)
 
 
 def stat_mode(path):

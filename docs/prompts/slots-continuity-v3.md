@@ -1,0 +1,16 @@
+# OPS #155 continuity v3 — fix independent security finding, no new scope
+Owner authorization remains the two-slot continuity repair; isolated source editing only. No installation, network, secrets, services, live checkpoints or protected wrappers.
+Input is exact v2 source candidate and pinned originals. Independent security review of installer SHA256 dc4e3d52a86f7b06d1fc6145c787cfe34292c6c11ccee3cd9772ebf9cca3ab6b FAILED:
+"slots-continuity.sh:439 -> Rule 7: Failed service startup prevents rollback. System.status() rejects failed units at line 99, aborting cleanup before file restoration. Simulation left all six replacement files installed, one service failed, and another stopped. --remove also rejects this state at line 386."
+This is a real correctness defect. Fix it; do not waive it.
+
+Allowed changes ONLY scripts/chatops/parallel-slots/continuity-src/install.py, generated slots-continuity.sh, tests/test_continuity_installer.py, tests/test_continuity_v2.py if fixtures require it, CONTINUITY.md/EVIDENCE.md. Do not change executor/slots/monitor payloads or any admission/model/QA/CI/policy behavior; pins for those source files must remain unchanged. Use existing builder with pinned-originals. No new privileges or permission changes.
+
+Requirements:
+- Separate structural systemd status parsing from allowed state per operation. A failed service after start (ActiveState=failed, SubState=failed, MainPID=0, empty/nonexistent cgroup, no children) is a legitimate quiescent recovery state, not an opaque unsupported state that prevents restoration.
+- Normal initial install must still refuse unhealthy/busy/unknown units. Recovery rollback and --remove may reconcile only proven quiescent failed units. Preserve enabled-state pin, KillMode/load checks, no children guard, trusted cgroup path, no active writer/deferred rollback guards. Never treat an active/activating/deactivating unit or failed unit with live descendants as idle.
+- A one-shot start failure, including failure after another unit successfully started, must restore ALL six managed files, manifest and original active/enabled state when safe; freeze/thaw retained safe units correctly. Do not stop a newly started author/QA/integration/deploy just to claim rollback.
+- A persistent service-start failure still restores coherent original files when safe and reports honest rollback incompleteness if service cannot restart; retain backup, no false PASS. Subsequent --remove must be able to read and recover this known failed/quiescent state instead of rejecting it before cleanup.
+- Tests must exercise production System.status/pids parsing against mocked systemctl show output, not only a FakeSystem that skips the rejected-state parser. Include failed/failed PID0 no-cgroup, nonempty cgroup, first/second start failure, persistent startup failure, explicit remove recovery, unchanged enabled states and unsafe writer/deferral refusal. Use scratch only and actual installer controller.
+- Re-run existing 151 core + 8 commissioning tests (as applicable), update precise evidence, regenerate installer, verify payload hashes unchanged and new installer SHA. No TODO/placeholder. Keep correction minimal.
+Return a complete corrected exact installer candidate; live installation still requires NEW independent security review and DRY.

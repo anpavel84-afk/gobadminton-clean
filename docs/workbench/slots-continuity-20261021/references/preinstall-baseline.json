@@ -1,0 +1,110 @@
+{
+  "at": "2026-10-21T19:55:29.755423+00:00",
+  "installed": {
+    "/usr/local/lib/gobadminton-slots/autonomous_issues.py": "0b367097be3aa5596327ebec14807b6f8ca39904e6a7279dbcb67b057c23f293",
+    "/usr/local/lib/gobadminton-slots/slots.py": "4fc51152b0f8a5bc97743101feca7e5f5e97c7ad791d6783def0b3bd3d6324b7",
+    "/usr/local/lib/gb-ops-monitor/opsmon/slot_telemetry.py": "070eaa290c72ba7a13af8accbd996f3fbe8473e00b857f3f293a868b4d8e5b3f",
+    "/usr/local/lib/gb-ops-monitor/opsmon/writer.py": "9a2364f1ca6175da6c26bcab4ae02884605edf108023d69ce8278f880fdbe132",
+    "/usr/local/lib/gb-ops-monitor/web/app.js": "9e9980c6c0580e54b01e42eda52bff573b45af9cd43b2f060cf70fea4f6ea379"
+  },
+  "slots": {
+    "slot1": {
+      "done": [
+        30,
+        31,
+        13,
+        15,
+        36,
+        37,
+        46,
+        12,
+        28,
+        47,
+        52,
+        54,
+        57,
+        61,
+        62,
+        64,
+        66,
+        78,
+        82,
+        84,
+        92,
+        98,
+        101,
+        104,
+        106,
+        108,
+        109,
+        112,
+        114,
+        131,
+        133,
+        138,
+        142,
+        147
+      ],
+      "parked_ids": [
+        68,
+        76,
+        80,
+        86,
+        88,
+        90,
+        94,
+        96,
+        117,
+        127,
+        136,
+        134,
+        141,
+        144
+      ],
+      "active": {
+        "issue": 151,
+        "phase": "blocked",
+        "head": "b9aebc69f2d61f232554d030645432ad1cf8f789",
+        "base": "9d3e092cc30796ffc0096c50584a771e60c18ef3",
+        "attempt": 2,
+        "reason": "Actions failed"
+      },
+      "state_sha256": "715b305ccab0d71f7d74f6a3328b9d0012fb91b705e940f42a9694dd3418e041"
+    },
+    "slot2": {
+      "done": [
+        152
+      ],
+      "parked_ids": [],
+      "active": {
+        "issue": 152,
+        "phase": "done",
+        "head": "4977074ee7b45ea612dde592b88b354d99839aea",
+        "base": "9d3e092cc30796ffc0096c50584a771e60c18ef3",
+        "attempt": 1,
+        "reason": null
+      },
+      "state_sha256": "5736658d0717f1e7e341bf9a7d66a88d2e7198e855feeab3c381843f5c55c104"
+    }
+  },
+  "units": {
+    "gobadminton-slot@slot1.service": [
+      "MainPID=79318",
+      "ActiveState=active",
+      "SubState=running",
+      "UnitFileState=enabled"
+    ],
+    "gobadminton-slot@slot2.service": [
+      "MainPID=79319",
+      "ActiveState=active",
+      "SubState=running",
+      "UnitFileState=enabled"
+    ],
+    "gobadminton-supervisor.service": [
+      "MainPID=79320",
+      "ActiveState=active",
+      "SubState=running",
+      "UnitFileState=enabled"
+    ]
+  }
+}

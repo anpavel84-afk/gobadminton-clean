@@ -1,0 +1,3 @@
+slots-continuity.sh:439 -> Rule 7: Failed service startup prevents rollback. System.status() rejects failed units at line 99, aborting cleanup before file restoration. Simulation left all six replacement files installed, one service failed, and another stopped. --remove also rejects this state at line 386.
+WAIVERS: 0
+VERDICT: FAIL
