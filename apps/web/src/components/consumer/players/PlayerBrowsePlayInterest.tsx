@@ -57,6 +57,30 @@ type Props = {
   onExternalSendAdmitted?: (() => void) | null;
 };
 
+/** 18×18 left-arrow glyph for «Пропустить» — presentational only; label stays the accessible name. */
+export function SkipArrowIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <path
+        d="M19 12H5M5 12l6-6M5 12l6 6"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** 18×18 plus glyph for «Давай сыграем» — presentational only; label stays the accessible name. */
+export function PlusIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** Stable footer: one reserved status line + same action baseline (no panel that pushes controls). */
 export function StableActionFooter({
   desktop,
@@ -87,7 +111,7 @@ export function StableActionFooter({
         <div className={`pb-main-actions${primary ? "" : " pb-main-actions--skip-only"}`}>
           {showSkip && (
             <button type="button" className="pb-btn-skip" disabled={skipDisabled} onClick={onSkip}>
-              Пропустить
+              <SkipArrowIcon />Пропустить
             </button>
           )}
           {primary}
@@ -150,7 +174,9 @@ export function DesktopBrowseActionsFixture({
             onSkip={() => {}}
             primary={
               showPrimary ? (
-                <button type="button" className={primaryClassName}>{primaryLabel}</button>
+                <button type="button" className={primaryClassName}>
+                  {primaryLabel === "Давай сыграем" ? <><PlusIcon />Давай сыграем</> : primaryLabel}
+                </button>
               ) : null
             }
           />
@@ -381,7 +407,7 @@ export function PlayerBrowsePlayInterest({
         onSkip={onSkip}
         primary={
           <button type="button" className="pb-btn-request" disabled>
-            Давай сыграем
+            <PlusIcon />Давай сыграем
           </button>
         }
       />
@@ -515,7 +541,7 @@ export function PlayerBrowsePlayInterest({
             if (started && useExternalSend) onExternalSendAdmitted?.();
           }}
         >
-          {!useExternalSend && mutation.busy ? "Отправляем…" : "Давай сыграем"}
+          {!useExternalSend && mutation.busy ? "Отправляем…" : <><PlusIcon />Давай сыграем</>}
         </button>
       }
     />
