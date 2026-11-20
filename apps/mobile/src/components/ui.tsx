@@ -3,7 +3,7 @@ import { AccessibilityInfo, findNodeHandle, Image, KeyboardAvoidingView, Modal, 
 import type { ImageSourcePropType } from 'react-native';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentProps, ComponentRef, PropsWithChildren, ReactNode, RefObject } from 'react';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { usePathname, useRouter } from 'expo-router';
 import { canonicalGamePath, canonicalVenueCreatePath } from '../native-auth-protocol.ts';
@@ -65,6 +65,12 @@ export function OutlineButton({ title, onPress, disabled = false, align = 'left'
     }]}>
     <Label style={{ fontWeight: '700', textAlign: align }}>{title}</Label>
   </Pressable>;
+}
+/** iPhone Modal defaults to portrait-only; the app itself rotates (orientation "default"). */
+export const iosModalOrientations = Platform.OS === 'ios' ? (['portrait', 'landscape'] as const) : undefined;
+/** iOS pageSheet/formSheet starts below the status bar: re-measure insets for the sheet's own view. */
+export function IosSheetSafeArea({ children }: PropsWithChildren) {
+  return Platform.OS === 'ios' ? <SafeAreaProvider>{children}</SafeAreaProvider> : <>{children}</>;
 }
 /** One owner for all safe edges. Chrome is outside and clips the scroll viewport. */
 export function ScreenFrame({ children, header, purple = false, keyboard = false }: PropsWithChildren<{
@@ -165,7 +171,7 @@ export function DiscoverySheet({ visible, title, onClose, returnFocusRef, childr
     wasOpen.current = visible;
   }, [visible, returnFocusRef]);
   if (!visible) return null;
-  return <Modal transparent visible animationType="none" onRequestClose={onClose}
+  return <Modal transparent visible animationType="none" onRequestClose={onClose} supportedOrientations={iosModalOrientations}
     onShow={() => { const node = findNodeHandle(heading.current); if (node) AccessibilityInfo.setAccessibilityFocus(node); }}>
     <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: '#13221A8C', paddingTop: insets.top + 24, paddingLeft: insets.left, paddingRight: insets.right }}>
       <View accessibilityViewIsModal onAccessibilityEscape={onClose} style={{ maxHeight: '100%', backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: insets.bottom }}>

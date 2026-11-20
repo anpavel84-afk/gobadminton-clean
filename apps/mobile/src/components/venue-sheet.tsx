@@ -32,7 +32,7 @@ import {
 import { colors } from '../theme.ts';
 import { VenueContent, VenueFailure, VenuePreview } from './venue-detail.tsx';
 import { DiscoveryIcon } from './discovery-icon.tsx';
-import { DiscoveryChip, Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
+import { DiscoveryChip, iosModalOrientations, Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRetrySchedule, onMeasure, returnFocusRef }: {
   selection: MapVenue; expanded: boolean; games: readonly PublicGame[] | null;
@@ -401,8 +401,8 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
 
   // Local Modal: Android TalkBack isolation + Back/escape; map host ownership unchanged.
   return <Modal transparent visible animationType="none" onRequestClose={close} onShow={focusExpandedHandle}
-    presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}>
-    <View style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents="box-none">
+    presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined} supportedOrientations={iosModalOrientations}>
+    <View style={[{ flex: 1, justifyContent: 'flex-end' }, Platform.OS === 'ios' && { paddingLeft: insets.left, paddingRight: insets.right }]} pointerEvents="box-none">
       <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
         pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
       {sheet}

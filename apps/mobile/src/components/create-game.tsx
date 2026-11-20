@@ -5,7 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../auth.tsx';
 import { usePreferences } from '../state.tsx';
-import { BackLink, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
+import { BackLink, Header, IosSheetSafeArea, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 import { colors } from '../theme.ts';
 import { ManagementCommand, ManagedTerms } from './game-management.tsx';
 import { API_ORIGIN, publicApi } from '../public-api.ts';
@@ -82,7 +82,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   // continueOrdinaryForm remains for the mounted lifecycle harness (explicit Continue CTA removed from UI).
   void continueOrdinaryForm;
 
-  const shell = (body: ReactNode, opts?: { footer?: ReactNode }) => <ScreenFrame keyboard header={sheet ? undefined : <Header />}>
+  const frame = (body: ReactNode, opts?: { footer?: ReactNode }) => <ScreenFrame keyboard header={sheet ? undefined : <Header />}>
     {sheet && <CreateGameSheetHeader
       name={sheetVenue?.name ?? 'Площадка'}
       address={sheetVenue?.address ?? ''}
@@ -96,6 +96,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
     </ScrollView>
     {opts?.footer}
   </ScreenFrame>;
+  const shell = (body: ReactNode, opts?: { footer?: ReactNode }) => sheet ? <IosSheetSafeArea>{frame(body, opts)}</IosSheetSafeArea> : frame(body, opts);
 
   const formFooter = <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.card }}>
     <OutlineButton title="Отмена" onPress={() => sheet ? closeSheet() : (router.canGoBack() ? router.back() : router.replace('/games'))} />

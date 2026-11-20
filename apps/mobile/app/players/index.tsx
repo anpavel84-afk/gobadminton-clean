@@ -9,7 +9,7 @@ import { mergeRadarPlayers, parseRadarPreview, radarPlayer } from '../../src/rad
 import type { UnifiedRow, UnifiedPreview, RadarRead } from '../../src/radar.ts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, TextInput, View, useWindowDimensions } from 'react-native';
+import { FlatList, Modal, Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { nativeAuth } from '../../src/auth-runtime.ts';
@@ -26,7 +26,7 @@ import { cityFieldLabel, filterCities } from '../../src/entry.ts';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
 import { PlayerAvatar, PlayerCard, PlayerProfile } from '../../src/components/player-card.tsx';
 import { colors } from '../../src/theme.ts';
-import { DiscoveryChip, DiscoverySheet, ErrorState, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
+import { DiscoveryChip, DiscoverySheet, ErrorState, Header, iosModalOrientations, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
 
 /** An inspection redeems only the selected Radar proof; it never looks up a public profile. */
 export async function loadPlayerInspection(context: RadarContactContext, read: (operation: RadarRead, actor: Actor) => Promise<unknown>, now = Date.now): Promise<UnifiedPreview> {
@@ -243,7 +243,7 @@ export default function Players() {
     {expanded && <TextButton title="Свернуть карточку игрока" onPress={() => setExpanded(false)} />}
   </View>;
   return <ScreenFrame keyboard header={<Header />}>
-    <Modal visible={mapOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={closeMap}>
+    <Modal visible={mapOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={closeMap} supportedOrientations={iosModalOrientations}>
       <ScreenFrame>
         {pack ? <NativeMap key={pack.version} pack={pack} venues={mapVenues} counts={counts} selected={selection?.id ?? null} camera={camera}
           controlBottom={controlBottom} statusTop={statusTop} onCamera={setCamera}
@@ -306,6 +306,7 @@ export default function Players() {
         </View>}
         <View style={{ borderWidth: 1, borderColor: colors.line, borderRadius: 12, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10 }}>
           <DiscoveryIcon name="search" /><TextInput accessibilityLabel="Имя игрока" placeholder="Найти игрока" value={name} maxLength={80} onChangeText={setName}
+            clearButtonMode="while-editing" returnKeyType={Platform.OS === 'ios' ? 'search' : undefined}
             style={{ flex: 1, minWidth: 0, minHeight: 58, fontFamily: 'Onest', fontSize: 14, color: colors.ink, paddingVertical: 12 }} />
         </View>
         <TextInput accessibilityLabel="Район / метро" placeholder="Район / метро" value={areaKey} maxLength={64} onChangeText={setAreaKey} style={[styles.input, { fontSize: 14 }]} />

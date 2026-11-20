@@ -8,7 +8,7 @@ import type { Comment, Action, CreateVenueCommunityReportRequest, Packet } from 
 import { commentText } from '../venue-community.ts';
 import { API_ORIGIN } from '../public-api.ts';
 import { colors } from '../theme.ts';
-import { DiscoveryChip, DiscoverySheet, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
+import { DiscoveryChip, DiscoverySheet, iosModalOrientations, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
 import { VenueReviewsSection } from './venue-reviews.tsx';
 import { VenueCommunityPhotosSection, commentPhotosFromThreads } from './venue-photos.tsx';
 type Trigger = ComponentRef<typeof Pressable>;
@@ -60,7 +60,7 @@ function UnresolvedActions({owner}:{owner:VenueCommunityCoordinator}) {
 function Dialog({ title, children, close, trigger }: { title: string; children: ReactNode; close: () => void; trigger: RefObject<Trigger | null> }) {
   const heading = useRef<ComponentRef<typeof Label>>(null), cancel = useRef<Trigger>(null);
   useEffect(() => () => { requestAnimationFrame(() => { trigger.current?.focus(); const node = findNodeHandle(trigger.current); if (node) AccessibilityInfo.setAccessibilityFocus(node); }); }, [trigger]);
-  return <Modal visible animationType="none" onRequestClose={close} onShow={() => { cancel.current?.focus(); const node = findNodeHandle(cancel.current); if (node) AccessibilityInfo.setAccessibilityFocus(node); }}>
+  return <Modal visible animationType="none" onRequestClose={close} supportedOrientations={iosModalOrientations} onShow={() => { cancel.current?.focus(); const node = findNodeHandle(cancel.current); if (node) AccessibilityInfo.setAccessibilityFocus(node); }}>
     <Page keyboard header={<ActionButton buttonRef={cancel} title="Отмена" onPress={close} />}>
       <View accessibilityViewIsModal onAccessibilityEscape={close} style={{gap:16}}>
         <Label ref={heading} accessibilityRole="header" style={styles.subtitle}>{title}</Label>{children}
