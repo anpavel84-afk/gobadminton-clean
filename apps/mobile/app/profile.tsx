@@ -1,17 +1,19 @@
 import { useCallback, useRef, useState, type ComponentRef, type ReactNode, type RefObject } from 'react';
-import { BackHandler, Pressable, ScrollView, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { BackHandler, Platform, Pressable, ScrollView, View } from 'react-native';
+import { useFocusEffect, useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../src/auth.tsx';
 import { usePreferences } from '../src/state.tsx';
 import { OwnProfileCard } from '../src/components/own-profile.tsx';
 import { ProfileEditor } from '../src/components/profile-editor.tsx';
 import { canonicalReturnPath } from '../src/native-auth-protocol.ts';
+import { bindIosBack } from '../src/ios-back.ts';
 import { colors } from '../src/theme.ts';
 import { Header, Label, Loading, ScreenFrame as Page, TextButton, styles } from '../src/components/ui.tsx';
 
 const providerNames: Record<string, string> = { vk: 'VK', yandex: 'Яндекс', email: 'Email' };
 const providerLabel = (method: string) => providerNames[method] ?? method;
+const useIosBack = bindIosBack(Platform.OS, usePreventRemove);
 
 function ProfileHardwareBack({ editing, onClose }: { editing: boolean; onClose: () => void }) {
   useFocusEffect(useCallback(() => {
@@ -24,6 +26,11 @@ function ProfileHardwareBack({ editing, onClose }: { editing: boolean; onClose: 
     });
     return () => back.remove();
   }, [editing, onClose]));
+  return null;
+}
+
+function ProfileIosBack({ editing, onClose }: { editing: boolean; onClose: () => void }) {
+  useIosBack(editing, onClose);
   return null;
 }
 
@@ -83,6 +90,7 @@ export default function Profile() {
   }
   return <Page keyboard header={<Header />}>
     <ProfileHardwareBack editing={editing} onClose={() => setEditing(false)} />
+    <ProfileIosBack editing={editing} onClose={() => setEditing(false)} />
     <ProfileScroll scrollRef={scrollRef}>
       <Label accessibilityRole="header" style={styles.title}>{auth.status === 'authenticated' && auth.me ? 'Мой профиль' : 'Профиль'}</Label>
       {auth.status === 'authenticated' && auth.me && <Label style={{ color: colors.secondary, fontSize: 15, lineHeight: 22 }}>Управляйте игровыми данными и тем, что видят другие.</Label>}
