@@ -72,6 +72,13 @@ AUTHOR_TIMEOUT_S = 1200
 QA_NATIVE_FSIZE_MAX = 512 << 20  # Existing native_cursor finite private-file policy.
 QA_OUTPUT_MAX = 2 << 20  # Equality is possible truncation, never accepted.
 QA_TIMEOUT_S = 1800
+# Closed Cursor author CLI allowlist: argv model id → required init-event model
+# prefix (exact equality for 'auto' → 'Auto', handled by native.parse_stream).
+CURSOR_AUTHOR_DEFAULT_MODEL = 'claude-opus-5-5-high'
+CURSOR_AUTHOR_MODELS = {
+    'auto': 'Auto',
+    'claude-opus-5-5-high': 'Claude Opus 5.5',
+}
 
 
 class LiveError(RuntimeError):
@@ -1252,6 +1259,94 @@ def _preserve_unpublished_author_sources(
     return meta
 
 
+def cursor_author_model(task):
+    """Resolve Cursor author CLI model from task; closed allowlist, default default.
+
+    Raises ProviderError(preflight_no_call) before any auth/CLI launch when the
+    requested model is absent or not in CURSOR_AUTHOR_MODELS.
+    """
+    from providers import ProviderError
+    model = (task.get('cursor_model') if isinstance(task, dict) else None) or CURSOR_AUTHOR_DEFAULT_MODEL
+    if not isinstance(model, str) or model not in CURSOR_AUTHOR_MODELS:
+        raise ProviderError(
+            'preflight_no_call', 'cursor_model_not_allowed', charge='none')
+    return model
+
+
+def parse_cursor_author_stream(native, raw, model):
+    """Validate Cursor author stream-json; Auto stays byte-identical via native.
+
+    Explicit models reuse every native.parse_stream check except the init model
+    comparison: reported model must be a str starting with CURSOR_AUTHOR_MODELS
+    [model] and must not be 'Auto'. Never imports native source for the parser.
+    """
+    if model == 'auto':
+        return native.parse_stream(raw)
+    from providers import ProviderError
+
+    def need(ok, reason):
+        if not ok:
+            raise ProviderError('cursor_stream_invalid', reason)
+
+    max_stream = getattr(native, 'MAX_STREAM', None)
+    if not isinstance(max_stream, int) or max_stream <= 0:
+        max_stream = 64 << 20
+    need(isinstance(raw, (bytes, bytearray)) and len(raw) <= max_stream,
+         'Cursor transcript exceeds bound')
+    try:
+        text = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else raw
+        events = [loads(line) for line in text.splitlines() if line.strip()]
+    except (UnicodeDecodeError, LiveError, ValueError, TypeError) as err:
+        raise ProviderError('cursor_stream_invalid', type(err).__name__) from err
+    need(events and len(events) <= 20000 and all(type(e) is dict for e in events),
+         'invalid Cursor stream')
+    results = [e for e in events if e.get('type') == 'result']
+    init = [e for e in events if e.get('type') == 'system' and e.get('subtype') == 'init']
+    need(len(init) == 1, 'effective Cursor route not Auto')
+    init_model = init[0].get('model')
+    prefix = CURSOR_AUTHOR_MODELS[model]
+    need(isinstance(init_model, str) and init_model != 'Auto'
+         and init_model.startswith(prefix),
+         'effective Cursor route not Auto')
+    need(len(results) == 1 and results[0] is events[-1]
+         and results[0].get('subtype') == 'success'
+         and results[0].get('is_error') is False, 'Cursor terminal success missing')
+    need(any(e.get('type') == 'assistant' for e in events),
+         'Cursor inference evidence missing')
+    insecure = []
+    for event in events:
+        if event.get('type') != 'tool_call' or event.get('subtype') != 'completed':
+            continue
+        shell = event.get('tool_call', {}).get('shellToolCall')
+        if not shell:
+            continue
+        policy = shell.get('args', {}).get('requestedSandboxPolicy', {}).get('type')
+        result = shell.get('result', {})
+        if (policy not in ('TYPE_WORKSPACE_READWRITE', 'TYPE_WORKSPACE_READONLY')
+                and ('success' in result or 'failure' in result)):
+            insecure.append(policy)
+    need(not insecure, 'Cursor executed Shell without native sandbox; no source import')
+    usage = results[0].get('usage')
+    need(usage is None or type(usage) is dict and all(
+        type(v) is int and v >= 0 for v in usage.values()),
+         'invalid provider-reported Cursor usage')
+    ids = {e['model_call_id'] for e in events if isinstance(e.get('model_call_id'), str)}
+    wire = raw if isinstance(raw, (bytes, bytearray)) else raw.encode('utf-8')
+    return dict(
+        effective_route=model,
+        underlying_model=init_model,
+        effort=None,
+        provider_internal_calls=None,
+        observed_model_call_ids=len(ids),
+        provider_reported_usage=usage,
+        tool_events=sum(
+            e.get('type') == 'tool_call' and e.get('subtype') == 'completed'
+            for e in events),
+        retries=sum(e.get('type') == 'retry' for e in events),
+        transcript_sha256=hashlib.sha256(wire).hexdigest(),
+    )
+
+
 def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True):
     """Actual Cursor Auto CLI via native export/import (Mode A pattern in source).
 
@@ -1269,6 +1364,18 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     if intent_path is None:
         _, intent_path = prepare_cursor_author_intent(task, worktree, evidence)
     worktree = Path(worktree)
+    # Resolve model before auth/sandbox/CLI — closed allowlist preflight.
+    try:
+        model = cursor_author_model(task)
+    except ProviderError as err:
+        if err.code == 'preflight_no_call':
+            mark_intent_phase(
+                intent_path, 'preflight_no_call',
+                error_type='cursor_model_not_allowed',
+                error=str(err.detail or 'cursor_model_not_allowed')[:500],
+                no_model_launched=True,
+            )
+        raise
     try:
         native = _load_native('native_cursor')
     except LiveError as err:
@@ -1367,7 +1474,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         guard = _load_native('native_guard')
         node = str(native.CURSOR_PIN / 'node')
         cmd = [node, str(native.CURSOR_PIN / 'index.js'),
-               '--print', '--output-format', 'stream-json', '--model', 'auto',
+               '--print', '--output-format', 'stream-json', '--model', model,
                '--sandbox=enabled', '--disable-project-configs', '--disable-auto-update',
                '--disable-indexing', '--disable-codebase-ref',
                '--allowed-tools', native.AUTHOR_TOOLS, '--trust', '--single-turn',
@@ -1424,6 +1531,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                                       error='process_boundary', detail=type(err).__name__)
                     raise ProviderError('cursor_process_boundary', type(err).__name__) from err
             mark_intent_phase(intent_path, 'running', process=boundary,
+                              requested_model=model,
                               root_model=False, uid=CURSOR_UID)
             try:
                 p.communicate(input=prompt.encode(), timeout=AUTHOR_TIMEOUT_S)
@@ -1458,7 +1566,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         raw = stream.read_bytes()
         if token.encode() in raw or token.encode() in errf.read_bytes():
             raise ProviderError('token_leak_in_stream')
-        result = native.parse_stream(raw)
+        result = parse_cursor_author_stream(native, raw, model)
         model_result = result
         # Post-model local only: snapshot/import/git. LiveError must not escape
         # as bare exception leaving claim RUNNING — charged source_import.
@@ -1537,6 +1645,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 'changed_paths': changed,
                 'model_launch': 1,
                 'provider': 'cursor_auto',
+                'effective_model': model,
+                'requested_model': model,
                 'result': result,
                 'root_model': False,
                 'uid': CURSOR_UID,
@@ -4821,10 +4931,23 @@ def _qa_author_binding(admission):
         runtime_task.pop('revision', None)
     runtime_keys -= set(claim.get('task') or {})
     canonical = lambda value: {k: v for k, v in value.items() if k not in runtime_keys}
-    known = {'cursor_auto': ('native:cursor:1002', 'auto'),
+    known = {'cursor_auto': ('native:cursor:1002', None),
              'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
              'codex_author': ('native:codex:1002:author', 'gpt-6.1-sol:medium')}
-    expected = known.get(claim.get('author_provider'))
+    provider = claim.get('author_provider')
+    expected = known.get(provider)
+    if provider == 'cursor_auto':
+        model_ok = provenance.get('model') in CURSOR_AUTHOR_MODELS
+        executor_ok = provenance.get('executor') == 'native:cursor:1002'
+        expected_executor = 'native:cursor:1002'
+    elif expected:
+        model_ok = (provenance.get('executor'), provenance.get('model')) == expected
+        executor_ok = True
+        expected_executor = expected[0]
+    else:
+        model_ok = False
+        executor_ok = False
+        expected_executor = None
     if (not expected or claim.get('schema') != 'GB_LEAN_CLAIM_V1'
             or claim.get('candidate_sha') != admission['candidate_sha']
             or claim.get('revision') != admission['admission_ref']
@@ -4835,12 +4958,12 @@ def _qa_author_binding(admission):
             or provenance.get('candidate_sha') != admission['candidate_sha']
             or provenance.get('revision') != admission['admission_ref']
             or provenance.get('role') != 'author'
-            or (provenance.get('executor'), provenance.get('model')) != expected
+            or not model_ok or not executor_ok
             or provenance.get('operation_id') != admission.get('author_operation_id')
             or not provenance.get('operation_id')
-            or admission.get('author_executor') != expected[0]):
+            or admission.get('author_executor') != expected_executor):
         raise ValueError('qa protected author binding')
-    return expected[0]
+    return expected_executor
 
 
 def _qa_process_identity(process, argv):
