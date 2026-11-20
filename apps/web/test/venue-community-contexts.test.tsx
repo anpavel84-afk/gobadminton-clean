@@ -1657,6 +1657,14 @@ describe("mounted map and discovery lifecycle authorities", () => {
     "../src/components/consumer/ConsumerShell", "../src/components/consumer/discovery/DiscoveryCityProvider",
     "../src/components/consumer/venues/SelectedVenueCover", "../src/components/consumer/games/VenuePreviewCard",
     "../src/components/consumer/games/VenueSheet", "../src/components/consumer/games/VenuePopup"];
+  /** Moscow calendar day offset from now — discovery normalizes past days to today. */
+  const futureMoscowDay = (days = 7) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Moscow",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(Date.now() + days * 86_400_000));
   beforeEach(() => {
     mounted.mockClear(); unmounted.mockClear();
     window.history.replaceState(null, "", `/games?view=map&cityId=${cityA}&day=2026-11-20&activity=regular`);
@@ -1725,6 +1733,7 @@ describe("mounted map and discovery lifecycle authorities", () => {
   });
 
   it("parent Escape and popstate city/list transitions cannot unmount the pending owner", async () => {
+    const day = futureMoscowDay();
     const { GamesDiscoveryPage } = await import("../src/components/consumer/pages/GamesDiscoveryPage");
     render(createElement(GamesDiscoveryPage));
     await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
@@ -1735,7 +1744,7 @@ describe("mounted map and discovery lifecycle authorities", () => {
     expect(screen.getByTestId("selected-owner")).toBeTruthy();
     expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
     act(() => {
-      window.history.pushState(null, "", `/games?view=list&cityId=${cityB}&day=2026-11-20&activity=regular&selectedVenue=${V1}&communityCity=${cityA}#ratings`);
+      window.history.pushState(null, "", `/games?view=list&cityId=${cityB}&day=${day}&activity=regular&selectedVenue=${V1}&communityCity=${cityA}#ratings`);
       window.dispatchEvent(new PopStateEvent("popstate"));
       expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
       expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
@@ -1749,7 +1758,7 @@ describe("mounted map and discovery lifecycle authorities", () => {
       expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
     });
     const held = new URL(window.location.href);
-    expect(held.searchParams.get("day")).toBe("2026-11-20");
+    expect(held.searchParams.get("day")).toBe(day);
     expect(held.searchParams.get("activity")).toBe("regular");
     expect(held.searchParams.get("selectedVenue")).toBe(V1);
     expect(held.searchParams.get("communityCity")).toBe(cityA);
