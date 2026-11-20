@@ -1,20 +1,22 @@
 import { createContext, useContext, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { PropsWithChildren } from 'react';
-import { AppState } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { useRouter } from 'expo-router';
 import { nativeAuth } from './auth-runtime.ts';
+import { IOS_AUTH_UNSUPPORTED, iosAuthSessionSupported } from './ios-auth.ts';
 import { NATIVE_REDIRECT, isNativeCallback } from './native-auth-protocol.ts';
 import type { MessagesCoordinator } from './messages-coordinator.ts';
 import type { PlayersCoordinator } from './players.ts';
 import type { ParticipationCoordinator } from './participation.ts';
 import type { AuthSnapshot } from './auth-coordinator.ts';
 
-type AuthContext = AuthSnapshot & { postgame: typeof nativeAuth.postgame; safety: typeof nativeAuth.safety; contact: typeof nativeAuth.contact; profile: typeof nativeAuth.profile; avatar: typeof nativeAuth.avatar; cover: typeof nativeAuth.cover; gameManagement: typeof nativeAuth.gameManagement; players: PlayersCoordinator; messages: MessagesCoordinator; participation: ParticipationCoordinator; signIn: (returnPath?: string | null) => Promise<void>;
+type AuthContext = AuthSnapshot & { postgame: typeof nativeAuth.postgame; safety: typeof nativeAuth.safety; contact: typeof nativeAuth.contact; profile: typeof nativeAuth.profile; avatar: typeof nativeAuth.avatar; cover: typeof nativeAuth.cover; gameManagement: typeof nativeAuth.gameManagement; players: PlayersCoordinator; messages: MessagesCoordinator; participation: ParticipationCoordinator; signIn: (returnPath?: string | null) => Promise<void>; signInUnavailable: string | null;
   logout: () => Promise<void>; cancel: () => Promise<void>; validate: () => Promise<void>;
   loadSessions: () => Promise<void>; revokeSession: (id: string | null) => Promise<void> };
 const Context = createContext<AuthContext | null>(null);
+const iosSignInUnavailable = Platform.OS === 'ios' && !iosAuthSessionSupported(Platform.Version) ? IOS_AUTH_UNSUPPORTED : null;
 export function AuthProvider({ children }: PropsWithChildren) {
   const snapshot = useSyncExternalStore(nativeAuth.subscribe, nativeAuth.getSnapshot, nativeAuth.getSnapshot);
   const router = useRouter();
@@ -40,13 +42,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => clearTimeout(timer);
   }, [snapshot.status, snapshot.me]);
   async function signIn(returnPath?: string | null) {
+    if (iosSignInUnavailable) { Alert.alert('Вход недоступен', iosSignInUnavailable); return; }
     if (browserBusy.current) return;
     browserBusy.current = true;
     try {
       const start = await nativeAuth.beginLogin(returnPath);
       if (!start) return;
       try {
-        const result = await WebBrowser.openAuthSessionAsync(start.url, NATIVE_REDIRECT);
+        // iOS needs preferUniversalLinks for the HTTPS callback; Android keeps the two-argument call.
+        const result = await (Platform.OS === 'ios'
+          ? WebBrowser.openAuthSessionAsync(start.url, NATIVE_REDIRECT, { preferUniversalLinks: true })
+          : WebBrowser.openAuthSessionAsync(start.url, NATIVE_REDIRECT));
         if (result.type === 'success') {
           const path = await nativeAuth.callback(result.url);
           if (path) router.replace(path as '/profile');
@@ -54,7 +60,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       } catch { await nativeAuth.cancelLogin(start.generation); }
     } finally { browserBusy.current = false; }
   }
-  return <Context.Provider value={{ ...snapshot, postgame: nativeAuth.postgame, safety: nativeAuth.safety, contact: nativeAuth.contact, profile: nativeAuth.profile, avatar: nativeAuth.avatar, cover: nativeAuth.cover, gameManagement: nativeAuth.gameManagement, players: nativeAuth.players, messages: nativeAuth.messages, participation: nativeAuth.participation, signIn, logout: () => nativeAuth.logout(), cancel: () => nativeAuth.cancelLogin(),
+  return <Context.Provider value={{ ...snapshot, postgame: nativeAuth.postgame, safety: nativeAuth.safety, contact: nativeAuth.contact, profile: nativeAuth.profile, avatar: nativeAuth.avatar, cover: nativeAuth.cover, gameManagement: nativeAuth.gameManagement, players: nativeAuth.players, messages: nativeAuth.messages, participation: nativeAuth.participation, signIn, signInUnavailable: iosSignInUnavailable, logout: () => nativeAuth.logout(), cancel: () => nativeAuth.cancelLogin(),
     validate: nativeAuth.validate, loadSessions: nativeAuth.loadSessions, revokeSession: nativeAuth.revokeSession }}>{children}</Context.Provider>;
 }
 export function useAuth() {
