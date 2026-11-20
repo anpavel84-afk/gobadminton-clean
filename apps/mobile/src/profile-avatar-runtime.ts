@@ -1,6 +1,7 @@
 import {
   AVATAR_DERIVATIVE_MAX_BYTES,
   AVATAR_DERIVATIVE_OVERSIZE,
+  AVATAR_HEIF_CONVERT_FAILED,
   AVATAR_PREPROCESS_MS,
   AVATAR_SIZE,
   AVATAR_SOURCE_MAX_BYTES,
@@ -12,6 +13,8 @@ import {
   avatarOrientedSize,
   cloneDerivativeBytes,
   inspectAvatarSource,
+  inspectHeifSource,
+  isHeifSource,
   stripAvatarMetadata,
   type AvatarDerivative,
   type AvatarMetadata,
@@ -19,6 +22,7 @@ import {
 import type * as ExpoFileSystemModule from 'expo-file-system';
 import type * as ExpoImageManipulatorModule from 'expo-image-manipulator';
 import type * as ExpoImagePickerModule from 'expo-image-picker';
+import type * as ReactNativeModule from 'react-native';
 
 /** Server cover output size (sanitized 1200×400 PNG). */
 export const COVER_WIDTH = 1200;
@@ -118,7 +122,39 @@ export type AvatarRuntimeDeps = {
     format: 'jpeg' | 'webp',
     compress: number,
   ) => Promise<{ uri: string }>;
+  /**
+   * iOS only (absent on Android): PHPicker `current` originals are often HEIC/HEIF.
+   * Decode with one native orientation pass and save an upright app-cache JPEG ≤ maxEdge.
+   */
+  heicToJpeg?: (inputUri: string, maxEdge: number) => Promise<{ uri: string; width: number; height: number }>;
 };
+
+/**
+ * Inspected source container and the URI the crop reads from. Without `heicToJpeg` this is exactly
+ * the picked asset; with it, HEIC/HEIF bytes become a tracked JPEG that passes the same JPEG gates.
+ */
+export async function resolveAvatarSource(
+  deps: Pick<AvatarRuntimeDeps, 'openReadOnly' | 'heicToJpeg'>,
+  asset: PickedAvatarAsset,
+  sourceBytes: Uint8Array,
+  track: (uri: string) => void,
+  retired: () => boolean,
+): Promise<{ uri: string; meta: AvatarMetadata }> {
+  if (!deps.heicToJpeg || !isHeifSource(sourceBytes)) {
+    return { uri: asset.uri, meta: inspectAvatarSource(sourceBytes, asset.mimeType ?? '') };
+  }
+  const heif = inspectHeifSource(sourceBytes, asset.mimeType ?? '');
+  if (heif.hasAlpha) throw new AvatarSourceError(AVATAR_TRANSPARENCY_USER, 'WHITE_FLATTEN_UNPROVEN');
+  const converted = await deps.heicToJpeg(asset.uri, Math.min(2048, Math.max(heif.width, heif.height)));
+  track(converted.uri);
+  if (retired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+  const bytes = await readBoundedAvatarBytes(deps.openReadOnly, converted.uri);
+  const meta = inspectAvatarSource(bytes, 'image/jpeg');
+  if (meta.orientation !== 1 || meta.width !== converted.width || meta.height !== converted.height) {
+    throw new AvatarSourceError(AVATAR_HEIF_CONVERT_FAILED);
+  }
+  return { uri: converted.uri, meta };
+}
 
 /** Bound actual bytes via sequential read of limit+1 — never trust picker fileSize/base64. */
 export async function readBoundedAvatarBytes(
@@ -210,14 +246,15 @@ export async function prepareOwnCoverDerivative(
     const work = (async () => {
       const sourceBytes = await readBoundedAvatarBytes(deps.openReadOnly, asset.uri);
       if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
-      const meta = inspectAvatarSource(sourceBytes, asset.mimeType ?? '');
+      const source = await resolveAvatarSource(deps, asset, sourceBytes, track, effectivelyRetired);
+      const meta = source.meta;
       assertOpaqueAvatarSource(meta);
       if (!deps.coverFrame1200x400) {
         throw new AvatarSourceError('Не удалось подготовить фрагмент обложки 1200×400. Выберите другое фото.');
       }
       const oriented = avatarOrientedSize(meta);
       const maxEdge = Math.min(2048, Math.max(oriented.width, oriented.height));
-      const rendered = await deps.coverFrame1200x400(asset.uri, meta, position, maxEdge);
+      const rendered = await deps.coverFrame1200x400(source.uri, meta, position, maxEdge);
       track(rendered.uri);
       if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
       if (rendered.width !== COVER_WIDTH || rendered.height !== COVER_HEIGHT) {
@@ -275,6 +312,7 @@ export async function prepareOwnCoverDerivative(
 /**
  * Android quality:1 copies selected original bytes to cache, but OS/provider import may precede validation.
  * iOS may silently fall back to decoded/reencoded PNG — original-container parity is unproved.
+ * iOS HEIC/HEIF originals are converted to an upright JPEG first (resolveAvatarSource); Android has no converter.
  * Crop uses orientation-normalized visible size after one native orientation fix; no guessed Android double-rotate.
  * Transparent sources fail closed: native white-flatten is unproven.
  */
@@ -305,11 +343,12 @@ export async function prepareOwnAvatarDerivative(
     const work = (async () => {
       const sourceBytes = await readBoundedAvatarBytes(deps.openReadOnly, asset.uri);
       if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
-      const meta = inspectAvatarSource(sourceBytes, asset.mimeType ?? '');
+      const source = await resolveAvatarSource(deps, asset, sourceBytes, track, effectivelyRetired);
+      const meta = source.meta;
       assertOpaqueAvatarSource(meta);
       const oriented = avatarOrientedSize(meta);
       const maxEdge = Math.min(2048, Math.max(oriented.width, oriented.height));
-      const rendered = await deps.centerSquare512(asset.uri, meta, maxEdge);
+      const rendered = await deps.centerSquare512(source.uri, meta, maxEdge);
       track(rendered.uri);
       if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
       if (rendered.width !== AVATAR_SIZE || rendered.height !== AVATAR_SIZE) {
@@ -385,6 +424,43 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
   const manipulator = require('expo-image-manipulator') as typeof ExpoImageManipulatorModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require('expo-file-system') as typeof ExpoFileSystemModule;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Platform } = require('react-native') as typeof ReactNativeModule;
+  const ios = Platform.OS === 'ios';
+  /**
+   * iOS ImageCropTransformer throws when the rect exceeds the decoded bitmap by even 1 px, and ImageIO
+   * thumbnail rounding is not JS rounding — so crop from the decoded (already upright) ImageRef size.
+   */
+  const iosDecodedCrop = async (
+    inputUri: string,
+    decodeMax: number,
+    rect: (width: number, height: number) => { originX: number; originY: number; width: number; height: number },
+    size: { width: number; height: number },
+  ) => {
+    const decoded = await manipulator.ImageManipulator.manipulate(inputUri, {
+      maxWidth: decodeMax,
+      maxHeight: decodeMax,
+    }).renderAsync();
+    try {
+      const crop = rect(decoded.width, decoded.height);
+      const image = await manipulator.ImageManipulator.manipulate(decoded)
+        .crop({
+          originX: crop.originX,
+          originY: crop.originY,
+          width: crop.width,
+          height: crop.height,
+        })
+        .resize(size)
+        .renderAsync();
+      const saved = await image.saveAsync({
+        format: manipulator.SaveFormat.JPEG,
+        compress: 1,
+      });
+      return { uri: saved.uri, width: image.width, height: image.height };
+    } finally {
+      decoded.release();
+    }
+  };
   const preferred =
     picker.UIImagePickerPreferredAssetRepresentationMode?.Current ??
     ('current' as const);
@@ -395,7 +471,7 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
   } catch {
     /* Paths.cache unavailable in non-native hosts — ownership stays closed (no deletes). */
   }
-  return {
+  const runtime: AvatarRuntimeDeps = {
     launchLibrary: options =>
       picker.launchImageLibraryAsync({
         ...options,
@@ -419,6 +495,14 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
     centerSquare512: async (inputUri, meta, maxEdge) => {
       const oriented = avatarOrientedSize(meta);
       const crop = avatarDownsampleCrop(oriented, maxEdge);
+      if (ios) {
+        return iosDecodedCrop(
+          inputUri,
+          crop.decodeMax,
+          (width, height) => avatarDownsampleCrop({ width, height }, Math.max(width, height)),
+          { width: AVATAR_SIZE, height: AVATAR_SIZE },
+        );
+      }
       const image = await manipulator.ImageManipulator.manipulate(inputUri, {
         maxWidth: crop.decodeMax,
         maxHeight: crop.decodeMax,
@@ -444,6 +528,14 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
       const dw = Math.max(1, Math.round(oriented.width * scale));
       const dh = Math.max(1, Math.round(oriented.height * scale));
       const crop = coverCrop(dw, dh, position.x, position.y);
+      if (ios) {
+        return iosDecodedCrop(
+          inputUri,
+          decodeMax,
+          (width, height) => coverCrop(width, height, position.x, position.y),
+          { width: COVER_WIDTH, height: COVER_HEIGHT },
+        );
+      }
       const image = await manipulator.ImageManipulator.manipulate(inputUri, {
         maxWidth: decodeMax,
         maxHeight: decodeMax,
@@ -470,4 +562,18 @@ export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
       });
     },
   };
+  if (ios) {
+    runtime.heicToJpeg = async (inputUri, maxEdge) => {
+      const image = await manipulator.ImageManipulator.manipulate(inputUri, {
+        maxWidth: maxEdge,
+        maxHeight: maxEdge,
+      }).renderAsync();
+      const saved = await image.saveAsync({
+        format: manipulator.SaveFormat.JPEG,
+        compress: 1,
+      });
+      return { uri: saved.uri, width: image.width, height: image.height };
+    };
+  }
+  return runtime;
 }
