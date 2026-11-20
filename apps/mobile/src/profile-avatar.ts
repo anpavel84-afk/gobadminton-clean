@@ -189,6 +189,90 @@ export function inspectAvatarSource(bytes: ArrayBuffer | Uint8Array, declaredTyp
   return { mime, width, height, orientation, hasAlpha };
 }
 
+const HEIF_STILL_BRANDS = ['heic', 'heix', 'heim', 'heis'];
+const HEIF_SEQUENCE_BRANDS = ['msf1', 'hevc', 'hevx', 'hevm', 'hevs'];
+const HEIF_ALPHA_URNS = ['urn:mpeg:hevc:2015:auxid:1', 'urn:mpeg:mpegB:cicp:systems:auxiliary:alpha'];
+export const AVATAR_HEIF_TYPES: readonly string[] = ['image/heic', 'image/heif'];
+export const AVATAR_HEIF_CONVERT_FAILED =
+  'Не удалось преобразовать фото HEIC в JPEG. Выберите другое фото или сохраните его как JPEG.';
+
+export type HeifSourceMetadata = { width: number; height: number; hasAlpha: boolean };
+
+/** ISO-BMFF ftyp carrying a still HEVC brand (iOS photo-library original). Header only. */
+export function isHeifSource(bytes: Uint8Array): boolean {
+  if (bytes.length < 16) return false;
+  const ascii = (offset: number) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+  if (ascii(4) !== 'ftyp') return false;
+  const size = ((bytes[0]! << 24) >>> 0) + (bytes[1]! << 16) + (bytes[2]! << 8) + bytes[3]!;
+  if (size < 16 || size > bytes.length) return false;
+  const brands = [ascii(8)];
+  for (let p = 16; p + 4 <= size; p += 4) brands.push(ascii(p));
+  return brands.some(brand => HEIF_STILL_BRANDS.includes(brand));
+}
+
+/**
+ * HEIC/HEIF container gate before native decode: still image (no sequence), `pict` handler,
+ * largest `ispe` within the 50 Mp budget, alpha auxiliary images flagged. Pixels/orientation stay native.
+ */
+export function inspectHeifSource(bytes: ArrayBuffer | Uint8Array, declaredType = ''): HeifSourceMetadata {
+  const a = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const buffer = a.buffer.slice(a.byteOffset, a.byteOffset + a.byteLength) as ArrayBuffer;
+  const v = new DataView(buffer);
+  const ascii = (offset: number, count: number) => String.fromCharCode(...a.subarray(offset, offset + count));
+  const invalid = (): never => {
+    throw new AvatarSourceError('Фото повреждено или не удалось прочитать его размеры. Выберите другое фото.');
+  };
+  if (declaredType && !AVATAR_HEIF_TYPES.includes(declaredType)) throw new AvatarSourceError(AVATAR_FORMATS);
+  if (!isHeifSource(a) || HEIF_SEQUENCE_BRANDS.includes(ascii(8, 4))) throw new AvatarSourceError(AVATAR_FORMATS);
+  // Walks sibling boxes in [start, end); stops after `stop` so trailing media data is never parsed.
+  const children = (start: number, end: number, stop?: string) => {
+    const boxes: { type: string; start: number; end: number }[] = [];
+    for (let p = start; p < end;) {
+      if (p + 8 > end) invalid();
+      let size = v.getUint32(p);
+      let header = 8;
+      if (size === 1) {
+        if (p + 16 > end || v.getUint32(p + 8) !== 0) invalid();
+        size = v.getUint32(p + 12);
+        header = 16;
+      } else if (size === 0) size = end - p;
+      if (size < header || size > end - p) invalid();
+      const type = ascii(p + 4, 4);
+      boxes.push({ type, start: p + header, end: p + size });
+      if (type === stop) break;
+      p += size;
+    }
+    return boxes;
+  };
+  const meta = children(0, a.length, 'meta').find(box => box.type === 'meta') ?? invalid();
+  if (meta.end - meta.start < 4) invalid();
+  const metaBoxes = children(meta.start + 4, meta.end);
+  const hdlr = metaBoxes.find(box => box.type === 'hdlr') ?? invalid();
+  if (hdlr.end - hdlr.start < 12 || ascii(hdlr.start + 8, 4) !== 'pict') throw new AvatarSourceError(AVATAR_FORMATS);
+  const iprp = metaBoxes.find(box => box.type === 'iprp') ?? invalid();
+  const ipco = children(iprp.start, iprp.end).find(box => box.type === 'ipco') ?? invalid();
+  let width = 0, height = 0, hasAlpha = false;
+  for (const property of children(ipco.start, ipco.end)) {
+    if (property.type === 'ispe') {
+      if (property.end - property.start < 12) invalid();
+      const w = v.getUint32(property.start + 4), h = v.getUint32(property.start + 8);
+      if (w * h > width * height) {
+        width = w;
+        height = h;
+      }
+    } else if (property.type === 'auxC') {
+      const urn = a.subarray(property.start + 4, property.end);
+      const nul = urn.indexOf(0);
+      if (HEIF_ALPHA_URNS.includes(String.fromCharCode(...urn.subarray(0, nul < 0 ? urn.length : nul)))) hasAlpha = true;
+    }
+  }
+  if (!width || !height) invalid();
+  if (width * height > AVATAR_SOURCE_MAX_PIXELS) {
+    throw new AvatarSourceError('Фото должно быть не больше 50 Мп. Выберите фото меньшего размера.');
+  }
+  return { width, height, hasAlpha };
+}
+
 /** Some encoders attach ICC/EXIF/XMP. Strip metadata containers explicitly. */
 export function stripAvatarMetadata(bytes: ArrayBuffer | Uint8Array, mime: string, orientationOnly = false): Uint8Array {
   const a = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
