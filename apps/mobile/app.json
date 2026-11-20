@@ -13,7 +13,14 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "ru.gobadminton.mobile.dev"
+      "bundleIdentifier": "ru.gobadminton.mobile.dev",
+      "associatedDomains": [
+        "applinks:dev.gobadminton.ru",
+        "webcredentials:dev.gobadminton.ru"
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "ru.gobadminton.mobile.dev",
