@@ -1,0 +1,24 @@
+{
+  "status": "DRAFT_FOR_GROK_REVIEW_AND_IMPLEMENTATION",
+  "source_baseline": "bdd912a82a2f0087f4cfc9c6820edc8c49ee6527",
+  "files": [
+    {
+      "name": "GROK_TESTING_PROTOCOL_IMPLEMENTATION.md",
+      "bytes": 9054,
+      "words": 672,
+      "sha256": "4b4c3d2a0ed9a72ce61903cf3b8a1d708544aa38bcdaf3a7f6bc1f8a1bf85e12"
+    },
+    {
+      "name": "PROPORTIONATE_TESTING_PROTOCOL_V1.md",
+      "bytes": 50148,
+      "words": 3729,
+      "sha256": "eb33420feb9c1d8a654a256431bfd6262d0f15fdcc8b99a9559b37998c299713"
+    },
+    {
+      "name": "TEST_PLAN_AND_ROLE_CAPSULES.md",
+      "bytes": 6637,
+      "words": 507,
+      "sha256": "63c5b3665d53a622f3bb5638d73fc73450f6c73d8c1c342f4c5a433de7663241"
+    }
+  ]
+}
