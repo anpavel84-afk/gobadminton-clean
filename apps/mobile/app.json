@@ -51,9 +51,20 @@
       [
         "expo-font",
         {
-          "fonts": [
-            "./assets/onest.ttf"
-          ]
+          "android": {
+            "fonts": [
+              "./assets/onest.ttf"
+            ]
+          },
+          "ios": {
+            "fonts": [
+              "./assets/onest-regular.ttf",
+              "./assets/onest-medium.ttf",
+              "./assets/onest-semibold.ttf",
+              "./assets/onest-bold.ttf",
+              "./assets/onest-extrabold.ttf"
+            ]
+          }
         }
       ],
       [

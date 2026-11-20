@@ -2,6 +2,7 @@ import { VenueCommunityProvider } from '../src/venue-community-runtime.tsx';
 import { RadarProvider } from '../src/radar-runtime.tsx';
 import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
+import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { loadAsync } from 'expo-font';
 import { MessagesOwner } from '../src/components/messages.tsx';
@@ -18,9 +19,21 @@ export default function RootLayout() {
   const reduceMotion = useReduceMotion();
   useEffect(() => {
     let active = true;
-    // Metro needs a literal require to bundle the native font asset.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    loadAsync({ Onest: require('../assets/onest.ttf') }).then(() => { if (active) setFont('ready'); })
+    // Metro needs literal requires to bundle the native font assets. iOS cannot select a wght
+    // instance of the variable face, so it gets the static instances as one family and never the
+    // variable file (both carry the PostScript name Onest-Regular).
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const loading = Platform.OS === 'ios'
+      ? loadAsync([{ fontFamily: 'Onest', fontDefinitions: [
+        { path: require('../assets/onest-regular.ttf'), weight: 400 },
+        { path: require('../assets/onest-medium.ttf'), weight: 500 },
+        { path: require('../assets/onest-semibold.ttf'), weight: 600 },
+        { path: require('../assets/onest-bold.ttf'), weight: 700 },
+        { path: require('../assets/onest-extrabold.ttf'), weight: 800 },
+      ] }])
+      : loadAsync({ Onest: require('../assets/onest.ttf') });
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    loading.then(() => { if (active) setFont('ready'); })
       .catch(() => { if (active) setFont('error'); });
     return () => { active = false; };
   }, [attempt]);
