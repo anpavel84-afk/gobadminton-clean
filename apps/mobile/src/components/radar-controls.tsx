@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Linking, Modal, Pressable, ScrollView, Switch, View } from 'react-native';
+import type { PropsWithChildren } from 'react';
+import { Linking, Modal, Platform, Pressable, ScrollView, Switch, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useAuth } from '../auth.tsx';
 import { useRadar } from '../radar-runtime.tsx';
@@ -7,7 +9,7 @@ import { activationDeadline } from '../radar.ts';
 import type { RadarSnapshot } from '../radar-coordinator.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
-import { Label, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
+import { IosSheetSafeArea, iosModalOrientations, Label, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 /** UI clock only: no permission, publication, heartbeat or renewal is dispatched here. */
 export function radarControlPresentation(state: RadarSnapshot, now: number) {
   const a = state.activation;
@@ -65,8 +67,8 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
       <View style={{width:28,height:28,alignItems:'center',justifyContent:'center',transform:[{scale:0.55}]}}>{glyph}</View>
       <Label style={{fontWeight:'600',fontSize:14,lineHeight:20}}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
     </Pressable>}
-    <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet">
-      <ScreenFrame><ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+    <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet" supportedOrientations={iosModalOrientations}>
+      <IosSheetSafeArea><RadarSheetBody>
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
           <Pressable accessibilityRole="button" accessibilityLabel="Закрыть" onPress={close}
             style={({ pressed }) => [{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
@@ -97,7 +99,14 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
         {['denied','restricted','services_off','location_error'].includes(state.phase) && <TextButton title="Открыть настройки устройства" onPress={() => { void Linking.openSettings(); }} />}
         <Label>Поиск игроков по городу доступен и без геолокации.</Label>
         <TextButton title="К списку игроков" onPress={close} />
-      </ScrollView></ScreenFrame>
+      </RadarSheetBody></IosSheetSafeArea>
     </Modal>
   </>;
+}
+/** Reads insets inside IosSheetSafeArea: the iOS pageSheet runs under the home indicator, not the status bar. */
+function RadarSheetBody({ children }: PropsWithChildren) {
+  const insets = useSafeAreaInsets();
+  return <ScreenFrame><ScrollView contentContainerStyle={{ padding: 20, paddingBottom: Platform.OS === 'ios' ? insets.bottom + 20 : 20, gap: 16 }}>
+    {children}
+  </ScrollView></ScreenFrame>;
 }

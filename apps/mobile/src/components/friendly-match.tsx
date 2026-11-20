@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { playerInitials } from '../presentation.ts';
 import { playerMediaUrl } from '../media.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
-import { Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
+import { iosModalOrientations, Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
 /** Same approved uploaded/provider media projection, with real-name fallback in match colors. */
 function MatchAvatar({identity,self,size}:{identity:Match['peer'];self:boolean;size:number}) {
   const [failed,setFailed]=useState<string[]>([]);
@@ -44,7 +44,7 @@ export function FriendlyMatch({match,onDismiss,current}:{match:Match;onDismiss:(
     return ()=>{mounted.current=false;};
   },[]);
   const valid=()=>mounted.current && current();
-  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={onDismiss}
+  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={onDismiss} supportedOrientations={iosModalOrientations}
     onShow={()=>{const handle=findNodeHandle(title.current);if(handle)AccessibilityInfo.setAccessibilityFocus(handle);}}>
     <ScreenFrame><ScrollView contentContainerStyle={{flexGrow:1,paddingHorizontal:24,paddingTop:14,paddingBottom:insets.bottom+20}}>
       <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:compact?8:20}}>
