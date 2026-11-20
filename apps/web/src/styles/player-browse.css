@@ -564,6 +564,21 @@
   min-height: 52px;
 }
 
+.gb-player-browse .pb-btn-skip,
+.gb-player-browse .pb-btn-request {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.gb-player-browse .pb-btn-skip svg,
+.gb-player-browse .pb-btn-request svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
 .gb-player-browse .pb-btn-skip {
   border: 1px solid var(--pb-line);
   border-radius: 14px;
@@ -2140,7 +2155,7 @@
      top/bottom/height — align-items:stretch on a flex row made Next as tall as status+button. */
   .gb-player-browse[data-browse-desktop="true"] .pb-profile-actions {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1.6fr) minmax(138px, 1fr);
     grid-template-rows: auto auto;
     column-gap: 10px;
     row-gap: 0;
@@ -2177,7 +2192,7 @@
     grid-column: 1;
     grid-row: 2;
     display: block;
-    min-height: 48px;
+    min-height: 56px;
     align-self: stretch;
   }
 
@@ -2186,7 +2201,7 @@
   .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop .btn {
     width: 100%;
     box-sizing: border-box;
-    min-height: 48px;
+    min-height: 56px;
     height: 100%;
     border-radius: 10px;
     font-size: 12px;
@@ -2207,7 +2222,7 @@
     justify-content: center;
     gap: 10px;
     box-sizing: border-box;
-    min-height: 48px;
+    min-height: 56px;
     height: 100%;
     min-width: 138px;
     padding: 12px 16px;
@@ -2773,9 +2788,9 @@ dialog.pb-mobile-fs::backdrop {
 }
 
 .gb-player-browse .pb-controls--mobile .pb-main-actions {
-  grid-template-columns: 1fr 1.35fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.65fr);
   gap: 8px;
-  min-height: 48px;
+  min-height: 50px;
 }
 
 .gb-player-browse .pb-controls--mobile .pb-main-actions--skip-only {
@@ -2784,7 +2799,7 @@ dialog.pb-mobile-fs::backdrop {
 
 .gb-player-browse .pb-controls--mobile .pb-main-actions button,
 .gb-player-browse .pb-controls--mobile .pb-main-actions .btn {
-  min-height: 48px;
+  min-height: 50px;
   font-size: 12px;
 }
 

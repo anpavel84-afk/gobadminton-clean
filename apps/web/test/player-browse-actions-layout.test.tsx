@@ -157,9 +157,9 @@ describe("player browse desktop actions layout (#523)", () => {
     expect(css).toMatch(
       /\.gb-player-browse\[data-browse-desktop="true"\]\s+\.pb-action-status\s*\{[^}]*grid-column:\s*1[^}]*grid-row:\s*1/s,
     );
-    // Desktop shared geometry stays Style Guide 48; mobile 52 untouched.
+    // Desktop shared geometry Style Guide 56; mobile base 52 untouched.
     expect(css).toMatch(
-      /\.gb-player-browse\[data-browse-desktop="true"\]\s+\.pb-btn-next\s*\{[^}]*min-height:\s*48px/s,
+      /\.gb-player-browse\[data-browse-desktop="true"\]\s+\.pb-btn-next\s*\{[^}]*min-height:\s*56px/s,
     );
     expect(css).toMatch(/\.gb-player-browse\s+\.pb-main-actions\s*\{[^}]*min-height:\s*52px/s);
     expect(css).not.toMatch(
