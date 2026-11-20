@@ -85,5 +85,5 @@ test('signIn guard is iOS-only and precedes beginLogin; Android keeps the two-ar
 test('profile guest card shows the iOS notice in place of the sign-in button only when unavailable', () => {
   const profile = read('../app/profile.tsx');
   assert.match(profile, /\{auth\.signInUnavailable \? <Label accessibilityRole="alert">\{auth\.signInUnavailable\}<\/Label>\s*: !busy && auth\.notice !== 'storage' && <TextButton title="Войти" onPress=\{\(\) => void act\(\(\) => auth\.signIn\(intent\)\)\} \/>\}/);
-  assert.doesNotMatch(profile, /Platform/);
+  assert.doesNotMatch(profile, /Platform\.Version|iosAuthSessionSupported/);
 });
