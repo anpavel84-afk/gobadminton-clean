@@ -1009,9 +1009,11 @@ def routing_qualifications(task, *, reviewer_authority=None, protected_reviewer=
     if protected_reviewer is not None:
         accepted_qa_effort(reviewer_authority, protected_reviewer)
     admitted = author_routes(task)
+    import live as lean_live
+    cursor_model = lean_live.CURSOR_AUTHOR_DEFAULT_MODEL
     result = {}
     for provider, role, model, executor in (
-        (p.CURSOR, 'cursor_author', 'auto', 'native:cursor:1002'),
+        (p.CURSOR, 'cursor_author', cursor_model, 'native:cursor:1002'),
         (p.AGY, 'agy_author', p.AGY_MODEL, 'native:agy:978'),
         (p.CODEX, 'codex_author', p.CODEX_MODEL, 'native:codex:1002:author'),
     ):

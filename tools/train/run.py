@@ -962,15 +962,21 @@ def _author_provenance(claim, author_result, worktree, candidate_sha, operation,
     # Controller-frozen installed V3 contract, never admission task flags.
     if (claim.get('bound_author') or {}).get('mode') != 'on':
         return None
-    known_authors = {'cursor_auto': ('native:cursor:1002', 'auto'),
+    known_authors = {'cursor_auto': ('native:cursor:1002', None),
         'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
         'codex_author': ('native:codex:1002:author', 'gpt-6.1-sol:medium')}
     actual_provider = author_result.get('provider') or 'cursor_auto'
-    executor, model = known_authors.get(actual_provider, ('', ''))
+    executor, fixed_model = known_authors.get(actual_provider, ('', ''))
     # No role inference from task JSON or historical partial output.
-    from live import _qa_source_bytes
-    if actual_provider != 'cursor_auto' and author_result.get('effective_model') != model:
-        executor = ''  # Unknown/mismatched native model cannot qualify an author receipt.
+    from live import CURSOR_AUTHOR_MODELS, _qa_source_bytes
+    if actual_provider == 'cursor_auto':
+        model = author_result.get('effective_model') or 'auto'
+        if model not in CURSOR_AUTHOR_MODELS:
+            executor = ''  # Unknown Cursor model cannot qualify an author receipt.
+    else:
+        model = fixed_model
+        if author_result.get('effective_model') != model:
+            executor = ''  # Unknown/mismatched native model cannot qualify an author receipt.
     _need(executor, 'author_provenance_hold')
     provenance = dict(role='author', source_bytes=_qa_source_bytes(worktree), executor=executor, model=model,
         revision=claim['revision'], candidate_sha=candidate_sha,
