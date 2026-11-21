@@ -33,13 +33,22 @@ export function BrandLockup({ launch = false, light = false }: { launch?: boolea
     </Text>}
   </View>;
 }
-export function PrimaryButton({ title, onPress, disabled = false, align = 'center' }: {
-  title: string; onPress?: () => void; disabled?: boolean; align?: 'center' | 'left';
+export function PrimaryButton({ title, onPress, disabled = false, align = 'center', trailingArrow = false }: {
+  title: string; onPress?: () => void; disabled?: boolean; align?: 'center' | 'left'; trailingArrow?: boolean;
 }) {
+  // Opt-in: explicit trailingArrow, or left-aligned title ending with " →" (venue create CTA parity).
+  const splitArrow = trailingArrow || align === 'left' && title.endsWith(' →');
+  const label = splitArrow && title.endsWith(' →') ? title.slice(0, -2) : title;
   if (align === 'left') {
-    return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
-      style={({ pressed }) => [primarySurface(disabled, pressed), { alignItems: 'flex-start' as const }]}>
-      <Text allowFontScaling style={[primaryLabelStyle, { textAlign: 'left' as const }]}>{title}</Text>
+    return <Pressable accessibilityRole="button" accessibilityLabel={splitArrow ? label : undefined}
+      accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+      style={({ pressed }) => [primarySurface(disabled, pressed), { alignItems: splitArrow ? 'stretch' as const : 'flex-start' as const }]}>
+      {splitArrow
+        ? <View style={{ flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <Text allowFontScaling style={[primaryLabelStyle, { textAlign: 'left' as const, flexShrink: 1 }]}>{label}</Text>
+          <Text allowFontScaling accessible={false} style={primaryLabelStyle}>→</Text>
+        </View>
+        : <Text allowFontScaling style={[primaryLabelStyle, { textAlign: 'left' as const }]}>{title}</Text>}
     </Pressable>;
   }
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}

@@ -96,12 +96,16 @@ test('#598 #606 #624 R4 source assertions', () => {
   assert.doesNotMatch(reviews, /createVenueReview|comment-photos|previewVenueReviewConsent|getOwnVenueReviewEligibility/);
   assert.match(photos, /Фотографии сообщества/);
   assert.match(photos, /Фотографии из публикаций об этой площадке/);
-  assert.match(photos, /commentPhotosFromThreads/);
+  assert.match(photos, /Пока нет фотографий сообщества\./);
+  assert.match(photos, /communityPhotos/);
+  assert.doesNotMatch(photos, /commentPhotosFromThreads/);
   assert.doesNotMatch(photos, /comment-photos|FormData|multipart|POST/);
   assert.match(community, /VenueReviewsSection/);
-  assert.match(community, /VenueCommunityPhotosSection/);
+  assert.match(community, /VenueCommunityPhotosSection venueId=/);
   assert.match(publicApi, /experience-reviews/);
   assert.match(publicApi, /parseVenueReviewsSummary/);
+  assert.match(publicApi, /community-photos/);
+  assert.match(publicApi, /isCommunityPhotoPage/);
 
   assert.match(city, /Где хотите играть\?/);
   assert.match(city, /Город/);

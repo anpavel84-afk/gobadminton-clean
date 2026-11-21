@@ -60,6 +60,53 @@ export function parseOwn(raw: unknown, requested: string): CommunityOwnVoteRespo
       upsert: boolean(actions.upsert), update: boolean(actions.update), withdraw: boolean(actions.withdraw) } } };
 }
 export type Photo = { id: string; width: number; height: number; url: string };
+export type CommunityPhoto = Photo & {
+  source: { commentId: string; parentCommentId: string | null; resourceVersion: number; path: string };
+};
+export type CommunityPhotoPage = { venueId: string; items: CommunityPhoto[]; nextCursor: string | null };
+
+function photoDim(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= 1600 ? raw : null;
+}
+
+/** Mirrors web `isCommunityPhotoPage`: ≤24 items, nextCursor only on a full page, unique ids, exact photo URL, dims 1..1600. */
+export function isCommunityPhotoPage(value: unknown): value is CommunityPhotoPage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  if (typeof page.venueId !== 'string' || page.venueId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] !== page.venueId) {
+    return false;
+  }
+  if (!Array.isArray(page.items) || page.items.length > 24) return false;
+  const next = page.nextCursor;
+  if (!(next === null || typeof next === 'string' && next.length > 0 && next.length <= 1024)) return false;
+  if (next !== null && page.items.length !== 24) return false;
+  const ids = new Set<string>();
+  for (const raw of page.items) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    const photo = raw as Record<string, unknown>;
+    if (typeof photo.id !== 'string' || photo.id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] !== photo.id) {
+      return false;
+    }
+    if (ids.has(photo.id)) return false;
+    ids.add(photo.id);
+    const source = photo.source;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return false;
+    const s = source as Record<string, unknown>;
+    if (typeof s.commentId !== 'string' || s.commentId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] !== s.commentId) {
+      return false;
+    }
+    if (!(s.parentCommentId === null || typeof s.parentCommentId === 'string'
+      && s.parentCommentId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] === s.parentCommentId)) {
+      return false;
+    }
+    if (s.parentCommentId === s.commentId) return false;
+    if (typeof s.resourceVersion !== 'number' || !Number.isInteger(s.resourceVersion) || s.resourceVersion < 1) return false;
+    if (s.path !== `/v1/comments/${s.commentId}`) return false;
+    if (photo.url !== `/v1/comments/${s.commentId}/revisions/${s.resourceVersion}/photos/${photo.id}`) return false;
+    if (photoDim(photo.width) === null || photoDim(photo.height) === null) return false;
+  }
+  return true;
+}
 export type Comment = {
   id: string; entityKind: 'venue'; entityId: string; parentCommentId: string | null; body: string | null;
   deleted: boolean; version: number; createdAt: string; updatedAt: string; edited: boolean; mine: boolean; replyCount: number;
