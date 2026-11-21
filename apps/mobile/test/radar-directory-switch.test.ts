@@ -24,9 +24,23 @@ test('#602 non-compact RadarControls is a directory row with in-list Switch matc
   assert.match(directory, /onValueChange=\{onDirectorySwitch\}/);
   assert.match(directory, /Включить Radar/);
   assert.match(directory, /Radar включён/);
-  assert.match(directory, /\{directorySubtitle\}/);
   assert.match(directory, /\{glyph\}/);
   assert.doesNotMatch(directory, /owner\.enable/);
+
+  // Compact mobile chip (#404 / APK19): fit-content up to 220, light-green, no visible subtitle.
+  assert.match(directory, /alignSelf:'flex-start'/);
+  assert.match(directory, /maxWidth:220/);
+  assert.match(directory, /borderRadius:12/);
+  assert.match(directory, /#eff6e5|DIRECTORY_RADAR_BG/);
+  assert.match(directory, /#dce8ca|DIRECTORY_RADAR_BORDER/);
+  assert.match(directory, /numberOfLines=\{1\}/);
+  assert.match(directory, /fontWeight:'700'/);
+  assert.match(directory, /fontSize:12/);
+  // Negative/regression: old full-width desktop row + visible subtitle Label was the bug.
+  assert.doesNotMatch(directory, /alignSelf:'stretch'/);
+  assert.doesNotMatch(directory, /<Label[^>]*>\{directorySubtitle\}<\/Label>/);
+  assert.doesNotMatch(directory, /fontSize:12,lineHeight:16,color:colors\.secondary/);
+  assert.match(directory, /accessibilityHint=\{directorySubtitle\}/);
 
   assert.match(controls, /Игроки поблизости/);
   assert.match(controls, /const directorySwitchDisabled = state\.busy \|\| state\.enabling \|\| !!state\.command \|\| state\.phase === 'restoring' \|\| state\.phase === 'consent'/);

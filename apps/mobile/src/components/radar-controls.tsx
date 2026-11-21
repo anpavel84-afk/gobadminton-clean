@@ -10,6 +10,9 @@ import type { RadarSnapshot } from '../radar-coordinator.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
 import { IosSheetSafeArea, iosModalOrientations, Label, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
+/** player-browse.css Mobile list compact Radar (#404) — theme has no equal tokens. */
+const DIRECTORY_RADAR_BG = '#eff6e5';
+const DIRECTORY_RADAR_BORDER = '#dce8ca';
 /** UI clock only: no permission, publication, heartbeat or renewal is dispatched here. */
 export function radarControlPresentation(state: RadarSnapshot, now: number) {
   const a = state.activation;
@@ -70,17 +73,14 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
     {compact ? <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}. Открыть управление Radar`}
       accessibilityState={{expanded:open}} onPress={enter} style={{width:48,height:48,alignItems:'center',justifyContent:'center',flexShrink:0}}>
       {glyph}
-    </Pressable> : <View style={{alignSelf:'stretch',minHeight:44,flexDirection:'row',alignItems:'center',gap:12,paddingVertical:8,paddingHorizontal:12,borderRadius:16,borderWidth:1,borderColor:colors.line,backgroundColor:active ? colors.limeSoft : colors.card}}>
+    </Pressable> : <View style={{alignSelf:'flex-start',maxWidth:220,minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingTop:7,paddingRight:10,paddingBottom:7,paddingLeft:8,borderRadius:12,borderWidth:1,borderColor:DIRECTORY_RADAR_BORDER,backgroundColor:DIRECTORY_RADAR_BG,overflow:'hidden'}}>
       <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}`} onPress={enter}
-        style={{flex:1,minWidth:0,minHeight:44,flexDirection:'row',alignItems:'center',gap:8}}>
-        <View style={{width:28,height:28,alignItems:'center',justifyContent:'center',transform:[{scale:0.55}]}}>{glyph}</View>
-        <View style={{flex:1,minWidth:0,gap:2}}>
-          <Label style={{fontWeight:'600',fontSize:14,lineHeight:20}}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
-          <Label style={{fontSize:12,lineHeight:16,color:colors.secondary}}>{directorySubtitle}</Label>
-        </View>
+        style={{flexShrink:1,minWidth:0,minHeight:44,flexDirection:'row',alignItems:'center',gap:8}}>
+        <View style={{width:22,height:22,alignItems:'center',justifyContent:'center',transform:[{scale:22/48}]}}>{glyph}</View>
+        <Label style={{fontWeight:'700',fontSize:12,lineHeight:14}} numberOfLines={1}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
       </Pressable>
-      <Switch accessibilityRole="switch" accessibilityLabel="Radar" accessibilityState={{checked:active}}
-        value={active} disabled={directorySwitchDisabled} onValueChange={onDirectorySwitch} />
+      <Switch accessibilityRole="switch" accessibilityLabel="Radar" accessibilityHint={directorySubtitle} accessibilityState={{checked:active}}
+        value={active} disabled={directorySwitchDisabled} onValueChange={onDirectorySwitch} style={{transform:[{scale:0.8}]}} />
     </View>}
     <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet" supportedOrientations={iosModalOrientations}>
       <IosSheetSafeArea><RadarSheetBody>
