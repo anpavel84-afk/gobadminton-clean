@@ -186,15 +186,27 @@ export class AuthCoordinator {
   uploadCommentPhoto = (
     input: Readonly<{ venueId: string; key: string; mime: string; bytes: Uint8Array }>,
     actor: Actor,
-  ) => this.participationRead(access => this.deps.api.uploadCommentPhoto(access, input), actor);
+    permit: () => boolean,
+  ) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.uploadCommentPhoto(access, input);
+  }, actor);
   commentPhotoStatus = (
     input: Readonly<{ id: string; venueId: string }>,
     actor: Actor,
-  ) => this.participationRead(access => this.deps.api.commentPhotoStatus(access, input), actor);
+    permit: () => boolean,
+  ) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.commentPhotoStatus(access, input);
+  }, actor);
   withdrawCommentPhoto = (
     input: Readonly<{ id: string; key: string; venueId: string }>,
     actor: Actor,
-  ) => this.participationRead(access => this.deps.api.withdrawCommentPhoto(access, input), actor);
+    permit: () => boolean,
+  ) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.withdrawCommentPhoto(access, input);
+  }, actor);
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
   private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {
     const epoch = this.epoch;

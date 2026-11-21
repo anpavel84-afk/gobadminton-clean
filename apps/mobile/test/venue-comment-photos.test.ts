@@ -18,6 +18,7 @@ import {
 } from '../src/venue-comment-photos.ts';
 import { CommunityError, freezePacket } from '../src/venue-community.ts';
 import { createNativeApi } from '../src/native-api.ts';
+import { ParticipationError } from '../src/participation.ts';
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
@@ -280,7 +281,7 @@ test('#598B r2 withdraw retry uses DELETE with same withdrawKey and never re-upl
   assert.match(composer, /withdrawKey/);
   assert.match(composer, /withdrawing/);
   assert.match(composer, /withdraw_failed/);
-  assert.match(composer, /nativeAuth\.withdrawCommentPhoto\(\{ id: receiptId, key: withdrawKey, venueId: venue \}/);
+  assert.match(composer, /nativeAuth\.withdrawCommentPhoto\(\s*\{ id: receiptId, key: withdrawKey, venueId: venue \},\s*current,\s*permit,/);
   assert.match(composer, /PHOTO_SUBMISSION_UNAVAILABLE/);
   const retryStart = composer.indexOf('const retry = useCallback');
   const retryEnd = composer.indexOf('const remove = useCallback');
@@ -317,8 +318,10 @@ test('#598B auth coordinator exposes photo ports through participationRead', () 
   assert.match(auth, /uploadCommentPhoto =/);
   assert.match(auth, /commentPhotoStatus =/);
   assert.match(auth, /withdrawCommentPhoto =/);
-  assert.match(auth, /participationRead\(access => this\.deps\.api\.uploadCommentPhoto/);
-  assert.match(auth, /participationRead\(access => this\.deps\.api\.withdrawCommentPhoto/);
+  // r5: permit() checked inside participationRead callback before deps.api dispatch.
+  assert.match(auth, /uploadCommentPhoto =[\s\S]*?permit: \(\) => boolean,[\s\S]*?participationRead\(access => \{\s*if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return this\.deps\.api\.uploadCommentPhoto\(access, input\);/);
+  assert.match(auth, /commentPhotoStatus =[\s\S]*?permit: \(\) => boolean,[\s\S]*?participationRead\(access => \{\s*if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return this\.deps\.api\.commentPhotoStatus\(access, input\);/);
+  assert.match(auth, /withdrawCommentPhoto =[\s\S]*?permit: \(\) => boolean,[\s\S]*?participationRead\(access => \{\s*if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return this\.deps\.api\.withdrawCommentPhoto\(access, input\);/);
 });
 
 test('#598B root composer wired under venue community comment field', () => {
@@ -562,6 +565,105 @@ test('#598B r3 status/withdraw/upload reject foreign venue receipt; accept canon
     /communityId\(\(raw as VenueCommentPhotoReceipt\)\.venueId\)/,
   );
   const auth = read('../src/auth-coordinator.ts');
-  assert.match(auth, /commentPhotoStatus = \(\s*input: Readonly<\{ id: string; venueId: string \}>,/);
-  assert.match(auth, /withdrawCommentPhoto = \(\s*input: Readonly<\{ id: string; key: string; venueId: string \}>,/);
+  assert.match(auth, /commentPhotoStatus = \(\s*input: Readonly<\{ id: string; venueId: string \}>,\s*actor: Actor,\s*permit: \(\) => boolean,/);
+  assert.match(auth, /withdrawCommentPhoto = \(\s*input: Readonly<\{ id: string; key: string; venueId: string \}>,\s*actor: Actor,\s*permit: \(\) => boolean,/);
+});
+
+test('#598B r5 composer passes alive+generation+scope permit; stale ParticipationError silent (negative)', () => {
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /ParticipationError/);
+  const upload = composer.slice(
+    composer.indexOf('const uploadOne = useCallback'),
+    composer.indexOf('const withdrawOne = useCallback'),
+  );
+  assert.match(upload, /const permit = \(\) => alive\.current && epoch === generation\.current && live\.current\.venueId === venue/);
+  assert.match(upload, /nativeAuth\.uploadCommentPhoto\(\s*\{ venueId: venue, key, mime, bytes \},\s*current,\s*permit,/);
+  assert.match(upload, /error instanceof ParticipationError && error\.kind === 'stale'/);
+  const withdraw = composer.slice(
+    composer.indexOf('const withdrawOne = useCallback'),
+    composer.indexOf('const add = useCallback'),
+  );
+  assert.match(withdraw, /const permit = \(\) => alive\.current && epoch === generation\.current && live\.current\.venueId === venue\s*&& itemsRef\.current\.some\(item => item\.key === key\)/);
+  assert.match(withdraw, /nativeAuth\.withdrawCommentPhoto\(\s*\{ id: receiptId, key: withdrawKey, venueId: venue \},\s*current,\s*permit,/);
+  assert.match(withdraw, /error instanceof ParticipationError && error\.kind === 'stale'/);
+});
+
+test('#598B r5 delayed-token: stale permit never dispatches photo API; live permit calls once', async () => {
+  // Faithful minimal harness of participationRead + photo methods (FIX-598B2-R5-EVIDENCE).
+  const deferred = <T>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(done => { resolve = done; });
+    return { promise, resolve };
+  };
+  type PhotoApi = {
+    uploadCommentPhoto: (access: string, input: unknown) => Promise<unknown>;
+    commentPhotoStatus: (access: string, input: unknown) => Promise<unknown>;
+    withdrawCommentPhoto: (access: string, input: unknown) => Promise<unknown>;
+  };
+  const participationRead = async <T>(
+    token: () => Promise<string>,
+    operation: (access: string) => Promise<T>,
+  ): Promise<T> => {
+    const access = await token();
+    return operation(access);
+  };
+  const makePorts = (api: PhotoApi, token: () => Promise<string>) => ({
+    uploadCommentPhoto: (input: unknown, _actor: unknown, permit: () => boolean) =>
+      participationRead(token, access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return api.uploadCommentPhoto(access, input);
+      }),
+    commentPhotoStatus: (input: unknown, _actor: unknown, permit: () => boolean) =>
+      participationRead(token, access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return api.commentPhotoStatus(access, input);
+      }),
+    withdrawCommentPhoto: (input: unknown, _actor: unknown, permit: () => boolean) =>
+      participationRead(token, access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return api.withdrawCommentPhoto(access, input);
+      }),
+  });
+
+  for (const method of ['uploadCommentPhoto', 'withdrawCommentPhoto', 'commentPhotoStatus'] as const) {
+    for (const caseKind of ['stale', 'live'] as const) {
+      const gate = deferred<string>();
+      const apiCalls: string[] = [];
+      const api: PhotoApi = {
+        uploadCommentPhoto: async () => { apiCalls.push('uploadCommentPhoto'); return readyReceipt(); },
+        commentPhotoStatus: async () => { apiCalls.push('commentPhotoStatus'); return readyReceipt(); },
+        withdrawCommentPhoto: async () => { apiCalls.push('withdrawCommentPhoto'); return withdrawnReceipt(); },
+      };
+      const ports = makePorts(api, () => gate.promise);
+      let permitted = true;
+      const permit = () => permitted;
+      const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+      const work = method === 'uploadCommentPhoto'
+        ? ports.uploadCommentPhoto({ venueId, key, mime: 'image/jpeg', bytes: jpeg }, actor, permit)
+        : method === 'commentPhotoStatus'
+          ? ports.commentPhotoStatus({ id: photoId, venueId }, actor, permit)
+          : ports.withdrawCommentPhoto({ id: photoId, key, venueId }, actor, permit);
+
+      await new Promise(done => setImmediate(done));
+      assert.equal(apiCalls.length, 0, `${method} must await token before dispatch`);
+
+      if (caseKind === 'stale') {
+        permitted = false;
+        gate.resolve('access-token');
+        await assert.rejects(work, (error: unknown) =>
+          error instanceof ParticipationError && error.kind === 'stale');
+        assert.equal(apiCalls.length, 0, `${method} stale must not dispatch`);
+      } else {
+        gate.resolve('access-token');
+        await work;
+        assert.deepEqual(apiCalls, [method], `${method} live must dispatch once`);
+      }
+    }
+  }
+
+  // Source: actual coordinator methods use the same permit-inside-callback shape.
+  const auth = read('../src/auth-coordinator.ts');
+  assert.match(auth, /if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return this\.deps\.api\.uploadCommentPhoto/);
+  assert.match(auth, /if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return this\.deps\.api\.commentPhotoStatus/);
+  assert.match(auth, /if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return this\.deps\.api\.withdrawCommentPhoto/);
 });

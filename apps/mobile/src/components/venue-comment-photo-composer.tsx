@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import type { Actor } from '../participation.ts';
+import { ParticipationError, type Actor } from '../participation.ts';
 import { nativeAuth } from '../auth-runtime.ts';
 import { CommunityError } from '../venue-community.ts';
 import {
@@ -98,12 +98,15 @@ export function useVenueCommentPhotoComposer(
     }
     running.current.add(key);
     dispatch({ type: 'patch', key, state: 'checking', message: undefined });
+    // Permit rechecked inside participationRead after token, immediately before dispatch.
+    const permit = () => alive.current && epoch === generation.current && live.current.venueId === venue;
     try {
       const receipt = await nativeAuth.uploadCommentPhoto(
         { venueId: venue, key, mime, bytes },
         current,
+        permit,
       );
-      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+      if (!permit()) return;
       dispatch({
         type: 'patch',
         key,
@@ -112,7 +115,8 @@ export function useVenueCommentPhotoComposer(
         message: 'Готово к публикации',
       });
     } catch (error) {
-      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+      if (!permit()) return;
+      if (error instanceof ParticipationError && error.kind === 'stale') return;
       if (error instanceof CommunityError) {
         const mapped = mapUploadFailure(error.status, error.code);
         dispatch({ type: 'patch', key, state: mapped.state, message: mapped.message });
@@ -140,13 +144,21 @@ export function useVenueCommentPhotoComposer(
     if (!venue || !current || !alive.current || running.current.has(key)) return;
     running.current.add(key);
     dispatch({ type: 'patch', key, state: 'withdrawing', withdrawKey, message: undefined });
+    // Permit: composer alive + generation + venue scope + item still present in this generation.
+    const permit = () => alive.current && epoch === generation.current && live.current.venueId === venue
+      && itemsRef.current.some(item => item.key === key);
     try {
-      await nativeAuth.withdrawCommentPhoto({ id: receiptId, key: withdrawKey, venueId: venue }, current);
-      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+      await nativeAuth.withdrawCommentPhoto(
+        { id: receiptId, key: withdrawKey, venueId: venue },
+        current,
+        permit,
+      );
+      if (!permit()) return;
       bytesByKey.current.delete(key);
       dispatch({ type: 'drop', key });
     } catch (error) {
-      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+      if (!permit()) return;
+      if (error instanceof ParticipationError && error.kind === 'stale') return;
       if (
         error instanceof CommunityError
         && error.status === 404
