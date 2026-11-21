@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gamesContext, gamesRoute, retainedGamesOffset } from '../../src/maps.ts';
@@ -81,7 +81,7 @@ export default function GuestGames() {
     <Pressable accessibilityRole="button" accessibilityLabel="Показать площадки на карте" onPress={openMap}
       onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
       style={[floating
-        ? {position:'absolute',bottom:insets.bottom+16,alignSelf:'center'}
+        ? {position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,alignSelf:'center'}
         : {alignSelf:'center'},
       {minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
@@ -95,7 +95,7 @@ export default function GuestGames() {
       onContentSizeChange={(_width,height) => {const offset=restoreOffset.current;if (offset !== null && state.data && height >= offset) {listRef.current?.scrollToOffset({offset,animated:false});restoreOffset.current=null;}}}
       data={city ? list.visible : noGames} keyExtractor={game => game.id}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: hasListItems ? mapEntryHeight + insets.bottom + 16 : 16, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: hasListItems ? mapEntryHeight + insets.bottom + 16 - (Platform.OS === 'ios' ? insets.bottom : 0) : 16, gap: 16 }}
       ListHeaderComponent={<View style={feed.header}>
         <View style={feed.copy}>
           <Label style={feed.eyebrow}>Игры рядом{city ? ` · ${city.nameRu}` : ''}</Label>
@@ -184,7 +184,7 @@ export default function GuestGames() {
 const feed = StyleSheet.create({
   header: { gap: 16 }, copy: { gap: 8, marginBottom: 10 },
   eyebrow: { alignSelf: 'flex-start', backgroundColor: colors.lime, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, fontWeight: '600', fontSize: 12, lineHeight: 17, letterSpacing: 0.6, textTransform: 'uppercase' },
-  title: { fontSize: 36, lineHeight: 39, fontWeight: '700', letterSpacing: -1.44, marginTop: 5 },
+  title: { fontSize: 36, lineHeight: Platform.OS === 'ios' ? 44 : 39, fontWeight: '700', letterSpacing: -1.44, marginTop: 5 },
   body: { color: colors.secondary, fontSize: 13, lineHeight: 19 },
   selectors: { flexDirection: 'row', gap: 8 },
   selector: { minHeight: 82, flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: colors.line, borderRadius: 12, padding: 9, gap: 3 },
