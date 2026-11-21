@@ -111,7 +111,10 @@ test('R3 source: #623 notice scroll/alert, time without seconds, Создать 
   const controls = read('../src/components/create-game-controls.tsx');
   assert.match(create, /scrollTo/);
   assert.match(create, /contactAlert/);
+  assert.match(create, /if \(contactAlert\) return/);
   assert.match(controls, /accessibilityRole="alert"/);
+  assert.match(controls, /measureLayout/);
+  assert.match(controls, /onContactAlertLayout/);
   assert.match(create, /createGameInstant/);
   assert.doesNotMatch(create, /toLocaleString\('ru-RU',\s*\{\s*timeZone:/);
   assert.match(create, /title="Создать игру"/);
