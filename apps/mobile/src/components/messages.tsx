@@ -1,7 +1,7 @@
 import { NativeSafety } from './safety.tsx';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, PropsWithChildren } from 'react';
-import { AppState, FlatList, Image, Pressable, TextInput, View } from 'react-native';
+import { AppState, FlatList, Image, Platform, Pressable, RefreshControl, TextInput, View } from 'react-native';
 import type { FlatListProps } from 'react-native';
 import { useFocusEffect, usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
@@ -99,7 +99,8 @@ export function NativeMessagesInbox() {
     </DiscoverySheet>
     {auth.status !== 'authenticated' ? <View style={{ padding: 16 }}><PrivateEntry /></View> : <>
       <FlatList data={items} keyExtractor={i => `${i.kind}:${i.id}`} contentContainerStyle={{ padding: 16, gap: 0, flexGrow: 1 }}
-        refreshing={state.inboxStatus === 'loading'} onRefresh={() => { void owner.loadInbox(); }}
+        refreshControl={<RefreshControl refreshing={state.inboxStatus === 'loading'} onRefresh={() => { void owner.loadInbox(); }}
+          tintColor={Platform.OS === 'ios' ? colors.purple : undefined} />}
         ListEmptyComponent={<Label>{state.inboxStatus === 'loading' ? 'Загружаем сообщения…' : state.inboxStatus === 'error' ? 'Не удалось загрузить сообщения' : state.inboxStatus === 'ready' ? 'Здесь пока пусто. Здесь появятся переписки, приглашения и чаты ваших игр.' : 'Сообщения'}</Label>}
         renderItem={({ item }) => <Pressable accessibilityRole="button" onPress={() => router.push(inboxDestination(item) as '/messages')}
           style={{ borderBottomColor: colors.line, borderBottomWidth: 1, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>

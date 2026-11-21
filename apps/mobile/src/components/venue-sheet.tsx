@@ -314,7 +314,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
     {venue && (expanded ? schedule ? <>
       <TextButton title="К информации о площадке" onPress={() => changeView('info')} />
       <Label accessibilityRole="header" style={styles.subtitle}>Игры на этой площадке</Label>
-      <ScrollView horizontal contentContainerStyle={{gap:8}} accessibilityLabel="Даты игр">
+      <ScrollView horizontal alwaysBounceHorizontal={Platform.OS === 'ios' ? false : undefined} contentContainerStyle={{gap:8}} accessibilityLabel="Даты игр">
         {days.map(item => <DiscoveryChip key={item.date} title={discoveryDateLabel(item.date)} selected={item.date === day?.date} onPress={() => {setSelectedDate(item.date);}} />)}
       </ScrollView>
       {day?.games.map(game => <Pressable key={game.id} accessibilityRole="button" accessibilityLabel={`Открыть игру ${game.title}`} onPress={() => router.push({pathname:'/games/[id]',params:{id:game.id}})} style={styles.card}>
