@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
-import { AppState, BackHandler, FlatList, Pressable, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { AppState, BackHandler, FlatList, Platform, Pressable, View } from 'react-native';
+import { useFocusEffect, useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { selectedCity } from '../../src/entry.ts';
 import { useResource } from '../../src/hooks.ts';
@@ -16,6 +16,9 @@ import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
 import { RadarControls } from '../../src/components/radar-controls.tsx';
 import { DiscoveryChip, DiscoverySheet, ErrorState, Label, Loading, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
 import { colors } from '../../src/theme.ts';
+import { bindIosBack } from '../../src/ios-back.ts';
+
+const useIosBack = bindIosBack(Platform.OS, usePreventRemove);
 
 export default function GamesMap() {
   const params = useLocalSearchParams(), context = gamesContext(params), router = useRouter(), insets = useSafeAreaInsets();
@@ -64,6 +67,7 @@ export default function GamesMap() {
     return true;
   },[overlay,returnToList]);
   useFocusEffect(useCallback(() => {const listener = BackHandler.addEventListener('hardwareBackPress',back);return () => listener.remove();},[back]));
+  useIosBack(mapBack(overlay) !== null,back);
   // Resolve route aliases only from an actual public binding in this same generation.
   const requestedSelection = useRef<string | null>(null);
   useEffect(() => {

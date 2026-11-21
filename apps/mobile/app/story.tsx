@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react';
-import { BackHandler, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
-import { Redirect, useFocusEffect, useRouter } from 'expo-router';
+import { BackHandler, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Redirect, useFocusEffect, usePreventRemove, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { bindIosBack } from '../src/ios-back.ts';
 import { usePreferences } from '../src/state.tsx';
 import { colors } from '../src/theme.ts';
 import { contentWidth, introArtworkSize } from '../src/layout.ts';
@@ -11,6 +12,7 @@ const stories = [
   ['Ваш город.', 'Ваш ритм', 'Выберите город вручную. Вход и геопозиция для просмотра не нужны.'],
   ['На корт —', 'вместе', 'Смотрите расписание и условия игр. Вы сами решаете, что подходит вам.'],
 ] as const;
+const useIosBack = bindIosBack(Platform.OS, usePreventRemove);
 export default function Story() {
   const [step, setStep] = useState(0);
   const { width, height, fontScale } = useWindowDimensions();
@@ -25,6 +27,7 @@ export default function Story() {
     const back = BackHandler.addEventListener('hardwareBackPress', () => { finish(); return true; });
     return () => back.remove();
   }, [finish]));
+  useIosBack(!(hydrated && preferences.storyCompleted), release => { release(); finish(); });
   if (hydrated && preferences.storyCompleted) return <Redirect href={preferences.cityId ? '/games' : '/city'} />;
   const story = stories[step]!;
   const usableHeight = Math.max(0, (viewport ?? height - insets.top - 88) - insets.bottom);
