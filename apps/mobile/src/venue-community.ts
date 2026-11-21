@@ -160,7 +160,7 @@ export function parsePage(raw: unknown, scope: Scope, query: Query): Page {
 export type Action =
   | { kind: 'upsert'; value: number; expectedVersion: number }
   | { kind: 'withdraw'; expectedVersion: number }
-  | { kind: 'create'; text: string; parentCommentId: string | null; parentEntityId: string }
+  | { kind: 'create'; text: string; parentCommentId: string | null; parentEntityId: string; photoIds?: readonly string[] }
   | { kind: 'edit'; comment: Comment; text: string }
   | { kind: 'delete'; comment: Comment }
   | { kind: 'report'; report: CreateVenueCommunityReportRequest };
@@ -173,8 +173,21 @@ export function freezePacket(actor: Actor, scope: Scope, action: Action, key: st
     body = { expectedVersion: version(action.expectedVersion, action.kind === 'upsert' ? 0 : 1) };
     if (action.kind === 'upsert') { if (version(action.value) > 5) return invalid(); body.value = action.value; }
   } else if (action.kind === 'create') {
-    path = `/venues/${scope.venueId}/comments`; method = 'POST'; body = { text: commentText(action.text), ...(action.parentCommentId ? { parentCommentId: id(action.parentCommentId) } : {}) };
+    path = `/venues/${scope.venueId}/comments`; method = 'POST';
     id(action.parentEntityId);
+    let photoIds: string[] | undefined;
+    if (action.photoIds !== undefined) {
+      if (!Array.isArray(action.photoIds) || action.photoIds.length === 0 || action.photoIds.length > 4) return invalid();
+      photoIds = action.photoIds.map(photoId => id(photoId));
+      if (new Set(photoIds).size !== photoIds.length) return invalid();
+    }
+    const trimmed = typeof action.text === 'string' ? action.text.trim() : '';
+    if (!trimmed && !photoIds?.length) return invalid();
+    body = {
+      text: trimmed ? commentText(action.text) : '',
+      ...(photoIds ? { photoIds: Object.freeze(photoIds) } : {}),
+      ...(action.parentCommentId ? { parentCommentId: id(action.parentCommentId) } : {}),
+    };
   } else if (action.kind === 'edit' || action.kind === 'delete') {
     const c = action.comment; if (!c.mine || c.deleted || c.parentCommentId !== null) return invalid();
     path = `/comments/${id(c.id)}`; method = action.kind === 'edit' ? 'PUT' : 'DELETE'; body = { expectedVersion: version(c.version) };
@@ -204,7 +217,9 @@ export function parseReceipt(raw: unknown, p: Packet): CommunityOwnVoteResponse 
   if (a.kind === 'report') { const r = object(raw); if (r.status !== 'submitted') return invalid(); return { reportId: id(r.reportId), status: 'submitted', createdAt: date(r.createdAt) }; }
   const c = parseComment(raw);
   const entityId = a.kind === 'create' ? a.parentEntityId : a.comment.entityId;
-  if ((a.kind !== 'delete' && c.body === null) || !c.mine || c.entityId !== entityId || c.parentCommentId !== (a.kind === 'create' ? a.parentCommentId : a.comment.parentCommentId)) return invalid();
+  // Photo-only create may return a null body; text-required creates still reject a null body.
+  const allowNullBody = a.kind === 'delete' || (a.kind === 'create' && !!a.photoIds?.length);
+  if ((!allowNullBody && c.body === null) || !c.mine || c.entityId !== entityId || c.parentCommentId !== (a.kind === 'create' ? a.parentCommentId : a.comment.parentCommentId)) return invalid();
   if (a.kind === 'create' ? c.version !== 1 || c.deleted : c.id !== a.comment.id || c.version !== a.comment.version + 1 || c.deleted !== (a.kind === 'delete')) return invalid();
   if (a.kind === 'edit' && (c.photos.map(p => p.id).join() !== a.comment.photos.map(p => p.id).join())) return invalid();
   // Public body masking is server presentation, not local approval or a raw-text equality check.

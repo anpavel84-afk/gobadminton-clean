@@ -182,6 +182,17 @@ export class AuthCoordinator {
     if (!permit()) throw new ParticipationError('stale');
     return this.deps.api.communityMutation(access, packet);
   }, packet.actor);
+  /** Bearer stays inside the coordinator — same closed wrapper as avatar binary ports. */
+  uploadCommentPhoto = (
+    input: Readonly<{ venueId: string; key: string; mime: string; bytes: Uint8Array }>,
+    actor: Actor,
+  ) => this.participationRead(access => this.deps.api.uploadCommentPhoto(access, input), actor);
+  commentPhotoStatus = (id: string, actor: Actor) =>
+    this.participationRead(access => this.deps.api.commentPhotoStatus(access, id), actor);
+  withdrawCommentPhoto = (
+    input: Readonly<{ id: string; key: string }>,
+    actor: Actor,
+  ) => this.participationRead(access => this.deps.api.withdrawCommentPhoto(access, input), actor);
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
   private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {
     const epoch = this.epoch;

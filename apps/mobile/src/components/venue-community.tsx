@@ -11,6 +11,7 @@ import { colors } from '../theme.ts';
 import { DiscoveryChip, DiscoverySheet, iosModalOrientations, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
 import { VenueReviewsSection } from './venue-reviews.tsx';
 import { VenueCommunityPhotosSection } from './venue-photos.tsx';
+import { VenueCommentPhotoComposer, useVenueCommentPhotoComposer } from './venue-comment-photo-composer.tsx';
 type Trigger = ComponentRef<typeof Pressable>;
 const reasons = [ ['harassment','Оскорбления / давление'], ['spam','Спам'], ['fake_profile','Поддельный профиль'], ['inappropriate','Неприемлемый контент'], ['other','Другое'] ] as const;
 const orderOptions = [ ['asc','Сначала старые'], ['desc','Сначала новые'] ] as const;
@@ -144,10 +145,9 @@ function CommunityPanel({name}:{name:string}) {
       <DiscoverySheet visible={orderOpen} title="Порядок" onClose={() => setOrderOpen(false)} returnFocusRef={orderTrigger}>
         {orderOptions.map(([value,label]) => <DiscoveryChip key={value} title={label} selected={s.order === value} onPress={() => { owner.setOrder(value); setOrderOpen(false); }} />)}
       </DiscoverySheet>
-      {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} /> : s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate ? <>
-        <Field label="Ваш комментарий" value={s.drafts.root ?? ''} disabled={locked} onChange={text => owner.setDraft('root',text)} />
-        <PrimaryButton title="Отправить" disabled={locked || !validText(s.drafts.root ?? '')} onPress={() => commit({kind:'create',text:s.drafts.root!,parentCommentId:null,parentEntityId:s.scope!.canonicalVenueId})} />
-      </> : s.roots.phase === 'ready' && <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>}
+      {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} /> : s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate ? (
+        <RootCommentComposer locked={locked} />
+      ) : s.roots.phase === 'ready' && <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>}
       <Outcomes owner={owner} match={o => o.packet.action.kind === 'create' && !o.packet.action.parentCommentId} />
       <ThreadNotice thread={s.roots} reload={() => void owner.loadThread(null)} />
       {s.roots.phase === 'ready' && !s.roots.pages.flatMap(p => p.page.items).length && <Label>Пока нет комментариев. Начните разговор.</Label>}
@@ -178,6 +178,34 @@ function CommunityPanel({name}:{name:string}) {
       <PrimaryButton title={confirmation.packet.action.kind === 'delete' ? 'Удалить комментарий' : confirmation.packet.action.kind === 'withdraw' ? 'Убрать мою оценку' : 'Отправить жалобу'} disabled={s.operations.find(o => o.packet.key === confirmation.packet.key)?.status !== 'review'}
         onPress={() => { void owner.commit(confirmation.packet.key); setConfirmation(null);setReport(null);setDetail('');setReason(null); }} />
     </Dialog>}
+  </>;
+}
+function RootCommentComposer({ locked }: { locked: boolean }) {
+  const { owner, state: s } = useVenueCommunity();
+  const photos = useVenueCommentPhotoComposer(s.venueId, s.actor, locked);
+  const draft = s.drafts.root ?? '';
+  const sendEnabled = !locked && photos.canSend(draft) && (!draft.trim() || validText(draft));
+  return <>
+    <Field label="Ваш комментарий" value={draft} disabled={locked} onChange={text => owner.setDraft('root', text)} />
+    <VenueCommentPhotoComposer model={photos} disabled={locked} />
+    <PrimaryButton
+      title="Отправить"
+      disabled={!sendEnabled}
+      onPress={() => {
+        const packet = owner.review({
+          kind: 'create',
+          text: draft,
+          parentCommentId: null,
+          parentEntityId: s.scope!.canonicalVenueId,
+          ...(photos.readyIds.length ? { photoIds: photos.readyIds } : {}),
+        });
+        if (!packet) return;
+        void owner.commit(packet.key).then(() => {
+          const status = owner.getSnapshot().operations.find(o => o.packet.key === packet.key)?.status;
+          if (status === 'confirmed') photos.clear();
+        });
+      }}
+    />
   </>;
 }
 function ThreadNotice({thread,reload}:{thread:Thread;reload:()=>void}) {
