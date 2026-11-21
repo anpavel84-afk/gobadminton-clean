@@ -30,14 +30,18 @@ test('#620 venue-detail CTA has single-flight create guard', () => {
   assert.doesNotMatch(detail, /onPress=\{\(\) => router\.push\(venueCreatePath\(venue\.id\)!\)\}/);
 });
 
-test('#600 games list «На карте» is in-flow without items and floating only with items', () => {
+test('#600 games list «На карте» stays pinned above nav for empty/loading/error', () => {
   const games = read('../app/games/index.tsx');
-  assert.match(games, /hasListItems/);
-  assert.match(games, /!hasListItems && mapEntry\(false\)/);
-  assert.match(games, /hasListItems && mapEntry\(true\)/);
-  assert.match(games, /hasListItems \? mapEntryHeight \+ insets\.bottom \+ 16/);
-  assert.match(games, /accessibilityLabel="Показать площадки на карте"/);
-  assert.match(games, /position:'absolute'/);
+  assert.doesNotMatch(games, /hasListItems/);
+  const footerStart = games.indexOf('ListFooterComponent=');
+  const footerEnd = games.indexOf('</View>} />', footerStart) + '</View>} />'.length;
+  const footer = games.slice(footerStart, footerEnd);
+  assert.doesNotMatch(footer, /mapEntry/);
+  assert.match(games.slice(footerEnd), /^\s*\{mapEntry\(\)\}/);
+  assert.match(games, /position:'absolute',bottom:Platform\.OS === 'ios' \? 16 : insets\.bottom\+16/);
+  assert.match(games, /paddingBottom: city \? mapEntryHeight \+ insets\.bottom \+ 16 - \(Platform\.OS === 'ios' \? insets\.bottom : 0\) : 16/);
+  assert.match(games, /accessibilityLabel="Все игры на карте"/);
+  assert.match(games, /onPress=\{openMap\}/);
   assert.equal((games.match(/>На карте</g) ?? []).length, 1);
 });
 
