@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
-import { Image, Pressable, TextInput, View } from 'react-native';
+import { Image, Platform, Pressable, TextInput, View } from 'react-native';
 import { DiscoveryChip, DiscoverySheet, Label, styles } from './ui.tsx';
 import { LevelRange } from './level-range.tsx';
 import { colors, typography } from '../theme.ts';
@@ -22,6 +22,7 @@ export function GameField({ label, value, onChange, maxLength = 2000, multiline 
     <Label style={{ textAlign: 'left' }}>{label}</Label>
     <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} maxLength={maxLength}
       multiline={multiline} keyboardType={numeric ? 'number-pad' : 'default'} allowFontScaling
+      returnKeyType={Platform.OS === 'ios' ? (multiline || numeric ? 'done' : 'next') : undefined}
       style={{ minHeight: multiline ? 96 : 48, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.lineDark,
         color: colors.ink, fontFamily: typography.fontFamily, fontSize: 16, backgroundColor: colors.card, textAlign: 'left' }} />
   </View>;

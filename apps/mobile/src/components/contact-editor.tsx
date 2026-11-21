@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { TextInput } from 'react-native';
+import { Platform, TextInput } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { BackLink, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
@@ -47,7 +47,10 @@ export function ContactEditor({ target }: { target: string }) {
         {state.player && <Label>{state.player.displayName}</Label>}
         {(state.status === 'ready' || ownCommand) && <>
           <TextInput accessibilityLabel="Текст сообщения" multiline maxLength={2000} value={text} editable={!command}
-            placeholder="Сообщение" onChangeText={value => owner.draft(target, value, state.actor, state.viewGeneration)} style={styles.input} />
+            placeholder="Сообщение" onChangeText={value => owner.draft(target, value, state.actor, state.viewGeneration)} style={styles.input}
+            textContentType={Platform.OS === 'ios' ? 'none' : undefined}
+            autoCorrect={Platform.OS === 'ios' ? false : undefined}
+            returnKeyType={Platform.OS === 'ios' ? 'default' : undefined} />
           {!command && <PrimaryButton title="Отправить" disabled={!text.trim() || text.trim().length > 2000} onPress={() => { void owner.send(target, state.actor, state.viewGeneration); }} />}
         </>}
         {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}

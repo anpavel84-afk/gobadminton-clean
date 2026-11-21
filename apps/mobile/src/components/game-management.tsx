@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { View, TextInput } from 'react-native';
+import { Platform, View, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { Game } from '@gobadminton/contracts/game-types';
 import { useAuth } from '../auth.tsx';
@@ -53,6 +53,8 @@ export function GameManagement({ id }: { id: string }) {
         {d.roster === 'error' && <Label>Не удалось загрузить заявки. Без актуального списка действия недоступны.</Label>}
         <TextButton title="Обновить" onPress={() => void owner.loadDetail(id)} />
         {mutable && <><Label>Причина отклонения или снятия</Label><TextInput accessibilityLabel="Причина отклонения или снятия" value={reason} onChangeText={setReason} maxLength={1000} multiline allowFontScaling
+          autoCorrect={Platform.OS === 'ios' ? false : undefined}
+          returnKeyType={Platform.OS === 'ios' ? 'done' : undefined}
           style={{ minHeight: 48, padding: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 12, fontFamily: typography.fontFamily, fontSize: 16, color: colors.ink }} /></>}
         {d.roster === 'ready' && (['pending','confirmed','history'] as const).map(group => {
           const items = d.participants.filter(p => group === 'history' ? !['pending','confirmed'].includes(p.status) : p.status === group);
