@@ -14,7 +14,7 @@ import { NativeMap } from '../../src/components/native-map.tsx';
 import { VenueSheet } from '../../src/components/venue-sheet.tsx';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
 import { RadarControls } from '../../src/components/radar-controls.tsx';
-import { DiscoveryChip, DiscoverySheet, ErrorState, Label, Loading, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
+import { DiscoveryChip, DiscoverySheet, ErrorState, Label, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
 import { colors } from '../../src/theme.ts';
 import { bindIosBack } from '../../src/ios-back.ts';
 
@@ -107,7 +107,7 @@ export default function GamesMap() {
   return <ScreenFrame>
     <View style={{flex:1}}>
       {context && city && pack && !catalog && <NativeMap key={cityId} pack={pack} venues={visible} counts={counts} selected={overlay.selected} camera={camera} controlBottom={controlBottom} statusTop={statusTop} onCamera={setCamera} onSelect={select} onCatalog={() => setCatalog(true)} />}
-      {(!pack || catalog) && <FlatList data={visible} keyExtractor={venue => venue.id}
+      {city && (!pack || catalog) && <FlatList data={visible} keyExtractor={venue => venue.id}
         contentContainerStyle={{padding:16,paddingTop:statusTop ?? 12,paddingBottom:insets.bottom+100,gap:12}}
         ListHeaderComponent={<View style={{gap:12}}><Label accessibilityRole="header" style={styles.subtitle}>Площадки списком</Label>
           {!pack && <Label>Для выбранного города карта пока недоступна.</Label>}
@@ -135,7 +135,7 @@ export default function GamesMap() {
           <RadarControls compact />
         </View>
       </View>
-      {statusTop !== undefined && (!hydrated || cities.state.status === 'loading') && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><Loading title="Загружаем города…" /></View>}
+      {statusTop !== undefined && (!hydrated || cities.state.status === 'loading') && <View pointerEvents="none" accessibilityLiveRegion="polite" style={{position:'absolute',width:1,height:1,overflow:'hidden',top:statusTop,left:0}}><Label>Загружаем города…</Label></View>}
       {statusTop !== undefined && cities.state.status === 'error' && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><ErrorState error={cities.state.error} retry={cities.retry} /></View>}
       {statusTop !== undefined && hydrated && cities.state.status === 'ready' && !city && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Выбранный город недоступен.</Label><TextButton title="К играм" onPress={() => router.replace('/games')} /></View>}
       {statusTop !== undefined && city && state.status === 'loading' && <View pointerEvents="none" accessibilityLiveRegion="polite" style={{position:'absolute',width:1,height:1,overflow:'hidden',top:statusTop,left:0}}><Label>Загружаем площадки и расписания…</Label></View>}
