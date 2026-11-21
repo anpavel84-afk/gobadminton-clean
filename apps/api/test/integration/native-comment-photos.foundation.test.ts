@@ -52,7 +52,7 @@ run("native comment-photos principal upload/status/content/withdraw foundation",
     NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{ clientId, redirectUris: ["https://app.example.test/auth/callback"] }]),
   });
   async function build(enabled: boolean) {
-    provider = new FakeModerationProvider({ ...env, NATIVE_AUTH_ENABLED: enabled });
+    provider = new FakeModerationProvider(env);
     provider.fixture = async () => safeImageDecision();
     const module = await Test.createTestingModule({
       imports: [buildTestCoreModule({ ...env, NATIVE_AUTH_ENABLED: enabled }, pool), AuthModule, CommentsModule],
