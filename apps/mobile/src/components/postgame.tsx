@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, PropsWithChildren, RefObject } from 'react';
-import { AccessibilityInfo, findNodeHandle, Modal, Pressable, Text, View, TextInput, Switch } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Modal, Platform, Pressable, Text, View, TextInput, Switch } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { attendanceLabel, mayAcknowledge, normalizeFormReason } from '../postgame.ts';
@@ -111,7 +111,7 @@ export function OutcomePanel({data}: {data:Results}) {
     {data.outcome.provenance && <Label>Отметил организатор · {new Date(data.outcome.provenance.recordedAt).toLocaleString('ru')}</Label>}
     {data.allowedActions.canRecordOutcome && <>
       <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{(['held','not_held'] as const).map(v=><Choice key={v} title={v === 'held' ? 'Состоялась' : 'Не состоялась'} selected={value === v} onPress={()=>setValue(v)} />)}</View>
-      <Label>Причина исхода или исправления</Label><TextInput editable={!blocked} multiline scrollEnabled textAlignVertical="top" accessibilityLabel="Причина исхода или исправления" placeholder="Причина" value={reason} onChangeText={setReason} maxLength={500} style={[styles.input,{minHeight:100,maxHeight:180}]} />
+      <Label>Причина исхода или исправления</Label><TextInput editable={!blocked} multiline scrollEnabled textAlignVertical="top" accessibilityLabel="Причина исхода или исправления" placeholder="Причина" value={reason} onChangeText={setReason} maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined} returnKeyType={Platform.OS === 'ios' ? 'done' : undefined} style={[styles.input,{minHeight:100,maxHeight:180}]} />
       <ReviewButton title="Проверить исход" onPress={()=>owner.review({kind:'outcome',gameId:data.gameId,body:{expectedVersion:data.outcome.version,outcome:value,...(reviewReason ? {reason:reviewReason} : {})}})} />
     </>}
   </View>;
@@ -130,7 +130,7 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
     {writes && row.allowedActions.canSetAttendance && !disputed && <>
       <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{(['present','absent',...(row.version > 0 ? ['unknown'] as const : [])] as AttendanceValue[]).map(v=><Choice key={v} title={attendanceLabel(v)} selected={value === v} onPress={()=>{setValue(v);if(v !== 'present')setLate(false);}} />)}</View>
       {value === 'present' && <View style={{flexDirection:'row',alignItems:'center',gap:8}}><Label>Опоздал</Label><Switch disabled={blocked} accessibilityLabel="Опоздал" value={late} onValueChange={setLate} /></View>}
-      {row.version > 0 && <><Label>Причина исправления посещения</Label><TextInput editable={!blocked} multiline scrollEnabled textAlignVertical="top" accessibilityLabel="Причина исправления посещения" placeholder="Причина исправления" value={reason} onChangeText={setReason} maxLength={500} style={[styles.input,{minHeight:100,maxHeight:180}]} /></>}
+      {row.version > 0 && <><Label>Причина исправления посещения</Label><TextInput editable={!blocked} multiline scrollEnabled textAlignVertical="top" accessibilityLabel="Причина исправления посещения" placeholder="Причина исправления" value={reason} onChangeText={setReason} maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined} returnKeyType={Platform.OS === 'ios' ? 'done' : undefined} style={[styles.input,{minHeight:100,maxHeight:180}]} /></>}
       <ReviewButton title="Проверить отметку" onPress={()=>owner.review({kind:'attendance',gameId,contextId:row.contextId,body:{expectedVersion:row.version,value,late,...(row.version > 0 ? {correctionReason:reviewReason} : {})}})} />
     </>}
     {own && writes && mayAcknowledge(row) && <><Label>Подтверждайте только если согласны с отметкой.</Label><ReviewButton title="Я согласен с отметкой" onPress={()=>owner.review({kind:'ack',gameId,contextId:row.contextId,body:{attendanceVersion:row.version}})} /></>}

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Keyboard, TextInput, View } from 'react-native';
+import { Keyboard, Platform, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { publicApi } from '../src/public-api.ts';
 import { filterCities, selectedCity } from '../src/entry.ts';
@@ -30,7 +30,8 @@ export default function ManualCity() {
     <Label nativeID="city-label">Название города</Label>
     <TextInput accessibilityLabel="Название города" placeholder="Введите город" value={query}
       onChangeText={value => { setQuery(value); setAll(false); }} autoCorrect={false} autoCapitalize="words"
-      allowFontScaling style={styles.input} returnKeyType="search" />
+      allowFontScaling style={styles.input} returnKeyType="search"
+      clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : undefined} />
     <TextButton title="Все доступные города" onPress={() => { setAll(true); setQuery(''); }} />
     {storageError && <Label>Настройки не удалось сохранить или прочитать. Этот выбор будет действовать в текущем запуске.</Label>}
     {state.status === 'loading' && <Loading title="Загружаем города…" />}

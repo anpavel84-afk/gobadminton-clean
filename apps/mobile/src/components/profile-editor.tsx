@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
-import { ActivityIndicator, Image, Keyboard, Pressable, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Keyboard, Platform, Pressable, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import {
   LEVEL_GUIDE_DISCLAIMER, PILOT_LEVEL_OPTIONS, formatPreservedLevelChoiceLabel, levelChoiceLabel,
@@ -87,10 +87,16 @@ export function ProfileEditor() {
         </View>
         <Label>Публичное имя</Label>
         <TextInput accessibilityLabel="Публичное имя" value={state.draft.displayName} onChangeText={displayName => owner.update({ displayName })}
-          editable={!locked} maxLength={80} allowFontScaling autoComplete="off" style={styles.input} />
+          editable={!locked} maxLength={80} allowFontScaling autoComplete="off" style={styles.input}
+          textContentType={Platform.OS === 'ios' ? 'name' : undefined}
+          autoCorrect={Platform.OS === 'ios' ? false : undefined}
+          returnKeyType={Platform.OS === 'ios' ? 'done' : undefined} />
         <Label>Город профиля: {selected?.nameRu ?? 'выберите из каталога'}</Label>
         {!locked && <>
-          <TextInput accessibilityLabel="Найти город профиля" value={query} onChangeText={setQuery} allowFontScaling style={styles.input} />
+          <TextInput accessibilityLabel="Найти город профиля" value={query} onChangeText={setQuery} allowFontScaling style={styles.input}
+            textContentType={Platform.OS === 'ios' ? 'addressCity' : undefined}
+            autoCorrect={Platform.OS === 'ios' ? false : undefined}
+            returnKeyType={Platform.OS === 'ios' ? 'search' : undefined} />
           <View style={{ gap: 0 }}>
             {state.cities.filter(c => c.nameRu.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru'))).map(c =>
               <CityRow key={c.id} name={c.nameRu} selected={c.id === state.draft.cityId}
