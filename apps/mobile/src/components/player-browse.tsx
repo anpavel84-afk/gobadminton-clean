@@ -1,9 +1,9 @@
 import type { ComponentRef } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, BackHandler, findNodeHandle, Image, Modal, PanResponder, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, Animated, BackHandler, findNodeHandle, Image, Modal, PanResponder, Platform, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import type { GestureResponderEvent, PanResponderCallbacks, PanResponderGestureState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { usePreventRemove, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { BrowseSnapshot, MatchIdentity, PlayInterestCoordinator } from '../play-interest-coordinator.ts';
 import type { PlayersSnapshot } from '../players.ts';
@@ -19,6 +19,13 @@ import { SvgXml } from 'react-native-svg';
 import { playerMediaUrl } from '../media.ts';
 import { FriendlyMatch } from './friendly-match.tsx';
 import { Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
+import { bindIosBack } from '../ios-back.ts';
+
+const useIosBack = bindIosBack(Platform.OS, usePreventRemove);
+function BrowseIosBack({open,onBack}:{open:boolean;onBack:()=>void}) {
+  useIosBack(open,onBack);
+  return null;
+}
 
 // Exact existing canonical/ce252.svg fallback, shared visually with PlayerProfile.
 const defaultCoverXml = "<svg preserveAspectRatio=\"none\" overflow=\"visible\" style=\"display: block;\" width=\"200\" height=\"200\" viewBox=\"0 0 200 200\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n<g id=\"&#208;&#164;&#208;&#184;&#208;&#179;&#209;&#131;&#209;&#128;&#208;&#176; 3\">\n<circle id=\"Ellipse 63\" cx=\"25\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 64\" cx=\"75\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 65\" cx=\"125\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 66\" cx=\"175\" cy=\"125\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 67\" cx=\"25\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 68\" cx=\"75\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 69\" cx=\"125\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 70\" cx=\"175\" cy=\"175\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 71\" cx=\"25\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 72\" cx=\"75\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 73\" cx=\"125\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 74\" cx=\"175\" cy=\"25\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 75\" cx=\"25\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 76\" cx=\"75\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 77\" cx=\"125\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n<circle id=\"Ellipse 78\" cx=\"175\" cy=\"75\" r=\"25\" fill=\"#AB3232\"/>\n</g>\n</svg>\n";
@@ -313,5 +320,10 @@ export function PlayerBrowse({owner,state,self,focused,placeLabel,cities=[],stat
       </View>
     </Modal>
     {match && <FriendlyMatch match={match} onDismiss={owner.dismiss} current={()=>owner.getSnapshot().match===match && owner.getSnapshot().active && owner.getSnapshot().foreground} />}
+    <BrowseIosBack open={focused && (!!state.match || tutorial!==0 || info!==null)} onBack={()=>{
+      if(owner.getSnapshot().match)owner.dismiss();
+      else if(tutorial!==0)setTutorial(0);
+      else if(info!==null)setInfo(null);
+    }} />
   </ScreenFrame>;
 }
