@@ -39,6 +39,8 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
     return () => clearInterval(timer);
   },[state.activation]);
   const presentation = radarControlPresentation(state,now), {active} = presentation;
+  const directorySwitchDisabled = state.busy || state.enabling || !!state.command || state.phase === 'restoring' || state.phase === 'consent';
+  const directorySubtitle = !active || presentation.tone === 'active' ? 'Игроки поблизости' : presentation.caption;
   const glyphColor = presentation.tone === 'active' ? colors.ink : colors.secondary;
   const glyph = <Svg width={48} height={48} viewBox="0 0 48 48" accessible={false}>
     <Circle cx={24} cy={24} r={21} fill="none" stroke={colors.secondary} strokeWidth={3.5} opacity={0.13} />
@@ -56,17 +58,30 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
     setAccepted(false); setOpen(true);
     if (!active && !state.command) void owner.consent();
   };
+  const onDirectorySwitch = () => {
+    if (auth.status === 'guest') { void auth.signIn('/players'); return; }
+    if (auth.status !== 'authenticated' || directorySwitchDisabled) return;
+    if (active) { void owner.stop(); return; }
+    setAccepted(false); setOpen(true);
+    if (!state.command) void owner.consent();
+  };
   const close = () => { setOpen(false); setAccepted(false); if (state.enabling || state.phase === 'consent') owner.cancel(); };
   return <>
     {compact ? <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}. Открыть управление Radar`}
       accessibilityState={{expanded:open}} onPress={enter} style={{width:48,height:48,alignItems:'center',justifyContent:'center',flexShrink:0}}>
       {glyph}
-    </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}`}
-      accessibilityState={{expanded:open,checked:active}} onPress={enter}
-      style={{alignSelf:'flex-start',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:active ? colors.limeSoft : colors.card}}>
-      <View style={{width:28,height:28,alignItems:'center',justifyContent:'center',transform:[{scale:0.55}]}}>{glyph}</View>
-      <Label style={{fontWeight:'600',fontSize:14,lineHeight:20}}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
-    </Pressable>}
+    </Pressable> : <View style={{alignSelf:'stretch',minHeight:44,flexDirection:'row',alignItems:'center',gap:12,paddingVertical:8,paddingHorizontal:12,borderRadius:16,borderWidth:1,borderColor:colors.line,backgroundColor:active ? colors.limeSoft : colors.card}}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}`} onPress={enter}
+        style={{flex:1,minWidth:0,minHeight:44,flexDirection:'row',alignItems:'center',gap:8}}>
+        <View style={{width:28,height:28,alignItems:'center',justifyContent:'center',transform:[{scale:0.55}]}}>{glyph}</View>
+        <View style={{flex:1,minWidth:0,gap:2}}>
+          <Label style={{fontWeight:'600',fontSize:14,lineHeight:20}}>{active ? 'Radar включён' : 'Включить Radar'}</Label>
+          <Label style={{fontSize:12,lineHeight:16,color:colors.secondary}}>{directorySubtitle}</Label>
+        </View>
+      </Pressable>
+      <Switch accessibilityRole="switch" accessibilityLabel="Radar" accessibilityState={{checked:active}}
+        value={active} disabled={directorySwitchDisabled} onValueChange={onDirectorySwitch} />
+    </View>}
     <Modal visible={open} onRequestClose={close} animationType="none" presentationStyle="pageSheet" supportedOrientations={iosModalOrientations}>
       <IosSheetSafeArea><RadarSheetBody>
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
