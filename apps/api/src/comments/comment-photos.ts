@@ -299,7 +299,7 @@ export class CommentPhotosController {
   @Post("venues/:venueId/comment-photos")
   @Header("Cache-Control", "no-store")
   async upload(@Req() req: FastifyRequest, @Param("venueId") venueId: string, @Res({ passthrough: true }) reply: FastifyReply) {
-    const actor = await this.auth.requireCookieMutation(req);
+    const actor = await this.auth.requirePrincipalMutation(req);
     const key = this.idempotency.requireKey(req.headers["idempotency-key"]);
     const result = await this.photos.upload(actor, venueId, key, req.headers["x-photo-rights"], req.body, req.headers["content-type"] ?? "");
     reply.code(result.statusCode);
@@ -309,14 +309,14 @@ export class CommentPhotosController {
   @Get("me/venue-photo-submissions/:photoId")
   @Header("Cache-Control", "no-store")
   async status(@Req() req: FastifyRequest, @Param("photoId") id: string) {
-    return this.photos.status(await this.auth.requireSession(req), id);
+    return this.photos.status(await this.auth.requirePrincipal(req), id);
   }
   @Get("me/venue-photo-submissions/:photoId/content")
   async content(@Req() req: FastifyRequest, @Param("photoId") id: string, @Res() reply: FastifyReply) {
     reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff")
       .header("Content-Security-Policy", "default-src 'none'; sandbox");
     // Conditional headers never bypass current authorization; return an authorized PNG body.
-    const bytes = await this.photos.content(await this.auth.requireSession(req), id);
+    const bytes = await this.photos.content(await this.auth.requirePrincipal(req), id);
     return reply.type("image/png").send(bytes);
   }
   @Get("comments/:commentId/revisions/:version/photos/:photoId")
@@ -338,7 +338,7 @@ export class CommentPhotosController {
   @Delete("me/venue-photo-submissions/:photoId")
   @Header("Cache-Control", "no-store")
   async withdraw(@Req() req: FastifyRequest, @Param("photoId") id: string) {
-    const actor = await this.auth.requireCookieMutation(req);
+    const actor = await this.auth.requirePrincipalMutation(req);
     return this.photos.withdraw(actor, id, this.idempotency.requireKey(req.headers["idempotency-key"]), req.headers["x-photo-version"], req.body);
   }
 }
