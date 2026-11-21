@@ -18,7 +18,7 @@ import { PlayerAvatar } from './player-card.tsx';
 import { SvgXml } from 'react-native-svg';
 import { playerMediaUrl } from '../media.ts';
 import { FriendlyMatch } from './friendly-match.tsx';
-import { Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
+import { iosModalOrientations, Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
 import { bindIosBack } from '../ios-back.ts';
 
 const useIosBack = bindIosBack(Platform.OS, usePreventRemove);
@@ -309,7 +309,7 @@ export function PlayerBrowse({owner,state,self,focused,placeLabel,cities=[],stat
           style={{minWidth:48,minHeight:48,borderRadius:24,backgroundColor:colors.card,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="close" /></Pressable>
       </View>
     </View>
-    <Modal transparent visible={focused && tutorialReady===actorKey && tutorial!==0 && !!peer && !match} animationType="none" onRequestClose={()=>setTutorial(0)}>
+    <Modal transparent visible={focused && tutorialReady===actorKey && tutorial!==0 && !!peer && !match} animationType="none" supportedOrientations={iosModalOrientations} onRequestClose={()=>setTutorial(0)}>
       <View style={{flex:1,backgroundColor:'#13221AEF',justifyContent:'center',paddingTop:insets.top+16,paddingBottom:insets.bottom+16,paddingLeft:insets.left+24,paddingRight:insets.right+24}}>
         <ScrollView contentContainerStyle={{flexGrow:1,justifyContent:'center',gap:20}}>
           <Pressable accessibilityRole="button" accessibilityLabel="Закрыть подсказку" onPress={()=>setTutorial(0)} style={{minWidth:48,minHeight:48,alignSelf:'flex-end',justifyContent:'center',alignItems:'center'}}><DiscoveryIcon name="close" color={colors.card} /></Pressable>

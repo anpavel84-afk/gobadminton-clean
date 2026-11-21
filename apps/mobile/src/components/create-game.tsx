@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
-import { ScrollView, View } from 'react-native';
+import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../auth.tsx';
@@ -67,6 +67,9 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   // selectVenue closes over the latest fence; venue readiness + selection key drive the one-shot.
   }, [venueId, venueState.status, venueState.data, selected, attempted, selecting, state.created, state.creationReference, selectionKey]);
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  // formSheet detent 0.9 in app/_layout.tsx → sheet top is 10% of the window; RN KAV needs that as keyboardVerticalOffset.
+  const sheetKeyboardOffset = sheet && Platform.OS === 'ios' ? windowHeight * 0.1 : undefined;
   const active = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
   const blocked = ['sending','unknown'].includes(state.command?.status ?? '');
   const sheetVenue = venueState.data ?? state.venues.find(v => v.id === (venueId || f.venueId));
@@ -82,7 +85,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   // continueOrdinaryForm remains for the mounted lifecycle harness (explicit Continue CTA removed from UI).
   void continueOrdinaryForm;
 
-  const frame = (body: ReactNode, opts?: { footer?: ReactNode }) => <ScreenFrame keyboard header={sheet ? undefined : <Header />}>
+  const frame = (body: ReactNode, opts?: { footer?: ReactNode }) => <ScreenFrame keyboard header={sheet ? undefined : <Header />} keyboardVerticalOffset={sheetKeyboardOffset}>
     {sheet && <CreateGameSheetHeader
       name={sheetVenue?.name ?? 'Площадка'}
       address={sheetVenue?.address ?? ''}
