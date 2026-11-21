@@ -13,11 +13,13 @@ import {
   type PhotoComposerItem,
   type VenueCommentPhotoReceipt,
 } from '../src/venue-comment-photos.ts';
-import { freezePacket } from '../src/venue-community.ts';
+import { CommunityError, freezePacket } from '../src/venue-community.ts';
+import { createNativeApi } from '../src/native-api.ts';
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 const venueId = '11111111-1111-4111-8111-111111111111';
+const foreignVenueId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const photoId = '22222222-2222-4222-8222-222222222222';
 const photoId2 = '33333333-3333-4333-8333-333333333333';
 const actor = { actorId: 'actor', sessionId: 'session', generation: 1 };
@@ -275,7 +277,7 @@ test('#598B r2 withdraw retry uses DELETE with same withdrawKey and never re-upl
   assert.match(composer, /withdrawKey/);
   assert.match(composer, /withdrawing/);
   assert.match(composer, /withdraw_failed/);
-  assert.match(composer, /nativeAuth\.withdrawCommentPhoto\(\{ id: receiptId, key: withdrawKey \}/);
+  assert.match(composer, /nativeAuth\.withdrawCommentPhoto\(\{ id: receiptId, key: withdrawKey, venueId: venue \}/);
   assert.match(composer, /PHOTO_SUBMISSION_UNAVAILABLE/);
   const retryStart = composer.indexOf('const retry = useCallback');
   const retryEnd = composer.indexOf('const remove = useCallback');
@@ -332,4 +334,114 @@ test('#598B r2 composer survives roots loading; uses canonical venue id (negativ
   assert.doesNotMatch(ui, /s\.roots\.phase === 'ready' && s\.roots\.pages\[0\]\?\.page\.canCreate \?/);
   assert.doesNotMatch(ui, /useVenueCommentPhotoComposer\(s\.venueId/);
   assert.match(ui, /function RootCommentComposer\(\{[\s\S]*photos: VenueCommentPhotoComposerModel/);
+});
+
+test('#598B r3 retires photo drafts on reconcile-confirmed create, not only initial commit (negative)', () => {
+  const ui = read('../src/components/venue-community.tsx');
+  const rootStart = ui.indexOf('function RootCommentComposer');
+  assert.ok(rootStart > 0);
+  const root = ui.slice(rootStart, ui.indexOf('function ThreadNotice'));
+  assert.match(root, /publishKey/);
+  assert.match(root, /operation\.status === 'confirmed'/);
+  assert.match(root, /photos\.clear\(\)/);
+  assert.match(root, /operation\.status === 'refused'/);
+  // Must watch coordinator snapshot so reconcile confirmation also retires drafts.
+  assert.match(root, /s\.operations\.find/);
+  assert.doesNotMatch(root, /owner\.commit\(packet\.key\)\.then/);
+  // Refused path must NOT clear photo drafts (only clears publishKey).
+  const refusedIdx = root.indexOf("operation.status === 'refused'");
+  assert.ok(refusedIdx > 0);
+  const refusedTail = root.slice(refusedIdx, refusedIdx + 120);
+  assert.doesNotMatch(refusedTail, /photos\.clear/);
+});
+
+test('#598B r3 pending file read blocks Send; uploadOne/read recheck locked (negative)', () => {
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /pendingReads/);
+  assert.match(composer, /setPendingReads/);
+  assert.match(composer, /canSend: \(text: string\) => !reading && commentSendReady\(text, items\)/);
+  assert.match(composer, /checking: hasCheckingPhoto\(items\) \|\| reading/);
+  const uploadStart = composer.indexOf('const uploadOne = useCallback');
+  const uploadEnd = composer.indexOf('const withdrawOne = useCallback');
+  assert.ok(uploadStart > 0 && uploadEnd > uploadStart);
+  const upload = composer.slice(uploadStart, uploadEnd);
+  assert.match(upload, /isLocked/);
+  assert.match(upload, /state: 'retryable'/);
+  assert.doesNotMatch(upload, /nativeAuth\.uploadCommentPhoto[\s\S]*isLocked/);
+  const addStart = composer.indexOf('const add = useCallback');
+  const addEnd = composer.indexOf('const retry = useCallback');
+  const add = composer.slice(addStart, addEnd);
+  assert.match(add, /setPendingReads\(count => count \+ 1\)/);
+  assert.match(add, /live\.current\.locked\) return;/);
+  assert.match(add, /setPendingReads\(count => Math\.max\(0, count - 1\)\)/);
+});
+
+test('#598B r3 status/withdraw/upload reject foreign venue receipt; accept canonical (negative)', async () => {
+  assert.notEqual(venueId, foreignVenueId);
+  const matching = readyReceipt(photoId, { venueId });
+  const foreign = readyReceipt(photoId, { venueId: foreignVenueId });
+  const matchingWithdrawn = withdrawnReceipt(photoId);
+  const foreignWithdrawn = { ...withdrawnReceipt(photoId), venueId: foreignVenueId };
+
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+  let uploadBody: unknown = matching;
+  const api = createNativeApi(async (url, init) => {
+    const path = String(url);
+    if (path.includes('/comment-photos') && init?.method === 'POST') {
+      return new Response(JSON.stringify(uploadBody), { status: 201 });
+    }
+    if (path.includes('/venue-photo-submissions/') && init?.method === 'GET') {
+      return new Response(JSON.stringify(uploadBody), { status: 200 });
+    }
+    if (path.includes('/venue-photo-submissions/') && init?.method === 'DELETE') {
+      return new Response(JSON.stringify(uploadBody), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  });
+
+  uploadBody = matching;
+  assert.deepEqual(
+    await api.uploadCommentPhoto('token', { venueId, key, mime: 'image/jpeg', bytes: jpeg }),
+    matching,
+  );
+  uploadBody = foreign;
+  await assert.rejects(
+    () => api.uploadCommentPhoto('token', { venueId, key, mime: 'image/jpeg', bytes: jpeg }),
+    (error: unknown) => error instanceof CommunityError && error.kind === 'invalid',
+  );
+
+  uploadBody = matching;
+  assert.deepEqual(
+    await api.commentPhotoStatus('token', { id: photoId, venueId }),
+    matching,
+  );
+  uploadBody = foreign;
+  await assert.rejects(
+    () => api.commentPhotoStatus('token', { id: photoId, venueId }),
+    (error: unknown) => error instanceof CommunityError && error.kind === 'invalid',
+  );
+
+  uploadBody = matchingWithdrawn;
+  assert.deepEqual(
+    await api.withdrawCommentPhoto('token', { id: photoId, key, venueId }),
+    matchingWithdrawn,
+  );
+  uploadBody = foreignWithdrawn;
+  await assert.rejects(
+    () => api.withdrawCommentPhoto('token', { id: photoId, key, venueId }),
+    (error: unknown) => error instanceof CommunityError && error.kind === 'invalid',
+  );
+
+  const apiSrc = read('../src/native-api.ts');
+  assert.match(apiSrc, /commentPhotoStatus: async \(\s*access: string,\s*input: Readonly<\{ id: string; venueId: string \}>,/);
+  assert.match(apiSrc, /withdrawCommentPhoto: async \(\s*access: string,\s*input: Readonly<\{ id: string; key: string; venueId: string \}>,/);
+  assert.match(apiSrc, /isPhotoReceipt\(raw, venueId, 'ready', photoId\)/);
+  assert.match(apiSrc, /isPhotoReceipt\(raw, venueId, 'withdrawn', photoId\)/);
+  assert.doesNotMatch(
+    apiSrc.slice(apiSrc.indexOf('commentPhotoStatus:'), apiSrc.indexOf('withdrawCommentPhoto:')),
+    /communityId\(\(raw as VenueCommentPhotoReceipt\)\.venueId\)/,
+  );
+  const auth = read('../src/auth-coordinator.ts');
+  assert.match(auth, /commentPhotoStatus = \(\s*input: Readonly<\{ id: string; venueId: string \}>,/);
+  assert.match(auth, /withdrawCommentPhoto = \(\s*input: Readonly<\{ id: string; key: string; venueId: string \}>,/);
 });

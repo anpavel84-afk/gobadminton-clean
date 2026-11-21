@@ -221,10 +221,14 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         clearTimeout(timeout);
       }
     },
-    commentPhotoStatus: async (access: string, id: string): Promise<VenueCommentPhotoReceipt> => {
+    commentPhotoStatus: async (
+      access: string,
+      input: Readonly<{ id: string; venueId: string }>,
+    ): Promise<VenueCommentPhotoReceipt> => {
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
       try {
-        const photoId = communityId(id);
+        const photoId = communityId(input.id);
+        const venueId = communityId(input.venueId);
         const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/venue-photo-submissions/${encodeURIComponent(photoId)}`, {
           method: 'GET',
           credentials: 'omit',
@@ -251,8 +255,6 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
           );
         }
         const raw = await response.json();
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new CommunityError('invalid');
-        const venueId = communityId((raw as VenueCommentPhotoReceipt).venueId);
         if (!isPhotoReceipt(raw, venueId, 'ready', photoId)) throw new CommunityError('invalid');
         return raw;
       } catch (error) {
@@ -264,11 +266,12 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     },
     withdrawCommentPhoto: async (
       access: string,
-      input: Readonly<{ id: string; key: string }>,
+      input: Readonly<{ id: string; key: string; venueId: string }>,
     ): Promise<VenueCommentPhotoReceipt> => {
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
       try {
         const photoId = communityId(input.id);
+        const venueId = communityId(input.venueId);
         communityId(input.key);
         const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/venue-photo-submissions/${encodeURIComponent(photoId)}`, {
           method: 'DELETE',
@@ -300,8 +303,6 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
           );
         }
         const raw = await response.json();
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new CommunityError('invalid');
-        const venueId = communityId((raw as VenueCommentPhotoReceipt).venueId);
         if (!isPhotoReceipt(raw, venueId, 'withdrawn', photoId)) throw new CommunityError('invalid');
         return raw;
       } catch (error) {

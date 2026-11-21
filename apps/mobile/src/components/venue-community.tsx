@@ -197,7 +197,22 @@ function RootCommentComposer({
 }) {
   const { owner, state: s } = useVenueCommunity();
   const draft = s.drafts.root ?? '';
+  // Key create packet → retire drafts when THAT op confirms (commit or reconcile).
+  const publishKey = useRef<string | null>(null);
   const sendEnabled = !locked && photos.canSend(draft) && (!draft.trim() || validText(draft));
+  useEffect(() => {
+    const key = publishKey.current;
+    if (!key) return;
+    const operation = s.operations.find(o => o.packet.key === key);
+    if (!operation) return;
+    if (operation.status === 'confirmed') {
+      photos.clear();
+      publishKey.current = null;
+      return;
+    }
+    // Failed/rejected create keeps photo drafts in the composer.
+    if (operation.status === 'refused') publishKey.current = null;
+  }, [s.operations, photos]);
   return <>
     <Field label="Ваш комментарий" value={draft} disabled={locked} onChange={text => owner.setDraft('root', text)} />
     <VenueCommentPhotoComposer model={photos} disabled={locked} />
@@ -213,10 +228,8 @@ function RootCommentComposer({
           ...(photos.readyIds.length ? { photoIds: photos.readyIds } : {}),
         });
         if (!packet) return;
-        void owner.commit(packet.key).then(() => {
-          const status = owner.getSnapshot().operations.find(o => o.packet.key === packet.key)?.status;
-          if (status === 'confirmed') photos.clear();
-        });
+        publishKey.current = packet.key;
+        void owner.commit(packet.key);
       }}
     />
   </>;

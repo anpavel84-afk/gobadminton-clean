@@ -187,10 +187,12 @@ export class AuthCoordinator {
     input: Readonly<{ venueId: string; key: string; mime: string; bytes: Uint8Array }>,
     actor: Actor,
   ) => this.participationRead(access => this.deps.api.uploadCommentPhoto(access, input), actor);
-  commentPhotoStatus = (id: string, actor: Actor) =>
-    this.participationRead(access => this.deps.api.commentPhotoStatus(access, id), actor);
+  commentPhotoStatus = (
+    input: Readonly<{ id: string; venueId: string }>,
+    actor: Actor,
+  ) => this.participationRead(access => this.deps.api.commentPhotoStatus(access, input), actor);
   withdrawCommentPhoto = (
-    input: Readonly<{ id: string; key: string }>,
+    input: Readonly<{ id: string; key: string; venueId: string }>,
     actor: Actor,
   ) => this.participationRead(access => this.deps.api.withdrawCommentPhoto(access, input), actor);
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */

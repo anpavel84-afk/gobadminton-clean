@@ -52,6 +52,7 @@ export function useVenueCommentPhotoComposer(
   const [items, dispatch] = useReducer(photoComposerReducer, []);
   const [rights, setRights] = useState(false);
   const [notice, setNotice] = useState('');
+  const [pendingReads, setPendingReads] = useState(0);
   const bytesByKey = useRef(new Map<string, Uint8Array>());
   const running = useRef(new Set<string>());
   const generation = useRef(0);
@@ -69,6 +70,7 @@ export function useVenueCommentPhotoComposer(
     dispatch({ type: 'clear' });
     setRights(false);
     setNotice('');
+    setPendingReads(0);
     return () => {
       alive.current = false;
       generation.current += 1;
@@ -78,8 +80,19 @@ export function useVenueCommentPhotoComposer(
 
   const uploadOne = useCallback(async (key: string, mime: PhotoComposerItem['mime'], bytes: Uint8Array) => {
     const epoch = generation.current;
-    const { venueId: venue, actor: current } = live.current;
+    const { venueId: venue, actor: current, locked: isLocked } = live.current;
+    // Recheck admission before starting upload — Send may have locked mid-read.
     if (!venue || !current || !alive.current || running.current.has(key)) return;
+    if (isLocked) {
+      // Keep bytes as retryable; never start an upload while the composer is locked.
+      dispatch({
+        type: 'patch',
+        key,
+        state: 'retryable',
+        message: 'Проверка временно недоступна. Повторите позже.',
+      });
+      return;
+    }
     running.current.add(key);
     dispatch({ type: 'patch', key, state: 'checking', message: undefined });
     try {
@@ -124,7 +137,7 @@ export function useVenueCommentPhotoComposer(
     running.current.add(key);
     dispatch({ type: 'patch', key, state: 'withdrawing', withdrawKey, message: undefined });
     try {
-      await nativeAuth.withdrawCommentPhoto({ id: receiptId, key: withdrawKey }, current);
+      await nativeAuth.withdrawCommentPhoto({ id: receiptId, key: withdrawKey, venueId: venue }, current);
       if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
       bytesByKey.current.delete(key);
       dispatch({ type: 'drop', key });
@@ -160,6 +173,7 @@ export function useVenueCommentPhotoComposer(
     void (async () => {
       const epoch = generation.current;
       const venue = live.current.venueId;
+      setPendingReads(count => count + 1);
       try {
         const runtime = createExpoAvatarRuntime();
         const result = await runtime.launchLibrary(AVATAR_PICKER_OPTIONS);
@@ -188,7 +202,9 @@ export function useVenueCommentPhotoComposer(
           }
           return;
         }
+        // Recheck admission after async read — do not start upload while locked.
         if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+        if (live.current.locked) return;
         if (isHeicCommentSource(bytes)) {
           setNotice('Формат HEIC не поддерживается. Сохраните фото как JPEG, PNG или WebP.');
           return;
@@ -206,6 +222,8 @@ export function useVenueCommentPhotoComposer(
         if (alive.current && epoch === generation.current && live.current.venueId === venue) {
           setNotice('Не удалось прочитать файл. Загрузка не начата; выберите файл снова.');
         }
+      } finally {
+        setPendingReads(count => Math.max(0, count - 1));
       }
     })();
   }, [rights, uploadOne]);
@@ -254,16 +272,18 @@ export function useVenueCommentPhotoComposer(
     dispatch({ type: 'clear' });
     setRights(false);
     setNotice('');
+    setPendingReads(0);
   }, []);
 
+  const reading = pendingReads > 0;
   return {
     items,
     rights,
     setRights,
     notice,
     readyIds: readyPhotoIds(items),
-    checking: hasCheckingPhoto(items),
-    canSend: (text: string) => commentSendReady(text, items),
+    checking: hasCheckingPhoto(items) || reading,
+    canSend: (text: string) => !reading && commentSendReady(text, items),
     add,
     retry,
     remove,
