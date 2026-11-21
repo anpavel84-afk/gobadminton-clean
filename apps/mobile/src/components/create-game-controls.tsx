@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { ComponentRef, ReactNode } from 'react';
+import type { ComponentRef, ReactNode, Ref } from 'react';
 import { Image, Platform, Pressable, TextInput, View } from 'react-native';
 import { DiscoveryChip, DiscoverySheet, Label, styles } from './ui.tsx';
 import { LevelRange } from './level-range.tsx';
@@ -15,12 +15,13 @@ import {
 } from '../game-form.ts';
 import { discoveryDateLabel } from '../presentation.ts';
 
-export function GameField({ label, value, onChange, maxLength = 2000, multiline = false, numeric = false }: {
+export function GameField({ label, value, onChange, maxLength = 2000, multiline = false, numeric = false, inputRef }: {
   label: string; value: string; onChange: (v: string) => void; maxLength?: number; multiline?: boolean; numeric?: boolean;
+  inputRef?: Ref<ComponentRef<typeof TextInput>>;
 }) {
   return <View style={{ gap: 6 }}>
     <Label style={{ textAlign: 'left' }}>{label}</Label>
-    <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} maxLength={maxLength}
+    <TextInput ref={inputRef} accessibilityLabel={label} value={value} onChangeText={onChange} maxLength={maxLength}
       multiline={multiline} keyboardType={numeric ? 'number-pad' : 'default'} allowFontScaling
       returnKeyType={Platform.OS === 'ios' ? (multiline || numeric ? 'done' : 'next') : undefined}
       style={{ minHeight: multiline ? 96 : 48, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.lineDark,
@@ -89,7 +90,7 @@ const VISIBILITY_OPTIONS: { value: CreationForm['visibility']; label: string }[]
   { value: 'unlisted', label: 'Только по ссылке' },
 ];
 
-export function CreateGameFormSections({ form, venues, trainer, timezone, coverUrl, onUpdate, onOpenCity, contactAlert = null }: {
+export function CreateGameFormSections({ form, venues, trainer, timezone, coverUrl, onUpdate, onOpenCity, contactAlert = null, onContactAlertLayout }: {
   form: CreationForm;
   venues: Venue[];
   trainer: boolean;
@@ -98,6 +99,7 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
   onUpdate: (patch: Partial<CreationForm>) => void;
   onOpenCity: () => void;
   contactAlert?: string | null;
+  onContactAlertLayout?: (anchor: ComponentRef<typeof View>) => void;
 }) {
   const selected = venues.find(v => v.id === form.venueId);
   const catalogueTrigger = useRef<ComponentRef<typeof Pressable>>(null);
@@ -105,6 +107,8 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
   const timeTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const formatTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const visibilityTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const contactAnchorRef = useRef<ComponentRef<typeof View>>(null);
+  const contactInputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
@@ -217,8 +221,15 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
     </FormSection>
 
     <FormSection title="Условия участия">
-      <GameField label="Публичный контакт для этой игры" value={form.contact} onChange={contact => onUpdate({ contact })} maxLength={320} />
-      {!!contactAlert && <Label accessibilityRole="alert" style={{ textAlign: 'left', color: colors.secondary }}>{contactAlert}</Label>}
+      <View ref={contactAnchorRef} collapsable={false}>
+        <GameField label="Публичный контакт для этой игры" value={form.contact} onChange={contact => onUpdate({ contact })} maxLength={320} inputRef={contactInputRef} />
+        {!!contactAlert && <Label accessibilityRole="alert" style={{ textAlign: 'left', color: colors.secondary }} onLayout={() => {
+          const anchor = contactAnchorRef.current;
+          if (!contactAlert || !anchor || !onContactAlertLayout) return;
+          onContactAlertLayout(anchor);
+          contactInputRef.current?.focus();
+        }}>{contactAlert}</Label>}
+      </View>
       <Label style={{ textAlign: 'left', color: colors.secondary }}>Будет виден на странице игры.</Label>
       <Pressable accessibilityRole="button" onPress={() => onUpdate({ saveContact: !form.saveContact })}
         style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
