@@ -22,7 +22,7 @@ test('iOS floating map/swipe CTAs sit at bottom 16; tab bar already owns the hom
   assert.match(nav, /paddingBottom: insets\.bottom \+ 5/);
   const games = read('../app/games/index.tsx');
   assert.match(games, /bottom:Platform\.OS === 'ios' \? 16 : insets\.bottom\+16/);
-  assert.match(games, /hasListItems \? mapEntryHeight \+ insets\.bottom \+ 16 - \(Platform\.OS === 'ios' \? insets\.bottom : 0\)/);
+  assert.match(games, /paddingBottom: city \? mapEntryHeight \+ insets\.bottom \+ 16 - \(Platform\.OS === 'ios' \? insets\.bottom : 0\) : 16/);
   const players = read('../app/players/index.tsx');
   assert.match(players, /bottom:Platform\.OS === 'ios' \? 16 : insets\.bottom\+16/);
   assert.match(players, /Platform\.OS === 'ios' \? floatingEntryHeight\+48 : floatingEntryHeight\+insets\.bottom\+48/);
