@@ -286,9 +286,9 @@ export default function Players() {
     <DiscoverySheet visible={!mapOpen && !!person} title="Игрок Radar" onClose={() => setSelectedPerson(null)} returnFocusRef={personTrigger}>{personContent}</DiscoverySheet>
     <FlatList data={merged.ordinary} keyExtractor={p => p.publicPlayerId}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: floatingEntryHeight+insets.bottom+48, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: Platform.OS === 'ios' ? floatingEntryHeight+48 : floatingEntryHeight+insets.bottom+48, gap: 16 }}
       ListHeaderComponent={<View style={{ gap: 16 }}>
-        <Label accessibilityRole="header" style={[styles.title, { fontSize: 32, lineHeight: 35 }]}>Игроки</Label>
+        <Label accessibilityRole="header" style={[styles.title, { fontSize: 32, lineHeight: Platform.OS === 'ios' ? 39 : 35 }]}>Игроки</Label>
         <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 19 }}>Найдите партнёров для хорошей игры.</Label>
         <RadarControls />
         <Pressable accessibilityRole="button" accessibilityLabel={`Город: ${cityFieldLabel({ hydrated, status: cities.state.status, city, savedCityId: cityId, emptyLabel: 'Все города' })}`} accessibilityState={{ expanded: cityPicker }} onPress={() => setCityPicker(v => !v)}
@@ -297,7 +297,12 @@ export default function Players() {
             <Label style={{ fontSize: 14, lineHeight: 20, fontWeight: '600' }}>{cityFieldLabel({ hydrated, status: cities.state.status, city, savedCityId: cityId, emptyLabel: 'Все города' })}</Label></View><DiscoveryIcon name="chevron" />
         </Pressable>
         {cityPicker && <View style={styles.card}>
-          <TextInput accessibilityLabel="Поиск города" placeholder="Найти город" value={citySearch} onChangeText={setCitySearch} style={styles.input} />
+          <TextInput accessibilityLabel="Поиск города" placeholder="Найти город" value={citySearch} onChangeText={setCitySearch}
+            clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : undefined}
+            returnKeyType={Platform.OS === 'ios' ? 'search' : undefined}
+            autoCorrect={Platform.OS === 'ios' ? false : undefined}
+            autoCapitalize={Platform.OS === 'ios' ? 'none' : undefined}
+            style={styles.input} />
           <TextButton title="Все города" onPress={() => { setCitySelection(null); setCityPicker(false); }} />
           {cities.state.status === 'loading' && <Loading title="Загружаем города…" />}
           {cities.state.status === 'error' && <ErrorState error={cities.state.error} retry={cities.retry} />}
@@ -309,7 +314,12 @@ export default function Players() {
             clearButtonMode="while-editing" returnKeyType={Platform.OS === 'ios' ? 'search' : undefined}
             style={{ flex: 1, minWidth: 0, minHeight: 58, fontFamily: 'Onest', fontSize: 14, color: colors.ink, paddingVertical: 12 }} />
         </View>
-        <TextInput accessibilityLabel="Район / метро" placeholder="Район / метро" value={areaKey} maxLength={64} onChangeText={setAreaKey} style={[styles.input, { fontSize: 14 }]} />
+        <TextInput accessibilityLabel="Район / метро" placeholder="Район / метро" value={areaKey} maxLength={64} onChangeText={setAreaKey}
+          clearButtonMode={Platform.OS === 'ios' ? 'while-editing' : undefined}
+          returnKeyType={Platform.OS === 'ios' ? 'search' : undefined}
+          autoCorrect={Platform.OS === 'ios' ? false : undefined}
+          autoCapitalize={Platform.OS === 'ios' ? 'words' : undefined}
+          style={[styles.input, { fontSize: 14 }]} />
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           <DiscoveryChip title="Все" selected={!looking && !trainer} onPress={() => { setLooking(false); setTrainer(false); }} />
           <DiscoveryChip title="Ищу игру" selected={looking} onPress={() => setLooking(v => !v)} />
@@ -354,7 +364,7 @@ export default function Players() {
         {list?.data?.nextCursor && !list.moreError && <PrimaryButton title={list.loadingMore ? 'Загружаем…' : 'Показать ещё'} disabled={list.loadingMore} onPress={more} />}
       </View>} />
     <View pointerEvents="box-none" onLayout={event => setFloatingEntryHeight(event.nativeEvent.layout.height)}
-      style={{position:'absolute',bottom:insets.bottom+16,left:0,right:0,alignItems:'center',paddingHorizontal:16,gap:8}}>
+      style={{position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,left:0,right:0,alignItems:'center',paddingHorizontal:16,gap:8}}>
     <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
       onPress={() => { browse.stage(filters,list?.data ?? null); router.push('/players/browse'); }}
       style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
