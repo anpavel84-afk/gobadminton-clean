@@ -56,6 +56,17 @@ test('#598B isPhotoReceipt accepts valid ready and withdrawn receipts', () => {
   assert.equal(isPhotoReceipt(withdrawnReceipt(), venueId, 'withdrawn', photoId), true);
 });
 
+test('#598B isPhotoReceipt accepts canonical venue id when alias ≠ canonical; rejects foreign venue (negative)', () => {
+  const alias = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const canonical = venueId;
+  assert.notEqual(alias, canonical);
+  assert.equal(isPhotoReceipt(readyReceipt(photoId, { venueId: canonical }), canonical, 'ready'), true);
+  assert.equal(isPhotoReceipt(readyReceipt(photoId, { venueId: canonical }), alias, 'ready'), false);
+  assert.equal(isPhotoReceipt(readyReceipt(photoId, { venueId: photoId2 }), canonical, 'ready'), false);
+  assert.equal(isPhotoReceipt(withdrawnReceipt(photoId), canonical, 'withdrawn', photoId), true);
+  assert.equal(isPhotoReceipt(withdrawnReceipt(photoId), alias, 'withdrawn', photoId), false);
+});
+
 test('#598B isPhotoReceipt rejects invalid receipts (negative)', () => {
   assert.equal(isPhotoReceipt(readyReceipt(photoId, { venueId: photoId2 }), venueId, 'ready'), false);
   assert.equal(isPhotoReceipt(readyReceipt(photoId, { version: 2 }), venueId, 'ready'), false);
@@ -145,6 +156,33 @@ test('#598B withdraw drop removes ready item from composer state', () => {
   assert.equal(items.length, 0);
 });
 
+test('#598B withdrawKey path excludes photoIds and preserves same key across withdraw_failed (negative)', () => {
+  const withdrawKey = '55555555-5555-4555-8555-555555555555';
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/png', size: 50,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch', key, state: 'ready', receipt: readyReceipt(),
+  });
+  assert.deepEqual(readyPhotoIds(items), [photoId]);
+  items = photoComposerReducer(items, {
+    type: 'patch', key, state: 'withdrawing', withdrawKey, receipt: readyReceipt(),
+  });
+  assert.deepEqual(readyPhotoIds(items), []);
+  assert.equal(items.find(i => i.key === key)?.withdrawKey, withdrawKey);
+  items = photoComposerReducer(items, {
+    type: 'patch', key, state: 'withdraw_failed', withdrawKey, receipt: readyReceipt(),
+    message: 'Снятие не подтверждено. Проверьте доступ и повторите ту же операцию.',
+  });
+  assert.deepEqual(readyPhotoIds(items), []);
+  assert.equal(items.find(i => i.key === key)?.withdrawKey, withdrawKey);
+  assert.equal(items.find(i => i.key === key)?.state, 'withdraw_failed');
+  items = photoComposerReducer(items, {
+    type: 'patch', key, state: 'withdrawing', withdrawKey,
+  });
+  assert.equal(items.find(i => i.key === key)?.withdrawKey, withdrawKey);
+});
+
 test('#598B create packet includes photoIds only when non-empty; >4 rejected', () => {
   const withPhotos = freezePacket(actor, scope, {
     kind: 'create',
@@ -232,6 +270,43 @@ test('#598B composer gates «Добавить фото» on rights; no upload pa
   assert.equal(COMMENT_PHOTO_MAX_BYTES, 5 * 1024 * 1024);
 });
 
+test('#598B r2 withdraw retry uses DELETE with same withdrawKey and never re-uploads (negative)', () => {
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /withdrawKey/);
+  assert.match(composer, /withdrawing/);
+  assert.match(composer, /withdraw_failed/);
+  assert.match(composer, /nativeAuth\.withdrawCommentPhoto\(\{ id: receiptId, key: withdrawKey \}/);
+  assert.match(composer, /PHOTO_SUBMISSION_UNAVAILABLE/);
+  const retryStart = composer.indexOf('const retry = useCallback');
+  const retryEnd = composer.indexOf('const remove = useCallback');
+  assert.ok(retryStart > 0 && retryEnd > retryStart);
+  const retry = composer.slice(retryStart, retryEnd);
+  assert.match(retry, /if \(item\.withdrawKey && item\.receipt\) \{\s*void withdrawOne\(item\.key, item\.receipt\.id, item\.withdrawKey\);\s*return;/);
+  const withdrawBranch = retry.slice(
+    retry.indexOf('item.withdrawKey && item.receipt'),
+    retry.indexOf('if (!rights)'),
+  );
+  assert.doesNotMatch(withdrawBranch, /uploadOne/);
+  assert.match(withdrawBranch, /withdrawOne/);
+  const removeStart = composer.indexOf('const remove = useCallback');
+  const removeEnd = composer.indexOf('const clear = useCallback');
+  const remove = composer.slice(removeStart, removeEnd);
+  assert.match(remove, /item\.withdrawKey \?\? Crypto\.randomUUID\(\)/);
+  assert.doesNotMatch(remove, /uploadOne/);
+});
+
+test('#598B r2 unmount cleanup invalidates generation and guards async continuations (negative)', () => {
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /const alive = useRef\(true\)/);
+  assert.match(composer, /alive\.current = true/);
+  assert.match(composer, /alive\.current = false/);
+  assert.match(composer, /return \(\) => \{\s*alive\.current = false;\s*generation\.current \+= 1;/);
+  assert.match(composer, /!alive\.current \|\| epoch !== generation\.current/);
+  const effectStart = composer.indexOf('useEffect(() => {');
+  const effectBody = composer.slice(effectStart, effectStart + 500);
+  assert.match(effectBody, /return \(\) => \{/);
+});
+
 test('#598B auth coordinator exposes photo ports through participationRead', () => {
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /uploadCommentPhoto =/);
@@ -247,4 +322,14 @@ test('#598B root composer wired under venue community comment field', () => {
   assert.match(ui, /useVenueCommentPhotoComposer/);
   assert.match(ui, /RootCommentComposer/);
   assert.match(ui, /photoIds: photos\.readyIds/);
+});
+
+test('#598B r2 composer survives roots loading; uses canonical venue id (negative)', () => {
+  const ui = read('../src/components/venue-community.tsx');
+  assert.match(ui, /useVenueCommentPhotoComposer\(s\.scope\?\.canonicalVenueId \?\? null, s\.actor, locked\)/);
+  assert.match(ui, /Photo drafts live on CommunityPanel/);
+  assert.match(ui, /canCreate \? <RootCommentComposer locked=\{locked\} photos=\{photos\} \/>/);
+  assert.doesNotMatch(ui, /s\.roots\.phase === 'ready' && s\.roots\.pages\[0\]\?\.page\.canCreate \?/);
+  assert.doesNotMatch(ui, /useVenueCommentPhotoComposer\(s\.venueId/);
+  assert.match(ui, /function RootCommentComposer\(\{[\s\S]*photos: VenueCommentPhotoComposerModel/);
 });

@@ -42,6 +42,7 @@ export type VenueCommentPhotoComposerModel = {
 /**
  * Root-comment photo drafts: rights gate → picker → raw binary upload via nativeAuth.
  * Tokens never leave the auth coordinator; no CSRF cookies or multipart bodies.
+ * `venueId` must be the coordinator Scope canonicalVenueId (API receipts bind to canonical).
  */
 export function useVenueCommentPhotoComposer(
   venueId: string | null,
@@ -54,24 +55,31 @@ export function useVenueCommentPhotoComposer(
   const bytesByKey = useRef(new Map<string, Uint8Array>());
   const running = useRef(new Set<string>());
   const generation = useRef(0);
+  const alive = useRef(true);
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const live = useRef({ venueId, actor, locked });
   live.current = { venueId, actor, locked };
 
   useEffect(() => {
+    alive.current = true;
     generation.current += 1;
     bytesByKey.current.clear();
     running.current.clear();
     dispatch({ type: 'clear' });
     setRights(false);
     setNotice('');
+    return () => {
+      alive.current = false;
+      generation.current += 1;
+      running.current.clear();
+    };
   }, [venueId, actor?.actorId, actor?.sessionId, actor?.generation]);
 
   const uploadOne = useCallback(async (key: string, mime: PhotoComposerItem['mime'], bytes: Uint8Array) => {
     const epoch = generation.current;
     const { venueId: venue, actor: current } = live.current;
-    if (!venue || !current || running.current.has(key)) return;
+    if (!venue || !current || !alive.current || running.current.has(key)) return;
     running.current.add(key);
     dispatch({ type: 'patch', key, state: 'checking', message: undefined });
     try {
@@ -79,7 +87,7 @@ export function useVenueCommentPhotoComposer(
         { venueId: venue, key, mime, bytes },
         current,
       );
-      if (epoch !== generation.current || live.current.venueId !== venue) return;
+      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
       dispatch({
         type: 'patch',
         key,
@@ -88,7 +96,7 @@ export function useVenueCommentPhotoComposer(
         message: 'Готово к публикации',
       });
     } catch (error) {
-      if (epoch !== generation.current || live.current.venueId !== venue) return;
+      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
       if (error instanceof CommunityError) {
         const mapped = mapUploadFailure(error.status, error.code);
         dispatch({ type: 'patch', key, state: mapped.state, message: mapped.message });
@@ -105,6 +113,44 @@ export function useVenueCommentPhotoComposer(
     }
   }, []);
 
+  const withdrawOne = useCallback(async (
+    key: string,
+    receiptId: string,
+    withdrawKey: string,
+  ) => {
+    const epoch = generation.current;
+    const { venueId: venue, actor: current } = live.current;
+    if (!venue || !current || !alive.current || running.current.has(key)) return;
+    running.current.add(key);
+    dispatch({ type: 'patch', key, state: 'withdrawing', withdrawKey, message: undefined });
+    try {
+      await nativeAuth.withdrawCommentPhoto({ id: receiptId, key: withdrawKey }, current);
+      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+      bytesByKey.current.delete(key);
+      dispatch({ type: 'drop', key });
+    } catch (error) {
+      if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
+      if (
+        error instanceof CommunityError
+        && error.status === 404
+        && error.code === 'PHOTO_SUBMISSION_UNAVAILABLE'
+      ) {
+        bytesByKey.current.delete(key);
+        dispatch({ type: 'drop', key });
+        return;
+      }
+      dispatch({
+        type: 'patch',
+        key,
+        state: 'withdraw_failed',
+        withdrawKey,
+        message: 'Снятие не подтверждено. Проверьте доступ и повторите ту же операцию.',
+      });
+    } finally {
+      running.current.delete(key);
+    }
+  }, []);
+
   const add = useCallback(() => {
     if (!rights || live.current.locked || !live.current.venueId || !live.current.actor) return;
     if (itemsRef.current.length >= MAX_COMMENT_PHOTOS) {
@@ -113,10 +159,12 @@ export function useVenueCommentPhotoComposer(
     }
     void (async () => {
       const epoch = generation.current;
+      const venue = live.current.venueId;
       try {
         const runtime = createExpoAvatarRuntime();
         const result = await runtime.launchLibrary(AVATAR_PICKER_OPTIONS);
-        if (epoch !== generation.current || result.canceled || !result.assets?.length) return;
+        if (!alive.current || epoch !== generation.current || live.current.venueId !== venue
+          || result.canceled || !result.assets?.length) return;
         const asset = result.assets[0];
         if (!asset?.uri) {
           setNotice('Не удалось получить выбранное фото.');
@@ -135,10 +183,12 @@ export function useVenueCommentPhotoComposer(
             'Выберите JPEG, PNG или WebP до 5 МиБ.',
           );
         } catch {
-          setNotice('Выберите JPEG, PNG или WebP до 5 МиБ.');
+          if (alive.current && epoch === generation.current && live.current.venueId === venue) {
+            setNotice('Выберите JPEG, PNG или WebP до 5 МиБ.');
+          }
           return;
         }
-        if (epoch !== generation.current) return;
+        if (!alive.current || epoch !== generation.current || live.current.venueId !== venue) return;
         if (isHeicCommentSource(bytes)) {
           setNotice('Формат HEIC не поддерживается. Сохраните фото как JPEG, PNG или WebP.');
           return;
@@ -153,7 +203,7 @@ export function useVenueCommentPhotoComposer(
         dispatch({ type: 'add', key, mime, size: bytes.byteLength });
         void uploadOne(key, mime, bytes);
       } catch {
-        if (epoch === generation.current) {
+        if (alive.current && epoch === generation.current && live.current.venueId === venue) {
           setNotice('Не удалось прочитать файл. Загрузка не начата; выберите файл снова.');
         }
       }
@@ -161,7 +211,17 @@ export function useVenueCommentPhotoComposer(
   }, [rights, uploadOne]);
 
   const retry = useCallback((item: PhotoComposerItem) => {
-    if (live.current.locked || item.state === 'checking' || item.state === 'ready' || item.state === 'rejected') return;
+    if (
+      live.current.locked
+      || item.state === 'checking'
+      || item.state === 'withdrawing'
+      || item.state === 'ready'
+      || item.state === 'rejected'
+    ) return;
+    if (item.withdrawKey && item.receipt) {
+      void withdrawOne(item.key, item.receipt.id, item.withdrawKey);
+      return;
+    }
     if (!rights) return;
     const bytes = bytesByKey.current.get(item.key);
     if (!bytes) {
@@ -169,38 +229,23 @@ export function useVenueCommentPhotoComposer(
       return;
     }
     void uploadOne(item.key, item.mime, bytes);
-  }, [rights, uploadOne]);
+  }, [rights, uploadOne, withdrawOne]);
 
   const remove = useCallback((item: PhotoComposerItem) => {
-    if (live.current.locked || item.state === 'checking') return;
-    if (item.state === 'rejected' || item.state === 'retryable' || item.state === 'unknown' || !item.receipt) {
+    if (live.current.locked || item.state === 'checking' || item.state === 'withdrawing') return;
+    if (
+      item.state === 'rejected'
+      || item.state === 'retryable'
+      || !item.receipt
+      || (item.state === 'unknown' && !item.withdrawKey)
+    ) {
       bytesByKey.current.delete(item.key);
       dispatch({ type: 'drop', key: item.key });
       return;
     }
-    const { venueId: venue, actor: current } = live.current;
-    if (!venue || !current || !item.receipt) return;
-    const withdrawKey = Crypto.randomUUID();
-    const epoch = generation.current;
-    dispatch({ type: 'patch', key: item.key, state: 'checking', message: undefined });
-    void (async () => {
-      try {
-        await nativeAuth.withdrawCommentPhoto({ id: item.receipt!.id, key: withdrawKey }, current);
-        if (epoch !== generation.current) return;
-        bytesByKey.current.delete(item.key);
-        dispatch({ type: 'drop', key: item.key });
-      } catch {
-        if (epoch !== generation.current) return;
-        dispatch({
-          type: 'patch',
-          key: item.key,
-          state: 'unknown',
-          receipt: item.receipt,
-          message: 'Снятие не подтверждено. Проверьте доступ и повторите ту же операцию.',
-        });
-      }
-    })();
-  }, []);
+    const withdrawKey = item.withdrawKey ?? Crypto.randomUUID();
+    void withdrawOne(item.key, item.receipt.id, withdrawKey);
+  }, [withdrawOne]);
 
   const clear = useCallback(() => {
     generation.current += 1;
@@ -273,16 +318,19 @@ export function VenueCommentPhotoComposer({
           </Label>
           {item.message ? <Label>{item.message}</Label> : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {item.state !== 'checking' && item.state !== 'ready' && item.state !== 'rejected' ? (
+            {item.state !== 'checking'
+              && item.state !== 'withdrawing'
+              && item.state !== 'ready'
+              && item.state !== 'rejected' ? (
               <OutlineButton
                 title="Повторить"
-                disabled={locked || !model.rights}
+                disabled={locked || (!model.rights && !item.withdrawKey)}
                 onPress={() => model.retry(item)}
               />
             ) : null}
             <OutlineButton
               title={`Убрать фото ${index + 1}`}
-              disabled={locked || item.state === 'checking'}
+              disabled={locked || item.state === 'checking' || item.state === 'withdrawing'}
               onPress={() => model.remove(item)}
             />
           </View>

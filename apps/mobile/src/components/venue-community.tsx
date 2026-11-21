@@ -11,7 +11,11 @@ import { colors } from '../theme.ts';
 import { DiscoveryChip, DiscoverySheet, iosModalOrientations, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
 import { VenueReviewsSection } from './venue-reviews.tsx';
 import { VenueCommunityPhotosSection } from './venue-photos.tsx';
-import { VenueCommentPhotoComposer, useVenueCommentPhotoComposer } from './venue-comment-photo-composer.tsx';
+import {
+  VenueCommentPhotoComposer,
+  useVenueCommentPhotoComposer,
+  type VenueCommentPhotoComposerModel,
+} from './venue-comment-photo-composer.tsx';
 type Trigger = ComponentRef<typeof Pressable>;
 const reasons = [ ['harassment','Оскорбления / давление'], ['spam','Спам'], ['fake_profile','Поддельный профиль'], ['inappropriate','Неприемлемый контент'], ['other','Другое'] ] as const;
 const orderOptions = [ ['asc','Сначала старые'], ['desc','Сначала новые'] ] as const;
@@ -89,6 +93,8 @@ function CommunityPanel({name}:{name:string}) {
   const [orderOpen,setOrderOpen] = useState(false);
   const origin = useRef<RefObject<Trigger | null>>(aggregateReportTrigger);
   const locked = owner.busy(), own = s.own?.own;
+  // Photo drafts live on CommunityPanel so roots loading / order reload does not unmount them.
+  const photos = useVenueCommentPhotoComposer(s.scope?.canonicalVenueId ?? null, s.actor, locked);
   const orderLabel = orderOptions.find(([value]) => value === s.order)?.[1] ?? orderOptions[0][1];
   const login = () => router.push({pathname:'/profile',params:{returnTo:`/venues/${s.venueId}`}});
   const commit = (action:Action) => { const packet = owner.review(action); if (packet) void owner.commit(packet.key); };
@@ -96,6 +102,7 @@ function CommunityPanel({name}:{name:string}) {
   const close = () => { if (confirmation) owner.cancelReview(confirmation.packet.key); setConfirmation(null); setReport(null); setReason(null); setDetail(''); };
   const reportSubject = (subject:ReportSubject, source: RefObject<Trigger | null>) => { if (!s.actor) {login();return;} origin.current=source;setReport(subject);setReason(null);setDetail(''); };
   const aggregate = s.summary;
+  const canCreate = s.roots.pages[0]?.page.canCreate;
   return <>
     <UnresolvedActions owner={owner} />
     <View style={styles.card}>
@@ -145,9 +152,10 @@ function CommunityPanel({name}:{name:string}) {
       <DiscoverySheet visible={orderOpen} title="Порядок" onClose={() => setOrderOpen(false)} returnFocusRef={orderTrigger}>
         {orderOptions.map(([value,label]) => <DiscoveryChip key={value} title={label} selected={s.order === value} onPress={() => { owner.setOrder(value); setOrderOpen(false); }} />)}
       </DiscoverySheet>
-      {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} /> : s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate ? (
-        <RootCommentComposer locked={locked} />
-      ) : s.roots.phase === 'ready' && <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>}
+      {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} />
+        : canCreate ? <RootCommentComposer locked={locked} photos={photos} />
+          : s.roots.phase === 'ready' ? <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>
+            : null}
       <Outcomes owner={owner} match={o => o.packet.action.kind === 'create' && !o.packet.action.parentCommentId} />
       <ThreadNotice thread={s.roots} reload={() => void owner.loadThread(null)} />
       {s.roots.phase === 'ready' && !s.roots.pages.flatMap(p => p.page.items).length && <Label>Пока нет комментариев. Начните разговор.</Label>}
@@ -180,9 +188,14 @@ function CommunityPanel({name}:{name:string}) {
     </Dialog>}
   </>;
 }
-function RootCommentComposer({ locked }: { locked: boolean }) {
+function RootCommentComposer({
+  locked,
+  photos,
+}: {
+  locked: boolean;
+  photos: VenueCommentPhotoComposerModel;
+}) {
   const { owner, state: s } = useVenueCommunity();
-  const photos = useVenueCommentPhotoComposer(s.venueId, s.actor, locked);
   const draft = s.drafts.root ?? '';
   const sendEnabled = !locked && photos.canSend(draft) && (!draft.trim() || validText(draft));
   return <>

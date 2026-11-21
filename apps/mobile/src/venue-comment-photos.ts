@@ -68,7 +68,14 @@ export function isHeicCommentSource(bytes: Uint8Array): boolean {
   return ['heic', 'heif', 'mif1', 'msf1', 'heix', 'hevc', 'hevx'].includes(brand);
 }
 
-export type PhotoItemState = 'checking' | 'ready' | 'rejected' | 'retryable' | 'unknown';
+export type PhotoItemState =
+  | 'checking'
+  | 'ready'
+  | 'rejected'
+  | 'retryable'
+  | 'unknown'
+  | 'withdrawing'
+  | 'withdraw_failed';
 
 export type PhotoComposerItem = {
   key: string;
@@ -76,12 +83,21 @@ export type PhotoComposerItem = {
   size: number;
   state: PhotoItemState;
   receipt?: VenueCommentPhotoReceipt;
+  /** Frozen DELETE idempotency key — retry must reuse, never re-upload. */
+  withdrawKey?: string;
   message?: string;
 };
 
 export type PhotoComposerAction =
   | { type: 'add'; key: string; mime: CommentPhotoMime; size: number }
-  | { type: 'patch'; key: string; state: PhotoItemState; receipt?: VenueCommentPhotoReceipt; message?: string }
+  | {
+    type: 'patch';
+    key: string;
+    state: PhotoItemState;
+    receipt?: VenueCommentPhotoReceipt;
+    withdrawKey?: string;
+    message?: string;
+  }
   | { type: 'drop'; key: string }
   | { type: 'clear' };
 
@@ -107,21 +123,25 @@ export function photoComposerReducer(
           state: action.state,
           message: action.message,
           ...(action.receipt !== undefined ? { receipt: action.receipt } : {}),
+          ...(action.withdrawKey !== undefined ? { withdrawKey: action.withdrawKey } : {}),
         };
       });
     }
   }
 }
 
-/** Ready receipt ids only, composer order preserved. */
+/** Ready receipt ids only; withdrawing / withdraw_failed / keyed removals never count. */
 export function readyPhotoIds(items: readonly PhotoComposerItem[]): string[] {
   return items
-    .filter(item => item.state === 'ready' && item.receipt && item.receipt.status === 'ready')
+    .filter(item => item.state === 'ready'
+      && !item.withdrawKey
+      && item.receipt
+      && item.receipt.status === 'ready')
     .map(item => item.receipt!.id);
 }
 
 export function hasCheckingPhoto(items: readonly PhotoComposerItem[]): boolean {
-  return items.some(item => item.state === 'checking');
+  return items.some(item => item.state === 'checking' || item.state === 'withdrawing');
 }
 
 /** Send when trimmed text is non-empty or ≥1 ready photo; never while a photo is checking. */
@@ -134,9 +154,11 @@ export function commentSendReady(text: string, items: readonly PhotoComposerItem
 
 export function photoStatusLabel(state: PhotoItemState): string {
   if (state === 'checking') return 'Проверяется…';
+  if (state === 'withdrawing') return 'Снимается…';
   if (state === 'ready') return 'Готово';
   if (state === 'rejected') return 'Отклонено';
   if (state === 'retryable') return 'Можно повторить позже';
+  if (state === 'withdraw_failed') return 'Снятие не подтверждено';
   return 'Результат пока неизвестен';
 }
 
