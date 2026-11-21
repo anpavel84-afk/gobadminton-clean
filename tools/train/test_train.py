@@ -4124,6 +4124,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 'issue': 375,
                 'allowed_paths': ['tools/train/live.py', 'tools/train/test_train.py'],
                 'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+                'cursor_model': 'auto',
             }
             native = mock.Mock(spec=[
                 'CURSOR_PIN', 'AUTHOR_TOOLS', 'export', 'author_config',
@@ -4248,6 +4249,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                     'tools/train/live.py', 'apps/web/src/env.ts',
                 ],
                 'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+                'cursor_model': 'auto',
             }
             native = mock.Mock(spec=[
                 'CURSOR_PIN', 'AUTHOR_TOOLS', 'export', 'author_config',
@@ -4374,6 +4376,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 'issue': 375,
                 'allowed_paths': ['tools/train/live.py'],
                 'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+                'cursor_model': 'auto',
             }
             native = mock.Mock(spec=[
                 'CURSOR_PIN', 'AUTHOR_TOOLS', 'export', 'author_config',
@@ -5086,6 +5089,228 @@ class DirectSourceCustodyPersistFdTests(unittest.TestCase):
             # Idempotent same-identity return.
             again = retention.persist(root, binding)
             self.assertIs(again, manifest)
+
+
+class CursorAuthorModelAllowlistTests(unittest.TestCase):
+    """T1/#527: configurable Cursor author model, closed allowlist, provenance."""
+
+    def _stream(self, *, init_model='Claude Opus 5.5 300K High', result_ok=True,
+                include_assistant=True, shell_policy='TYPE_WORKSPACE_READWRITE'):
+        events = [
+            {'type': 'system', 'subtype': 'init', 'model': init_model},
+        ]
+        if include_assistant:
+            events.append({'type': 'assistant', 'model_call_id': 'm1'})
+        if shell_policy is not None:
+            events.append({
+                'type': 'tool_call', 'subtype': 'completed',
+                'tool_call': {'shellToolCall': {
+                    'args': {'requestedSandboxPolicy': {'type': shell_policy}},
+                    'result': {'success': {'exit': 0}},
+                }},
+            })
+        if result_ok:
+            events.append({
+                'type': 'result', 'subtype': 'success', 'is_error': False,
+                'usage': {'inputTokens': 1, 'outputTokens': 2},
+            })
+        else:
+            events.append({
+                'type': 'result', 'subtype': 'error', 'is_error': True,
+            })
+        return ('\n'.join(json.dumps(e) for e in events) + '\n').encode()
+
+    def _capture_argv(self, task):
+        captured = {}
+        with tempfile.TemporaryDirectory(dir='/tmp') as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            (work / 'tracked.txt').write_text('x')
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            native = mock.Mock()
+            native.CURSOR_PIN = Path('/opt/pin')
+            native.AUTHOR_TOOLS = 'Shell,Read'
+            native.MAX_STREAM = 8 << 20
+            native.export.return_value = {'tracked.txt': 'a' * 64}
+            native.author_config.return_value = {
+                'permissions': {'allow': []}, 'sandbox': {}}
+            native.parse_stream.return_value = {
+                'effective_route': 'Auto', 'underlying_model': None}
+            native.source_name.side_effect = lambda n: True
+            guard = mock.Mock()
+            guard.CURSOR_PIN = Path('/opt/pin')
+            proc = mock.Mock()
+            proc.returncode = 1
+            proc.pid = 4242
+            proc.poll.return_value = 1
+            proc.wait.return_value = 1
+            proc.communicate.return_value = (b'', b'')
+
+            def capture_ns(guard_mod, base, cmd):
+                captured['cmd'] = list(cmd)
+                # Stop before SourceRetention/Popen — argv is already frozen.
+                raise lean_live.LiveError(
+                    'cursor_namespace_guard', 'argv-capture-only')
+
+            with mock.patch.object(lean_live, 'require_executor_uid'), \
+                    mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
+                        native if n == 'native_cursor' else guard)), \
+                    mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
+                        stdout='tracked.txt\0', returncode=0)), \
+                    mock.patch.object(lean_live, 'load_short_rules', return_value=(
+                        'RULES\n', 'a' * 64, Path('AGENTS.md'))), \
+                    mock.patch.object(lean_live, 'chown_private_tree'), \
+                    mock.patch.object(lean_live, 'chown_bounded_output_dir'), \
+                    mock.patch.object(lean_live, '_ensure_cursor_private_root'), \
+                    mock.patch.object(lean_live, '_cursor_namespace_argv_uid1002',
+                                      side_effect=capture_ns), \
+                    mock.patch.object(lean_live.subprocess, 'Popen', return_value=proc), \
+                    mock.patch.object(lean_live, 'materialize_inputs', return_value=[]), \
+                    mock.patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'tok-test-xx'}):
+                with self.assertRaises(providers.ProviderError):
+                    lean_live.cursor_author_live(
+                        task=task, worktree=work, evidence_dir=evidence)
+        return captured.get('cmd')
+
+    def test_default_argv_claude_opus_and_auto_override(self):
+        task = {
+            'issue': 527, 'allowed_paths': ['tracked.txt'],
+            'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+        }
+        cmd = self._capture_argv(task)
+        self.assertIsNotNone(cmd)
+        self.assertIn('--model', cmd)
+        self.assertEqual(cmd[cmd.index('--model') + 1], 'claude-opus-5-5-high')
+        task_auto = dict(task, cursor_model='auto')
+        cmd_auto = self._capture_argv(task_auto)
+        self.assertEqual(cmd_auto[cmd_auto.index('--model') + 1], 'auto')
+
+    def test_disallowed_model_preflight_no_popen(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 527, 'allowed_paths': ['tracked.txt'],
+                'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+                'cursor_model': 'gpt-5.3-codex',
+            }
+            popen = mock.Mock(side_effect=AssertionError('Popen must not run'))
+            with mock.patch.object(lean_live, 'require_executor_uid'), \
+                    mock.patch.object(lean_live.subprocess, 'Popen', popen), \
+                    mock.patch.object(lean_live.tempfile, 'mkdtemp',
+                                      side_effect=AssertionError('no sandbox')):
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live.cursor_author_live(
+                        task=task, worktree=work, evidence_dir=evidence)
+            self.assertEqual(ctx.exception.code, 'preflight_no_call')
+            self.assertEqual(ctx.exception.detail, 'cursor_model_not_allowed')
+            self.assertEqual(ctx.exception.charge, 'none')
+            self.assertEqual(popen.call_count, 0)
+            intent = json.loads((evidence / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'preflight_no_call')
+            self.assertTrue(intent.get('no_model_launched'))
+
+    def test_parse_cursor_author_stream_auto_delegates(self):
+        native = mock.Mock()
+        native.parse_stream = mock.Mock(return_value={
+            'effective_route': 'Auto', 'underlying_model': None})
+        raw = b'{"type":"system"}\n'
+        out = lean_live.parse_cursor_author_stream(native, raw, 'auto')
+        native.parse_stream.assert_called_once_with(raw)
+        self.assertEqual(out['effective_route'], 'Auto')
+
+    def test_parse_cursor_author_stream_explicit_accepts_and_rejects(self):
+        native = mock.Mock()
+        native.MAX_STREAM = 8 << 20
+        model = 'claude-opus-5-5-high'
+        ok = lean_live.parse_cursor_author_stream(
+            native, self._stream(), model)
+        self.assertEqual(ok['effective_route'], model)
+        self.assertEqual(ok['underlying_model'], 'Claude Opus 5.5 300K High')
+        with self.assertRaises(providers.ProviderError) as ctx:
+            lean_live.parse_cursor_author_stream(
+                native, self._stream(init_model='Auto'), model)
+        self.assertEqual(ctx.exception.code, 'cursor_stream_invalid')
+        with self.assertRaises(providers.ProviderError):
+            lean_live.parse_cursor_author_stream(
+                native, self._stream(init_model='GPT-5 Something'), model)
+        with self.assertRaises(providers.ProviderError):
+            lean_live.parse_cursor_author_stream(
+                native, self._stream(result_ok=False), model)
+        # Missing result: drop last event.
+        raw_no_result = self._stream()
+        lines = [ln for ln in raw_no_result.splitlines() if ln.strip()]
+        raw_no_result = b'\n'.join(lines[:-1]) + b'\n'
+        with self.assertRaises(providers.ProviderError):
+            lean_live.parse_cursor_author_stream(native, raw_no_result, model)
+        with self.assertRaises(providers.ProviderError) as shell_ctx:
+            lean_live.parse_cursor_author_stream(
+                native, self._stream(shell_policy='TYPE_INSECURE'), model)
+        self.assertIn('sandbox', shell_ctx.exception.detail)
+
+    def test_effective_model_provenance_and_qa_binding(self):
+        self.assertEqual(
+            lean_live.cursor_author_model({}), 'claude-opus-5-5-high')
+        self.assertEqual(
+            lean_live.cursor_author_model({'cursor_model': 'auto'}), 'auto')
+        # Provenance records real model; unknown holds.
+        claim = {'bound_author': {'mode': 'on'}, 'revision': 'r' * 64}
+        with mock.patch.object(lean_live, '_qa_source_bytes', return_value='sb'):
+            prov = lean_run._author_provenance(
+                claim,
+                {'provider': 'cursor_auto',
+                 'effective_model': 'claude-opus-5-5-high'},
+                '/tmp/wt', 'c' * 40, 'op-1', '/tmp/ev')
+        self.assertEqual(prov['model'], 'claude-opus-5-5-high')
+        self.assertEqual(prov['executor'], 'native:cursor:1002')
+        with mock.patch.object(lean_live, '_qa_source_bytes', return_value='sb'):
+            with self.assertRaises(lean_run.LeanError) as hold:
+                lean_run._author_provenance(
+                    claim,
+                    {'provider': 'cursor_auto',
+                     'effective_model': 'gpt-5.3-codex'},
+                    '/tmp/wt', 'c' * 40, 'op-1', '/tmp/ev')
+        self.assertEqual(hold.exception.code, 'author_provenance_hold')
+        # QA protected binding accepts allowlisted cursor model.
+        admission = {
+            'task': {'issue': 527, 'worktree': '/tmp/wt', 'revision': 'r' * 64},
+            'candidate_sha': 'c' * 40,
+            'admission_ref': 'r' * 64,
+            'author_operation_id': 'op-1',
+            'author_executor': 'native:cursor:1002',
+            'author_receipt': '/tmp/missing-receipt.json',
+        }
+        receipt = {
+            'schema': 'GB_LEAN_CLAIM_V1',
+            'revision': 'r' * 64,
+            'candidate_sha': 'c' * 40,
+            'author_provider': 'cursor_auto',
+            'issue': 527,
+            'worktree': '/tmp/wt',
+            'task': {'issue': 527, 'worktree': '/tmp/wt'},
+            'author_provenance': {
+                'role': 'author',
+                'source_bytes': 'sb',
+                'executor': 'native:cursor:1002',
+                'model': 'claude-opus-5-5-high',
+                'candidate_sha': 'c' * 40,
+                'revision': 'r' * 64,
+                'operation_id': 'op-1',
+            },
+        }
+        with mock.patch.object(lean_live, '_qa_receipt', return_value=receipt):
+            self.assertEqual(
+                lean_live._qa_author_binding(admission), 'native:cursor:1002')
+        # routing_qualifications uses default model.
+        with mock.patch.object(providers, 'role_ready', return_value=(True, {})):
+            import author_routing as policy
+            routes = providers.routing_qualifications(
+                {'authorroute': ['cursor_auto']})
+            self.assertEqual(
+                routes[policy.CURSOR].model, 'claude-opus-5-5-high')
 
 
 if __name__ == '__main__':

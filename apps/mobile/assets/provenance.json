@@ -10,6 +10,11 @@
     "badminton-courts.jpg": "1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd",
     "go-badminton.svg": "b168aeb3545164eb173b694b2caa5d0eff98d864d4482233af9bec1bb65c8827",
     "onest.ttf": "3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589",
+    "onest-regular.ttf": "c99633a859f82e2eca49274c05d3c264a39f3391d06380f3ea121467bc91a8c8",
+    "onest-medium.ttf": "10b96dc16ce921d987545ae607ca167df715541a996773bd13ce0656fb8b4282",
+    "onest-semibold.ttf": "7639e0c9b908c617b0d9c6053b9a0e46aa834a817927563575cbe6bd4a69f69a",
+    "onest-bold.ttf": "d72a8afcbd55183360f04812180475b03efd38f401dbc95905152857ed3b1ebe",
+    "onest-extrabold.ttf": "e1538f6ab0f29250e9edd1a32aa1b8f42c2932bc97bd52c1bb4093e95788a9d0",
     "icon.png": "76469bebd216158794f6c39643b143ba4f6d16886cd326297146bb5d46d835cd"
   },
   "assetSources": {
@@ -37,6 +42,46 @@
       "source": "apps/web/public/discovery/badminton-courts.jpg",
       "method": "Byte-exact cp from web discovery; mirrors web provenance sha256 1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd.",
       "sha256": "1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd"
+    },
+    "onest-regular.ttf": {
+      "source": "apps/mobile/assets/onest.ttf",
+      "method": "fontTools varLib.instancer from onest.ttf sha256 3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589, wght=400",
+      "postScriptName": "Onest-Regular",
+      "usWeightClass": 400,
+      "platform": "ios",
+      "sha256": "c99633a859f82e2eca49274c05d3c264a39f3391d06380f3ea121467bc91a8c8"
+    },
+    "onest-medium.ttf": {
+      "source": "apps/mobile/assets/onest.ttf",
+      "method": "fontTools varLib.instancer from onest.ttf sha256 3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589, wght=500",
+      "postScriptName": "Onest-Medium",
+      "usWeightClass": 500,
+      "platform": "ios",
+      "sha256": "10b96dc16ce921d987545ae607ca167df715541a996773bd13ce0656fb8b4282"
+    },
+    "onest-semibold.ttf": {
+      "source": "apps/mobile/assets/onest.ttf",
+      "method": "fontTools varLib.instancer from onest.ttf sha256 3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589, wght=600",
+      "postScriptName": "Onest-SemiBold",
+      "usWeightClass": 600,
+      "platform": "ios",
+      "sha256": "7639e0c9b908c617b0d9c6053b9a0e46aa834a817927563575cbe6bd4a69f69a"
+    },
+    "onest-bold.ttf": {
+      "source": "apps/mobile/assets/onest.ttf",
+      "method": "fontTools varLib.instancer from onest.ttf sha256 3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589, wght=700",
+      "postScriptName": "Onest-Bold",
+      "usWeightClass": 700,
+      "platform": "ios",
+      "sha256": "d72a8afcbd55183360f04812180475b03efd38f401dbc95905152857ed3b1ebe"
+    },
+    "onest-extrabold.ttf": {
+      "source": "apps/mobile/assets/onest.ttf",
+      "method": "fontTools varLib.instancer from onest.ttf sha256 3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589, wght=800",
+      "postScriptName": "Onest-ExtraBold",
+      "usWeightClass": 800,
+      "platform": "ios",
+      "sha256": "e1538f6ab0f29250e9edd1a32aa1b8f42c2932bc97bd52c1bb4093e95788a9d0"
     },
     "icon.png": {
       "source": "apps/web/public/brand/pwa/icon-512.png",

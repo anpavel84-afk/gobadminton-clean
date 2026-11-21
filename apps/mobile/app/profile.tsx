@@ -103,7 +103,8 @@ export default function Profile() {
       {(auth.status === 'guest' || auth.status === 'unverifiable') && <View style={styles.card}>
         <Label>{auth.status === 'unverifiable' ? 'Сессия сейчас не подтверждена.' : 'Вы просматриваете игры как гость.'}</Label>
         <Label>Доступные способы входа определяет сервер. Вход откроется в системном браузере.</Label>
-        {!busy && auth.notice !== 'storage' && <TextButton title="Войти" onPress={() => void act(() => auth.signIn(intent))} />}
+        {auth.signInUnavailable ? <Label accessibilityRole="alert">{auth.signInUnavailable}</Label>
+          : !busy && auth.notice !== 'storage' && <TextButton title="Войти" onPress={() => void act(() => auth.signIn(intent))} />}
         {auth.status === 'unverifiable' && !busy && <TextButton title="Проверить соединение и сессию" onPress={() => void act(auth.validate)} />}
       </View>}
       {auth.status === 'authenticated' && auth.me && <>

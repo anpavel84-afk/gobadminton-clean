@@ -13,7 +13,14 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "ru.gobadminton.mobile.dev"
+      "bundleIdentifier": "ru.gobadminton.mobile.dev",
+      "associatedDomains": [
+        "applinks:dev.gobadminton.ru",
+        "webcredentials:dev.gobadminton.ru"
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "ru.gobadminton.mobile.dev",
@@ -43,7 +50,7 @@
           ]
         }
       ],
-      "versionCode": 17
+      "versionCode": 18
     },
     "plugins": [
       "expo-router",
@@ -51,9 +58,20 @@
       [
         "expo-font",
         {
-          "fonts": [
-            "./assets/onest.ttf"
-          ]
+          "android": {
+            "fonts": [
+              "./assets/onest.ttf"
+            ]
+          },
+          "ios": {
+            "fonts": [
+              "./assets/onest-regular.ttf",
+              "./assets/onest-medium.ttf",
+              "./assets/onest-semibold.ttf",
+              "./assets/onest-bold.ttf",
+              "./assets/onest-extrabold.ttf"
+            ]
+          }
         }
       ],
       [

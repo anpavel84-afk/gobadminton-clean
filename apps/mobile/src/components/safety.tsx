@@ -5,7 +5,7 @@ import { useAuth } from '../auth.tsx';
 import { safetyPeerId } from '../safety-coordinator.ts';
 import type { DirectMessage } from '../messages.ts';
 import { reportable, REPORT_REASONS } from '../safety.ts';
-import { Label, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
+import { iosModalOrientations, Label, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 const noMessages: DirectMessage[] = [];
 /** Native controls only. The root owner, never the modal, owns uncertain commands. */
@@ -51,7 +51,7 @@ export function NativeSafety({ peerId, name, conversationId, messages = noMessag
       {conversationId && <TextButton title="Пожаловаться на сообщение" onPress={() => owner.choose('message', view, actor)} />}
     </View>
     {!state.dialog && content}
-    <Modal visible={!!state.dialog} animationType="slide" onRequestClose={cancel}>
+    <Modal visible={!!state.dialog} animationType="slide" onRequestClose={cancel} supportedOrientations={iosModalOrientations}>
       <Page keyboard header={<TextButton title="Назад" onPress={cancel} />}>
         <Label accessibilityRole="header" style={styles.subtitle}>{state.dialog === 'block' ? 'Заблокировать игрока' : state.dialog === 'unblock' ? 'Снять мою блокировку' : 'Пожаловаться'}</Label>
         <Label>{context.name}</Label>

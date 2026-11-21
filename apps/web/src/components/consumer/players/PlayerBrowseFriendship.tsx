@@ -7,6 +7,7 @@ import { friendCommand, friendStatus, getFriendState, getSocialCapabilities } fr
 import { canOfferFriendship } from "../../../lib/player-browse";
 import { privateViews } from "../../../lib/private-view";
 import { AuthEntry } from "./ProfileComposition";
+import { SkipArrowIcon } from "./PlayerBrowsePlayInterest";
 import { useSocialMutation } from "../messages/useSocialMutation";
 import { Button } from "../Button";
 
@@ -264,7 +265,7 @@ export function PlayerBrowseFriendship({
         </div>
       ) : (
         <div className="pb-main-actions" style={{ marginTop: 12 }}>
-          <button type="button" className="pb-btn-skip" disabled={navigationLocked} onClick={onSkip}>Пропустить</button>
+          <button type="button" className="pb-btn-skip" disabled={navigationLocked} onClick={onSkip}><SkipArrowIcon />Пропустить</button>
           <button type="button" className="pb-btn-request" disabled>В друзья · позже</button>
         </div>
       )}
@@ -315,7 +316,7 @@ export function PlayerBrowseFriendship({
       </div>
     ) : (
       <div className="pb-main-actions">
-        <button type="button" className="pb-btn-skip" disabled={locked} onClick={onSkip}>Пропустить</button>
+        <button type="button" className="pb-btn-skip" disabled={locked} onClick={onSkip}><SkipArrowIcon />Пропустить</button>
         <button type="button" className="pb-btn-request" disabled={!canRequest || locked} onClick={() => { void runRequest(); }}>
           {mutation.busy ? "Отправляем…" : "Предложить дружбу"}
         </button>

@@ -6,7 +6,7 @@ import { useAuth } from '../auth.tsx';
 import { attendanceLabel, mayAcknowledge, normalizeFormReason } from '../postgame.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
-import { Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
+import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
 type FocusTarget = ComponentRef<typeof Pressable>;
 const FocusContext=createContext<RefObject<FocusTarget | null> | null>(null);
 export function PostgameSurface({children}:PropsWithChildren) {
@@ -74,7 +74,7 @@ export function CommandReview({gameId}: {gameId?:string}) {
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
-    <Modal visible={visible} animationType="none" presentationStyle="fullScreen" onRequestClose={close}
+    <Modal visible={visible} animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}
       onShow={()=>{const node=findNodeHandle(heading.current);if(node) AccessibilityInfo.setAccessibilityFocus(node);}}>
       <Page keyboard header={<View style={{gap:8}}>
         <TextButton title={review ? 'Отмена' : 'Закрыть'} onPress={close} />
