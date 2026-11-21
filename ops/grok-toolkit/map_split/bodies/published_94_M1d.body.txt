@@ -1,0 +1,17 @@
+GOBADMINTON_AUTONOMY_V1
+{
+  "schema": "GOBADMINTON_AUTONOMY_V1",
+  "target": "dev",
+  "kind": "source_only",
+  "goal": "FOLLOW-UP to M1c (Issue 90, the fullscreen map shell with the single return capsule). Start from the latest dev AFTER M1c is accepted on DEV; if M1c is not merged into dev, stop and say so in the handoff. Scope: ONLY marker visuals and marker separation. Source for re-use (read-only): branch automation/issue-88 at EXACT commit 0ce158e062d4509e8528abbbf33b520a21210ecf (PR 89): verify the tip equals that SHA, else re-implement. Bring only the marker parts with git checkout 0ce158e062d4509e8528abbbf33b520a21210ecf -- <path> where useful and merge by hand into the M1c result: apps/web/src/lib/games-venue-map.ts, apps/web/src/components/consumer/games/GamesVenueMap.tsx (selectedVenueId, separateMarkerPoints use, zoomend recompute), the marker and selected-ring rules in apps/web/src/styles/radar-geographic.css and venue-schedule-card.css, apps/web/test/marker-separation.test.ts and apps/web/test/games-venue-map-lifecycle.test.tsx. Do NOT touch GamesMapBackButton, GamesMapView layout, GamesDiscoveryPage focus logic or the back-button tests. Binding spec: (1) marker states: white 44px marker without games; lime 48px marker with the games count number; selected marker gets a violet+lime ring; unavailable venues show a count without a number; (2) pure function separateMarkerPoints(points, zoom): deterministic by venue id, offset at most 22px on screen, no mutation of input, markers at distinct coordinates untouched; recomputed on zoomend without recreating the map; (3) selected marker CSS class applied through the existing marker lifecycle, no marker flicker and no map remount on selection change (this keeps the M0b blink-fix constraints: no per-second re-render of markers); (4) safe on iPhone widths 390/430, no horizontal scroll. Additive web-only; no API, database, contracts, dependencies or PROD. Edit only allowed_paths. Run the web unit tests, lint, typecheck and build yourself and fix every failure; do not loosen or delete assertions without an equivalent.",
+  "acceptance": "D1. Unit tests for separateMarkerPoints: determinism by id, offset <=22px, input not mutated, distinct points unchanged, coincident points get distinct positions. D2. Unit/lifecycle test: selecting a marker toggles only the selected class/ring, does not recreate the map or other markers; zoomend triggers a recompute. D3. Marker states render as specified (white 44px empty, lime 48px with number, selected ring violet+lime, unavailable count without number), covered by a test or computed-style check, honest NOT_TESTED where a browser is not available. D4. The M1c return capsule, focus behavior, layout script and their tests are unchanged and still pass; no assertion deleted without an equivalent. D5. Web tests, lint, typecheck and build pass with command output quoted in the handoff; no new dependencies; only allowed_paths changed. D6. docs/handoffs handoff states what was re-used from 0ce158e062d4509e8528abbbf33b520a21210ecf, what was merged by hand, exact commands and results, and NOT_TESTED for physical iOS.",
+  "allowed_paths": [
+    "apps/web/src/components/consumer/games/GamesVenueMap.tsx",
+    "apps/web/src/lib/games-venue-map.ts",
+    "apps/web/src/styles/radar-geographic.css",
+    "apps/web/src/styles/venue-schedule-card.css",
+    "apps/web/test/**",
+    "docs/handoffs/**"
+  ],
+  "max_attempts": 3
+}

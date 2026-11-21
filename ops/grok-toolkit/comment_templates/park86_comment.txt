@@ -1,0 +1,2 @@
+GOBADMINTON_PARK_V1
+{"schema": "GOBADMINTON_PARK_V1", "issue": 86, "head": "135bc87310e4184e09779f8ecda0fa42a1d39e48", "attempt": 3, "reason": "M1 QA FAIL on 135bc873 (focus of back button not set on fresh map entry); attempts 3 of 3 exhausted. Parked to free the slot; work continues in successor Issue M1b built from PR 87 branch.", "allow_successors": []}

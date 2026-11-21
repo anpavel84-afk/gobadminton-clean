@@ -1,0 +1,179 @@
+{
+ "issue": 96,
+ "title": "M0b: карта не должна пропадать на iPhone (жизненный цикл, лог, mapdebug)",
+ "state": "open",
+ "collected_utc": "2026-10-19T10:57:15.017154+00:00",
+ "dev_head": "0c61960868b85cf40b761d953c7ea1b7565ecda9",
+ "pr": {
+  "number": 97,
+  "state": "open",
+  "head": "765aebc247269012615f69ed22ba8d5412aeffb3",
+  "base": "dev",
+  "base_sha": "0c61960868b85cf40b761d953c7ea1b7565ecda9",
+  "url": "https://github.com/anpavel84-afk/gobadminton-clean/pull/97"
+ },
+ "qa_source": "из --qa-dir evidence/96",
+ "attempts": [
+  {
+   "attempt": 1,
+   "sha": "224ebbe3540bfd6c914e4638b543dafcb393d2ab",
+   "message": "Refs #96: autonomous source attempt 1",
+   "ci": {
+    "total": 8,
+    "failed": [
+     {
+      "name": "source (web)",
+      "conclusion": "failure",
+      "annotations": [
+       "line 167: Property 'presentation' does not exist on type '{ marker: Marker; button: HTMLButtonElement; }'.",
+       "line 168: Property 'presentation' does not exist on type '{ marker: Marker; button: HTMLButtonElement; }'.",
+       "line 182: Property 'position' does not exist on type '{ marker: Marker; button: HTMLButtonElement; }'."
+      ],
+      "url": "https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39208652721/job/117916919744"
+     }
+    ]
+   },
+   "qa": {
+    "verdict": "FAIL",
+    "reviewed_sha": "224ebbe3540bfd6c914e4638b543dafcb393d2ab",
+    "findings": [
+     "A2 source-test coverage is incomplete. games-map-refresh.test.tsx mocks next/dynamic as a static <div>Map</div>, so its focus, refresh, failure and day-change tests never construct or remove a mocked Map. games-venue-map-lifecycle.test.tsx does not exercise those transitions with changing counts readiness. Add coverage asserting exactly one Map construction and no remove() across all A2 transitions, followed by removal on unmount/retry. This is a source acceptance requirement, not a later lifecycle gate. Full test/lint/typecheck/build runs were NOT_TESTED: dependencies are absent and Corepack could not obtain pnpm (EAI_AGAIN). Standalone debug-module checks and git diff --check passed."
+    ],
+    "source": "/home/__EXEC_USER__/.gb-autonomy-state/qa-96-a1.json"
+   }
+  },
+  {
+   "attempt": 2,
+   "sha": "fe5a9ec80760f4804930d99885ec891bec41145f",
+   "message": "Refs #96: autonomous source attempt 2",
+   "ci": {
+    "total": 15,
+    "failed": [
+     {
+      "name": "source (web)",
+      "conclusion": "failure",
+      "annotations": [
+       "line 167: Property 'presentation' does not exist on type '{ marker: Marker; button: HTMLButtonElement; }'.",
+       "line 168: Property 'presentation' does not exist on type '{ marker: Marker; button: HTMLButtonElement; }'.",
+       "line 182: Property 'position' does not exist on type '{ marker: Marker; button: HTMLButtonElement; }'."
+      ],
+      "url": "https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39209424507/job/117919271779"
+     }
+    ]
+   },
+   "qa": {
+    "verdict": "PASS",
+    "reviewed_sha": "fe5a9ec80760f4804930d99885ec891bec41145f",
+    "findings": [],
+    "source": "/home/__EXEC_USER__/.gb-autonomy-state/qa-96-a2.json"
+   }
+  },
+  {
+   "attempt": 3,
+   "sha": "765aebc247269012615f69ed22ba8d5412aeffb3",
+   "message": "Refs #96: autonomous source attempt 3",
+   "ci": {
+    "total": 15,
+    "failed": []
+   },
+   "qa": {
+    "verdict": "FAIL",
+    "reviewed_sha": "765aebc247269012615f69ed22ba8d5412aeffb3",
+    "findings": [
+     "apps/web/src/lib/games-map-debug.ts:21 violates A4 coordinate rejection: the regex requires decimal fractions in both coordinates, so valid pairs such as '55.75,37' and '55,37' are retained and exposed through console.info and window.__gbMapLog. A direct Node assertion reproduced the rejection failure. Web tests, lint, typecheck and build were NOT_TESTED: node_modules is absent and Corepack could not resolve the unavailable pnpm distribution (EAI_AGAIN). This environment limitation is not a source defect."
+    ],
+    "source": "/home/__EXEC_USER__/.gb-autonomy-state/qa-96-a3.json"
+   }
+  }
+ ],
+ "control_comments": [
+  {
+   "id": 6264708013,
+   "created_at": "2026-10-19T10:05:30Z",
+   "schema": "GOBADMINTON_RESUME_V1",
+   "body": "GOBADMINTON_RESUME_V1\n{\"schema\": \"GOBADMINTON_RESUME_V1\", \"issue\": 96, \"head\": \"fe5a9ec80760f4804930d99885ec891bec41145f\", \"attempt\": 2, \"mode\": \"ci_fix\", \"note\": \"CI failed only job 'source (web)' at typecheck (tsc -p tsconfig.json --noEmit), 4x TS2339 in apps/web/src/components/consumer/games/GamesVenueMap.tsx lines 167, 168, 182: properties 'presentation' and 'position' do not exist on type '{ marker: Marker; button: HTMLButtonElement; }'. Cause: reconcileVenueMarkers<Entry> infers Entry from the create() object literal, not from the markers ref. Fix ONLY the types in GamesVenueMap.tsx: declare one named type (e.g. type VenueMarkerEntry = { marker: maplibregl.Marker; button: HTMLButtonElement; presentation?: string; position?: string }), use it for the useRef Map and pass it explicitly as reconcileVenueMarkers<VenueMarkerEntry>(...) (or annotate create's return type). Keep every other candidate change and test; do not weaken types with any/ts-ignore, do not disable lint rules or tests. Run pnpm --filter @gobadminton/web run typecheck, lint and test:unit offline if available; otherwise mark NOT_TESTED with the exact reason and keep the fix in the diff.\"}"
+  },
+  {
+   "id": 6265059608,
+   "created_at": "2026-10-19T10:25:16Z",
+   "schema": "GOBADMINTON_PARK_V1",
+   "body": "GOBADMINTON_PARK_V1\n{\"schema\": \"GOBADMINTON_PARK_V1\", \"issue\": 96, \"head\": \"765aebc247269012615f69ed22ba8d5412aeffb3\", \"attempt\": 3, \"reason\": \"M0b QA FAIL on 765aebc2 (PR 97) after RESUME ci_fix of TS2339 (CI green on attempt 3); attempts 3 of 3 exhausted. Parked by Owner; replaced by narrow successor M0c (map lifecycle core).\", \"allow_successors\": []}"
+  }
+ ],
+ "pr_files": [
+  {
+   "file": "apps/web/src/components/consumer/games/GamesMapDebugPanel.tsx",
+   "status": "added",
+   "add": 23,
+   "del": 0
+  },
+  {
+   "file": "apps/web/src/components/consumer/games/GamesMapView.tsx",
+   "status": "modified",
+   "add": 18,
+   "del": 10
+  },
+  {
+   "file": "apps/web/src/components/consumer/games/GamesMapViewport.tsx",
+   "status": "modified",
+   "add": 6,
+   "del": 5
+  },
+  {
+   "file": "apps/web/src/components/consumer/games/GamesVenueMap.tsx",
+   "status": "modified",
+   "add": 46,
+   "del": 15
+  },
+  {
+   "file": "apps/web/src/components/consumer/pages/GamesDiscoveryPage.tsx",
+   "status": "modified",
+   "add": 4,
+   "del": 1
+  },
+  {
+   "file": "apps/web/src/lib/games-map-debug.ts",
+   "status": "added",
+   "add": 28,
+   "del": 0
+  },
+  {
+   "file": "apps/web/src/lib/games-venue-map.ts",
+   "status": "modified",
+   "add": 5,
+   "del": 0
+  },
+  {
+   "file": "apps/web/test/games-map-debug.test.tsx",
+   "status": "added",
+   "add": 42,
+   "del": 0
+  },
+  {
+   "file": "apps/web/test/games-map-refresh-lifecycle.test.tsx",
+   "status": "added",
+   "add": 182,
+   "del": 0
+  },
+  {
+   "file": "apps/web/test/games-map-refresh.test.tsx",
+   "status": "modified",
+   "add": 32,
+   "del": 1
+  },
+  {
+   "file": "apps/web/test/games-venue-map-lifecycle.test.tsx",
+   "status": "modified",
+   "add": 43,
+   "del": 9
+  },
+  {
+   "file": "docs/handoffs/ISSUE_96_M0B.md",
+   "status": "added",
+   "add": 94,
+   "del": 0
+  }
+ ],
+ "predecessor_body": "GOBADMINTON_AUTONOMY_V1\n{\n  \"schema\": \"GOBADMINTON_AUTONOMY_V1\",\n  \"target\": \"dev\",\n  \"kind\": \"source_only\",\n  \"goal\": \"Base: CURRENT HEAD of your worktree = dev 0c619608 (M0 #84, M1e #92 merged). Work from HEAD. HARD RULES: NEVER run git fetch, pull, ls-remote, clone, checkout, switch, reset, stash or anything needing network or writing git metadata. Do NOT compare with origin/dev or any remote ref: the local remote-tracking ref in the author sandbox is stale and irrelevant. This task has NO stop conditions about base, remote state or other issues: never stop and never deliver only a BLOCKED handoff. If a check cannot run, write NOT_TESTED with the exact reason and still deliver code and tests. Do not revert others' work. Additive web-only; no API, database, contracts, package.json/lockfile, new dependencies, PROD, secrets, network telemetry. Keep MapLibre 6.13.0, pmtiles and the Moscow bundle. Edit ONLY allowed_paths.\\nTASK M0b: on iPhone Safari the Games map basemap shows for about a second, then vanishes. Owner screenshot on DEV 0c619608: the 'К списку' capsule, Radar button, attribution and ALL venue markers stay visible, the basemap is an empty background, no error card. So GamesVenueMap and its Map instance stay mounted (unmount removes every marker); the GL basemap stops drawing and nothing reports it.\\nVerified causes in dev 0c619608:\\nC1 (most probable, silent). GamesVenueMap report() makes 'tiles' errors fatal only when loadedTiles===0 after 8 s; any later tile/worker/GL failure is just console.warn plus data-map-warnings, so a blank basemap is never visible or logged. webglcontextlost is reported as fatal immediately and webglcontextrestored is not handled (no repaint, fatal never cleared).\\nC2 (churn on iOS GPU/memory). GamesMapView setNow every 1000 ms (GamesDiscoveryPage also ticks 1 s) makes venueSchedules and counts new Maps each second, so both GamesVenueMap effects with deps [ready, venues, counts] re-run every second: every marker gets replaceChildren + a new SVG glyph, separate() runs setOffset on all markers and moveend is re-subscribed. layout() calls setSettled(false)+instance.resize() on every ResizeObserver tick even when size is unchanged; GamesMapViewport rewrites inline size on every visualViewport resize/scroll.\\nC3. window focus/online -> polling.refresh -> games reset to [] and gamesReady=false -> counts null -> all markers flip to '?' and back.\\nC4 (unmount paths, rarer). snapshot becomes null on a cityId change or on a failed FIRST venues load (then MapView is not rendered at all); GamesDiscoveryPage returns the 'Загружаем игры' tree while location is falsy. Same-city refresh/day change already keeps the snapshot (do not claim otherwise).\\nNote for handoff only: MapLibre 6.14.0 lists fixes for blank, unresponsive Safari maps and for load/idle not firing when the last tile fails; an upgrade is NOT part of this task.\\nDo:\\n1) New pure module apps/web/src/lib/games-map-debug.ts: ring buffer max 200 of {t, ev, detail}; logMapEvent(ev, detail) with detail a short string or number (no URLs with query, ids, coordinates, camera center). console.info('[games-map-life]', ...) and window.__gbMapLog only when debug is on. Events at least: map-view-mount/unmount, venue-map-mount/unmount, map-construct(w x h, dpr), style-load, load, first-render, first-tile, idle, resize(w x h, only on change), zero-size-skip, canvas(cssW x cssH vs backing W x H), tile-error(kind,status,path), tiles(loaded,errors), webgl-lost, webgl-restored, fatal(kind), snapshot-reset(reason), visibility(hidden|visible), pagehide, poll(start|ok|fail), counts-identity-change, fallback-shown(reason).\\n2) Debug panel GamesMapDebugPanel.tsx when URL has mapdebug=1 (remember it in sessionStorage gb-games-map-debug=1 for the tab): fixed, monospace, above safe area, max 40vh, scrollable, last 60 entries live, buttons 'Скопировать' (JSON via navigator.clipboard, textarea fallback) and 'Закрыть'. Off and absent by default; never sent anywhere.\\n3) Fixes:\\na) C1: webglcontextlost is not fatal for 4000 ms; webglcontextrestored cancels it and calls triggerRepaint; not restored in time -> existing fatal 'webgl' card ('Повторить' re-creates). On visibility visible call triggerRepaint. Log every non-fatal error with kind/status/path and keep tile loaded/error counters.\\nb) C2: replace the 1 s tick in GamesMapView by one that changes state only when the minute changes (e.g. 30 s interval); add a pure helper in games-venue-map.ts that returns the previous counts Map when content is equal, and use it; marker update skips DOM writes when text, label, class and pressed state are unchanged; separate() effect does not depend on counts; layout() resizes only when width/height changed, at most once per animation frame, skips zero size (zero-size-skip).\\nc) C3: during a background revalidation of the same city keep the last confirmed counts until new games arrive (no '?' flash); still never show stale counts after a failed reload (keep M0 honesty: on failure counts null).\\nd) C4: never setSnapshot(null) while a snapshot of the same city exists; if the first venues load fails, render the map with no markers plus the honest error text. In GamesDiscoveryPage keep the last resolved location for the map view so a transient null does not unmount it.\\ne) Never remove or re-create the Map except on GamesVenueMap unmount or 'Повторить'. Keep M0 fatal classification for other kinds, error card, camera restore, Radar sharing, Moscow-only guard, M1e back button.\\n4) docs/handoffs/ISSUE_<this issue number>_M0B.md: which causes are covered by which test, what changed, MapLibre 6.14.0 note, iPhone check: open https://dev.gobadminton.ru/games?view=map&mapdebug=1, wait 30 s, pan/zoom, background the tab 10 s and return, press 'Скопировать', send the log. Success = one venue-map-mount, no venue-map-unmount, no fatal, tile-error/webgl-lost entries explain any blank basemap.\",\n  \"acceptance\": \"Tests must use the existing harness style (mocked react hooks, maplibre-gl, pmtiles, next/dynamic; renderToStaticMarkup) as in apps/web/test/games-venue-map-lifecycle.test.tsx and games-map-refresh.test.tsx; no jsdom, testing-library or other new dependency.\\nA1. Regression tests that FAIL on dev 0c619608 and pass after the fix: (i) GamesVenueMap: webglcontextlost then webglcontextrestored within 4000 ms -> no failure card, onAvailability(false) not called; without restore after 4000 ms the 'Карта не загрузилась' card with kind webgl appears; (ii) GamesVenueMap: rerender with a new but content-equal counts Map -> zero replaceChildren calls and separate() not re-run; (iii) GamesMapView: 60 s of fake timers with unchanged data -> counts reference passed to MapView changes at most once; (iv) GamesMapView: first venues load fails -> MapView is still rendered (venues []) with the error alert.\\nA2. Invariants (must pass, may already pass on old code): across refresh with gamesReady=false, window focus, a failed poll after a success, day change and rerender with the same Moscow cityId, the mocked Map is constructed exactly once and remove() is never called until unmount or 'Повторить'; after a failed reload counts are null (no stale counts).\\nA3. layout(): zero size neither constructs a second Map nor removes it; unchanged size does not call resize(); positive size after zero calls resize() once.\\nA4. games-map-debug unit tests: ring limit 200, entry shape, details reject query strings and coordinates; console/window output only when debug is on. Panel test: mapdebug=1 renders 'Скопировать' and 'Закрыть'; without the flag nothing renders.\\nA5. docs/handoffs/ISSUE_<this issue number>_M0B.md exists per item 4 of the goal; it does not claim a Safari fix without device evidence.\\nA6. The diff contains real source changes to GamesMapView.tsx and GamesVenueMap.tsx, the new games-map-debug.ts and GamesMapDebugPanel.tsx, and new or extended test files in apps/web/test; a handoff-only diff is a FAIL. Test, lint, typecheck and build results are quoted, or NOT_TESTED with the exact reason (allowed; not a reason to stop). Existing web tests, lint, typecheck and build pass; no new dependencies; only allowed_paths changed; M0 error card, Radar, camera restore, marker lifecycle, M1e back button and Moscow-only guard unchanged.\",\n  \"allowed_paths\": [\n    \"apps/web/src/components/consumer/games/GamesVenueMap.tsx\",\n    \"apps/web/src/components/consumer/games/GamesMapView.tsx\",\n    \"apps/web/src/components/consumer/games/GamesMapViewport.tsx\",\n    \"apps/web/src/components/consumer/games/GamesMapDebugPanel.tsx\",\n    \"apps/web/src/components/consumer/pages/GamesDiscoveryPage.tsx\",\n    \"apps/web/src/lib/games-map-diagnostics.ts\",\n    \"apps/web/src/lib/games-map-debug.ts\",\n    \"apps/web/src/lib/games-venue-map.ts\",\n    \"apps/web/src/styles/radar-geographic.css\",\n    \"apps/web/test/**\",\n    \"docs/handoffs/**\"\n  ],\n  \"max_attempts\": 3\n}",
+ "missing_qa": []
+}

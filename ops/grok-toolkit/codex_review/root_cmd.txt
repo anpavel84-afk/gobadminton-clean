@@ -1,0 +1,1 @@
+sudo bash -c 'set -e; S=/var/lib/gb-ops-stage/files/codex-review-install.sh; T=/root/codex-review-install.sh; install -m 0700 -o root -g root "$S" "$T"; echo "59815aef65fe6c0f326bb33399284e38fdf84af4dfece4c58f1fd09e113f6f13  $T" | sha256sum -c - || { rm -f "$T"; exit 1; }; bash "$T"'

@@ -1,0 +1,24 @@
+[Unit]
+Description=GoBadminton OPS monitor snapshot writer (non-LLM, read-only on executor state)
+
+[Service]
+Type=oneshot
+User=__EXEC_USER__
+Group=__EXEC_USER__
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -I /usr/local/lib/gb-ops-monitor/opsmon/writer.py --state-dir /home/__EXEC_USER__/.gb-autonomy-state --out-dir /var/lib/gb-ops-monitor --titles-external /var/lib/gb-ops-titles/titles_ru.json --backlog-external /var/lib/gb-ops-titles/backlog_ru.json
+TimeoutStartSec=20
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/gb-ops-monitor
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+MemoryMax=64M

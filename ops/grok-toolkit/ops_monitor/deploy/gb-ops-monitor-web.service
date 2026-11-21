@@ -1,0 +1,33 @@
+[Unit]
+Description=GoBadminton OPS monitor (read-only web, loopback 127.0.0.1:18090)
+After=network.target
+
+[Service]
+Type=simple
+User=__MON_USER__
+Group=__MON_USER__
+Environment=OPSMON_CONFIG=/etc/gb-ops-monitor/config.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -I /usr/local/lib/gb-ops-monitor/opsmon/server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+ReadOnlyPaths=/var/lib/gb-ops-monitor /etc/gb-ops-monitor
+MemoryMax=96M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
