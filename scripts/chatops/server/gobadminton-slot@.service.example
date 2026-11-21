@@ -1,0 +1,23 @@
+# PARALLEL_SLOTS_V1 slot template (example; the installer renders the real unit). NOT installed by this PR.
+# slot1 drop-in: User=agentagency-dev, ProtectHome=read-only + ReadWritePaths=/home/agentagency-dev/.codex
+[Unit]
+Description=GoBadminton executor slot %i (PARALLEL_SLOTS_V1)
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+User=gb-%i
+SupplementaryGroups=gb-slots
+ExecStart=/usr/bin/python3 -B /usr/local/lib/gobadminton-slots/autonomous_issues.py --slot %i --repo /srv/gb-slots/%i/repo --state-dir /var/lib/gobadminton-autonomy/slots/%i --worktrees-root /srv/gb-slots/%i/worktrees --known-hosts VERIFIED_HOSTS --approved-since ENROLLMENT_UTC
+KillMode=control-group
+TimeoutStopSec=20
+SendSIGKILL=yes
+Restart=on-failure
+RestartSec=30
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/gobadminton-autonomy/slots/%i /var/lib/gobadminton-autonomy/outbox/%i /var/lib/gobadminton-autonomy/locks /srv/gb-slots/%i
+[Install]
+WantedBy=multi-user.target
