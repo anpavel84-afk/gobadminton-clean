@@ -76,10 +76,11 @@ export default function GuestGames() {
   const dayLabel = day ? discoveryDateLabel(day) : 'Все ближайшие';
   const skill = levelGuideSkillFor(level);
   const closeSheet = () => setSheet(null);
+  const emptySettled = !!city && state.status === 'ready' && !items.length;
   const mapEntry = () => city ? (
     <Pressable accessibilityRole="button" accessibilityLabel="Все игры на карте" onPress={openMap}
       onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
-      style={[{position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,alignSelf:'center'},
+      style={[{position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,...(emptySettled ? {right:16} : {alignSelf:'center'})},
       {minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
         flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}]}>
