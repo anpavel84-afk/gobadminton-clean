@@ -14,15 +14,21 @@ test('#623 contact-scroll path is keyed on contactAlert; generic notice scroll g
     true,
   );
 
-  // Contact-scroll path: measureLayout + section offset → onContactAlertLayout → scrollTo, keyed on contactAlert.
+  // Contact-scroll path: measureLayout against ScrollView content host (getInnerViewRef), keyed on contactAlert.
   assert.match(create, /contactAlert=\{contactAlert\}/);
-  assert.match(create, /onContactAlertLayout=\{y => \{/);
+  assert.match(create, /onContactAlertLayout=\{anchor => \{/);
+  assert.match(create, /getInnerViewRef/);
+  assert.match(create, /anchor\.measureLayout\(content,/);
   assert.match(create, /scrollRef\.current\?\.scrollTo\(\{\s*y:\s*Math\.max\(0,\s*y - 24\)/);
   assert.match(controls, /contactAlert/);
   assert.match(controls, /onContactAlertLayout/);
-  assert.match(controls, /measureLayout/);
-  assert.match(controls, /participationSectionY\.current \+ y/);
   assert.match(controls, /if \(!contactAlert/);
+  assert.match(controls, /contactAnchorRef\.current/);
+
+  // NEGATIVE / regression: section-relative onLayout offset must not drive scroll (short by BackLink/Step/title).
+  assert.doesNotMatch(controls, /participationSectionY/);
+  assert.doesNotMatch(controls, /participationSectionRef/);
+  assert.doesNotMatch(create, /participationSectionY/);
 
   // NEGATIVE / regression: bottom generic notice must not steal scroll when contactAlert is set.
   const noticeOnLayout = create.slice(

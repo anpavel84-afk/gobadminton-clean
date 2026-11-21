@@ -17,7 +17,7 @@ import { discoveryDateLabel } from '../presentation.ts';
 
 export function GameField({ label, value, onChange, maxLength = 2000, multiline = false, numeric = false, inputRef }: {
   label: string; value: string; onChange: (v: string) => void; maxLength?: number; multiline?: boolean; numeric?: boolean;
-  inputRef?: Ref<TextInput>;
+  inputRef?: Ref<ComponentRef<typeof TextInput>>;
 }) {
   return <View style={{ gap: 6 }}>
     <Label style={{ textAlign: 'left' }}>{label}</Label>
@@ -99,7 +99,7 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
   onUpdate: (patch: Partial<CreationForm>) => void;
   onOpenCity: () => void;
   contactAlert?: string | null;
-  onContactAlertLayout?: (y: number) => void;
+  onContactAlertLayout?: (anchor: ComponentRef<typeof View>) => void;
 }) {
   const selected = venues.find(v => v.id === form.venueId);
   const catalogueTrigger = useRef<ComponentRef<typeof Pressable>>(null);
@@ -107,10 +107,8 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
   const timeTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const formatTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const visibilityTrigger = useRef<ComponentRef<typeof Pressable>>(null);
-  const participationSectionRef = useRef<ComponentRef<typeof View>>(null);
-  const participationSectionY = useRef(0);
   const contactAnchorRef = useRef<ComponentRef<typeof View>>(null);
-  const contactInputRef = useRef<TextInput>(null);
+  const contactInputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
@@ -222,44 +220,30 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
       </View>
     </FormSection>
 
-    <View
-      ref={participationSectionRef}
-      collapsable={false}
-      onLayout={e => { participationSectionY.current = e.nativeEvent.layout.y; }}
-    >
-      <FormSection title="Условия участия">
-        <View ref={contactAnchorRef} collapsable={false}>
-          <GameField label="Публичный контакт для этой игры" value={form.contact} onChange={contact => onUpdate({ contact })} maxLength={320} inputRef={contactInputRef} />
-          {!!contactAlert && <Label accessibilityRole="alert" style={{ textAlign: 'left', color: colors.secondary }} onLayout={() => {
-            const section = participationSectionRef.current;
-            const anchor = contactAnchorRef.current;
-            if (!contactAlert || !section || !anchor || !onContactAlertLayout) return;
-            // measureLayout vs section root + section's ScrollView content y — not nested onLayout y alone.
-            anchor.measureLayout(
-              section,
-              (_x, y) => {
-                onContactAlertLayout(participationSectionY.current + y);
-                contactInputRef.current?.focus();
-              },
-              () => undefined,
-            );
-          }}>{contactAlert}</Label>}
-        </View>
-        <Label style={{ textAlign: 'left', color: colors.secondary }}>Будет виден на странице игры.</Label>
-        <Pressable accessibilityRole="button" onPress={() => onUpdate({ saveContact: !form.saveContact })}
-          style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
-          <Label style={{ textAlign: 'left', fontWeight: '600' }}>{`${form.saveContact ? '✓ ' : ''}Сохранить контакт для следующих игр`}</Label>
-        </Pressable>
-        <Label style={{ textAlign: 'left', color: colors.secondary }}>Контакт подставится при создании новой игры. Контакты в профиле не изменятся.</Label>
-        {form.activity === 'regular'
-          ? <GameField label="Условия площадки" value={form.terms} onChange={terms => onUpdate({ terms })} multiline />
-          : <>
-            <GameField label="Описание тренировки" value={form.training} onChange={training => onUpdate({ training })} multiline />
-            <GameField label="Оплата тренеру (по договорённости)" value={form.trainerTerms} onChange={trainerTerms => onUpdate({ trainerTerms })} multiline />
-            <Label style={{ textAlign: 'left', color: colors.secondary }}>Расчёт напрямую с тренером.</Label>
-          </>}
-      </FormSection>
-    </View>
+    <FormSection title="Условия участия">
+      <View ref={contactAnchorRef} collapsable={false}>
+        <GameField label="Публичный контакт для этой игры" value={form.contact} onChange={contact => onUpdate({ contact })} maxLength={320} inputRef={contactInputRef} />
+        {!!contactAlert && <Label accessibilityRole="alert" style={{ textAlign: 'left', color: colors.secondary }} onLayout={() => {
+          const anchor = contactAnchorRef.current;
+          if (!contactAlert || !anchor || !onContactAlertLayout) return;
+          onContactAlertLayout(anchor);
+          contactInputRef.current?.focus();
+        }}>{contactAlert}</Label>}
+      </View>
+      <Label style={{ textAlign: 'left', color: colors.secondary }}>Будет виден на странице игры.</Label>
+      <Pressable accessibilityRole="button" onPress={() => onUpdate({ saveContact: !form.saveContact })}
+        style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
+        <Label style={{ textAlign: 'left', fontWeight: '600' }}>{`${form.saveContact ? '✓ ' : ''}Сохранить контакт для следующих игр`}</Label>
+      </Pressable>
+      <Label style={{ textAlign: 'left', color: colors.secondary }}>Контакт подставится при создании новой игры. Контакты в профиле не изменятся.</Label>
+      {form.activity === 'regular'
+        ? <GameField label="Условия площадки" value={form.terms} onChange={terms => onUpdate({ terms })} multiline />
+        : <>
+          <GameField label="Описание тренировки" value={form.training} onChange={training => onUpdate({ training })} multiline />
+          <GameField label="Оплата тренеру (по договорённости)" value={form.trainerTerms} onChange={trainerTerms => onUpdate({ trainerTerms })} multiline />
+          <Label style={{ textAlign: 'left', color: colors.secondary }}>Расчёт напрямую с тренером.</Label>
+        </>}
+    </FormSection>
 
     <FormSection title="Фото этой игры">
       <Label style={{ textAlign: 'left' }}>Будет использована текущая одобренная обложка площадки или стандартная.</Label>

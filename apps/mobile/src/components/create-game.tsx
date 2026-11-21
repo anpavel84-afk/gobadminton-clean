@@ -173,8 +173,9 @@ export function CreateGame({ venueId }: { venueId?: string }) {
         onUpdate={patch => owner.update(patch)}
         onOpenCity={() => router.push('/city')}
         contactAlert={contactAlert}
-        onContactAlertLayout={y => {
-          scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true });
+        onContactAlertLayout={anchor => {
+          const content = scrollRef.current?.getInnerViewRef?.();
+          if (content) anchor.measureLayout(content, (_x, y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true }), () => undefined);
         }}
       />
       {state.notice && <Label accessibilityRole="alert" onLayout={e => {
