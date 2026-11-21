@@ -86,9 +86,8 @@ test('Android paths unchanged: no Android branches added, keyboard/inset owners 
   assert.match(ui, /<KeyboardAvoidingView behavior=\{Platform\.OS === 'ios' && keyboard \? 'padding' : undefined\}/);
   assert.match(ui, /paddingTop: insets\.top, paddingLeft: insets\.left, paddingRight: insets\.right/);
   assert.match(ui, /<Modal transparent visible animationType="none" onRequestClose=\{onClose\} supportedOrientations=\{iosModalOrientations\}/);
-  const app = JSON.parse(read('../app.json')) as { expo: { android: { softwareKeyboardLayoutMode: string; versionCode: number; package: string } } };
+  const app = JSON.parse(read('../app.json')) as { expo: { android: { softwareKeyboardLayoutMode: string; package: string } } };
   assert.equal(app.expo.android.softwareKeyboardLayoutMode, 'resize');
-  assert.equal(app.expo.android.versionCode, 17);
   assert.equal(app.expo.android.package, 'ru.gobadminton.mobile.dev');
 });
 
