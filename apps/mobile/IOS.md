@@ -1,6 +1,6 @@
-# GoBadminton DEV на iPhone (iOS I1: конфигурация)
+# GoBadminton DEV на iPhone (iOS)
 
-Статус: подготовлена только конфигурация Expo. iOS-сборка, подпись, установка на устройство и вход **NOT_TESTED**. Android-конфигурация (`expo.android`, `versionCode` 17) не менялась.
+Статус: конфигурация Expo (I1), навигация назад (I2), шрифты (I3), экраны/Modal (I4), медиа HEIC (I5), вход (I6) и polish (I7) в исходниках. iOS-сборка, подпись, установка на устройство и вход на устройстве **NOT_TESTED**. Android-конфигурация (`expo.android`, `versionCode`) не менялась этими шагами.
 
 ## Что настроено
 
@@ -39,11 +39,13 @@
 
    Android `assetlinks.json` этим не затрагивается.
 3. Тестовый iPhone с **iOS ≥ 17.4** для проверки входа.
-4. Перед любой отправкой в App Store — **Sign in with Apple** (App Review Guideline 4.8), т.к. есть вход через сторонний сервис. Это отдельная задача и решение Owner.
+4. Перед любой отправкой в App Store — **Sign in with Apple** (App Review Guideline 4.8), т.к. есть вход через сторонний сервис. Это отдельная задача и решение Owner. Нужно только перед TestFlight-external / App Store.
 
 ## Ограничения iOS
 
-- **HTTPS-callback входа только на iOS ≥ 17.4.** `expo-web-browser` 58 (`ios/WebAuthSession.swift`) использует `ASWebAuthenticationSession` с `callback: .https(host:path:)` только при `#available(iOS 17.4)` **и** опции `preferUniversalLinks: true`; иначе — старый API `callbackURLScheme`, который HTTPS-redirect `https://dev.gobadminton.ru/auth/native/callback` не перехватывает. Минимальная iOS для Expo SDK 58 — 16.4, поэтому на iOS 16.4–17.3 вход не завершится.
-- **Блокер следующего шага:** `src/auth.tsx` вызывает `openAuthSessionAsync(start.url, NATIVE_REDIRECT)` без `preferUniversalLinks: true` (по умолчанию `false` в `WebBrowserOptions.swift`). Для входа на iOS нужен отдельный шаг: передать опцию только при `Platform.OS === 'ios'`, чтобы Android-путь (`_openAuthSessionPolyfillAsync`) получал прежние аргументы.
-- **Нет аппаратной кнопки «Назад».** В React Native 0.88 `BackHandler.ios.js` — заглушка: обработчики `hardwareBackPress` (story, profile, map, player-browse) на iOS не вызываются. Возврат — только экранными кнопками и жестом навигации.
+- **Вход (I6):** HTTPS-callback через `ASWebAuthenticationSession` доступен только на **iOS ≥ 17.4** (`expo-web-browser` 58, `#available(iOS 17.4)` + `preferUniversalLinks: true`). На iOS это уже передаётся из `src/auth.tsx` только в ветке `Platform.OS === 'ios'`; Android по-прежнему вызывает `openAuthSessionAsync` с двумя аргументами. На iOS 16.4–17.3 вход заранее блокируется notice/Alert (`IOS_AUTH_UNSUPPORTED`), `beginLogin` не вызывается.
+- **Назад (I2):** аппаратной кнопки «Назад» нет (`BackHandler.ios.js` — заглушка), обработчики `hardwareBackPress` на iOS не вызываются. Внутренние слои (редактирование профиля, story, оверлеи карты, tutorial/info/match в player-browse) закрывает жест swipe-back через `bindIosBack` + `usePreventRemove`; экранные кнопки закрытия сохранены.
+- **Экраны (I4):** Modal используют `supportedOrientations={iosModalOrientations}` (на Android `undefined`); pageSheet/formSheet — `IosSheetSafeArea`; поиск игроков — iOS `clearButtonMode` / `returnKeyType="search"`.
+- **Медиа (I5):** HEIC/HEIF с iOS picker конвертируется в JPEG перед crop; на Android конвертера нет.
+- **Клавиатура в venue-create formSheet (I7):** RN 0.88 `KeyboardAvoidingView` считает overlap по `layout` родителя, а не окна; для formSheet detent `0.9` iOS передаёт `keyboardVerticalOffset` ≈ 10% высоты окна только из sheet-пути. Android `behavior` остаётся `undefined`.
 - Только iPhone (`supportsTablet: false`).

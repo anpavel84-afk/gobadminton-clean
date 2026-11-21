@@ -15,6 +15,7 @@ const modalOwners = [
   '../src/components/safety.tsx',
   '../src/components/venue-community.tsx',
   '../src/components/friendly-match.tsx',
+  '../src/components/player-browse.tsx',
   '../app/players/index.tsx',
 ] as const;
 const touched = [...modalOwners, '../src/components/create-game.tsx'] as const;
@@ -56,7 +57,7 @@ test('radar pageSheet: iOS re-measures insets and pads the home indicator; swipe
 test('venue create formSheet: only the sheet route gets the nested iOS safe area', () => {
   const create = read('../src/components/create-game.tsx');
   assert.match(create, /const shell = \(body: ReactNode, opts\?: \{ footer\?: ReactNode \}\) => sheet \? <IosSheetSafeArea>\{frame\(body, opts\)\}<\/IosSheetSafeArea> : frame\(body, opts\);/);
-  assert.match(create, /const frame = \(body: ReactNode, opts\?: \{ footer\?: ReactNode \}\) => <ScreenFrame keyboard header=\{sheet \? undefined : <Header \/>\}>/);
+  assert.match(create, /const frame = \(body: ReactNode, opts\?: \{ footer\?: ReactNode \}\) => <ScreenFrame keyboard header=\{sheet \? undefined : <Header \/>\} keyboardVerticalOffset=\{sheetKeyboardOffset\}>/);
   assert.ok(create.indexOf('const frame =') < create.indexOf('const shell ='));
   const layout = read('../app/_layout.tsx');
   assert.match(layout, /name="games\/create\/venue\/\[venueId\]" options=\{\{\s*presentation: 'formSheet'/);
@@ -83,7 +84,7 @@ test('Android paths unchanged: no Android branches added, keyboard/inset owners 
     assert.doesNotMatch(source, /Platform\.OS === 'android'|Platform\.OS !== 'ios'|Platform\.select\(/, file);
   }
   const ui = read('../src/components/ui.tsx');
-  assert.match(ui, /<KeyboardAvoidingView behavior=\{Platform\.OS === 'ios' && keyboard \? 'padding' : undefined\}/);
+  assert.match(ui, /<KeyboardAvoidingView behavior=\{Platform\.OS === 'ios' && keyboard \? 'padding' : undefined\}\s*keyboardVerticalOffset=\{Platform\.OS === 'ios' \? keyboardVerticalOffset : undefined\}/);
   assert.match(ui, /paddingTop: insets\.top, paddingLeft: insets\.left, paddingRight: insets\.right/);
   assert.match(ui, /<Modal transparent visible animationType="none" onRequestClose=\{onClose\} supportedOrientations=\{iosModalOrientations\}/);
   const app = JSON.parse(read('../app.json')) as { expo: { android: { softwareKeyboardLayoutMode: string; package: string } } };

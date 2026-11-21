@@ -73,11 +73,14 @@ export function IosSheetSafeArea({ children }: PropsWithChildren) {
   return Platform.OS === 'ios' ? <SafeAreaProvider>{children}</SafeAreaProvider> : <>{children}</>;
 }
 /** One owner for all safe edges. Chrome is outside and clips the scroll viewport. */
-export function ScreenFrame({ children, header, purple = false, keyboard = false }: PropsWithChildren<{
+export function ScreenFrame({ children, header, purple = false, keyboard = false, keyboardVerticalOffset }: PropsWithChildren<{
   header?: ReactNode; purple?: boolean; keyboard?: boolean;
+  /** iOS only: distance from screen top to this view (RN KAV layout is parent-relative). */
+  keyboardVerticalOffset?: number;
 }>) {
   const insets = useSafeAreaInsets();
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' && keyboard ? 'padding' : undefined}
+    keyboardVerticalOffset={Platform.OS === 'ios' ? keyboardVerticalOffset : undefined}
     style={[styles.page, { backgroundColor: purple ? colors.purple : colors.card,
       paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }]}>
     <StatusBar style={purple ? 'light' : 'dark'} />
