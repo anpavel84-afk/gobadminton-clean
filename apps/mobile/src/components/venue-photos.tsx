@@ -1,23 +1,76 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Pressable, View } from 'react-native';
-import { API_ORIGIN } from '../public-api.ts';
-import type { Photo } from '../venue-community.ts';
+import { API_ORIGIN, publicApi } from '../public-api.ts';
+import type { CommunityPhoto } from '../venue-community.ts';
 import { colors } from '../theme.ts';
-import { Label, styles } from './ui.tsx';
+import { Label, OutlineButton, styles } from './ui.tsx';
 
-/** Community photos from already-loaded comment photos only — no new photo endpoints. */
-export function VenueCommunityPhotosSection({ photos }: { photos: readonly Photo[] }) {
-  if (!photos.length) return null;
+type Phase = 'loading' | 'ready' | 'error';
+
+/** Always-rendered «Фотографии сообщества» — GET /v1/venues/{id}/community-photos (no upload). */
+export function VenueCommunityPhotosSection({ venueId }: { venueId: string }) {
+  const [phase, setPhase] = useState<Phase>('loading');
+  const [items, setItems] = useState<CommunityPhoto[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const cursorRef = useRef<string | null>(null);
+  const epoch = useRef(0);
+  const busy = useRef(false);
+
+  const load = useCallback((reset: boolean, signal?: AbortSignal) => {
+    if (busy.current) return;
+    const cursor = reset ? undefined : cursorRef.current ?? undefined;
+    if (!reset && cursor === undefined) return;
+    const request = ++epoch.current;
+    busy.current = true;
+    setPhase('loading');
+    if (reset) {
+      setItems([]);
+      cursorRef.current = null;
+      setHasMore(false);
+    }
+    void publicApi.communityPhotos(venueId, cursor, signal).then(page => {
+      if (request !== epoch.current) return;
+      busy.current = false;
+      setItems(prev => reset ? [...page.items] : [...prev, ...page.items]);
+      cursorRef.current = page.nextCursor;
+      setHasMore(page.nextCursor !== null);
+      setPhase('ready');
+    }, () => {
+      if (request !== epoch.current) return;
+      busy.current = false;
+      setPhase('error');
+    });
+  }, [venueId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    load(true, controller.signal);
+    return () => {
+      controller.abort();
+      epoch.current += 1;
+      busy.current = false;
+    };
+  }, [load]);
+
   return <View style={styles.card} accessibilityLabel="Фотографии сообщества">
     <Label accessibilityRole="header" style={styles.subtitle}>Фотографии сообщества</Label>
     <Label style={{ color: colors.secondary }}>Фотографии из публикаций об этой площадке</Label>
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {photos.map((photo, index) => <CommunityPhotoThumb key={photo.id} photo={photo} index={index} />)}
-    </View>
+    {items.length > 0 && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {items.map((photo, index) => <CommunityPhotoThumb key={photo.id} photo={photo} index={index} />)}
+    </View>}
+    {phase === 'loading' && <Label accessibilityLiveRegion="polite">Загружаем фотографии…</Label>}
+    {phase === 'ready' && items.length === 0 && <Label>Пока нет фотографий сообщества.</Label>}
+    {phase === 'error' && <>
+      <Label accessibilityRole="alert">Не удалось загрузить фотографии.</Label>
+      <OutlineButton title="Повторить" onPress={() => load(items.length === 0)} />
+    </>}
+    {hasMore && phase !== 'error' && (
+      <OutlineButton title="Ещё фотографии" disabled={phase === 'loading'} onPress={() => load(false)} />
+    )}
   </View>;
 }
 
-function CommunityPhotoThumb({ photo, index }: { photo: Photo; index: number }) {
+function CommunityPhotoThumb({ photo, index }: { photo: CommunityPhoto; index: number }) {
   const [failed, setFailed] = useState(false);
   return <Pressable accessibilityRole="image" accessibilityLabel={`Фото сообщества ${index + 1}`}
     style={{ width: '47%', aspectRatio: 1, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.paper }}>
@@ -28,27 +81,4 @@ function CommunityPhotoThumb({ photo, index }: { photo: Photo; index: number }) 
       : <Image source={{ uri: `${API_ORIGIN}${photo.url}` }} accessibilityLabel={`Фото сообщества ${index + 1}`}
         resizeMode="cover" onError={() => setFailed(true)} style={{ width: '100%', height: '100%' }} />}
   </Pressable>;
-}
-
-/** Collect unique comment photos already present in loaded community threads. */
-export function commentPhotosFromThreads(
-  roots: { pages: { page: { items: { photos: Photo[] }[] } }[] },
-  replies: Record<string, { pages: { page: { items: { photos: Photo[] }[] } }[] }>,
-): Photo[] {
-  const seen = new Set<string>();
-  const out: Photo[] = [];
-  const visit = (items: { photos: Photo[] }[]) => {
-    for (const comment of items) {
-      for (const photo of comment.photos) {
-        if (seen.has(photo.id)) continue;
-        seen.add(photo.id);
-        out.push(photo);
-      }
-    }
-  };
-  for (const page of roots.pages) visit(page.page.items);
-  for (const thread of Object.values(replies)) {
-    for (const page of thread.pages) visit(page.page.items);
-  }
-  return out;
 }

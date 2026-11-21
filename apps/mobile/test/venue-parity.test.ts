@@ -45,8 +45,9 @@ test('#597–#602 source assertions for Group B1 parity defects', () => {
   assert.match(detail, /align="left"/);
   assert.match(sheet, /Создать игру на этой площадке →/);
   assert.match(sheet, /align="left"/);
-  assert.match(sheet, /На этой площадке пока нет игр/);
-  assert.match(sheet, /Будьте первым, кто создаст игру и соберет компанию!/);
+  // Old expectation pinned the mobile-only empty-games block; web mobile omits it (#598).
+  assert.doesNotMatch(sheet, /На этой площадке пока нет игр/);
+  assert.doesNotMatch(sheet, /Будьте первым, кто создаст игру и соберет компанию!/);
   assert.doesNotMatch(sheet, /Нет доступных игр по выбранным условиям/);
   assert.doesNotMatch(sheet, /Обновить расписание/);
 

@@ -329,10 +329,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
       </> : games.length > 0 ? <>
         <Label>{`${games.length} доступных игр по выбранным условиям`}</Label>
         <PrimaryButton title="Показать игры на этой площадке" onPress={() => changeView('schedule')} />
-      </> : <View style={{gap:8}} accessibilityLabel="Ближайшие игры">
-        <Label style={{fontWeight:'700'}}>На этой площадке пока нет игр</Label>
-        <Label>Будьте первым, кто создаст игру и соберет компанию!</Label>
-      </View>}
+      </> : null}
     </View>} /> : <VenuePreview venue={venue} games={games} selected={media} onSelectMedia={setMedia} suppressTap={consumeSuppress}
       onControlTouch={noteControlOrigin} onControlTouchEnd={clearControlOrigin}
       onOpen={() => { if (consumeSuppress()) return; onExpand(true); }} />)}

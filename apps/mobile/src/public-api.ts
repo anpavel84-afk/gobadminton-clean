@@ -1,4 +1,4 @@
-import { CommunityError, commentsPath, id as communityId } from './venue-community.ts';
+import { CommunityError, commentsPath, id as communityId, isCommunityPhotoPage } from './venue-community.ts';
 import type { Query as CommunityQuery } from './venue-community.ts';
 import type { Venue } from './game-management.ts';
 import { parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
@@ -194,6 +194,14 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
         await get(`/venues/${venueId}/experience-reviews?${qs}`, signal),
         venueId,
       );
+    },
+    async communityPhotos(venueId: string, cursor?: string, signal?: AbortSignal) {
+      if (!isVenueId(venueId)) throw new PublicApiError('invalid');
+      if (cursor !== undefined && (!cursor || cursor.length > 1024)) throw new PublicApiError('invalid');
+      const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const value = await get(`/venues/${venueId}/community-photos${qs}`, signal);
+      if (!isCommunityPhotoPage(value)) throw new PublicApiError('invalid');
+      return value;
     },
   };
 }
