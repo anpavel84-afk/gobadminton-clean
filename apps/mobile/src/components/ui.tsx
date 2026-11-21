@@ -85,7 +85,7 @@ export function ScreenFrame({ children, header, purple = false, keyboard = false
       paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }]}>
     <StatusBar style={purple ? 'light' : 'dark'} />
     {header && <View style={[styles.chrome, purple && { backgroundColor: colors.purple, borderBottomWidth: 0, paddingHorizontal: 20 }]}>{header}</View>}
-    <View style={{ flex: 1, overflow: 'hidden' }}>{children}</View>
+    <View style={{ flex: 1, overflow: Platform.OS === 'ios' ? 'visible' : 'hidden' }}>{children}</View>
   </KeyboardAvoidingView>;
 }
 export function Page({ children, purple = false, keyboard = false, header }: PropsWithChildren<{
