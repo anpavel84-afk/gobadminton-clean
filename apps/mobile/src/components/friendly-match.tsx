@@ -1,6 +1,6 @@
 import type { ComponentRef } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, findNodeHandle, Image, Modal, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Image, Modal, Platform, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import type { FriendlyMatch as Match } from '../play-interest-coordinator.ts';
@@ -58,8 +58,8 @@ export function FriendlyMatch({match,onDismiss,current}:{match:Match;onDismiss:(
           <Label style={{fontSize:11,lineHeight:16,fontWeight:'600',flexShrink:1}}>Партнёр найден</Label>
         </View>
         <View ref={title} accessible accessibilityRole="header" accessibilityLabel="Дружеский матч">
-          <Label accessible={false} style={{fontSize:compact?44:52,lineHeight:compact?46:54,fontWeight:'700',letterSpacing:-2,textAlign:'center'}}>Дружеский</Label>
-          <Label accessible={false} style={{fontSize:compact?44:52,lineHeight:compact?46:54,fontWeight:'700',letterSpacing:-2,textAlign:'center',color:colors.purple}}>матч</Label>
+          <Label accessible={false} style={{fontSize:compact?44:52,lineHeight:(compact?44:52)+(Platform.OS==='ios'?8:2),fontWeight:'700',letterSpacing:-2,textAlign:'center'}}>Дружеский</Label>
+          <Label accessible={false} style={{fontSize:compact?44:52,lineHeight:(compact?44:52)+(Platform.OS==='ios'?8:2),fontWeight:'700',letterSpacing:-2,textAlign:'center',color:colors.purple}}>матч</Label>
         </View>
         <Label style={{fontSize:14,lineHeight:21,color:colors.secondary,textAlign:'center',maxWidth:280}}>Вы оба хотите сыграть в бадминтон.</Label>
       </View>
