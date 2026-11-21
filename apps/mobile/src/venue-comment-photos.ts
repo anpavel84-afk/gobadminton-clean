@@ -99,6 +99,7 @@ export type PhotoComposerAction =
     message?: string;
   }
   | { type: 'drop'; key: string }
+  | { type: 'retireIds'; ids: readonly string[] }
   | { type: 'clear' };
 
 export function photoComposerReducer(
@@ -110,6 +111,10 @@ export function photoComposerReducer(
       return [];
     case 'drop':
       return items.filter(item => item.key !== action.key);
+    case 'retireIds': {
+      const ids = new Set(action.ids);
+      return items.filter(item => !(item.receipt && ids.has(item.receipt.id)));
+    }
     case 'add': {
       if (items.length >= MAX_COMMENT_PHOTOS) return [...items];
       if (items.some(item => item.key === action.key)) return [...items];
@@ -128,6 +133,58 @@ export function photoComposerReducer(
       });
     }
   }
+}
+
+/** Operation-key → attached ready photo ids; lives next to drafts (same owner lifetime). */
+export type PendingPublishMap = ReadonlyMap<string, readonly string[]>;
+
+export function notePendingPublish(
+  pending: PendingPublishMap,
+  packetKey: string,
+  photoIds: readonly string[],
+): Map<string, readonly string[]> {
+  const next = new Map(pending);
+  next.set(packetKey, Object.freeze([...photoIds]));
+  return next;
+}
+
+/**
+ * When a tracked create becomes confirmed, retire those photo ids.
+ * Refused clears the association only — drafts stay for retry.
+ * Unknown/pending keep the association across composer remounts.
+ */
+export function applyPublishOperationUpdates(
+  pending: PendingPublishMap,
+  operations: readonly { packet: { key: string }; status: string }[],
+): { pending: Map<string, readonly string[]>; retireIds: string[] } {
+  const next = new Map(pending);
+  const retireIds: string[] = [];
+  for (const [packetKey, photoIds] of pending) {
+    const operation = operations.find(o => o.packet.key === packetKey);
+    if (!operation) continue;
+    if (operation.status === 'confirmed') {
+      retireIds.push(...photoIds);
+      next.delete(packetKey);
+    } else if (operation.status === 'refused') {
+      next.delete(packetKey);
+    }
+  }
+  return { pending: next, retireIds };
+}
+
+/**
+ * Pending-read counter delta applies only while the continuation is still current.
+ * Stale completions after a scope/generation reset must not change the new count.
+ */
+export function applyPendingReadDelta(
+  pending: number,
+  delta: 1 | -1,
+  alive: boolean,
+  epoch: number,
+  currentGeneration: number,
+): number {
+  if (!alive || epoch !== currentGeneration) return pending;
+  return Math.max(0, pending + delta);
 }
 
 /** Ready receipt ids only; withdrawing / withdraw_failed / keyed removals never count. */

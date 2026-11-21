@@ -11,6 +11,7 @@ import {
   detectCommentPhotoMime,
   hasCheckingPhoto,
   isHeicCommentSource,
+  applyPendingReadDelta,
   mapUploadFailure,
   photoComposerReducer,
   photoStatusLabel,
@@ -37,6 +38,8 @@ export type VenueCommentPhotoComposerModel = {
   retry: (item: PhotoComposerItem) => void;
   remove: (item: PhotoComposerItem) => void;
   clear: () => void;
+  /** Drop drafts whose receipt ids were published by a confirmed create. */
+  retirePublished: (photoIds: readonly string[]) => void;
 };
 
 /**
@@ -122,7 +125,8 @@ export function useVenueCommentPhotoComposer(
         });
       }
     } finally {
-      running.current.delete(key);
+      // Stale upload must not mutate the current generation's running set.
+      if (alive.current && epoch === generation.current) running.current.delete(key);
     }
   }, []);
 
@@ -160,7 +164,7 @@ export function useVenueCommentPhotoComposer(
         message: 'Снятие не подтверждено. Проверьте доступ и повторите ту же операцию.',
       });
     } finally {
-      running.current.delete(key);
+      if (alive.current && epoch === generation.current) running.current.delete(key);
     }
   }, []);
 
@@ -173,7 +177,8 @@ export function useVenueCommentPhotoComposer(
     void (async () => {
       const epoch = generation.current;
       const venue = live.current.venueId;
-      setPendingReads(count => count + 1);
+      // Increment only while this read's generation is still current.
+      setPendingReads(count => applyPendingReadDelta(count, 1, alive.current, epoch, generation.current));
       try {
         const runtime = createExpoAvatarRuntime();
         const result = await runtime.launchLibrary(AVATAR_PICKER_OPTIONS);
@@ -223,7 +228,8 @@ export function useVenueCommentPhotoComposer(
           setNotice('Не удалось прочитать файл. Загрузка не начата; выберите файл снова.');
         }
       } finally {
-        setPendingReads(count => Math.max(0, count - 1));
+        // Stale read completion must not decrement a newer generation's pending count.
+        setPendingReads(count => applyPendingReadDelta(count, -1, alive.current, epoch, generation.current));
       }
     })();
   }, [rights, uploadOne]);
@@ -275,6 +281,15 @@ export function useVenueCommentPhotoComposer(
     setPendingReads(0);
   }, []);
 
+  const retirePublished = useCallback((photoIds: readonly string[]) => {
+    if (!photoIds.length) return;
+    const idSet = new Set(photoIds);
+    for (const item of itemsRef.current) {
+      if (item.receipt && idSet.has(item.receipt.id)) bytesByKey.current.delete(item.key);
+    }
+    dispatch({ type: 'retireIds', ids: photoIds });
+  }, []);
+
   const reading = pendingReads > 0;
   return {
     items,
@@ -288,6 +303,7 @@ export function useVenueCommentPhotoComposer(
     retry,
     remove,
     clear,
+    retirePublished,
   };
 }
 

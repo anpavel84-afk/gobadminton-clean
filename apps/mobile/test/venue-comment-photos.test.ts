@@ -6,8 +6,11 @@ import {
   COMMENT_PHOTO_MAX_BYTES,
   MAX_COMMENT_PHOTOS,
   PHOTO_RIGHTS,
+  applyPendingReadDelta,
+  applyPublishOperationUpdates,
   commentSendReady,
   isPhotoReceipt,
+  notePendingPublish,
   photoComposerReducer,
   readyPhotoIds,
   type PhotoComposerItem,
@@ -323,42 +326,100 @@ test('#598B root composer wired under venue community comment field', () => {
   assert.match(ui, /VenueCommentPhotoComposer/);
   assert.match(ui, /useVenueCommentPhotoComposer/);
   assert.match(ui, /RootCommentComposer/);
-  assert.match(ui, /photoIds: photos\.readyIds/);
+  assert.match(ui, /const photoIds = photos\.readyIds/);
+  assert.match(ui, /\.\.\.\(photoIds\.length \? \{ photoIds \} : \{\}\)/);
 });
 
 test('#598B r2 composer survives roots loading; uses canonical venue id (negative)', () => {
   const ui = read('../src/components/venue-community.tsx');
   assert.match(ui, /useVenueCommentPhotoComposer\(s\.scope\?\.canonicalVenueId \?\? null, s\.actor, locked\)/);
-  assert.match(ui, /Photo drafts live on CommunityPanel/);
-  assert.match(ui, /canCreate \? <RootCommentComposer locked=\{locked\} photos=\{photos\} \/>/);
+  assert.match(ui, /Photo drafts \+ create→photoIds association live on CommunityPanel/);
+  assert.match(ui, /canCreate \? <RootCommentComposer locked=\{locked\} photos=\{photos\} onPublish=\{rememberPublish\} \/>/);
   assert.doesNotMatch(ui, /s\.roots\.phase === 'ready' && s\.roots\.pages\[0\]\?\.page\.canCreate \?/);
   assert.doesNotMatch(ui, /useVenueCommentPhotoComposer\(s\.venueId/);
   assert.match(ui, /function RootCommentComposer\(\{[\s\S]*photos: VenueCommentPhotoComposerModel/);
 });
 
-test('#598B r3 retires photo drafts on reconcile-confirmed create, not only initial commit (negative)', () => {
+test('#598B r3/r4 retires photo drafts on reconcile-confirmed create via CommunityPanel association (negative)', () => {
   const ui = read('../src/components/venue-community.tsx');
+  const panelStart = ui.indexOf('function CommunityPanel');
   const rootStart = ui.indexOf('function RootCommentComposer');
-  assert.ok(rootStart > 0);
+  assert.ok(panelStart > 0 && rootStart > panelStart);
+  const panel = ui.slice(panelStart, rootStart);
   const root = ui.slice(rootStart, ui.indexOf('function ThreadNotice'));
-  assert.match(root, /publishKey/);
-  assert.match(root, /operation\.status === 'confirmed'/);
-  assert.match(root, /photos\.clear\(\)/);
-  assert.match(root, /operation\.status === 'refused'/);
-  // Must watch coordinator snapshot so reconcile confirmation also retires drafts.
-  assert.match(root, /s\.operations\.find/);
-  assert.doesNotMatch(root, /owner\.commit\(packet\.key\)\.then/);
-  // Refused path must NOT clear photo drafts (only clears publishKey).
-  const refusedIdx = root.indexOf("operation.status === 'refused'");
+  // Association next to drafts on CommunityPanel — not in RootCommentComposer.
+  assert.match(panel, /pendingPublish/);
+  assert.match(panel, /notePendingPublish|rememberPublish/);
+  assert.match(panel, /applyPublishOperationUpdates/);
+  assert.match(panel, /photos\.retirePublished/);
+  assert.doesNotMatch(root, /publishKey/);
+  assert.doesNotMatch(root, /pendingPublish/);
+  assert.doesNotMatch(root, /photos\.clear\(\)/);
+  assert.doesNotMatch(root, /s\.operations/);
+  assert.doesNotMatch(ui, /owner\.commit\(packet\.key\)\.then/);
+  // Refused path must NOT retire photo drafts (association cleared only).
+  const helpers = read('../src/venue-comment-photos.ts');
+  const refusedIdx = helpers.indexOf("operation.status === 'refused'");
   assert.ok(refusedIdx > 0);
-  const refusedTail = root.slice(refusedIdx, refusedIdx + 120);
-  assert.doesNotMatch(refusedTail, /photos\.clear/);
+  const refusedTail = helpers.slice(refusedIdx, refusedIdx + 160);
+  assert.doesNotMatch(refusedTail, /retireIds\.push/);
+  assert.match(refusedTail, /next\.delete/);
+});
+
+test('#598B r4 remount: association survives RootCommentComposer unmount; reconcile retires drafts', () => {
+  // canCreate true → create UNKNOWN → canCreate false (composer unmounted) → canCreate true
+  // → reconcile confirms → drafts with those ids retired and not resubmittable.
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch', key, state: 'ready', receipt: readyReceipt(photoId),
+  });
+  assert.deepEqual(readyPhotoIds(items), [photoId]);
+
+  let pending = notePendingPublish(new Map(), 'op-unknown', [photoId]);
+  // Composer unmount/remount does not touch CommunityPanel's pendingPublish.
+  const stillUnknown = applyPublishOperationUpdates(pending, [
+    { packet: { key: 'op-unknown' }, status: 'unknown' },
+  ]);
+  assert.equal(stillUnknown.retireIds.length, 0);
+  assert.ok(stillUnknown.pending.has('op-unknown'));
+  pending = stillUnknown.pending;
+
+  const confirmed = applyPublishOperationUpdates(pending, [
+    { packet: { key: 'op-unknown' }, status: 'confirmed' },
+  ]);
+  assert.deepEqual(confirmed.retireIds, [photoId]);
+  assert.equal(confirmed.pending.size, 0);
+  items = photoComposerReducer(items, { type: 'retireIds', ids: confirmed.retireIds });
+  assert.deepEqual(readyPhotoIds(items), []);
+  assert.equal(commentSendReady('', items), false);
+
+  // Refused keeps drafts resubmittable.
+  let refusedItems: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  refusedItems = photoComposerReducer(refusedItems, {
+    type: 'patch', key, state: 'ready', receipt: readyReceipt(photoId),
+  });
+  const refused = applyPublishOperationUpdates(
+    notePendingPublish(new Map(), 'op-refused', [photoId]),
+    [{ packet: { key: 'op-refused' }, status: 'refused' }],
+  );
+  assert.deepEqual(refused.retireIds, []);
+  assert.equal(refused.pending.size, 0);
+  assert.deepEqual(readyPhotoIds(refusedItems), [photoId]);
+
+  const ui = read('../src/components/venue-community.tsx');
+  assert.match(ui, /pendingPublish/);
+  assert.doesNotMatch(ui.slice(ui.indexOf('function RootCommentComposer'), ui.indexOf('function ThreadNotice')), /publishKey/);
 });
 
 test('#598B r3 pending file read blocks Send; uploadOne/read recheck locked (negative)', () => {
   const composer = read('../src/components/venue-comment-photo-composer.tsx');
   assert.match(composer, /pendingReads/);
   assert.match(composer, /setPendingReads/);
+  assert.match(composer, /applyPendingReadDelta/);
   assert.match(composer, /canSend: \(text: string\) => !reading && commentSendReady\(text, items\)/);
   assert.match(composer, /checking: hasCheckingPhoto\(items\) \|\| reading/);
   const uploadStart = composer.indexOf('const uploadOne = useCallback');
@@ -371,9 +432,68 @@ test('#598B r3 pending file read blocks Send; uploadOne/read recheck locked (neg
   const addStart = composer.indexOf('const add = useCallback');
   const addEnd = composer.indexOf('const retry = useCallback');
   const add = composer.slice(addStart, addEnd);
-  assert.match(add, /setPendingReads\(count => count \+ 1\)/);
+  assert.match(add, /applyPendingReadDelta\(count, 1, alive\.current, epoch, generation\.current\)/);
   assert.match(add, /live\.current\.locked\) return;/);
-  assert.match(add, /setPendingReads\(count => Math\.max\(0, count - 1\)\)/);
+  assert.match(add, /applyPendingReadDelta\(count, -1, alive\.current, epoch, generation\.current\)/);
+  // Unconditional finally decrement must not remain.
+  assert.doesNotMatch(add, /setPendingReads\(count => Math\.max\(0, count - 1\)\)/);
+});
+
+test('#598B r4 stale read completion cannot zero a newer generation pending count (negative)', () => {
+  // start read A (gen 1) → scope reset (gen 2) → start read B → complete A → gen2 still 1; complete B → 0
+  let pending = 0;
+  const gen1 = 1;
+  pending = applyPendingReadDelta(pending, 1, true, gen1, 1);
+  assert.equal(pending, 1);
+  // Scope reset replaces counter (composer effect sets 0) and bumps generation.
+  pending = 0;
+  const gen2 = 2;
+  pending = applyPendingReadDelta(pending, 1, true, gen2, 2);
+  assert.equal(pending, 1);
+  // Stale A completes against gen 2 — must not decrement.
+  pending = applyPendingReadDelta(pending, -1, true, gen1, 2);
+  assert.equal(pending, 1);
+  // Dead/unmounted continuation also ignored.
+  pending = applyPendingReadDelta(pending, -1, false, gen2, 2);
+  assert.equal(pending, 1);
+  // Live B completes.
+  pending = applyPendingReadDelta(pending, -1, true, gen2, 2);
+  assert.equal(pending, 0);
+  // Send stays disabled while pending > 0 (gen2 after stale A).
+  assert.equal(applyPendingReadDelta(1, -1, true, 1, 2) > 0, true);
+
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /applyPendingReadDelta\(count, -1, alive\.current, epoch, generation\.current\)/);
+  assert.match(composer, /if \(alive\.current && epoch === generation\.current\) running\.current\.delete\(key\)/);
+});
+
+test('#598B r4 self-audit: publish association owned by CommunityPanel; async continuations generation-guarded (negative)', () => {
+  const ui = read('../src/components/venue-community.tsx');
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  const helpers = read('../src/venue-comment-photos.ts');
+  // (a) state that must outlive RootCommentComposer lives on CommunityPanel next to drafts.
+  assert.match(ui, /pendingPublish/);
+  assert.match(ui, /retirePublished/);
+  assert.match(helpers, /applyPublishOperationUpdates/);
+  assert.match(helpers, /notePendingPublish/);
+  const root = ui.slice(ui.indexOf('function RootCommentComposer'), ui.indexOf('function ThreadNotice'));
+  assert.doesNotMatch(root, /useRef/);
+  assert.doesNotMatch(root, /useState/);
+  assert.doesNotMatch(root, /useEffect/);
+  // (b) every pendingReads / running finally mutation is alive+generation guarded.
+  assert.match(helpers, /applyPendingReadDelta/);
+  assert.match(composer, /applyPendingReadDelta\(count, 1/);
+  assert.match(composer, /applyPendingReadDelta\(count, -1/);
+  const uploadFinally = composer.slice(
+    composer.indexOf('const uploadOne = useCallback'),
+    composer.indexOf('const withdrawOne = useCallback'),
+  );
+  assert.match(uploadFinally, /if \(alive\.current && epoch === generation\.current\) running\.current\.delete\(key\)/);
+  const withdrawFinally = composer.slice(
+    composer.indexOf('const withdrawOne = useCallback'),
+    composer.indexOf('const add = useCallback'),
+  );
+  assert.match(withdrawFinally, /if \(alive\.current && epoch === generation\.current\) running\.current\.delete\(key\)/);
 });
 
 test('#598B r3 status/withdraw/upload reject foreign venue receipt; accept canonical (negative)', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentRef, ReactNode, RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Image, Modal, Pressable, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -6,6 +6,11 @@ import { useVenueCommunity } from '../venue-community-runtime.tsx';
 import type { VenueCommunityCoordinator, Thread, Operation } from '../venue-community-coordinator.ts';
 import type { Comment, Action, CreateVenueCommunityReportRequest, Packet } from '../venue-community.ts';
 import { commentText } from '../venue-community.ts';
+import {
+  applyPublishOperationUpdates,
+  notePendingPublish,
+  type PendingPublishMap,
+} from '../venue-comment-photos.ts';
 import { API_ORIGIN } from '../public-api.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryChip, DiscoverySheet, iosModalOrientations, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
@@ -93,8 +98,18 @@ function CommunityPanel({name}:{name:string}) {
   const [orderOpen,setOrderOpen] = useState(false);
   const origin = useRef<RefObject<Trigger | null>>(aggregateReportTrigger);
   const locked = owner.busy(), own = s.own?.own;
-  // Photo drafts live on CommunityPanel so roots loading / order reload does not unmount them.
+  // Photo drafts + create→photoIds association live on CommunityPanel (same owner lifetime).
+  // RootCommentComposer unmounts when canCreate flips false; association must outlive it.
   const photos = useVenueCommentPhotoComposer(s.scope?.canonicalVenueId ?? null, s.actor, locked);
+  const pendingPublish = useRef<PendingPublishMap>(new Map());
+  const rememberPublish = useCallback((packetKey: string, photoIds: readonly string[]) => {
+    pendingPublish.current = notePendingPublish(pendingPublish.current, packetKey, photoIds);
+  }, []);
+  useEffect(() => {
+    const { pending, retireIds } = applyPublishOperationUpdates(pendingPublish.current, s.operations);
+    pendingPublish.current = pending;
+    if (retireIds.length) photos.retirePublished(retireIds);
+  }, [s.operations, photos]);
   const orderLabel = orderOptions.find(([value]) => value === s.order)?.[1] ?? orderOptions[0][1];
   const login = () => router.push({pathname:'/profile',params:{returnTo:`/venues/${s.venueId}`}});
   const commit = (action:Action) => { const packet = owner.review(action); if (packet) void owner.commit(packet.key); };
@@ -153,7 +168,7 @@ function CommunityPanel({name}:{name:string}) {
         {orderOptions.map(([value,label]) => <DiscoveryChip key={value} title={label} selected={s.order === value} onPress={() => { owner.setOrder(value); setOrderOpen(false); }} />)}
       </DiscoverySheet>
       {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} />
-        : canCreate ? <RootCommentComposer locked={locked} photos={photos} />
+        : canCreate ? <RootCommentComposer locked={locked} photos={photos} onPublish={rememberPublish} />
           : s.roots.phase === 'ready' ? <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>
             : null}
       <Outcomes owner={owner} match={o => o.packet.action.kind === 'create' && !o.packet.action.parentCommentId} />
@@ -191,28 +206,17 @@ function CommunityPanel({name}:{name:string}) {
 function RootCommentComposer({
   locked,
   photos,
+  onPublish,
 }: {
   locked: boolean;
   photos: VenueCommentPhotoComposerModel;
+  onPublish: (packetKey: string, photoIds: readonly string[]) => void;
 }) {
   const { owner, state: s } = useVenueCommunity();
   const draft = s.drafts.root ?? '';
-  // Key create packet → retire drafts when THAT op confirms (commit or reconcile).
-  const publishKey = useRef<string | null>(null);
+  // No create→photoIds association state here — this composer unmounts when canCreate is false;
+  // CommunityPanel owns that association next to drafts so reconcile can still retire them.
   const sendEnabled = !locked && photos.canSend(draft) && (!draft.trim() || validText(draft));
-  useEffect(() => {
-    const key = publishKey.current;
-    if (!key) return;
-    const operation = s.operations.find(o => o.packet.key === key);
-    if (!operation) return;
-    if (operation.status === 'confirmed') {
-      photos.clear();
-      publishKey.current = null;
-      return;
-    }
-    // Failed/rejected create keeps photo drafts in the composer.
-    if (operation.status === 'refused') publishKey.current = null;
-  }, [s.operations, photos]);
   return <>
     <Field label="Ваш комментарий" value={draft} disabled={locked} onChange={text => owner.setDraft('root', text)} />
     <VenueCommentPhotoComposer model={photos} disabled={locked} />
@@ -220,15 +224,16 @@ function RootCommentComposer({
       title="Отправить"
       disabled={!sendEnabled}
       onPress={() => {
+        const photoIds = photos.readyIds;
         const packet = owner.review({
           kind: 'create',
           text: draft,
           parentCommentId: null,
           parentEntityId: s.scope!.canonicalVenueId,
-          ...(photos.readyIds.length ? { photoIds: photos.readyIds } : {}),
+          ...(photoIds.length ? { photoIds } : {}),
         });
         if (!packet) return;
-        publishKey.current = packet.key;
+        if (photoIds.length) onPublish(packet.key, photoIds);
         void owner.commit(packet.key);
       }}
     />
