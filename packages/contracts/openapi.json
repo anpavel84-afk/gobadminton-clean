@@ -25095,6 +25095,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "operationId": "uploadPrivateVenueCommentPhoto",
@@ -25310,6 +25313,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "operationId": "getOwnPrivateVenuePhotoSubmission",
@@ -25386,6 +25392,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "operationId": "withdrawOwnPrivateVenuePhotoSubmission",
@@ -25533,6 +25542,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "operationId": "getOwnPrivateVenuePhotoContent",
