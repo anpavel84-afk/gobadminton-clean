@@ -410,6 +410,10 @@ test('own-profile Switch and profile-editor pending copy reference contactPolicy
   const policyBlock = own.slice(own.indexOf('Настройки сообщений'));
   assert.doesNotMatch(policyBlock, /directoryVisible|setDirectory|radarConsent/);
   assert.match(policyBlock, /setContactPolicy\(allow \? 'requests' : 'closed'\)/);
+  // Pending UNKNOWN retry must be reachable without profile (same-actor reauth trap) and not duplicated.
+  assert.match(own, /!profile && policyPending && pendingPolicyStatus/);
+  assert.match(own, /profile && player[\s\S]*pendingPolicyStatus/);
+  assert.equal((own.match(/Повторить прежнюю настройку личных сообщений/g) || []).length, 1);
   const editor = readFileSync(new URL('../src/components/profile-editor.tsx', import.meta.url), 'utf8');
   assert.match(editor, /kind === 'contactPolicy'/);
   assert.match(editor, /Сохранение настройки личных сообщений/);
@@ -418,4 +422,78 @@ test('own-profile Switch and profile-editor pending copy reference contactPolicy
   assert.doesNotMatch(editor, /status === 'stale'[\s\S]*owner\.load\(\)/);
   assert.match(editor, /status === 'error'[\s\S]*retryRead/);
   assert.doesNotMatch(editor, /\(state\.status === 'error' \|\| state\.status === 'idle'\)[\s\S]*owner\.load\(\)/);
+});
+
+test('unknown policy → same-actor reauth null profile → own-profile retry independent of profile → exact reconcile once; different-actor fence', async () => {
+  const own = readFileSync(new URL('../src/components/own-profile.tsx', import.meta.url), 'utf8');
+  // Actual OwnProfileCard path: pending-policy notice/status/retry renders when profile is absent.
+  assert.match(own, /!profile && policyPending && pendingPolicyStatus/);
+  assert.match(own, /pendingPolicyStatus[\s\S]*command\?\.status === 'unknown'[\s\S]*owner\.reconcile\(\)/);
+  assert.match(own, /profile && player[\s\S]*pendingPolicyStatus/);
+  assert.equal((own.match(/Повторить прежнюю настройку личных сообщений/g) || []).length, 1);
+
+  const base: OwnProfile = {
+    ...emptyProfile, version: 7, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests',
+  };
+  let recovered = false;
+  const s = setup(base, {
+    send: async (p) => {
+      if (!recovered) throw new ProfileError('network');
+      return ackPolicy(p, base);
+    },
+  });
+  await s.owner.load();
+  await s.owner.setContactPolicy('closed');
+  const original = s.sent[0]!.packet;
+  const originalKey = original.key;
+  assert.equal(original.kind, 'contactPolicy');
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.deepEqual(profileWireBody(original.body), { expectedVersion: 7, contactPolicy: 'closed' });
+
+  // Same actor, new session/generation: restores immutable command, resets profile=null.
+  const returned = { ...actor, sessionId: 'reauth-gen', generation: 4 };
+  s.owner.setActor(returned);
+  assert.equal(s.owner.getSnapshot().profile, null);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+  assert.equal(s.owner.getSnapshot().command?.packet.key, originalKey);
+  assert.match(s.owner.getSnapshot().notice!, /неизвестен/);
+
+  // load refuses while command exists — retry must not depend on profile becoming available.
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().profile, null);
+  assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+  assert.equal(s.keyCount, 1);
+
+  // Explicit reconcile once: exact old command/key, valid ACK adoption.
+  recovered = true;
+  await s.owner.reconcile();
+  assert.equal(s.sent.length, 2);
+  assert.strictEqual(s.sent[1]!.packet, original);
+  assert.equal(s.sent[1]!.packet.key, originalKey);
+  assert.equal(s.sent[1]!.authority.sessionId, 'reauth-gen');
+  assert.equal(s.sent[1]!.authority.generation, 4);
+  assert.equal(s.owner.getSnapshot().profile?.contactPolicy, 'closed');
+  assert.equal(s.owner.getSnapshot().profile?.version, 8);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.keyCount, 1);
+
+  // Different actor never receives old private command.
+  recovered = false;
+  const other = setup(base, {
+    send: async (p) => {
+      if (!recovered) throw new ProfileError('network');
+      return ackPolicy(p, base);
+    },
+  });
+  await other.owner.load();
+  await other.owner.setContactPolicy('closed');
+  assert.equal(other.owner.getSnapshot().command?.status, 'unknown');
+  other.owner.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
+  assert.equal(other.owner.getSnapshot().command, undefined);
+  assert.equal(other.owner.getSnapshot().profile, null);
+  recovered = true;
+  await other.owner.reconcile();
+  assert.equal(other.sent.length, 1);
+  assert.equal(other.owner.getSnapshot().profile, null);
 });

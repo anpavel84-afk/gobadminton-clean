@@ -46,12 +46,22 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
   const coverLocked = !!state.command || state.status !== 'ready' || peerBusy;
   const policyLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile || profile.version < 1;
   const policyPending = state.command?.packet.kind === 'contactPolicy';
+  // Reachable when same-actor reauth restores command with profile still null (load refuses).
+  // With profile present, same fragment stays inside the messaging card only — no duplicate.
+  const pendingPolicyStatus = <>
+    {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+    {policyPending && state.command?.status === 'sending' &&
+      <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем настройку…</Label>}
+    {policyPending && state.command?.status === 'unknown' &&
+      <PrimaryButton title="Повторить прежнюю настройку личных сообщений" onPress={() => void owner.reconcile()} />}
+  </>;
   return <View style={{ gap: 12 }}>
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}
     {(state.status === 'error' || state.status === 'idle') &&
       <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.retryRead()} />}
     {state.status === 'stale' &&
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
+    {!profile && policyPending && pendingPolicyStatus}
     {profile && player && <>
       <PlayerProfileHero
         player={player}
@@ -117,11 +127,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
           Другие игроки смогут написать вам, когда ваш профиль виден в каталоге. Выключение блокирует новые входящие; история переписок сохраняется.
         </Label>
         {profile.version < 1 && <Label>Сначала сохраните игровой профиль.</Label>}
-        {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
-        {policyPending && state.command?.status === 'sending' &&
-          <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем настройку…</Label>}
-        {policyPending && state.command?.status === 'unknown' &&
-          <PrimaryButton title="Повторить прежнюю настройку личных сообщений" onPress={() => void owner.reconcile()} />}
+        {pendingPolicyStatus}
       </View>
     </>}
   </View>;
