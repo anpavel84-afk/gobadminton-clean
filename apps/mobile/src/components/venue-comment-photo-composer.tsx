@@ -14,6 +14,7 @@ import {
   isHeicCommentSource,
   applyPendingReadDelta,
   mapUploadFailure,
+  nextReadyPhotoExpiresAt,
   photoComposerReducer,
   photoItemMessage,
   photoItemStatusLabel,
@@ -33,9 +34,15 @@ export type VenueCommentPhotoComposerModel = {
   rights: boolean;
   setRights: (value: boolean) => void;
   notice: string;
+  /** Render-time snapshot only — never pass to create; use takeReadyIds at Send. */
   readyIds: string[];
   checking: boolean;
   canSend: (text: string) => boolean;
+  /**
+   * Press-time ready receipt ids from the latest items ref (injectable `now`).
+   * Mirrors web onSubmit recheck — not the render-cached `readyIds` array.
+   */
+  takeReadyIds: (now?: number) => string[];
   add: () => void;
   retry: (item: PhotoComposerItem) => void;
   remove: (item: PhotoComposerItem) => void;
@@ -322,6 +329,25 @@ export function useVenueCommentPhotoComposer(
     }
   }, []);
 
+  // Press-time ids from the latest ref — never the render-cached readyIds array.
+  const takeReadyIds = useCallback((now = Date.now()) => readyPhotoIds(itemsRef.current, now), []);
+
+  // Wake UI when the nearest ready receipt TTL elapses (Send gating + expired labels).
+  useEffect(() => {
+    const epoch = generation.current;
+    const now = Date.now();
+    const expiresAt = nextReadyPhotoExpiresAt(items, now);
+    if (expiresAt === null) return;
+    const delay = Math.max(1, expiresAt - now);
+    const timer = setTimeout(() => {
+      if (!alive.current || epoch !== generation.current) return;
+      recheckExpiry(Date.now());
+    }, delay);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [items, recheckExpiry]);
+
   const reading = pendingReads > 0;
   return {
     items,
@@ -331,6 +357,7 @@ export function useVenueCommentPhotoComposer(
     readyIds: readyPhotoIds(items),
     checking: hasCheckingPhoto(items) || reading,
     canSend: (text: string) => !reading && commentSendReady(text, items),
+    takeReadyIds,
     add,
     retry,
     remove,

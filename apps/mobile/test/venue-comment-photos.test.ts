@@ -9,9 +9,11 @@ import {
   applyPendingReadDelta,
   applyPublishOperationUpdates,
   commentSendReady,
+  evaluateCommentCreateAtPress,
   expireStaleReadyPhotos,
   isPhotoReceipt,
   mapUploadFailure,
+  nextReadyPhotoExpiresAt,
   notePendingPublish,
   photoComposerReducer,
   photoItemMessage,
@@ -338,7 +340,9 @@ test('#598B root composer wired under venue community comment field', () => {
   assert.match(ui, /VenueCommentPhotoComposer/);
   assert.match(ui, /useVenueCommentPhotoComposer/);
   assert.match(ui, /RootCommentComposer/);
-  assert.match(ui, /const photoIds = photos\.readyIds/);
+  // r7: press-time takeReadyIds inside submit — not render-cached photos.readyIds.
+  assert.match(ui, /const photoIds = photos\.takeReadyIds\(now\)/);
+  assert.doesNotMatch(ui, /const photoIds = photos\.readyIds/);
   assert.match(ui, /\.\.\.\(photoIds\.length \? \{ photoIds \} : \{\}\)/);
 });
 
@@ -699,7 +703,108 @@ test('#598B r6 refused create keeps drafts and marks expiry; composer wires rech
   assert.doesNotMatch(composer, /photoStatusLabel\(item\.state\)/);
   const ui = read('../src/components/venue-community.tsx');
   assert.match(ui, /refusedWithPhotos/);
-  assert.match(ui, /photos\.recheckExpiry\(\)/);
+  assert.match(ui, /photos\.recheckExpiry/);
+});
+
+test('#598B r7 press-time ready ids: idle past expiry then Send (a)(b)(c)', () => {
+  const now = 1_700_000_000_000;
+  const expiresAt = now + 60_000;
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch',
+    key,
+    state: 'ready',
+    receipt: readyReceipt(photoId, { expiresAt: new Date(expiresAt).toISOString() }),
+  });
+  // Render-time snapshot while still unexpired.
+  const renderReadyIds = readyPhotoIds(items, now);
+  assert.deepEqual(renderReadyIds, [photoId]);
+
+  // (a) idle past expiry, then Send — press-time ids exclude it; photo-only → no submit.
+  const afterIdle = expiresAt + 1;
+  assert.deepEqual(readyPhotoIds(items, afterIdle), []);
+  const photoOnly = evaluateCommentCreateAtPress('', items, {
+    textValid: true, checking: false, now: afterIdle,
+  });
+  assert.equal(photoOnly.submit, false);
+  if (!photoOnly.submit) assert.equal(photoOnly.refreshExpiry, true);
+
+  // (b) exact boundary now === expiresAt → excluded.
+  assert.deepEqual(readyPhotoIds(items, expiresAt), []);
+  const atBoundary = evaluateCommentCreateAtPress('', items, {
+    textValid: true, checking: false, now: expiresAt,
+  });
+  assert.equal(atBoundary.submit, false);
+  if (!atBoundary.submit) assert.equal(atBoundary.refreshExpiry, true);
+
+  // (c) text + expired photo → submit with text and photoIds = [].
+  const withText = evaluateCommentCreateAtPress('текст', items, {
+    textValid: true, checking: false, now: afterIdle,
+  });
+  assert.deepEqual(withText, { submit: true, photoIds: [] });
+  // Stale render-time array must not be used for create.
+  assert.notDeepEqual(renderReadyIds, withText.submit ? withText.photoIds : null);
+
+  // Checking / pending blocks submit even with text.
+  assert.deepEqual(
+    evaluateCommentCreateAtPress('текст', items, { textValid: true, checking: true, now: afterIdle }),
+    { submit: false, refreshExpiry: false },
+  );
+});
+
+test('#598B r7 source: press-time takeReadyIds in submit; expiry timer to next expiresAt (d)(e)', () => {
+  const ui = read('../src/components/venue-community.tsx');
+  const root = ui.slice(ui.indexOf('function RootCommentComposer'), ui.indexOf('function ThreadNotice'));
+  // (d) create photoIds from press-time function inside submit handler — not photos.readyIds.
+  assert.match(root, /photos\.takeReadyIds\(now\)/);
+  assert.doesNotMatch(root, /photos\.readyIds/);
+  assert.match(root, /photoIds\.length === 0\) \{\s*photos\.recheckExpiry\(now\);\s*return;/);
+  assert.match(root, /\.\.\.\(photoIds\.length \? \{ photoIds \} : \{\}\)/);
+  assert.match(root, /if \(photoIds\.length\) onPublish\(packet\.key, photoIds\)/);
+
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /takeReadyIds/);
+  assert.match(composer, /readyPhotoIds\(itemsRef\.current, now\)/);
+  assert.match(composer, /nextReadyPhotoExpiresAt/);
+  // (e) timer scheduled to next expiresAt; cleared on unmount; alive+generation guard.
+  assert.match(composer, /const expiresAt = nextReadyPhotoExpiresAt\(items, now\)/);
+  assert.match(composer, /const delay = Math\.max\(1, expiresAt - now\)/);
+  assert.match(composer, /const timer = setTimeout\(/);
+  assert.match(composer, /if \(!alive\.current \|\| epoch !== generation\.current\) return;/);
+  assert.match(composer, /recheckExpiry\(Date\.now\(\)\)/);
+  assert.match(composer, /return \(\) => \{\s*clearTimeout\(timer\);\s*\}/);
+
+  const helpers = read('../src/venue-comment-photos.ts');
+  assert.match(helpers, /export function nextReadyPhotoExpiresAt/);
+  assert.match(helpers, /export function evaluateCommentCreateAtPress/);
+
+  const now = 1_700_000_000_000;
+  const near = now + 5_000;
+  const far = now + 60_000;
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch',
+    key,
+    state: 'ready',
+    receipt: readyReceipt(photoId, { expiresAt: new Date(far).toISOString() }),
+  });
+  items = photoComposerReducer(items, {
+    type: 'add', key: photoId2, mime: 'image/png', size: 50,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch',
+    key: photoId2,
+    state: 'ready',
+    receipt: readyReceipt(photoId2, { expiresAt: new Date(near).toISOString() }),
+  });
+  assert.equal(nextReadyPhotoExpiresAt(items, now), near);
+  assert.equal(nextReadyPhotoExpiresAt(items, near), far);
+  assert.equal(nextReadyPhotoExpiresAt(items, far), null);
+  assert.equal(nextReadyPhotoExpiresAt([], now), null);
 });
 
 test('#598B r5 delayed-token: stale permit never dispatches photo API; live permit calls once', async () => {

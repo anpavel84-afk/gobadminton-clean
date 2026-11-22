@@ -253,6 +253,47 @@ export function expireStaleReadyPhotos(
   });
 }
 
+/**
+ * Nearest future `expiresAt` among currently-ready (publishable) drafts.
+ * Used to schedule a one-shot UI refresh when the next receipt TTL elapses.
+ */
+export function nextReadyPhotoExpiresAt(
+  items: readonly PhotoComposerItem[],
+  now = Date.now(),
+): number | null {
+  let nearest: number | null = null;
+  for (const item of items) {
+    if (item.state !== 'ready' || item.withdrawKey || !item.receipt) continue;
+    if (item.receipt.status !== 'ready') continue;
+    const at = Date.parse(item.receipt.expiresAt);
+    if (!Number.isFinite(at) || at <= now) continue;
+    if (nearest === null || at < nearest) nearest = at;
+  }
+  return nearest;
+}
+
+/**
+ * Send press-time decision (web onSubmit recheck): use CURRENT ready ids at `now`,
+ * not a render-cached readyIds array. Photo-only with zero currently-ready ids
+ * must not submit and should refresh expiry presentation.
+ */
+export function evaluateCommentCreateAtPress(
+  text: string,
+  items: readonly PhotoComposerItem[],
+  options: { textValid: boolean; checking: boolean; now?: number },
+): { submit: false; refreshExpiry: boolean } | { submit: true; photoIds: string[] } {
+  const now = options.now ?? Date.now();
+  if (options.checking) return { submit: false, refreshExpiry: false };
+  const photoIds = readyPhotoIds(items, now);
+  const trimmed = text.trim();
+  if (trimmed) {
+    if (!options.textValid) return { submit: false, refreshExpiry: false };
+    return { submit: true, photoIds };
+  }
+  if (photoIds.length === 0) return { submit: false, refreshExpiry: true };
+  return { submit: true, photoIds };
+}
+
 export function photoStatusLabel(state: PhotoItemState): string {
   if (state === 'checking') return 'Проверяется…';
   if (state === 'withdrawing') return 'Снимается…';

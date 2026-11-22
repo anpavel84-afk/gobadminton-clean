@@ -229,7 +229,17 @@ function RootCommentComposer({
       title="Отправить"
       disabled={!sendEnabled}
       onPress={() => {
-        const photoIds = photos.readyIds;
+        // Press-time recheck (web onSubmit): ids from current items ref, not render readyIds.
+        const now = Date.now();
+        if (photos.checking) return;
+        const photoIds = photos.takeReadyIds(now);
+        const trimmed = draft.trim();
+        if (trimmed) {
+          if (!validText(draft)) return;
+        } else if (photoIds.length === 0) {
+          photos.recheckExpiry(now);
+          return;
+        }
         const packet = owner.review({
           kind: 'create',
           text: draft,
