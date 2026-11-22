@@ -527,13 +527,18 @@ test('own-profile visibility card after Looking before Messages; Switch + pendin
   assert.doesNotMatch(own, /Чтобы показывать профиль в каталоге, сначала укажите город/);
   assert.ok(own.indexOf('LookingForGameCard') < own.indexOf('Видимость профиля'));
   assert.ok(own.indexOf('Видимость профиля') < own.indexOf('Личные сообщения'));
-  assert.match(own, /!profile && visibilityPending && pendingVisibilityStatus/);
+  // Outside-profile: pending UNKNOWN and post-rejection recovery (stale/error) without profile.
+  assert.match(own, /visibilityOutsideRecovery/);
+  assert.match(own, /!profile && \(visibilityPending \|\| visibilityOutsideRecovery\) && pendingVisibilityStatus/);
   assert.match(own, /Повторить включение видимости|Повторить отключение видимости/);
   assert.match(own, /Сохраняем видимость профиля…/);
   assert.match(own, /Обновить данные/);
   const editor = readFileSync(new URL('../src/components/profile-editor.tsx', import.meta.url), 'utf8');
   assert.match(editor, /kind === 'visibility'/);
   assert.match(editor, /Сохраняем видимость профиля…/);
+  // Editor refresh/retry CTAs are not gated on a loaded profile.
+  assert.match(editor, /status === 'stale'[\s\S]*refreshAuthoritative/);
+  assert.match(editor, /\(state\.status === 'error' \|\| state\.status === 'idle'\)[\s\S]*retryRead/);
   const auth = readFileSync(new URL('../src/auth-coordinator.ts', import.meta.url), 'utf8');
   assert.match(auth, /mutateOwnVisibility/);
   assert.match(auth, /visibility:/);
@@ -564,4 +569,230 @@ test('profileWireBody never carries directoryVisible; visibilityWireBody omits a
     patch: { areaKey: false, bio: false, level: false },
   }), 'directoryVisible'), false);
   assert.equal(createProfileDraft('n', 'c').displayName, 'n');
+});
+
+test('#522 P1: null-profile same-actor rejection → reachable authoritative recovery keeps dirty; read failure recoverable', async () => {
+  const serverV1: OwnProfile = {
+    ...emptyProfile, version: 1, displayName: 'Server', cityId: city.id, areaKey: 'server-area',
+    bio: 'Server bio', directoryVisible: false, consentPolicyVersion: 'directory-mvp-v1',
+  };
+  for (const reject of [
+    { status: 409, code: 'VERSION_CONFLICT', expect: 'stale' as const },
+    { status: 422, code: 'CONSENT_POLICY_VERSION_INVALID', expect: 'stale' as const },
+    { status: 422, code: 'VISIBILITY_NOT_ALLOWED', expect: 'error' as const },
+  ]) {
+    let authoritative: OwnProfile = { ...serverV1 };
+    let phase: 'lost' | 'reject' | 'ok' = 'lost';
+    let citiesEmpty = false;
+    const s = setup(serverV1, {
+      visibility: async (packet) => {
+        if (phase === 'lost') throw new ProfileError('network');
+        if (phase === 'reject') throw new ProfileError('business', reject.status, reject.code);
+        return ackVisibility(packet, authoritative);
+      },
+      read: async () => ({ ...authoritative }),
+      cities: async () => (citiesEmpty ? [] : [city]),
+    });
+    await s.owner.load();
+    s.owner.update({
+      displayName: 'Dirty local', bio: 'Keep bio', areaKey: 'local-metro', cityId: city.id,
+    });
+    await s.owner.setDirectoryVisible(true);
+    const original = s.sent[0]!.packet;
+    assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+
+    s.owner.setActor(null);
+    s.owner.setActor({ ...actor, sessionId: `reauth-${reject.code}`, generation: 2 });
+    assert.equal(s.owner.getSnapshot().profile, null);
+    assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+    assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+    assert.equal(s.owner.getSnapshot().draft.displayName, 'Dirty local');
+
+    phase = 'reject';
+    await s.owner.reconcile();
+    assert.equal(s.owner.getSnapshot().command, undefined);
+    assert.equal(s.owner.getSnapshot().profile, null);
+    assert.equal(s.owner.getSnapshot().status, reject.expect);
+    assert.equal(s.owner.getSnapshot().draft.displayName, 'Dirty local');
+    assert.equal(s.owner.getSnapshot().draft.bio, 'Keep bio');
+    assert.equal(s.keyCount, 1);
+    assert.equal(s.sent.length, 2);
+
+    // Explicit recovery: 409/consent → refreshAuthoritative; other 4xx → retryRead/load.
+    authoritative = {
+      ...serverV1, version: 3, directoryVisible: false, displayName: 'Fresh Server',
+      bio: 'Fresh bio', areaKey: 'fresh-area',
+    };
+    citiesEmpty = false;
+    if (reject.expect === 'stale') {
+      assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
+      await s.owner.refreshAuthoritative();
+    } else {
+      await s.owner.retryRead();
+    }
+    assert.equal(s.owner.getSnapshot().profile?.version, 3);
+    assert.equal(s.owner.getSnapshot().profile?.displayName, 'Fresh Server');
+    assert.equal(s.owner.getSnapshot().draft.displayName, 'Dirty local');
+    assert.equal(s.owner.getSnapshot().draft.bio, 'Keep bio');
+    assert.equal(s.owner.getSnapshot().draft.areaKey, 'local-metro');
+    assert.equal(s.owner.getSnapshot().status, 'ready');
+    assert.equal(s.owner.getSnapshot().command, undefined);
+    assert.equal(s.keyCount, 1);
+  }
+
+  // Retry-read network failure after null-profile rejection stays recoverable; UNKNOWN not invented.
+  let authoritativeFail: OwnProfile = { ...serverV1 };
+  let phaseFail: 'lost' | 'reject' | 'read' = 'lost';
+  let readFails = false;
+  const fail = setup(serverV1, {
+    visibility: async (packet) => {
+      if (phaseFail === 'lost') throw new ProfileError('network');
+      if (phaseFail === 'reject') throw new ProfileError('business', 409, 'VERSION_CONFLICT');
+      return ackVisibility(packet, authoritativeFail);
+    },
+    read: async () => {
+      if (readFails) throw new ProfileError('network');
+      return { ...authoritativeFail };
+    },
+  });
+  await fail.owner.load();
+  fail.owner.update({ displayName: 'Hold', bio: 'x' });
+  await fail.owner.setDirectoryVisible(true);
+  fail.owner.setActor(null);
+  fail.owner.setActor({ ...actor, sessionId: 'fail-reauth', generation: 3 });
+  phaseFail = 'reject';
+  await fail.owner.reconcile();
+  assert.equal(fail.owner.getSnapshot().status, 'stale');
+  assert.equal(fail.owner.getSnapshot().profile, null);
+  readFails = true;
+  await fail.owner.refreshAuthoritative();
+  assert.equal(fail.owner.getSnapshot().status, 'error');
+  assert.equal(fail.owner.getSnapshot().readIntent, 'rebase');
+  assert.equal(fail.owner.getSnapshot().profile, null);
+  assert.equal(fail.owner.getSnapshot().draft.displayName, 'Hold');
+  assert.equal(fail.owner.getSnapshot().command, undefined);
+  readFails = false;
+  authoritativeFail = { ...serverV1, version: 4, displayName: 'After fail' };
+  await fail.owner.retryRead();
+  assert.equal(fail.owner.getSnapshot().status, 'ready');
+  assert.equal(fail.owner.getSnapshot().profile?.version, 4);
+  assert.equal(fail.owner.getSnapshot().draft.displayName, 'Hold');
+});
+
+test('#522 P1: success with empty cities → subsequent load/editor remount preserves dirty + adopts pristine', async () => {
+  const serverV1: OwnProfile = {
+    ...emptyProfile, version: 1, displayName: 'Server', cityId: city.id, areaKey: 'server-area',
+    bio: 'Server bio', directoryVisible: false, consentPolicyVersion: 'directory-mvp-v1',
+  };
+  let authoritative: OwnProfile = { ...serverV1 };
+  let phase: 'lost' | 'ack' = 'lost';
+  let citiesEmpty = false;
+  const s = setup(serverV1, {
+    visibility: async (packet) => {
+      if (phase === 'lost') throw new ProfileError('network');
+      return ackVisibility(packet, authoritative);
+    },
+    read: async () => ({ ...authoritative }),
+    cities: async () => (citiesEmpty ? [] : [city]),
+  });
+  // First load with cities so the editor can dirty the draft, then lose catalog on reauth.
+  await s.owner.load();
+  // Only name+area dirty; bio stays pristine against server.
+  s.owner.update({
+    displayName: 'Unsaved name', areaKey: 'local-metro', cityId: city.id,
+  });
+  await s.owner.setDirectoryVisible(true);
+  s.owner.setActor(null);
+  s.owner.setActor({ ...actor, sessionId: 'empty-cities', generation: 2 });
+  assert.equal(s.owner.getSnapshot().cities.length, 0);
+  assert.equal(s.owner.getSnapshot().profile, null);
+
+  phase = 'ack';
+  authoritative = {
+    ...serverV1, version: 2, directoryVisible: true, displayName: 'Server',
+    bio: 'Server bio', areaKey: 'remote-area',
+  };
+  await s.owner.reconcile();
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().profile?.directoryVisible, true);
+  assert.equal(s.owner.getSnapshot().status, 'idle');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsaved name');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Server bio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'local-metro');
+
+  // Editor remount / idle retry-load: dirty kept; pristine bio adopts newer GET.
+  authoritative = {
+    ...authoritative, version: 2, displayName: 'Server Renamed', bio: 'Bio after catalog',
+    areaKey: 'catalog-area',
+  };
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().cities.length, 1);
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsaved name');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'local-metro');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Bio after catalog');
+  assert.equal(s.owner.getSnapshot().draft.cityId, city.id);
+  assert.equal(s.owner.getSnapshot().profile?.displayName, 'Server Renamed');
+  assert.equal(s.owner.getSnapshot().profile?.bio, 'Bio after catalog');
+});
+
+test('#522 P1: existing profile ACK+GET rebases pristine remote edits; dirty bio survives; save uses fresh version', async () => {
+  const serverV1: OwnProfile = {
+    ...emptyProfile, version: 1, displayName: 'Alice', cityId: city.id, areaKey: 'north',
+    bio: 'old bio', directoryVisible: false, consentPolicyVersion: 'directory-mvp-v1',
+    level: null,
+  };
+  let authoritative: OwnProfile = { ...serverV1 };
+  let phase: 'lost' | 'ack' = 'lost';
+  const s = setup(serverV1, {
+    visibility: async (packet) => {
+      if (phase === 'lost') throw new ProfileError('network');
+      return ackVisibility(packet, authoritative);
+    },
+    read: async () => ({ ...authoritative }),
+    send: async (packet) => {
+      if (packet.kind !== 'profile') throw new Error('expected profile');
+      return {
+        ...authoritative,
+        version: packet.body.expectedVersion + 1,
+        displayName: packet.body.displayName,
+        cityId: packet.body.cityId,
+        areaKey: packet.body.areaKey,
+        bio: packet.body.bio,
+        level: packet.body.level,
+      };
+    },
+  });
+  await s.owner.load();
+  // Only bio is dirty; name/city/area/level stay pristine against v1.
+  s.owner.update({ bio: 'local dirty bio' });
+  await s.owner.setDirectoryVisible(true);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+
+  // During UNKNOWN another device changes pristine fields + version.
+  phase = 'ack';
+  authoritative = {
+    ...serverV1, version: 5, directoryVisible: true, displayName: 'Alice Remote',
+    cityId: city.id, areaKey: 'south', bio: 'remote bio', level: null,
+  };
+  await s.owner.reconcile();
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().profile?.version, 5);
+  assert.equal(s.owner.getSnapshot().profile?.displayName, 'Alice Remote');
+  assert.equal(s.owner.getSnapshot().profile?.areaKey, 'south');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'local dirty bio');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Alice Remote');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'south');
+  assert.equal(s.owner.getSnapshot().draft.cityId, city.id);
+
+  await s.owner.save();
+  const saved = s.sent.find(x => x.packet.kind === 'profile')?.packet;
+  if (!saved || saved.kind !== 'profile') throw new Error('expected profile save');
+  assert.equal(saved.body.expectedVersion, 5);
+  assert.equal(saved.body.displayName, 'Alice Remote');
+  assert.equal(saved.body.areaKey, 'south');
+  assert.equal(saved.body.bio, 'local dirty bio');
+  assert.notEqual(saved.body.displayName, 'Alice');
+  assert.notEqual(saved.body.areaKey, 'north');
+  assert.notEqual(saved.body.bio, 'old bio');
 });

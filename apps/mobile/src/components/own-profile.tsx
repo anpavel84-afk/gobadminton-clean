@@ -64,9 +64,13 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
       ? 'Повторить включение видимости'
       : 'Повторить отключение видимости')
     : 'Повторить изменение видимости';
-  // Reachable when same-actor reauth restores command with profile still null (load refuses).
+  // Reachable when same-actor reauth restores command with profile still null (load refuses),
+  // and after definitive visibility rejection clears the command while profile is still null
+  // (409 / consent-invalid stale, or other business 4xx → error). No loaded-profile prerequisite.
   // Trainer/visibility pending use the same outside-branch composition as policy/looking.
   // With profile present, same fragment stays inside the owning card only — no duplicate.
+  const visibilityOutsideRecovery = !visibilityPending && state.noticeOwner === 'visibility'
+    && (state.status === 'stale' || state.status === 'error');
   const pendingPolicyStatus = <>
     {state.noticeOwner === 'contactPolicy' && state.notice &&
       <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
@@ -117,7 +121,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     {state.status === 'stale' && state.noticeOwner !== 'visibility' &&
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
     {!profile && policyPending && pendingPolicyStatus}
-    {!profile && visibilityPending && pendingVisibilityStatus}
+    {!profile && (visibilityPending || visibilityOutsideRecovery) && pendingVisibilityStatus}
     {!profile && lookingPending && pendingLookingStatus}
     {!profile && trainerPending && pendingTrainerStatus}
     {profile && player && <>

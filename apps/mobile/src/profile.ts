@@ -505,19 +505,28 @@ export class ProfileCoordinator {
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
+      // Visibility/same-actor recovery may retain restoredBaseline so a later idle load
+      // preserves dirty fields and adopts only pristine ones from the fresh GET.
+      const baseline = this.restoredBaseline;
       this.restoredBaseline = null;
+      const draft = baseline
+        ? mergeDirtyDraft(this.state.draft, baseline, profile)
+        : form(profile);
       this.show({
-        profile, cities, draft: form(profile), status: 'ready', readIntent: null,
+        profile, cities, draft, status: 'ready', readIntent: null,
         notice: profile.displayName.trim() && profile.cityId ? null : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
         noticeOwner: profile.displayName.trim() && profile.cityId ? null : 'profile',
       });
     } catch {
+      // Keep restoredBaseline + draft; retry stays reachable. Never invent UNKNOWN clearance.
       if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.', noticeOwner: 'profile' });
     }
   };
   /**
-   * Authoritative GET + rebaseFromAuthoritative while readIntent==='rebase'.
+   * Authoritative GET + dirty-preserving adopt while readIntent==='rebase'.
    * Allowed from status stale, or error after a failed rebase GET (intent retained).
+   * Works with a loaded profile OR null-profile same-actor visibility recovery that still
+   * holds restoredBaseline (409 / consent-invalid / explicit refresh after rejection).
    * Preserves dirty name/city/area/bio/level; adopts fresh version/policy/pristine fields.
    * No auto write / policy resend. Does not infer cause from notice text.
    * Lower historical GET must not claim ready/fresh.
@@ -526,33 +535,55 @@ export class ProfileCoordinator {
     const actor = this.state.actor;
     const canRebase = this.state.status === 'stale'
       || (this.state.status === 'error' && this.state.readIntent === 'rebase');
-    if (!actor || !this.state.profile || this.state.command || !canRebase || this.isPeerBusy()) return;
+    const existing = this.state.profile;
+    const baseline = existing ?? this.restoredBaseline;
+    // Null-profile recovery needs the retained baseline; never require a loaded profile alone.
+    if (!actor || this.state.command || !canRebase || this.isPeerBusy() || !baseline) return;
     const serial = ++this.serial;
     this.show({ status: 'loading', notice: null, noticeOwner: null });
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
       this.show({ cities });
-      const applied = this.rebaseFromAuthoritative(profile);
-      if (!this.current(actor) || serial !== this.serial) return;
-      if (!applied) {
+      if (existing) {
+        const applied = this.rebaseFromAuthoritative(profile);
+        if (!this.current(actor) || serial !== this.serial) return;
+        if (!applied) {
+          this.show({
+            status: 'stale',
+            notice: 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.',
+            noticeOwner: 'profile',
+          });
+          return;
+        }
+        // Adopted profile is the new dirty baseline for any later idle load.
+        this.restoredBaseline = this.state.profile;
+        const adopted = this.state.profile!;
         this.show({
-          status: 'stale',
-          notice: 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.',
-          noticeOwner: 'profile',
+          status: 'ready',
+          readIntent: null,
+          notice: adopted.displayName.trim() && adopted.cityId
+            ? null
+            : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+          noticeOwner: adopted.displayName.trim() && adopted.cityId ? null : 'profile',
         });
         return;
       }
-      const adopted = this.state.profile;
+      // profile=null same-actor path: merge against restored baseline, then keep adopted for load().
+      const draft = mergeDirtyDraft(this.state.draft, baseline, profile);
+      this.restoredBaseline = profile;
       this.show({
+        profile,
+        draft,
         status: 'ready',
         readIntent: null,
-        notice: adopted.displayName.trim() && adopted.cityId
+        notice: profile.displayName.trim() && profile.cityId
           ? null
           : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
-        noticeOwner: adopted.displayName.trim() && adopted.cityId ? null : 'profile',
+        noticeOwner: profile.displayName.trim() && profile.cityId ? null : 'profile',
       });
     } catch {
+      // Retain rebase intent + restoredBaseline; never clear original UNKNOWN by assumption.
       if (this.current(actor) && serial === this.serial) {
         this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.', noticeOwner: 'profile' });
       }
@@ -583,6 +614,7 @@ export class ProfileCoordinator {
   };
   cancel = () => {
     if (this.state.command || this.state.status !== 'ready' || !this.state.profile || this.isPeerBusy()) return;
+    this.restoredBaseline = null;
     this.show({ draft: form(this.state.profile), notice: 'Изменения отменены.', noticeOwner: 'profile' });
   };
   save = async () => {
@@ -877,10 +909,11 @@ export class ProfileCoordinator {
         if (!existing) {
           // Same-account reauth: profile was cleared but dirty draft + baseline may be restored.
           const baseline = this.restoredBaseline;
-          this.restoredBaseline = null;
           const draft = baseline
             ? mergeDirtyDraft(this.state.draft, baseline, adopted)
             : this.state.draft;
+          // Keep adopted as baseline so a later idle load()/editor remount preserves dirty fields.
+          this.restoredBaseline = adopted;
           this.show({
             profile: adopted,
             draft,
@@ -892,10 +925,12 @@ export class ProfileCoordinator {
           });
           return;
         }
-        // Authoritative own profile only — never wipe unsaved name/city/area/bio/level draft.
-        this.restoredBaseline = null;
+        // Rebase pristine fields to current GET; preserve each locally dirty draft field.
+        const draft = mergeDirtyDraft(this.state.draft, existing, adopted);
+        this.restoredBaseline = adopted;
         this.show({
           profile: adopted,
+          draft,
           command: undefined,
           status: 'ready',
           readIntent: null,
@@ -927,6 +962,7 @@ export class ProfileCoordinator {
       const { body } = packet;
       if (profile.version <= body.expectedVersion || profile.displayName !== body.displayName || profile.cityId !== body.cityId
           || profile.areaKey !== body.areaKey || profile.bio !== body.bio || !sameStoredLevel(profile.level, body.level)) throw new ProfileError('invalid');
+      this.restoredBaseline = null;
       this.show({ profile, draft: form(profile), command: undefined, status: 'ready', readIntent: null, notice: 'Профиль сохранён.', noticeOwner: 'profile' });
       // A restored UNKNOWN has no catalog yet. Read only on the next explicit editor load.
       if (!this.state.cities.length) this.show({ status: 'idle' });
@@ -938,6 +974,8 @@ export class ProfileCoordinator {
         && error.kind === 'business'
         && error.status < 500
         && error.code !== 'COMMAND_IN_PROGRESS') {
+        // profile=null after same-actor restore: keep restoredBaseline; expose reachable recovery.
+        const nullProfile = !this.state.profile;
         if (packet.kind === 'visibility' && error.code === 'CONSENT_POLICY_VERSION_INVALID') {
           this.show({
             command: undefined,
@@ -949,10 +987,16 @@ export class ProfileCoordinator {
           return;
         }
         const stale = error.status === 409;
+        // Other definitive visibility 4xx with no profile → error so retry/load is reachable
+        // (ready+null hid all controls). Profile present keeps ready for an in-place retry.
+        const status = stale ? 'stale'
+          : (packet.kind === 'visibility' && nullProfile ? 'error' : 'ready');
+        const readIntent = stale ? 'rebase' as const
+          : (packet.kind === 'visibility' && nullProfile ? null : this.state.readIntent);
         this.show({
           command: undefined,
-          status: stale ? 'stale' : 'ready',
-          readIntent: stale ? 'rebase' : this.state.readIntent,
+          status,
+          readIntent,
           noticeOwner: stale
             ? (packet.kind === 'visibility' ? 'visibility' : 'profile')
             : noticeOwnerOf(packet),

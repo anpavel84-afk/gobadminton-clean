@@ -109,6 +109,32 @@ test('#522 P2 R2: same-actor reauth profile-null keeps trainer pending recovery 
   assert.match(insideCard, /\{pendingTrainerStatus\}/);
 });
 
+test('#522 P1: outside-profile visibility recovery composition after null-profile rejection (source assertion)', () => {
+  // Lexical/source composition only — not native-device renderer proof.
+  const own = read('../src/components/own-profile.tsx');
+  assert.match(own, /visibilityOutsideRecovery/);
+  assert.match(own, /noticeOwner === 'visibility'/);
+  assert.match(own, /status === 'stale' \|\| state\.status === 'error'/);
+  assert.match(own, /!profile && \(visibilityPending \|\| visibilityOutsideRecovery\) && pendingVisibilityStatus/);
+  const pendingStart = own.indexOf('const pendingVisibilityStatus');
+  const pendingEnd = own.indexOf('</>;', pendingStart);
+  const pendingFragment = own.slice(pendingStart, pendingEnd);
+  assert.match(pendingFragment, /refreshAuthoritative/);
+  assert.match(pendingFragment, /Обновить данные/);
+  assert.match(pendingFragment, /command\?\.status === 'unknown'/);
+  assert.match(pendingFragment, /reconcile/);
+  // Outside recovery precedes the profile-gated card; inside card still injects the same fragment.
+  const outsideIdx = own.indexOf('!profile && (visibilityPending || visibilityOutsideRecovery) && pendingVisibilityStatus');
+  const cardIdx = own.indexOf('accessibilityLabel="Видимость профиля"');
+  assert.ok(outsideIdx >= 0 && cardIdx > outsideIdx);
+  assert.match(own.slice(cardIdx), /\{pendingVisibilityStatus\}/);
+  // Generic stale refresh remains hidden for visibility noticeOwner (owned by the fragment).
+  assert.match(own, /status === 'stale' && state\.noticeOwner !== 'visibility'/);
+  const editor = read('../src/components/profile-editor.tsx');
+  assert.match(editor, /status === 'stale'[\s\S]*refreshAuthoritative/);
+  assert.match(editor, /\(state\.status === 'error' \|\| state\.status === 'idle'\)[\s\S]*retryRead/);
+});
+
 test('#605 player-card.tsx exports PlayerCover; PlayerProfile uses shared hero', () => {
   const source = read('../src/components/player-card.tsx');
   assert.match(source, /export function PlayerCover\(/);
