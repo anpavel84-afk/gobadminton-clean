@@ -86,10 +86,7 @@ export function LookingForGameCard({
         editable={!locked}
         placeholder="Необязательно"
         placeholderTextColor={colors.secondary}
-        style={{
-          minHeight: 48, borderWidth: 1, borderColor: colors.lineDark, borderRadius: 12,
-          paddingHorizontal: 12, paddingVertical: 10, color: colors.ink, backgroundColor: colors.card,
-        }}
+        style={styles.input}
       />
       <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 18 }}>Как долго искать</Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

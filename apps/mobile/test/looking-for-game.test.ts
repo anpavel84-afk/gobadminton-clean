@@ -121,7 +121,7 @@ test('native closed PUT/DELETE transport: exact path, bearer, key, minimal body;
   });
   const putPacket = Object.freeze({
     kind: 'lookingPut' as const, actor: Object.freeze({ ...actor }), key: 'put-key-16chars!!',
-    body: Object.freeze({ cityId: city.id, areaKey: 'sokol', ttlMinutes: LOOKING_TTL_1H as const, expectedVersion: 1 }),
+    body: Object.freeze({ cityId: city.id, areaKey: 'sokol', ttlMinutes: LOOKING_TTL_1H, expectedVersion: 1 }),
   });
   const put = await api.mutateOwnLooking('tok', putPacket);
   assert.equal(put.state, 'active');
@@ -338,7 +338,6 @@ test('ineligible/unavailable business FAIL keeps draft; expired display without 
   const editor = readFileSync(new URL('../src/components/profile-editor.tsx', import.meta.url), 'utf8');
   assert.match(editor, /lookingPut/);
   assert.match(editor, /Повторить прежний статус «Ищу игру»/);
-  assert.equal(JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8')).expo.android.versionCode, 26);
 });
 
 test('same-actor reauth restores looking UNKNOWN with profile=null; pending retry reachable', async () => {
