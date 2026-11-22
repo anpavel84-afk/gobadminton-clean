@@ -390,6 +390,17 @@ run("bounded native public Players principal opt-in", () => {
   it("looking PUT rejects no-profile/ineligible/invalid city without inventing eligibility", async () => {
     const bare = await actor();
     const lookingUrl = "/v1/me/looking-for-game";
+    // actor() + /v1/me provisions a default social row; wipe it for a true missing-profile case.
+    const wiped = await pool.query(
+      "DELETE FROM player_social_profiles WHERE user_id=$1 RETURNING user_id",
+      [bare.id],
+    );
+    expect(wiped.rowCount).toBe(1);
+    const missingRow = await pool.query(
+      "SELECT 1 FROM player_social_profiles WHERE user_id=$1",
+      [bare.id],
+    );
+    expect(missingRow.rowCount).toBe(0);
     const missing = await app.inject({
       method: "PUT", url: lookingUrl, headers: bearer(bare),
       payload: { cityId: MOSCOW_CITY_ID, areaKey: null, ttlMinutes: 60 },
@@ -415,11 +426,13 @@ run("bounded native public Players principal opt-in", () => {
     const after = await app.inject({ url: "/v1/me/social-profile", headers: bearer(eligible) });
     expect(after.json().socialEligible).toBe(false);
     expect(after.json().lookingForGame).toBeNull();
+    // putLooking asserts city before eligibility — invalid city while ineligible is still CITY_ID_INVALID.
     const badCity = await app.inject({
       method: "PUT", url: lookingUrl, headers: bearer(eligible),
       payload: { cityId: randomUUID(), areaKey: null, ttlMinutes: 60 },
     });
-    // Ineligible fails first when socialEligible false; restore eligible for city check.
+    expect(badCity.statusCode).toBe(422);
+    expect(badCity.json().code).toBe("CITY_ID_INVALID");
     const reopen = await app.inject({
       method: "PATCH", url: "/v1/me/social-profile", headers: bearer(eligible),
       payload: { expectedVersion: after.json().version, socialEligible: true },
@@ -431,7 +444,6 @@ run("bounded native public Players principal opt-in", () => {
     });
     expect(invalidCity.statusCode).toBe(422);
     expect(invalidCity.json().code).toBe("CITY_ID_INVALID");
-    expect(badCity.statusCode).toBe(422);
   });
 
 });

@@ -632,9 +632,21 @@ export class ProfileCoordinator {
     }
     if (looking.state !== 'inactive') throw new ProfileError('invalid');
   }
+  /** Canonical Looking body equality — version excluded; clock expiry does not mutate fields. */
+  private lookingCanonicalEqual(a: Looking, b: Looking): boolean {
+    return a.state === b.state
+      && a.cityId === b.cityId
+      && a.areaKey === b.areaKey
+      && a.startsAt === b.startsAt
+      && a.endsAt === b.endsAt
+      && a.expiresAt === b.expiresAt
+      && a.formatKeys.length === b.formatKeys.length
+      && a.formatKeys.every((key, index) => key === b.formatKeys[index]);
+  }
   /**
    * After a verified original ACK, prefer the fresh own-profile Looking state.
-   * Newer nested version/state wins; historical ACK never overwrites it.
+   * Nested must not regress below ACK or the known current Looking version.
+   * Same version may expire via clock, but canonical fields/state cannot diverge without a bump.
    * Canonical no-record STOP: inactive version 0 ACK + nested null → confirmed off.
    */
   private resolveLookingAfterAck(ack: Looking, nested: Looking | null, packet: LookingPacket): Looking | null {
@@ -643,6 +655,16 @@ export class ProfileCoordinator {
       throw new ProfileError('invalid');
     }
     if (nested.version < ack.version) throw new ProfileError('invalid');
+    if (nested.version === ack.version && !this.lookingCanonicalEqual(nested, ack)) {
+      throw new ProfileError('invalid');
+    }
+    const current = this.state.profile?.lookingForGame ?? null;
+    if (current) {
+      if (nested.version < current.version) throw new ProfileError('invalid');
+      if (nested.version === current.version && !this.lookingCanonicalEqual(nested, current)) {
+        throw new ProfileError('invalid');
+      }
+    }
     return nested;
   }
   private async dispatch(packet: ProfilePacket, authority: Actor) {
