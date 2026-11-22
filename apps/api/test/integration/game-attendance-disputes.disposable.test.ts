@@ -18,7 +18,7 @@ import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
@@ -79,9 +79,10 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
       NODE_ENV: "test",
       APP_ENV: "local",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      ALLOWED_WEB_ORIGINS: origin,
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "pg2-synthetic-fixture-pepper-only!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "pg2-synthetic-fingerprint-fixture!!",
