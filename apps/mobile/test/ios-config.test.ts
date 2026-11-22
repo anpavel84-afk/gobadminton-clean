@@ -23,7 +23,7 @@ test('iOS config leaves the DEV Android block exactly unchanged', () => {
       data: [{ scheme: 'https', host: 'dev.gobadminton.ru', path: '/auth/native/callback' }],
       category: ['BROWSABLE', 'DEFAULT'],
     }],
-    versionCode: 20,
+    versionCode: 21,
   });
 });
 
