@@ -45,7 +45,8 @@ test('#600 games list «На карте» stays pinned above nav for empty/loadi
   assert.equal((games.match(/>На карте</g) ?? []).length, 1);
 });
 
-test('#601 players floating «На карте» only when Radar is active; Свайп always', () => {
+test('#601 players floating «На карте» only when Radar is active; Свайп floats after inline scrolls away', () => {
+  // #660: obsolete #601 expectation that floating «Свайп» is always mounted — now scroll-gated.
   const players = read('../app/players/index.tsx');
   assert.match(players, /pointerEvents="box-none"/);
   assert.match(players, /floatingEntryHeight\+insets\.bottom\+48/);
@@ -53,4 +54,5 @@ test('#601 players floating «На карте» only when Radar is active; Св�
   assert.match(players, /radarState\.activation\?\.state === 'active' && <Pressable/);
   assert.match(players, />На карте</);
   assert.match(players, />Свайп</);
+  assert.match(players, /showFloatingSwipe && <Pressable/);
 });
