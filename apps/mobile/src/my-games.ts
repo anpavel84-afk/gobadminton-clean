@@ -26,6 +26,12 @@ export function matchesFilter(row: HubRow, filter: Filter) {
 export function isPendingInvite(invite: GameInvitation, now = Date.now()): boolean {
   return invite.status === 'pending' && (!invite.expiresAt || Date.parse(invite.expiresAt) > now);
 }
+/** Cached `pending` whose expiresAt is already past local clock — still refreshable, not actionable. */
+export function isInviteClockExpired(invite: GameInvitation, now = Date.now()): boolean {
+  if (invite.status !== 'pending' || !invite.expiresAt) return false;
+  const at = Date.parse(invite.expiresAt);
+  return Number.isFinite(at) && at <= now;
+}
 /** Loaded pending only; caller appends `+` while the invitations cursor is not exhausted. */
 export function pendingInviteCount(invites: readonly GameInvitation[], now = Date.now()): number {
   return invites.filter(invite => isPendingInvite(invite, now)).length;

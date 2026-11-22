@@ -6,7 +6,7 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import { MessagesCoordinator } from '../src/messages-coordinator.ts';
 import type { GameInvitation } from '../src/messages.ts';
 import { MessagesError, parseInvitationPage } from '../src/messages.ts';
-import { hubRows, hubView, matchesFilter, pendingInviteCount, isPendingInvite, hubBucket } from '../src/my-games.ts';
+import { hubRows, hubView, matchesFilter, pendingInviteCount, isPendingInvite, isInviteClockExpired, hubBucket } from '../src/my-games.ts';
 import type { Actor } from '../src/participation.ts';
 import type { OwnResult, Reminder } from '../src/postgame.ts';
 import { PostgameError } from '../src/postgame.ts';
@@ -327,10 +327,87 @@ test('parseInvitationPage validates list DTO; screen keeps invites filter inside
   assert.match(screen, /Условия игры доступны в приглашении ниже/);
   assert.doesNotMatch(screen, /без обхода доступа/);
   assert.match(read('../src/components/my-game-invitation.tsx'), /leaseFocus/);
-  assert.match(read('../src/components/my-game-invitation.tsx'), /accessibilityLabel=\{pending \? 'Приглашение в игру, ожидает решения'/);
+  assert.match(read('../src/components/my-game-invitation.tsx'), /isInviteClockExpired/);
+  assert.match(read('../src/components/my-game-invitation.tsx'), /Приглашение в игру, ожидает решения/);
   assert.doesNotMatch(read('../src/components/my-game-invitation.tsx'), /invitation-\$\{invite\.id\}/);
   assert.match(read('../src/auth-coordinator.ts'), /myInvitations/);
   assert.match(read('../src/auth-coordinator.ts'), /invitationSettled/);
   assert.match(read('../src/components/messages.tsx'), /import type \{[^}]*GameInvitation[^}]*\} from '\.\.\/messages\.ts'/);
   assert.doesNotMatch(read('../src/components/messages.tsx'), /invitation: import\('\.\.\/messages\.ts'\)\.GameInvitation/);
+});
+
+test('stale actor A finally must not clear B busy or consume B queued invitation refresh', async () => {
+  const actorB: Actor = { actorId: 'actor-b', sessionId: 'session-b', generation: 1 };
+  const forA = deferred<{ items: GameInvitation[]; nextCursor: string | null }>();
+  const forB = deferred<{ items: GameInvitation[]; nextCursor: string | null }>();
+  const actors: string[] = [];
+  let reads = 0;
+  const owner = new PostgameCoordinator({
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async (who) => {
+      reads++;
+      actors.push(who.actorId);
+      if (who.actorId === actor.actorId) return forA.promise;
+      if (reads === 2) return forB.promise;
+      return { items: [invite({ id: 'fresh-b', status: 'accepted', participationId: 'p-b' })], nextCursor: null };
+    },
+    results: async () => { throw new PostgameError('invalid'); },
+    send: async () => { throw new PostgameError('invalid'); },
+  }, () => 'key');
+  owner.setActor(actor);
+  const readA = owner.loadInvitations();
+  await tick();
+  assert.equal(owner.getSnapshot().invitations.status, 'loading');
+  owner.setActor(actorB);
+  const readB = owner.loadInvitations();
+  await tick();
+  assert.equal(owner.getSnapshot().invitations.status, 'loading');
+  // B ACK-style refresh while B list is in flight: queue followup + invalidate B read.
+  void owner.loadInvitations();
+  assert.equal(reads, 2, 'coalesce: B followup waits for in-flight B GET');
+  forA.resolve({ items: [invite({ id: 'stale-a' })], nextCursor: null });
+  await readA; await tick();
+  assert.equal(reads, 2, 'stale A finally must not start or steal B followup');
+  assert.equal(owner.getSnapshot().actor?.actorId, actorB.actorId);
+  assert.equal(owner.getSnapshot().invitations.status, 'loading');
+  assert.equal(owner.getSnapshot().invitations.data, undefined);
+  forB.resolve({ items: [invite({ id: 'stale-b', status: 'pending' })], nextCursor: null });
+  await readB; await tick();
+  assert.equal(reads, 3, 'invalidated B finally must still run its own queued fresh root GET');
+  assert.deepEqual(actors, [actor.actorId, actorB.actorId, actorB.actorId]);
+  assert.equal(owner.getSnapshot().invitations.status, 'ready');
+  assert.equal(owner.getSnapshot().invitations.data!.items[0]!.id, 'fresh-b');
+  assert.equal(owner.getSnapshot().invitations.data!.items[0]!.status, 'accepted');
+});
+
+test('clock-expired pending and zero-seat decision invariants; decline disables while pending', () => {
+  const live = invite({ expiresAt: '2026-11-20T00:00:00Z' });
+  const clockPast = invite({ id: 'past', expiresAt: '2026-11-01T00:00:00Z' });
+  const noExpiry = invite({ id: 'open', expiresAt: null });
+  const skewUnknown = invite({ id: 'skew', expiresAt: 'not-a-date' });
+  assert.equal(isPendingInvite(live, now), true);
+  assert.equal(isInviteClockExpired(live, now), false);
+  assert.equal(isPendingInvite(clockPast, now), false);
+  assert.equal(isInviteClockExpired(clockPast, now), true);
+  assert.equal(isPendingInvite(noExpiry, now), true);
+  assert.equal(isInviteClockExpired(noExpiry, now), false);
+  assert.equal(isInviteClockExpired(skewUnknown, now), false);
+  assert.equal(isPendingInvite(skewUnknown, now), false);
+
+  const body = read('../src/components/messages.tsx');
+  assert.match(body, /Свободных мест сейчас нет/);
+  assert.match(body, /availablePlaces < 1/);
+  assert.match(body, /function DeclineTextButton/);
+  assert.match(body, /accessibilityState=\{\{ disabled \}\}/);
+  assert.match(body, /disabled=\{declineDisabled\}/);
+  assert.match(body, /isInviteClockExpired\(invitation/);
+  assert.match(body, /invitationCopy\.expired/);
+  assert.doesNotMatch(body, /disabled=\{!!pending \|\| !context\}/);
+
+  const card = read('../src/components/my-game-invitation.tsx');
+  assert.match(card, /clockExpired \? invitationCopy\.expired/);
+  assert.match(card, /openable && !selected/);
+  assert.match(card, /invite\.status === 'pending'/);
+  assert.match(card, /clockExpired \? 'Обновить приглашение'/);
 });

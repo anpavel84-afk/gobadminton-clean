@@ -524,3 +524,24 @@ test('late safety denial cannot hide a replacement actor or focus and cannot res
     if (boundary !== 'focus') { assert.deepEqual(owner.getSnapshot().pending, {}); assert.deepEqual(owner.getSnapshot().drafts, {}); }
   }
 });
+
+test('invitation decision body: zero seats disable accept, clock expiry honest, decline a11y-disabled while pending', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { URL } = await import('node:url');
+  const { isInviteClockExpired } = await import('../src/my-games.ts');
+  const body = readFileSync(new URL('../src/components/messages.tsx', import.meta.url), 'utf8');
+  assert.match(body, /DeclineTextButton/);
+  assert.match(body, /disabled=\{acceptDisabled\}/);
+  assert.match(body, /disabled=\{declineDisabled\}/);
+  assert.match(body, /Свободных мест сейчас нет/);
+  assert.match(body, /noSeats|availablePlaces < 1/);
+  assert.match(body, /isInviteClockExpired\(invitation, Date\.now\(\)\)/);
+  assert.match(body, /DeclineTextButton title="Отклонить"/);
+  const expired = {
+    id: 'e', gameId: 'g', status: 'pending' as const, version: 1,
+    inviterPublicPlayerId: 'a', inviteePublicPlayerId: 'b',
+    expiresAt: '2020-01-01T00:00:00Z', participationId: null,
+  };
+  assert.equal(isInviteClockExpired(expired, Date.parse('2026-11-14T12:00:00Z')), true);
+  assert.equal(isInviteClockExpired({ ...expired, expiresAt: null }, Date.parse('2026-11-14T12:00:00Z')), false);
+});

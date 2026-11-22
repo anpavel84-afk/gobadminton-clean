@@ -5,7 +5,7 @@ import { useAuth } from '../auth.tsx';
 import { resourceKey } from '../messages-coordinator.ts';
 import type { GameInvitation, MessageResource } from '../messages.ts';
 import { invitationCopy, InvitationDecisionBody } from './messages.tsx';
-import { isPendingInvite } from '../my-games.ts';
+import { isInviteClockExpired, isPendingInvite } from '../my-games.ts';
 import { Label, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 /** One deliberately active inline invitation panel — shares root MessagesCoordinator focus/command lease. */
@@ -30,11 +30,16 @@ export function MyGameInvitations({
   return <View style={{ gap: 8 }}>
     {invitations.map(invite => {
       const pending = isPendingInvite(invite);
+      const clockExpired = isInviteClockExpired(invite);
+      // Any server-pending row stays openable (clock-expired + unparseable expiresAt → refresh).
+      const openable = invite.status === 'pending';
       const selected = activeId === invite.id;
-      return <View key={`${invite.id}:${invite.version}`} style={styles.card} accessibilityLabel={pending ? 'Приглашение в игру, ожидает решения' : `Приглашение: ${invitationCopy[invite.status]}`}>
-        {!selected ? <Label style={{ fontWeight: '700' }}>{pending ? 'Приглашение в игру' : invitationCopy[invite.status]}</Label> : null}
+      const collapsedLabel = pending ? 'Приглашение в игру' : clockExpired ? invitationCopy.expired : invitationCopy[invite.status];
+      const a11y = pending ? 'Приглашение в игру, ожидает решения' : `Приглашение: ${clockExpired ? invitationCopy.expired : invitationCopy[invite.status]}`;
+      return <View key={`${invite.id}:${invite.version}`} style={styles.card} accessibilityLabel={a11y}>
+        {!selected ? <Label style={{ fontWeight: '700' }}>{collapsedLabel}</Label> : null}
         {!selected && invite.status === 'accepted' ? <Label>Актуальный статус участия указан отдельно.</Label> : null}
-        {pending && !selected ? <TextButton title="Условия и решение" onPress={() => onActive(invite.id)} /> : null}
+        {openable && !selected ? <TextButton title={clockExpired ? 'Обновить приглашение' : 'Условия и решение'} onPress={() => onActive(invite.id)} /> : null}
         {selected ? <InlineInvitationPanel invitationId={invite.id} listInvite={invite} onClose={() => onActive(null)} /> : null}
       </View>;
     })}

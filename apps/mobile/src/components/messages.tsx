@@ -9,6 +9,7 @@ import type { MessagesCoordinator } from '../messages-coordinator.ts';
 import { resourceKey } from '../messages-coordinator.ts';
 import { inboxDestination } from '../messages.ts';
 import type { DirectMessage, GameInvitation, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
+import { isInviteClockExpired } from '../my-games.ts';
 import { playerMediaUrl } from '../media.ts';
 import { formatLabel, levelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
@@ -123,26 +124,50 @@ export function NativeMessagesInbox() {
 }
 const requestCopy = { pending: 'Запрос на общение', accepted: 'Переписка', declined: 'Запрос отклонён', expired: 'Срок запроса истёк', closed: 'Переписка закрыта' };
 export const invitationCopy = { pending: 'Вас приглашают в игру', accepted: 'Приглашение принято', declined: 'Приглашение отклонено', expired: 'Срок приглашения истёк', revoked: 'Приглашение отозвано', cancelled_by_game: 'Игра отменена' } as const;
+/** Ghost decline control — TextButton has no disabled; keep accepted textButton look with a11y. */
+function DeclineTextButton({ title, onPress, disabled = false }: { title: string; onPress: () => void; disabled?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => [styles.textButton, { opacity: disabled ? 0.5 : 1 }, !disabled && pressed && { backgroundColor: colors.paper }]}>
+    <Label style={{ color: colors.ink, textAlign: 'center' }}>{title}</Label>
+  </Pressable>;
+}
 /** Shared safe invitation terms + accept/decline; MyGames and Messages reuse one MessagesCoordinator owner. */
-export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, onDecline, onOpenGame }: {
+export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, onDecline, onOpenGame, now = Date.now() }: {
   invitation: GameInvitation;
   ownId: string | null;
   pending: boolean;
   onAccept: () => void;
   onDecline: () => void;
   onOpenGame?: () => void;
+  now?: number;
 }) {
   const context = invitation.acceptanceContext, recipient = ownId === invitation.inviteePublicPlayerId;
+  const clockExpired = isInviteClockExpired(invitation, now);
+  const noSeats = !!context && context.availablePlaces < 1;
+  const showDecision = recipient && invitation.status === 'pending';
+  const acceptDisabled = !!pending || !context || noSeats || clockExpired;
+  const declineDisabled = !!pending || clockExpired;
+  const statusLabel = clockExpired ? invitationCopy.expired : invitationCopy[invitation.status];
+  const pressAccept = () => {
+    if (pending || !context || noSeats || isInviteClockExpired(invitation, Date.now())) return;
+    onAccept();
+  };
+  const pressDecline = () => {
+    if (pending || isInviteClockExpired(invitation, Date.now())) return;
+    onDecline();
+  };
   return <View style={{ gap: 8 }}>
-    <Label style={styles.subtitle}>{invitationCopy[invitation.status]}</Label>
+    <Label style={styles.subtitle}>{statusLabel}</Label>
     {context ? <><Label style={{ fontWeight: '700' }}>{context.title}</Label><Label>{new Date(context.startsAt).toLocaleString('ru', { timeZone: context.timezone })} · {context.timezone}</Label>
       <Label>{context.venueName} · {context.venueAddress}</Label><Label>{formatLabel(context.formatKey)} · {levelLabel({ scaleId: context.levelScaleId, scaleVersion: context.levelScaleVersion, allowedLevelIds: context.allowedLevelIds })}</Label>
       {context.activityKind === 'trainer_led' && <Label>С тренером{context.trainerDisplayName ? ` · ${context.trainerDisplayName}` : ''}</Label>}
       {context.trainingDescription && <Label>{context.trainingDescription}</Label>}
       <Label>{context.settlementPurpose === 'no_trainer_fee' ? 'Без тренерского сбора' : context.priceStatus === 'fixed' ? `${context.priceMinor ? (BigInt(context.priceMinor) / 100n).toString() + '.' + (BigInt(context.priceMinor) % 100n).toString().padStart(2, '0') : ''} ${context.currency} / игрока за занятие` : 'Цена по договорённости'}</Label>
-      <Label>{context.settlementTerms}</Label><Label>Свободных мест: {context.availablePlaces}. Окончательное место проверяется при принятии.</Label></> : invitation.status === 'pending' && <Label>Условия сейчас недоступны. Обновите приглашение.</Label>}
-    {recipient && invitation.status === 'pending' && <><PrimaryButton title="Принять приглашение" disabled={!!pending || !context} onPress={onAccept} />
-      <TextButton title="Отклонить" onPress={onDecline} /></>}
+      <Label>{context.settlementTerms}</Label><Label>Свободных мест: {context.availablePlaces}. Окончательное место проверяется при принятии.</Label></> : invitation.status === 'pending' && !clockExpired && <Label>Условия сейчас недоступны. Обновите приглашение.</Label>}
+    {showDecision && !clockExpired && noSeats ? <Label>Свободных мест сейчас нет</Label> : null}
+    {showDecision && !clockExpired ? <><PrimaryButton title="Принять приглашение" disabled={acceptDisabled} onPress={pressAccept} />
+      <DeclineTextButton title="Отклонить" disabled={declineDisabled} onPress={pressDecline} /></> : null}
+    {showDecision && clockExpired ? <Label>Обновите приглашение, чтобы увидеть актуальный статус на сервере.</Label> : null}
     {invitation.status === 'accepted' && invitation.participationId && onOpenGame ? <TextButton title="Открыть игру" onPress={onOpenGame} /> : null}
   </View>;
 }

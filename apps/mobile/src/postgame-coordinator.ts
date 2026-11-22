@@ -55,6 +55,8 @@ export class PostgameCoordinator {
   /** Coalesce one fresh root invitations GET after ACK while an initial/load-more is in flight. */
   private invitationsBusy = false;
   private invitationsFollowup = false;
+  /** Generation that owns busy/followup; stale finally must not clear a newer actor/read. */
+  private invitationsBusyGen = 0;
   private port: Port;
   private random: () => string;
   constructor(port: Port, random: () => string) { this.port=port; this.random=random; }
@@ -68,13 +70,13 @@ export class PostgameCoordinator {
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
-    this.invitationsBusy=false; this.invitationsFollowup=false;
+    this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     if (saved) this.show({filter:saved.filter,command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,notice:saved.command ? unknownNotice : null});
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -132,6 +134,7 @@ export class PostgameCoordinator {
     const old=this.snapshot.invitations, cursor=more ? old.data?.nextCursor : undefined;
     if (more && !cursor) return;
     const {actor,valid}=this.start('invitations'); if (!actor) return;
+    const busyGen=++this.invitationsBusyGen;
     this.invitationsBusy=true;
     this.show({invitations:{...old,status:'loading'}});
     try {
@@ -148,6 +151,8 @@ export class PostgameCoordinator {
         : error;
       this.show({invitations:this.failure(mapped,this.snapshot.invitations)});
     } finally {
+      // Only the generation that set busy may clear it or consume a queued refresh.
+      if (this.invitationsBusyGen !== busyGen) return;
       this.invitationsBusy=false;
       if (this.invitationsFollowup) {
         this.invitationsFollowup=false;
