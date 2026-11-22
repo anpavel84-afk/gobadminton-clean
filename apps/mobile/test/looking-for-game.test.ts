@@ -799,32 +799,80 @@ test('address5: same-version server expiry projection active→inactive; guards 
     assert.equal(flip.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
     assert.equal(flip.owner.getSnapshot().profile?.lookingForGame?.version, 1);
 
-    // Premature inactive: future expiresAt at equal version must not pretend success.
-    const futureAt = '2026-11-22T13:00:00.000Z';
-    const prematureAck = activeLooking(1, { areaKey: 'zone', expiresAt: futureAt });
-    const prematureBase: OwnProfile = {
-      ...emptyProfile, version: 3, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+    // Clock skew: server already expired (inactive GET) while local clock still sees expiresAt
+    // as future — adopt verified projection; same key; no new writes/TTL renew.
+    const skewExpiresAt = '2026-11-22T13:00:00.000Z'; // future vs mocked now 12:00
+    const skewAck = activeLooking(1, { areaKey: 'zone', expiresAt: skewExpiresAt });
+    const skewInactive: Looking = { ...skewAck, state: 'inactive' };
+
+    // Root own coordinator: same-actor reauth under clock skew.
+    const skewReauthBase: OwnProfile = {
+      ...emptyProfile, version: 9, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
     };
-    let prematurePhase: 'net' | 'ack' = 'net';
-    let prematureAuth: OwnProfile = { ...prematureBase };
-    const premature = setup(prematureBase, {
+    let skewReauthPhase: 'net' | 'ack' = 'net';
+    let skewReauthAuth: OwnProfile = { ...skewReauthBase };
+    const skewReauth = setup(skewReauthBase, {
       looking: async () => {
-        if (prematurePhase === 'net') throw new ProfileError('network');
-        return prematureAck;
+        if (skewReauthPhase === 'net') throw new ProfileError('network');
+        return skewAck;
       },
-      read: async () => ({ ...prematureAuth }),
+      read: async () => ({ ...skewReauthAuth }),
     });
-    await premature.owner.load();
-    await premature.owner.enableLooking('zone', LOOKING_TTL_1H);
-    assert.equal(premature.owner.getSnapshot().command?.status, 'unknown');
-    prematurePhase = 'ack';
-    prematureAuth = {
-      ...prematureBase,
-      lookingForGame: { ...prematureAck, state: 'inactive' },
+    await skewReauth.owner.load();
+    await skewReauth.owner.enableLooking('zone', LOOKING_TTL_1H);
+    const skewReauthOriginal = skewReauth.lookingSent[0]!.packet;
+    assert.equal(skewReauth.keyCount, 1);
+    skewReauth.owner.setActor({ ...actor, sessionId: 'reauth-skew', generation: 2 });
+    assert.equal(skewReauth.owner.getSnapshot().profile, null);
+    assert.equal(skewReauth.owner.getSnapshot().command?.status, 'unknown');
+    skewReauthPhase = 'ack';
+    skewReauthAuth = { ...skewReauthBase, lookingForGame: skewInactive };
+    await skewReauth.owner.reconcile();
+    assert.strictEqual(skewReauth.lookingSent[1]!.packet, skewReauthOriginal);
+    assert.equal(skewReauth.lookingSent.length, 2);
+    assert.equal(skewReauth.keyCount, 1);
+    assert.equal(skewReauth.owner.getSnapshot().command, undefined);
+    assert.equal(skewReauth.owner.getSnapshot().profile?.lookingForGame?.version, 1);
+    assert.equal(skewReauth.owner.getSnapshot().profile?.lookingForGame?.state, 'inactive');
+    assert.equal(skewReauth.owner.getSnapshot().profile?.lookingForGame?.expiresAt, skewExpiresAt);
+    assert.equal(skewReauth.owner.getSnapshot().profile?.version, 9);
+    assert.doesNotMatch(skewReauth.owner.getSnapshot().notice!, /включено/);
+    assert.match(skewReauth.owner.getSnapshot().notice!, /выключено/);
+
+    // Root own coordinator: retained profile + dirty draft under clock skew; SP version kept.
+    const skewRetainedBase: OwnProfile = {
+      ...emptyProfile, version: 4, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
     };
-    await premature.owner.reconcile();
-    assert.equal(premature.owner.getSnapshot().command?.status, 'unknown');
-    assert.equal(premature.owner.getSnapshot().profile?.lookingForGame, null);
+    let skewRetainedPhase: 'net' | 'ack' = 'net';
+    let skewRetainedAuth: OwnProfile = { ...skewRetainedBase };
+    const skewRetained = setup(skewRetainedBase, {
+      looking: async () => {
+        if (skewRetainedPhase === 'net') throw new ProfileError('network');
+        return skewAck;
+      },
+      read: async () => ({ ...skewRetainedAuth }),
+    });
+    await skewRetained.owner.load();
+    skewRetained.owner.update({ displayName: 'Черновик', bio: 'dirty-skew' });
+    await skewRetained.owner.enableLooking('zone', LOOKING_TTL_1H);
+    const skewRetainedOriginal = skewRetained.lookingSent[0]!.packet;
+    assert.equal(skewRetained.keyCount, 1);
+    assert.equal(skewRetained.owner.getSnapshot().command?.status, 'unknown');
+    skewRetainedPhase = 'ack';
+    skewRetainedAuth = { ...skewRetainedBase, lookingForGame: skewInactive };
+    await skewRetained.owner.reconcile();
+    assert.strictEqual(skewRetained.lookingSent[1]!.packet, skewRetainedOriginal);
+    assert.equal(skewRetained.lookingSent.length, 2);
+    assert.equal(skewRetained.keyCount, 1);
+    assert.equal(skewRetained.owner.getSnapshot().command, undefined);
+    assert.equal(skewRetained.owner.getSnapshot().profile?.lookingForGame?.state, 'inactive');
+    assert.equal(skewRetained.owner.getSnapshot().profile?.lookingForGame?.version, 1);
+    assert.equal(skewRetained.owner.getSnapshot().profile?.lookingForGame?.expiresAt, skewExpiresAt);
+    assert.equal(skewRetained.owner.getSnapshot().profile?.version, 4);
+    assert.equal(skewRetained.owner.getSnapshot().draft.displayName, 'Черновик');
+    assert.equal(skewRetained.owner.getSnapshot().draft.bio, 'dirty-skew');
+    assert.doesNotMatch(skewRetained.owner.getSnapshot().notice!, /включено/);
+    assert.match(skewRetained.owner.getSnapshot().notice!, /выключено/);
 
     // Changed city/area under inactive cloak at equal version → UNKNOWN.
     const mutateBase: OwnProfile = {

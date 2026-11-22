@@ -648,17 +648,17 @@ export class ProfileCoordinator {
   }
   /**
    * Real server expires-on-read may flip active→inactive at the same version without a bump
-   * (identical other canonical fields + past valid expiresAt). Never inactive→active,
-   * premature inactive, or field mutations at equal version.
-   * Clock skew: only adopt when expiresAt is already past on the local clock (conservative);
-   * never invent a write/TTL or new protocol to paper over skew.
+   * (identical other canonical fields + valid expiresAt). Never inactive→active or field
+   * mutations at equal version. Fresh GET is authoritative: do not require the device clock
+   * to agree that expiresAt is already past (skew can leave a still-future local projection).
+   * Never invent a write/TTL or new protocol to paper over skew.
    */
-  private lookingServerExpiryProjection(prior: Looking, nested: Looking, nowMs = Date.now()): boolean {
+  private lookingServerExpiryProjection(prior: Looking, nested: Looking): boolean {
     if (prior.state !== 'active' || nested.state !== 'inactive') return false;
     if (!this.lookingCanonicalFieldsEqual(prior, nested)) return false;
     if (!nested.expiresAt) return false;
     const expires = Date.parse(nested.expiresAt);
-    return !Number.isNaN(expires) && expires <= nowMs;
+    return !Number.isNaN(expires);
   }
   private lookingEqualVersionAllowed(prior: Looking, nested: Looking): boolean {
     return this.lookingCanonicalEqual(nested, prior)
