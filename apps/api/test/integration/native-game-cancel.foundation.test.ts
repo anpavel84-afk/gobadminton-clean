@@ -152,7 +152,8 @@ run("native game cancel · self-migrating isolated database", () => {
     const made = await creation(owner); expect(made.result.statusCode).toBe(201);
     const published = await publish(owner, made.result.json());
     const url = `/v1/games/${published.id}/cancel`, key = randomUUID(), payload = { expectedVersion: published.version, reason: 'Synthetic native cancel' };
-    expect((await app.inject({ method:'POST', url, headers: bearer(outsider), payload })).statusCode).toBe(403);
+    // Outsider on UNLISTED: assertCanManage missing membership → privacy 404 (GAME_NOT_FOUND), not 403.
+    expect((await app.inject({ method:'POST', url, headers: bearer(outsider), payload })).statusCode).toBe(404);
     expect((await app.inject({ method:'POST', url, headers: bearer(owner), payload: { expectedVersion: published.version + 1, reason: 'stale' } })).statusCode).toBe(409);
     const cancelled = await app.inject({ method:'POST', url, headers: bearer(owner, key), payload });
     expect(cancelled.statusCode).toBe(200); expect(cancelled.json()).toMatchObject({ id: published.id, status: 'cancelled' });
