@@ -142,6 +142,15 @@ export class GameManagementCoordinator {
     } while (cursor);
     return { context: 'ready' as const, cityId, profile, preferences, trainer, venues };
   }
+  /**
+   * After an acknowledged trainer create/edit/deactivate: refetch creator profile + ownTrainer
+   * without inventing eligibility. Preserves in-progress create form when possible.
+   */
+  refreshOwnTrainerContext = async () => {
+    const actor = this.state.actor;
+    if (!actor || this.state.context === 'idle' || this.state.context === 'loading') return;
+    await this.loadContext(this.state.cityId, { preserveForm: true });
+  };
   loadContext = async (cityId: string | null, options?: { preserveForm?: boolean; current?: () => boolean }) => {
     const actor = this.state.actor, serial = ++this.contextRead;
     if (!actor) return;

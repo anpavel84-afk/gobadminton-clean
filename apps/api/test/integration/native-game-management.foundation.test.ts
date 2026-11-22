@@ -201,34 +201,60 @@ run("native game management · self-migrating isolated database", () => {
     expect((await app.inject({url:roster,headers:bearer(manager)})).statusCode).toBe(404);
     expect((await app.inject({method:'POST',url:confirm,headers:bearer(manager,key),payload})).statusCode).toBe(403);
   });
-  it('authoritative active own trainer context, no trainer seat, no invented fee; inactive trainer remains ordinary', async () => {
+  it('authoritative active own trainer context, native create/edit/off/reactivate CAS/replay; inactive denies new trainer-led create; old management remains', async () => {
     const owner=await actor();
     const notTrainer=await creation(owner,true,{trainer:true}); expect(notTrainer.result.statusCode).toBe(422);
-    const trainer=await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:browser(owner),payload:{selfDeclared:true,displayName:'Synthetic Trainer'}}); expect([200,201]).toContain(trainer.statusCode);
-    const own=await app.inject({url:'/v1/me/trainer-profile',headers:bearer(owner)}); expect(own.statusCode).toBe(200); expect(own.json().status).toBe('active');
+    const createKey=randomUUID(), createPayload={selfDeclared:true,displayName:'Synthetic Trainer',bio:'About'};
+    const created=await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner,createKey),payload:createPayload});
+    expect([200,201]).toContain(created.statusCode);
+    expect(created.json()).toMatchObject({status:'active',displayName:'Synthetic Trainer',bio:'About',declarationSource:'self_declared'});
+    expect(created.json().version).toBeGreaterThanOrEqual(1);
+    expect((await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner,createKey),payload:createPayload})).json()).toEqual(created.json());
+    const own=await app.inject({url:'/v1/me/trainer-profile',headers:bearer(owner)}); expect(own.statusCode).toBe(200); expect(own.json()).toEqual(created.json());
     expect((await app.inject({url:'/v1/me/trainer-profile',headers:{cookie:owner.cookie}})).json()).toEqual(own.json());
     expect((await app.inject({url:'/v1/me/social-profile',headers:bearer(owner)})).json().trainer).toBe(true);
+    expect((await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner),payload:{selfDeclared:true,displayName:'Stale',expectedVersion:own.json().version+1}})).statusCode).toBe(409);
+    const editKey=randomUUID(), editPayload={selfDeclared:true,displayName:'Edited Trainer',bio:null,expectedVersion:own.json().version};
+    const edited=await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner,editKey),payload:editPayload});
+    expect([200,201]).toContain(edited.statusCode);
+    expect(edited.json()).toMatchObject({status:'active',displayName:'Edited Trainer',bio:null});
+    expect(edited.json().version).toBeGreaterThan(own.json().version);
+    expect((await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner,editKey),payload:editPayload})).json()).toEqual(edited.json());
+    expect((await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner),payload:{selfDeclared:false,displayName:'No'}})).statusCode).toBe(422);
     const made=await creation(owner,true,{trainer:true}); expect(made.result.statusCode).toBe(201);
-    expect(made.result.json()).toMatchObject({activityKind:'trainer_led',confirmedCount:0,availablePlaces:3,trainer:{profileId:trainer.json().id},settlement:{priceStatus:'by_agreement',priceMinor:null,currency:null}});
+    expect(made.result.json()).toMatchObject({activityKind:'trainer_led',confirmedCount:0,availablePlaces:3,trainer:{profileId:created.json().id},settlement:{priceStatus:'by_agreement',priceMinor:null,currency:null}});
     expect((await pool.query('SELECT 1 FROM participations WHERE game_id=$1',[made.result.json().id])).rowCount).toBe(0);
-    expect((await app.inject({method:'POST',url:'/v1/me/trainer-profile/deactivate',headers:browser(owner),payload:{expectedVersion:trainer.json().version}})).statusCode).toBe(200);
+    const offKey=randomUUID(), offPayload={expectedVersion:edited.json().version};
+    const off=await app.inject({method:'POST',url:'/v1/me/trainer-profile/deactivate',headers:bearer(owner,offKey),payload:offPayload});
+    expect(off.statusCode).toBe(200); expect(off.json().status).toBe('inactive');
+    expect((await app.inject({method:'POST',url:'/v1/me/trainer-profile/deactivate',headers:bearer(owner,offKey),payload:offPayload})).json()).toEqual(off.json());
     expect((await app.inject({url:'/v1/me/trainer-profile',headers:bearer(owner)})).json().status).toBe('inactive');
     expect((await app.inject({url:'/v1/me/social-profile',headers:bearer(owner)})).json().trainer).toBe(false);
     const inactive=await creation(owner,true,{trainer:true}); expect(inactive.result.statusCode).toBe(422);
+    expect((await app.inject({url:`/v1/games/${made.result.json().id}`,headers:bearer(owner)})).statusCode).toBe(200);
+    const reactivateKey=randomUUID(), reactivatePayload={selfDeclared:true,displayName:'Back On',bio:'Again',expectedVersion:off.json().version};
+    const on=await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner,reactivateKey),payload:reactivatePayload});
+    expect([200,201]).toContain(on.statusCode); expect(on.json().status).toBe('active');
+    expect((await app.inject({method:'PUT',url:'/v1/me/trainer-profile',headers:bearer(owner,reactivateKey),payload:reactivatePayload})).json()).toEqual(on.json());
+    expect((await app.inject({url:'/v1/me/social-profile',headers:bearer(owner)})).json().trainer).toBe(true);
+    const remade=await creation(owner,true,{trainer:true}); expect(remade.result.statusCode).toBe(201);
   });
-  it('exact eight optins preserve browser Origin/CSRF, invalid/duplicate/mixed/disabled/revoked boundaries and closed neighbors', async () => {
+  it('exact ten LOCAL fixture optins preserve browser Origin/CSRF on every mutation, invalid/duplicate/mixed/disabled/revoked boundaries and closed neighbors', async () => {
     const owner=await actor(), made=await creation(owner); expect(made.result.statusCode).toBe(201); const g=made.result.json();
-    const routes: {method:'GET'|'POST';url:string;payload?:object}[]=[
+    const routes: {method:'GET'|'POST'|'PUT';url:string;payload?:object}[]=[
       {method:'POST',url:'/v1/games',payload:made.payload}, {method:'POST',url:`/v1/games/${g.id}/publish`,payload:{expectedVersion:g.version}},
       {method:'GET',url:`/v1/games/${g.id}/participations`}, {method:'GET',url:'/v1/me/game-preferences'}, {method:'GET',url:'/v1/me/trainer-profile'},
+      {method:'PUT',url:'/v1/me/trainer-profile',payload:{selfDeclared:true,displayName:'Optin Trainer'}},
+      {method:'POST',url:'/v1/me/trainer-profile/deactivate',payload:{expectedVersion:1}},
       ...['confirm','reject','remove'].map(action=>({method:'POST' as const,url:`/v1/participations/${randomUUID()}/${action}`,payload:{expectedVersion:1,reason:'Synthetic reason'}})),
     ];
+    expect(routes).toHaveLength(10);
     for(const route of routes) {
       for(const authorization of ['', 'Basic invalid', 'Bearer invalid', `Bearer ${'x'.repeat(43)}`]) expect((await app.inject({...route,headers:{authorization,'idempotency-key':randomUUID()}})).statusCode).toBe(401);
       expect((await app.inject({...route,headers:{Authorization:[`Bearer ${owner.accessToken}`,`Bearer ${owner.accessToken}`],'idempotency-key':randomUUID()}})).statusCode).toBe(401);
       expect((await app.inject({...route,headers:{...bearer(owner),cookie:owner.cookie}})).statusCode).toBe(403);
       expect((await disabledApp.inject({...route,headers:bearer(owner)})).statusCode).toBe(404);
-      if(route.method==='POST') {
+      if(route.method==='POST' || route.method==='PUT') {
         expect((await app.inject({...route,headers:{origin,cookie:owner.cookie,'idempotency-key':randomUUID()}})).json().code).toBe('CSRF_REQUIRED');
         expect((await app.inject({...route,headers:{...browser(owner),origin:'https://evil.test'}})).json().code).toBe('ORIGIN_REJECTED');
       }

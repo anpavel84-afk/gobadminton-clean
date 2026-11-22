@@ -54,6 +54,58 @@ test('#605 own-profile.tsx identity card copy and cover editor', () => {
   assert.match(source, /coverImageSource/);
 });
 
+test('#522 own-profile trainer card after personal messages', () => {
+  const source = read('../src/components/own-profile.tsx');
+  assert.match(source, /Опциональная информация игрока/);
+  assert.match(source, /Я тренер/);
+  assert.match(source, /Профиль тренера выключен/);
+  assert.match(source, /nativeAuth\.trainer/);
+  assert.ok(source.indexOf('Личные сообщения') < source.indexOf('Тренерский профиль'));
+});
+
+test('#522 P2: trainer card stale exposes reachable authoritative refresh CTA', () => {
+  const source = read('../src/components/own-profile.tsx');
+  const pendingStart = source.indexOf('const pendingTrainerStatus');
+  assert.ok(pendingStart >= 0);
+  const pendingEnd = source.indexOf('</>;', pendingStart);
+  assert.ok(pendingEnd > pendingStart);
+  const pendingFragment = source.slice(pendingStart, pendingEnd);
+  // Recovery CTAs live in pendingTrainerStatus, then inject into the trainer card.
+  assert.match(pendingFragment, /trainerState\.status === 'stale'/);
+  assert.match(pendingFragment, /refreshAuthoritative/);
+  assert.match(pendingFragment, /Обновить данные/);
+  assert.match(pendingFragment, /command\?\.status === 'unknown'/);
+  assert.match(pendingFragment, /reconcile/);
+  const trainerCard = source.slice(source.indexOf('accessibilityLabel="Тренерский профиль"'));
+  assert.match(trainerCard, /\{pendingTrainerStatus\}/);
+  // Loading/error/UNKNOWN recovery controls remain reachable on the card.
+  assert.match(trainerCard, /status === 'error'/);
+  assert.match(trainerCard, /Повторить/);
+});
+
+test('#522 P2 R2: same-actor reauth profile-null keeps trainer pending recovery reachable once', () => {
+  const own = read('../src/components/own-profile.tsx');
+  // Same Looking/contact pattern: pending retry outside profile-only branch; no duplicate title.
+  assert.match(own, /!profile && policyPending && pendingPolicyStatus/);
+  assert.match(own, /!profile && lookingPending && pendingLookingStatus/);
+  assert.match(own, /!profile && trainerPending && pendingTrainerStatus/);
+  assert.match(own, /profile && player[\s\S]*pendingTrainerStatus/);
+  assert.equal((own.match(/Повторить прежнее сохранение/g) || []).length, 1);
+  assert.equal((own.match(/Повторить прежнее отключение/g) || []).length, 1);
+  // pendingTrainerStatus owns reconcile; outside branch is composition only.
+  const pendingStart = own.indexOf('const pendingTrainerStatus');
+  const pendingEnd = own.indexOf('</>;', pendingStart);
+  const pendingFragment = own.slice(pendingStart, pendingEnd);
+  assert.match(pendingFragment, /trainerOwner\.reconcile\(\)/);
+  assert.match(pendingFragment, /command\?\.status === 'unknown'/);
+  // Outside-branch render precedes the profile card; inside-card injection remains for profile-present.
+  const outsideIdx = own.indexOf('!profile && trainerPending && pendingTrainerStatus');
+  const cardIdx = own.indexOf('accessibilityLabel="Тренерский профиль"');
+  assert.ok(outsideIdx >= 0 && cardIdx > outsideIdx);
+  const insideCard = own.slice(cardIdx);
+  assert.match(insideCard, /\{pendingTrainerStatus\}/);
+});
+
 test('#605 player-card.tsx exports PlayerCover; PlayerProfile uses shared hero', () => {
   const source = read('../src/components/player-card.tsx');
   assert.match(source, /export function PlayerCover\(/);
