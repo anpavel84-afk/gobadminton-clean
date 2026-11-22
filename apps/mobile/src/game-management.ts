@@ -194,7 +194,10 @@ export class GameManagementCoordinator {
     catch { this.show({ notice: 'Проверьте площадку, дату, время, длительность, места, уровни и публичный контакт.' }); }
   };
   newCreation = async (cityId: string | null) => {
-    if (this.state.created?.status !== 'published' || this.locked()) return;
+    // Explicit CTA only: published or cancelled completed creation may start fresh; draft/in-flight stay locked.
+    // pending UNKNOWN (locked) never resets — reconcile owns that packet.
+    const done = this.state.created?.status;
+    if ((done !== 'published' && done !== 'cancelled') || this.locked()) return;
     this.resumeKnown = null; this.contactEdited = false;
     this.show({ form: emptyCreationForm(), preview: null, created: null, creationReference: null, command: undefined, notice: undefined });
     await this.loadContext(cityId);

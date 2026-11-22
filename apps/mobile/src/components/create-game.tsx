@@ -131,12 +131,12 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       <TextButton title="Обновить проверку профиля" onPress={reloadContext} />
       {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
     </> : state.created ? <>
-      <Label style={styles.subtitle}>{state.created.status === 'published' ? 'Игра опубликована' : 'Черновик создан'}</Label>
+      <Label style={styles.subtitle}>{state.created.status === 'published' ? 'Игра опубликована' : state.created.status === 'cancelled' ? 'Игра отменена' : 'Черновик создан'}</Label>
       <ManagedTerms game={state.created} />
       <Label>{state.created.activityKind === 'regular' ? 'Создатель обычной игры занимает место по правилам сервиса.' : 'Тренер не занимает место участника автоматически.'}</Label>
       <ManagementCommand />
       {state.created.status === 'draft' && !blocked && <PrimaryButton title="Опубликовать черновик" onPress={() => void owner.publishDraft(state.created!.id)} />}
-      {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => void owner.newCreation(contextCity)} />}
+      {(state.created.status === 'published' || state.created.status === 'cancelled') && !blocked && <TextButton title="Создать ещё игру" onPress={() => void owner.newCreation(contextCity)} />}
       <TextButton title="Открыть сводку" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.created!.id } })} />
     </> : state.creationReference ? <>
       <Label>Игра уже создана. Сначала проверьте её сводку; повторное создание недоступно.</Label>

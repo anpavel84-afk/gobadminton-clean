@@ -148,6 +148,80 @@ test('delegated noncreator manager uses current roster version and rights, confl
   assert.equal(s.owner.getSnapshot().details[g.id]?.status,'denied');
   await s.owner.decide(g.id,part.id,'confirm',''); assert.equal(s.sent.length,1);
 });
+test('create→publish→cancel then explicit newCreation yields usable fresh form; pending UNKNOWN cancel prevents reset', async () => {
+  const published = { ...g, status: 'published' as const, version: 8 };
+  const cancelled = { ...published, status: 'cancelled' as const, version: 9 };
+  let current: Game = g;
+  const s = setup({
+    managed: async () => ({ items: [{ ...current, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => current,
+    send: async p => {
+      if (p.kind === 'create') { current = g; return g; }
+      if (p.kind === 'publish') { current = published; return published; }
+      if (p.kind === 'cancel') { current = cancelled; return cancelled; }
+      return { ...part, version: 4, status: 'confirmed' };
+    },
+  });
+  await preview(s.owner); await s.owner.publishPreview();
+  assert.equal(s.owner.getSnapshot().created?.status, 'published');
+  assert.deepEqual(s.owner.getSnapshot().creationReference, { id: g.id, version: 8 });
+  await s.owner.cancel(g.id, 'Отмена после публикации');
+  assert.equal(s.owner.getSnapshot().created?.status, 'cancelled');
+  assert.deepEqual(s.owner.getSnapshot().creationReference, { id: g.id, version: 9 });
+  // Cancelled alone does not auto-reset; creationReference keeps form/writes locked until explicit CTA.
+  const lockedForm = s.owner.getSnapshot().form; const lockedPreview = s.owner.getSnapshot().preview;
+  s.owner.update({ title: 'must stay locked' }); assert.strictEqual(s.owner.getSnapshot().form, lockedForm);
+  s.owner.preview(); assert.strictEqual(s.owner.getSnapshot().preview, lockedPreview);
+  await s.owner.publishPreview(); assert.equal(s.sent.filter(p => p.kind === 'create').length, 1);
+
+  await s.owner.newCreation('city-1');
+  const fresh = s.owner.getSnapshot();
+  assert.equal(fresh.created, null); assert.equal(fresh.creationReference, null);
+  assert.equal(fresh.command, undefined); assert.equal(fresh.preview, null);
+  assert.equal(fresh.context, 'ready'); assert.equal(fresh.form.contact, '');
+  assert.equal(fresh.form.venueId, ''); assert.equal(fresh.notice, undefined);
+  s.owner.update(form); s.owner.preview();
+  assert.ok(s.owner.getSnapshot().preview);
+  assert.equal(s.owner.getSnapshot().preview?.venueId, venue.id);
+  assert.equal(s.sent.filter(p => p.kind === 'create').length, 1);
+
+  // Pending UNKNOWN cancel must not be discarded by newCreation.
+  let recover = false; let unknownCurrent: Game = g;
+  const unknown = setup({
+    managed: async () => ({ items: [{ ...unknownCurrent, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => unknownCurrent,
+    send: async p => {
+      if (p.kind === 'create') { unknownCurrent = g; return g; }
+      if (p.kind === 'publish') { unknownCurrent = published; return published; }
+      if (!recover) throw new ParticipationError('network');
+      unknownCurrent = cancelled; return cancelled;
+    },
+  });
+  await preview(unknown.owner); await unknown.owner.publishPreview();
+  await unknown.owner.cancel(g.id, 'Original UNKNOWN cancel');
+  const packet = unknown.sent.find(p => p.kind === 'cancel')!;
+  assert.equal(unknown.owner.getSnapshot().command?.status, 'unknown');
+  const before = unknown.owner.getSnapshot();
+  await unknown.owner.newCreation('city-1');
+  assert.strictEqual(unknown.owner.getSnapshot().command?.packet, before.command?.packet);
+  assert.equal(unknown.owner.getSnapshot().command?.status, 'unknown');
+  assert.deepEqual(unknown.owner.getSnapshot().creationReference, before.creationReference);
+  assert.equal(unknown.sent.filter(p => p.kind === 'cancel').length, 1);
+  recover = true; await unknown.owner.reconcile();
+  assert.equal(unknown.sent.at(-1)?.key, packet.key);
+  assert.strictEqual(unknown.sent.at(-1)?.body, packet.body);
+  assert.equal(unknown.owner.getSnapshot().created?.status, 'cancelled');
+  await unknown.owner.newCreation('city-1');
+  assert.equal(unknown.owner.getSnapshot().created, null);
+  assert.equal(unknown.owner.getSnapshot().creationReference, null);
+  unknown.owner.update(form); unknown.owner.preview();
+  assert.ok(unknown.owner.getSnapshot().preview);
+
+  const ui = readFileSync(new URL('../src/components/create-game.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /status === 'cancelled' \? 'Игра отменена'/);
+  assert.match(ui, /status === 'published' \|\| state\.created\.status === 'cancelled'/);
+});
+
 test('explicit cancel succeeds, rejects invalid status/version, retains UNKNOWN packet and survives only same-packet reconcile', async () => {
   const published = { ...g, status: 'published' as const, version: 8 };
   const cancelled = { ...published, status: 'cancelled' as const, version: 9 };
