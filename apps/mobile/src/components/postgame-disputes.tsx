@@ -1,10 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
-import { Modal, Platform, Switch, TextInput, View } from 'react-native';
+import { useEffect, useSyncExternalStore } from 'react';
+import { Platform, Switch, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
-import { attendanceLabel, mayAcknowledgeCurrent, normalizeFormReason } from '../postgame.ts';
+import { attendanceHistoryLanes, attendanceLabel, mayAcknowledgeCurrent, normalizeFormReason } from '../postgame.ts';
 import type { AttendanceDispute, AttendanceValue, Results } from '../postgame.ts';
-import { Choice, ReviewButton } from './postgame.tsx';
-import { iosModalOrientations, Label, Loading, TextButton, Page, styles } from './ui.tsx';
+import { AttendanceHistoryPanel, Choice, ReviewButton } from './postgame.tsx';
+import { Label, Loading, TextButton, styles } from './ui.tsx';
 
 function useOwner() {
   const owner = useAuth().postgame;
@@ -124,35 +124,6 @@ function DisputeDetailPanel({ detail, writes, displayName }: { detail: Attendanc
   </View>;
 }
 
-function HistoryPanel({ gameId, contextId }: { gameId: string; contextId: string }) {
-  const { owner, s } = useOwner();
-  const key = `${gameId}:${contextId}`;
-  const source = s.histories[key];
-  const [open, setOpen] = useState(false);
-  return <>
-    <TextButton title="История изменений" onPress={() => { setOpen(true); void owner.loadHistory(gameId, contextId, 20); }} />
-    <Modal visible={open} animationType="none" presentationStyle="fullScreen" onRequestClose={() => setOpen(false)} supportedOrientations={iosModalOrientations}>
-      <Page keyboard header={<TextButton title="Закрыть" onPress={() => setOpen(false)} />}>
-        <Label accessibilityRole="header" style={{ fontWeight: '700' }}>История изменений</Label>
-        {(source?.status === 'idle' || source?.status === 'loading') ? <Loading title="Загружаем историю…" /> : null}
-        {source?.status === 'error' ? <><Label>Не удалось загрузить историю.</Label><TextButton title="Повторить" onPress={() => void owner.loadHistory(gameId, contextId, 20)} /></> : null}
-        {source?.status === 'unavailable' ? <Label>История сейчас недоступна.</Label> : null}
-        {source?.status === 'ready' ? (source.data?.items.length
-          ? source.data.items.map(item => {
-            const sourceLabel = item.source === 'self_attested' ? 'Сами отметили'
-              : item.source === 'manager_explicit' ? 'Отметил организатор'
-              : item.source === 'case_reviewer' ? 'Решение по обращению'
-              : 'Источник неизвестен';
-            return <View key={item.version} style={{ gap: 4 }}>
-              <Label>v{item.version}: {attendanceLabel(item.after.value)}{item.after.late ? ' · опоздание' : ''} · {item.actorDisplay} · {sourceLabel} · {new Date(item.recordedAt).toLocaleString('ru')}</Label>
-            </View>;
-          })
-          : <Label>Пока нет записей.</Label>) : null}
-      </Page>
-    </Modal>
-  </>;
-}
-
 export function ClarificationSection({ data }: { data: Results }) {
   const { owner, s } = useOwner();
   const attendance = data.attendance;
@@ -168,6 +139,12 @@ export function ClarificationSection({ data }: { data: Results }) {
   const detailSource = selection ? s.disputes[selection.disputeId] : undefined;
   const writes = attendance?.writesEnabled ?? false;
   const onlyOpen = opens.length === 1 ? opens[0] : null;
+  const historyLanes = attendanceHistoryLanes(data, selection);
+  // Own card already exposes history; clarification lane covers manager/other selected contexts.
+  const clarificationHistory = historyLanes.clarification
+    && historyLanes.own?.contextId !== historyLanes.clarification.contextId
+    ? historyLanes.clarification
+    : null;
 
   // Hooks must run before any conditional return (installed gate).
   useEffect(() => {
@@ -199,7 +176,9 @@ export function ClarificationSection({ data }: { data: Results }) {
       {detailSource?.status === 'ready' && detailSource.data
         ? <DisputeDetailPanel detail={detailSource.data} writes={writes} displayName={selectedRow.displayName} />
         : null}
-      <HistoryPanel gameId={data.gameId} contextId={selection.contextId} />
+      {clarificationHistory
+        ? <AttendanceHistoryPanel gameId={clarificationHistory.gameId} contextId={clarificationHistory.contextId} />
+        : null}
     </> : null}
     {!selection && opens.length === 0
       ? <Label>Нет открытого уточнения по вашей отметке.</Label>

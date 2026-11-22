@@ -287,6 +287,46 @@ export function mayAcknowledgeCurrent(dispute: AttendanceDispute) {
     && dispute.currentAssertion.value !== 'unknown' && dispute.currentAssertion.version > 0;
 }
 export function needsAttention(row: OwnResult) { return !!row.notice && !row.notice.acknowledgedAt && row.notice.source !== 'self_attested' && row.notice.attendanceVersion === row.attendance.version; }
+/**
+ * Resolving-ACK consent must mirror the frozen body against authoritative dispute detail
+ * (attendanceVersion + resolvingDisputeId + expectedDisputeVersion + game/context).
+ * Stale roster rows are never a substitute; mismatch/unavailable → null (honest refresh, no confirm).
+ */
+export function resolvingAckAssertion(
+  intent: Extract<Intent, { kind: 'ack' }>,
+  detail: AttendanceDispute | null | undefined,
+): { value: AttendanceValue; late: boolean; version: number; disputeId: string; disputeVersion: number } | null {
+  const disputeId = intent.body.resolvingDisputeId;
+  const expectedDisputeVersion = intent.body.expectedDisputeVersion;
+  if (disputeId === undefined || expectedDisputeVersion === undefined) return null;
+  if (!detail) return null;
+  if (detail.id !== disputeId || detail.gameId !== intent.gameId || detail.contextId !== intent.contextId) return null;
+  if (detail.version !== expectedDisputeVersion) return null;
+  if (detail.currentAssertion.version !== intent.body.attendanceVersion) return null;
+  return {
+    value: detail.currentAssertion.value,
+    late: detail.currentAssertion.late,
+    version: detail.currentAssertion.version,
+    disputeId: detail.id,
+    disputeVersion: detail.version,
+  };
+}
+/**
+ * Attendance history entry points: own card is independent of open/withdrawn/resolved disputes
+ * (accepted WEB parity). Clarification remains an extra lane for a selected open dispute.
+ */
+export function attendanceHistoryLanes(
+  results: Results,
+  openSelection: { gameId: string; contextId: string } | null,
+): { own: { gameId: string; contextId: string } | null; clarification: { gameId: string; contextId: string } | null } {
+  const my = results.attendance?.installed ? results.attendance.myAttendance : null;
+  return {
+    own: my ? { gameId: results.gameId, contextId: my.contextId } : null,
+    clarification: openSelection && openSelection.gameId === results.gameId
+      ? { gameId: openSelection.gameId, contextId: openSelection.contextId }
+      : null,
+  };
+}
 export function validateReceipt(raw: unknown, p: Packet): Receipt {
   if (p.kind === 'outcome') { const r = parseResults(raw); if (r.gameId !== p.gameId || r.outcome.version !== p.body.expectedVersion + 1 || r.outcome.value !== p.body.outcome || r.outcome.reason !== (p.body.reason ?? null)) invalid(); return r; }
   if (p.kind === 'later') { const r = parseReminders(raw); const target = r.items.find(r => r.id === p.reminderId); if (target) invalid(); return r; }

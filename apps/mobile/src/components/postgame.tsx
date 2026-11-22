@@ -3,7 +3,7 @@ import type { ComponentRef, PropsWithChildren, RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Platform, Pressable, Text, View, TextInput, Switch } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
-import { attendanceLabel, mayAcknowledge, normalizeFormReason } from '../postgame.ts';
+import { attendanceLabel, mayAcknowledge, normalizeFormReason, resolvingAckAssertion } from '../postgame.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
@@ -77,6 +77,13 @@ export function CommandReview({gameId}: {gameId?:string}) {
   const lockedDetail=disputeCommand && lockedDisputeSource?.status === 'ready' && lockedDisputeSource.data?.id === disputeCommand.disputeId
     ? lockedDisputeSource.data : undefined;
   const lockedPerson=lockedDetail ? person(lockedDetail.contextId) : undefined;
+  // Resolving ACK consent locks to frozen body + matching dispute detail — never the live roster row.
+  const resolvingAck=selected?.kind === 'ack' && selected.body.resolvingDisputeId !== undefined;
+  const resolvingSource=resolvingAck && selected.kind === 'ack' && readable ? s.disputes[selected.body.resolvingDisputeId!] : undefined;
+  const resolvingDetail=resolvingSource?.status === 'ready' && selected?.kind === 'ack' && resolvingSource.data?.id === selected.body.resolvingDisputeId
+    ? resolvingSource.data : undefined;
+  const resolvingMatch=selected?.kind === 'ack' && resolvingAck ? resolvingAckAssertion(selected, resolvingDetail) : null;
+  const canConfirm=!resolvingAck || !!resolvingMatch;
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
@@ -84,7 +91,7 @@ export function CommandReview({gameId}: {gameId?:string}) {
       onShow={()=>{const node=findNodeHandle(heading.current);if(node) AccessibilityInfo.setAccessibilityFocus(node);}}>
       <Page keyboard header={<View style={{gap:8}}>
         <TextButton title={review ? 'Отмена' : 'Закрыть'} onPress={close} />
-        {review && <PrimaryButton title="Подтвердить" onPress={()=>void owner.confirm()} />}
+        {review && <PrimaryButton title="Подтвердить" disabled={!canConfirm} onPress={()=>void owner.confirm()} />}
         {command?.status === 'sending' && <Label accessibilityLiveRegion="polite">Сохраняем…</Label>}
         {command?.status === 'unknown' && <TextButton title="Проверить исходное действие" onPress={()=>void owner.reconcile(command.packet.gameId)} />}
       </View>}>
@@ -98,9 +105,12 @@ export function CommandReview({gameId}: {gameId?:string}) {
             {selected.kind === 'attendance' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label><Label>{attendanceLabel(selected.body.value)}{selected.body.late ? ' · Опоздал' : ''}</Label>{selected.body.correctionReason && <Label>{selected.body.correctionReason}</Label>}</>}
             {selected.kind === 'bulk' && <><Label>Отметить «Пришёл» только выбранным участникам · {selected.body.items.length}</Label>{selected.body.items.map((item,index)=><Label key={item.contextId}>{person(item.contextId)?.displayName || `Выбранный участник ${index+1}`}</Label>)}</>}
             {selected.kind === 'ack' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label>
-              <Label>{selected.body.resolvingDisputeId
-                ? `Подтвердить отметку и закрыть уточнение · ${attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}`
-                : `Я согласен с отметкой посещения · ${attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}`}</Label></>}
+              {selected.body.resolvingDisputeId
+                ? resolvingMatch
+                  ? <Label>{`Подтвердить отметку и закрыть уточнение · ${attendanceLabel(resolvingMatch.value)}${resolvingMatch.late ? ' · Опоздал' : ''} · версия ${resolvingMatch.version}`}</Label>
+                  : <><Label>Текущая отметка для подтверждения недоступна. Обновите уточнение.</Label>
+                    <TextButton title="Обновить уточнение" onPress={()=>void owner.loadDispute(selected.body.resolvingDisputeId!)} /></>
+                : <Label>{`Я согласен с отметкой посещения · ${attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}`}</Label>}</>}
             {selected.kind === 'dispute' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label><Label>{selected.body.attendanceVersion === 0 ? 'Отметки пока нет' : `Версия ${selected.body.attendanceVersion}`}</Label><Label>{selected.body.explanation}</Label></>}
             {selected.kind === 'withdraw' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Отозвать возражение · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>Отметка сохранится; согласие участника с ней не записывается.</Label>{selected.body.reason && <Label>{selected.body.reason}</Label>}</>}
             {selected.kind === 'respond' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Ответить / исправить · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label>{selected.body.correction && <Label>{attendanceLabel(selected.body.correction.value)}{selected.body.correction.late ? ' · Опоздание' : ''} · {selected.body.correction.correctionReason}</Label>}<Label>Уточнение останется открытым</Label></>}
@@ -159,6 +169,7 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
     )}
     {own && disputed && dispute && <ReviewButton title="К уточнению" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
     {!own && disputed && dispute && <ReviewButton title="Открыть уточнение" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
+    {own && <AttendanceHistoryPanel gameId={gameId} contextId={row.contextId} />}
     <Modal visible={disputeOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={()=>setDisputeOpen(false)} supportedOrientations={iosModalOrientations}>
       <Page keyboard header={<View style={{gap:8}}>
         <TextButton title="Отмена" onPress={()=>setDisputeOpen(false)} />
@@ -179,6 +190,36 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
       </Page>
     </Modal>
   </View>;
+}
+/** Typed attendance-history lane — reachable from own card independently of open disputes. */
+export function AttendanceHistoryPanel({ gameId, contextId }: { gameId: string; contextId: string }) {
+  const owner = useAuth().postgame;
+  const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const key = `${gameId}:${contextId}`;
+  const source = s.histories[key];
+  const [open, setOpen] = useState(false);
+  return <>
+    <TextButton title="История изменений" onPress={() => { setOpen(true); void owner.loadHistory(gameId, contextId, 20); }} />
+    <Modal visible={open} animationType="none" presentationStyle="fullScreen" onRequestClose={() => setOpen(false)} supportedOrientations={iosModalOrientations}>
+      <Page keyboard header={<TextButton title="Закрыть" onPress={() => setOpen(false)} />}>
+        <Label accessibilityRole="header" style={{ fontWeight: '700' }}>История изменений</Label>
+        {(source?.status === 'idle' || source?.status === 'loading') ? <Loading title="Загружаем историю…" /> : null}
+        {source?.status === 'error' ? <><Label>Не удалось загрузить историю.</Label><TextButton title="Повторить" onPress={() => void owner.loadHistory(gameId, contextId, 20)} /></> : null}
+        {source?.status === 'unavailable' ? <Label>История сейчас недоступна.</Label> : null}
+        {source?.status === 'ready' ? (source.data?.items.length
+          ? source.data.items.map(item => {
+            const sourceLabel = item.source === 'self_attested' ? 'Сами отметили'
+              : item.source === 'manager_explicit' ? 'Отметил организатор'
+              : item.source === 'case_reviewer' ? 'Решение по обращению'
+              : 'Источник неизвестен';
+            return <View key={item.version} style={{ gap: 4 }}>
+              <Label>v{item.version}: {attendanceLabel(item.after.value)}{item.after.late ? ' · опоздание' : ''} · {item.actorDisplay} · {sourceLabel} · {new Date(item.recordedAt).toLocaleString('ru')}</Label>
+            </View>;
+          })
+          : <Label>Пока нет записей.</Label>) : null}
+      </Page>
+    </Modal>
+  </>;
 }
 export function Roster({data}: {data:Results}) {
   const owner=useAuth().postgame, [selected,setSelected]=useState<string[]>([]), a=data.attendance;

@@ -129,13 +129,7 @@ export class PostgameCoordinator {
   }
   private clearIncompatibleDrafts(gameId: string, results?: Results) {
     const attendance = results?.attendance;
-    const known = new Set<string>();
-    if (attendance?.myAttendance) known.add(draftKey(gameId, attendance.myAttendance.contextId, attendance.myAttendance.dispute?.id));
-    if (attendance?.myAttendance) known.add(draftKey(gameId, attendance.myAttendance.contextId));
-    for (const row of attendance?.roster ?? []) {
-      known.add(draftKey(gameId, row.contextId, row.dispute?.id));
-      known.add(draftKey(gameId, row.contextId));
-    }
+    const rows = [...(attendance?.roster ?? []),...(attendance?.myAttendance ? [attendance.myAttendance] : [])];
     const drafts = {...this.snapshot.drafts};
     let changed = false;
     for (const key of Object.keys(drafts)) {
@@ -143,8 +137,10 @@ export class PostgameCoordinator {
       const parts = key.split(':');
       const contextId = parts[1];
       const disputePart = parts.slice(2).join(':');
-      const row = [...(attendance?.roster ?? []),...(attendance?.myAttendance ? [attendance.myAttendance] : [])].find(r => r.contextId === contextId);
-      if (!row || (disputePart !== 'create' && row.dispute?.id !== disputePart && !this.snapshot.disputes[disputePart]?.data)) {
+      const row = rows.find(r => r.contextId === contextId);
+      // Roster pagination absence is not definitive removal — keep compatible later-page drafts.
+      if (!row) continue;
+      if (disputePart !== 'create' && row.dispute?.id !== disputePart && !this.snapshot.disputes[disputePart]?.data) {
         delete drafts[key]; changed = true;
       }
     }

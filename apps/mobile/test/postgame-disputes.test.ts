@@ -5,6 +5,7 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseAttendance, parseAttendanceDispute, parseAttendanceHistory, parseResolvedDispute,
   mayAcknowledge, mayAcknowledgeCurrent, wire, validateReceipt,
+  resolvingAckAssertion, attendanceHistoryLanes, attendanceLabel,
 } from '../src/postgame.ts';
 import type { AckReceipt, Attendance, AttendanceDispute, Intent, Packet, Receipt, Results, ResultsQuery } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
@@ -291,4 +292,166 @@ test('ordinary ACK still rejects open dispute and self-authored cannot use mayAc
   });
   assert.equal(mayAcknowledgeCurrent(self), false);
   assert.equal(mayAcknowledgeCurrent(openDispute), true);
+});
+
+test('resolving ACK review selector uses matching detail not stale roster; later mismatch cannot confirm', async () => {
+  const absentV1: Attendance = {
+    ...marked, value: 'absent', version: 1,
+    dispute: { id: 'dispute-a', status: 'open', challengedVersion: 1, version: 1 },
+  };
+  const detailPresentV2: AttendanceDispute = {
+    ...openDispute, version: 2,
+    currentAssertion: { value: 'present', version: 2, late: false, assertion: marked.assertion },
+    history: [...openDispute.history, { version: 2, action: 'manager_corrected', explanation: 'исправил', recordedAt: date }],
+    allowedActions: { canWithdraw: false, canRespond: false, canRequestHelp: false, canAcknowledgeCurrent: true },
+  };
+  const frozen: Intent = {
+    kind: 'ack', gameId: game.id, contextId: row.contextId,
+    body: { attendanceVersion: 2, resolvingDisputeId: 'dispute-a', expectedDisputeVersion: 2 },
+  };
+  // Stale roster says absent v1; authoritative matching detail says present v2 — consent must follow detail.
+  assert.equal(absentV1.value, 'absent');
+  assert.equal(attendanceLabel(absentV1.value), 'Не пришёл');
+  const match = resolvingAckAssertion(frozen, detailPresentV2);
+  assert.deepEqual(match, { value: 'present', late: false, version: 2, disputeId: 'dispute-a', disputeVersion: 2 });
+  assert.equal(attendanceLabel(match!.value), 'Пришёл');
+  assert.equal(resolvingAckAssertion(frozen, openDispute), null);
+  assert.equal(resolvingAckAssertion(frozen, undefined), null);
+  assert.equal(resolvingAckAssertion({
+    kind: 'ack', gameId: game.id, contextId: row.contextId, body: { attendanceVersion: 1 },
+  }, detailPresentV2), null);
+
+  const s = setup({
+    ...detailPresentV2,
+    allowedActions: detailPresentV2.allowedActions,
+    currentAssertion: detailPresentV2.currentAssertion,
+    history: detailPresentV2.history,
+  });
+  s.port.results = async (_a: Actor, id: string): Promise<Results> => ({
+    ...structuredClone(result), gameId: id,
+    attendance: {
+      ...result.attendance!,
+      myAttendance: absentV1,
+      roster: [absentV1],
+      rosterNextCursor: null,
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  s.coordinator.selectDispute({ gameId: game.id, contextId: row.contextId, disputeId: 'dispute-a' });
+  await new Promise<void>(r => setImmediate(r));
+  assert.equal(s.coordinator.getSnapshot().disputes['dispute-a']?.data?.currentAssertion.value, 'present');
+  s.coordinator.review(frozen);
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'ack');
+  assert.deepEqual(
+    resolvingAckAssertion(s.coordinator.getSnapshot().review as Extract<Intent, { kind: 'ack' }>, s.coordinator.getSnapshot().disputes['dispute-a']!.data),
+    match,
+  );
+
+  // Detail advances after freeze — projection no longer matches; confirm must not send wrong fact.
+  const detailV3 = {
+    ...detailPresentV2, version: 3,
+    currentAssertion: { value: 'absent' as const, version: 3, late: false, assertion: marked.assertion },
+  };
+  s.port.dispute = async () => structuredClone(detailV3);
+  await s.coordinator.loadDispute('dispute-a');
+  assert.equal(resolvingAckAssertion(frozen, s.coordinator.getSnapshot().disputes['dispute-a']!.data), null);
+  s.port.send = async p => { s.sent.push(p); return marked; };
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.coordinator.getSnapshot().review, null);
+});
+
+test('manager page-two draft survives first-page refresh then reload', async () => {
+  const page1 = { ...marked, contextId: 'context-page1', displayName: 'Участник 1', dispute: null,
+    allowedActions: { ...marked.allowedActions, canRespondDispute: true } };
+  const page2 = {
+    ...marked, contextId: 'context-b', displayName: 'Участник 2',
+    dispute: { id: 'dispute-b', status: 'open' as const, challengedVersion: 1, version: 1 },
+    allowedActions: { ...marked.allowedActions, canRespondDispute: true, canSetAttendance: false },
+  };
+  const detailB: AttendanceDispute = {
+    ...openDispute, id: 'dispute-b', contextId: 'context-b',
+    allowedActions: { canWithdraw: false, canRespond: true, canRequestHelp: false, canAcknowledgeCurrent: false },
+  };
+  const sent: Packet[] = [];
+  const port = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async (_a: Actor, id: string, query?: ResultsQuery): Promise<Results> => ({
+      ...structuredClone(result), gameId: id,
+      attendance: {
+        ...result.attendance!,
+        // Manager projection: no own row hiding the page-two gap.
+        myAttendance: null,
+        roster: query?.rosterCursor ? [page2] : [page1],
+        rosterNextCursor: query?.rosterCursor ? null : 'roster-2',
+        summary: { rosterCount: 2, marked: 2, unknown: 0, underClarification: 1, agreed: 0 },
+        allowedActions: { canRecordAttendance: true, canBulkPresent: false },
+      },
+    }),
+    dispute: async () => structuredClone(detailB),
+    history: async () => ({ items: [] }),
+    send: async (p: Packet): Promise<unknown> => { sent.push(p); throw new PostgameError('network'); },
+  };
+  const coordinator = new PostgameCoordinator(port, () => `key-${sent.length}`);
+  coordinator.setActor(actor);
+  await coordinator.loadResults(game.id);
+  await coordinator.loadResults(game.id, { rosterCursor: 'roster-2', rosterLimit: 50 }, 'roster');
+  assert.equal(coordinator.getSnapshot().games[game.id]?.data?.attendance?.roster?.length, 2);
+  coordinator.selectDispute({ gameId: game.id, contextId: 'context-b', disputeId: 'dispute-b' });
+  await new Promise<void>(r => setImmediate(r));
+  coordinator.setDraft(game.id, 'context-b', 'dispute-b', { respondExplanation: 'ответ со второй страницы' });
+  assert.equal(coordinator.getSnapshot().drafts[`${game.id}:context-b:dispute-b`]?.respondExplanation, 'ответ со второй страницы');
+
+  // First-page refresh omits page-two row — draft and selection must survive.
+  await coordinator.loadResults(game.id);
+  assert.equal(coordinator.getSnapshot().games[game.id]?.data?.attendance?.roster?.map(r => r.contextId).join(','), 'context-page1');
+  assert.equal(coordinator.getSnapshot().drafts[`${game.id}:context-b:dispute-b`]?.respondExplanation, 'ответ со второй страницы');
+  assert.equal(coordinator.getSnapshot().selection?.disputeId, 'dispute-b');
+
+  await coordinator.loadResults(game.id, { rosterCursor: 'roster-2', rosterLimit: 50 }, 'roster');
+  assert.equal(coordinator.getSnapshot().games[game.id]?.data?.attendance?.roster?.length, 2);
+  assert.equal(coordinator.getSnapshot().drafts[`${game.id}:context-b:dispute-b`]?.respondExplanation, 'ответ со второй страницы');
+  assert.equal(coordinator.getSnapshot().selection?.disputeId, 'dispute-b');
+});
+
+test('own attendance history lane stays reachable after closed dispute; core history read works', async () => {
+  const closedOwn: Attendance = {
+    ...marked,
+    dispute: { id: 'dispute-a', status: 'withdrawn', challengedVersion: 1, version: 2 },
+  };
+  const closedResults: Results = {
+    ...result,
+    attendance: {
+      ...result.attendance!,
+      myAttendance: closedOwn,
+      roster: null,
+      rosterNextCursor: null,
+      summary: { rosterCount: 1, marked: 1, unknown: 0, underClarification: 0, agreed: 0 },
+    },
+  };
+  const lanes = attendanceHistoryLanes(closedResults, null);
+  assert.deepEqual(lanes.own, { gameId: game.id, contextId: row.contextId });
+  assert.equal(lanes.clarification, null);
+  // Open selection on another context still keeps own lane (composition reachability, not string mirror).
+  const withOther = attendanceHistoryLanes(closedResults, { gameId: game.id, contextId: 'context-b' });
+  assert.deepEqual(withOther.own, { gameId: game.id, contextId: row.contextId });
+  assert.deepEqual(withOther.clarification, { gameId: game.id, contextId: 'context-b' });
+
+  const s = setup();
+  s.port.results = async (_a: Actor, id: string): Promise<Results> => ({ ...structuredClone(closedResults), gameId: id });
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().games[game.id]?.data?.attendance?.myAttendance?.dispute?.status, 'withdrawn');
+  s.port.history = async () => ({
+    items: [{
+      version: 1, before: null, after: { value: 'present' as const, late: false },
+      reason: null, source: 'manager_explicit' as const, recordedAt: date, actorDisplay: 'Организатор',
+    }],
+  });
+  await s.coordinator.loadHistory(game.id, row.contextId, 20);
+  const history = s.coordinator.getSnapshot().histories[`${game.id}:${row.contextId}`];
+  assert.equal(history?.status, 'ready');
+  assert.equal(history?.data?.items.length, 1);
+  assert.equal(history?.data?.items[0]?.after.value, 'present');
 });
