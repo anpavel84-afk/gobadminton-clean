@@ -4,7 +4,7 @@ import {
   COMMENT_PHOTO_MAX_BYTES, PHOTO_RIGHTS, isCommentPhotoMime, isPhotoReceipt,
 } from './venue-comment-photos.ts';
 import type { VenueCommentPhotoReceipt } from './venue-comment-photos.ts';
-import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders } from './postgame.ts';
+import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, historyQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders, parseAttendanceDispute, parseAttendanceHistory } from './postgame.ts';
 import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
@@ -137,7 +137,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         throw new PostgameError(response.status >= 500 || code === 'COMMAND_IN_PROGRESS' ? 'network'
           : [403,404].includes(response.status) ? 'private' : [400,409,422,429].includes(response.status) ? 'business' : 'network',response.status,code);
       }
-      if (response.status !== 200) throw new PostgameError('invalid');
+      if (![200, 201].includes(response.status)) throw new PostgameError('invalid');
       return await response.json();
     } catch(error) {
       if(error instanceof NativeAuthError || error instanceof PostgameError) throw error;
@@ -320,6 +320,8 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     postgameOwn: async (access: string, cursor?: string) => parseOwnResults(await postgameRequest(`/me/game-results?limit=20${cursor ? `&cursor=${encodeURIComponent(postgameCursor(cursor))}` : ''}`,access)),
     postgameResults: async (access: string, gameId: string, query?: ResultsQuery) => parseResults(await postgameRequest(`/games/${postgameId(gameId)}/results${resultsQuery(query)}`,access)),
     postgameReminders: async (access: string) => parseReminders(await postgameRequest('/me/postgame-reminders?limit=20',access)),
+    postgameDispute: async (access: string, disputeId: string) => parseAttendanceDispute(await postgameRequest(`/attendance-disputes/${postgameId(disputeId)}`,access)),
+    postgameHistory: async (access: string, gameId: string, contextId: string, limit?: number) => parseAttendanceHistory(await postgameRequest(`/games/${postgameId(gameId)}/attendance/${postgameId(contextId)}/history${historyQuery(limit)}`,access)),
     postgameMutation: (access: string, packet: PostgamePacket) => postgameRequest(postgameWire(packet).path,access,packet),
     playInterestStates: (access: string, ids: readonly string[]) => interestRequest(statesPath([...ids]), access),
     playInterestMutation: async (access: string, packet: PlayInterestPacket) => {

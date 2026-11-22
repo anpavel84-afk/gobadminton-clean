@@ -142,6 +142,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `my-games.test.ts` / messages·postgame; API `native-messages.foundation` list NativeBearer cases; source APK counter 27 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 MyGames invitations source; not VERIFIED_SOURCE / not device PASS / empty account ≠ invite action UAT |
 
+## R-04 · Postgame attendance clarification / PG-2 disputes (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameResultsComposition` clarification tab + existing attendance-dispute API; native `postgame` / `postgame-coordinator` / `postgame-disputes` on `/my-games/[gameId]/results` |
+| Entry | Authenticated results screen section «Уточнение» beside attendance; own «К уточнению» / roster «Открыть уточнение»; organizer multi-select by display name |
+| Trigger | Explicit create («Оспорить отметку» / «Попросить уточнение»), respond/correct, withdraw, help, resolving ACK, history; no silence/auto-help/auto-ACK |
+| Expected | Server `canDispute`/`canRespond`/`canWithdraw`/`canRequestHelp`/`canAcknowledgeCurrent` + writesEnabled only; missing-mark `challengedVersion` 0; correction keeps OPEN; withdraw ≠ agreement; help requested ≠ case linked; resolving ACK requires both dispute fields and matching `resolvedDispute` receipt; ordinary ACK unchanged; selection/draft fences; UNKNOWN exact-packet retry; bounded history limit, no cursor |
+| Accessibility | Named participant/action/result; keyboard-safe scroll; focus return to initiating control; busy/error/UNKNOWN announced |
+| Non-scope | Public comments/peer feedback/admin case resolution UI; PROD; APK30 binary/device claim |
+| Evidence | Mobile unit `postgame.test.ts` / `postgame-disputes.test.ts`; API `game-attendance-disputes.disposable` cookie + native bearer; source APK counter 30 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native PG-2 disputes source; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
 | Field | Content |

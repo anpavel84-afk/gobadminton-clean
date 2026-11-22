@@ -2,11 +2,22 @@ import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import type { GameInvitation } from './messages.ts';
 import { MessagesError } from './messages.ts';
-import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, needsAttention } from './postgame.ts';
-import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult } from './postgame.ts';
+import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention } from './postgame.ts';
+import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage } from './postgame.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
+export type DisputeSelection = { gameId: string; contextId: string; disputeId: string };
+export type DisputeDraft = {
+  createExplanation?: string;
+  respondExplanation?: string;
+  correctionEnabled?: boolean;
+  correctionValue?: 'present' | 'absent' | 'unknown';
+  correctionLate?: boolean;
+  correctionReason?: string;
+  helpExplanation?: string;
+  withdrawReason?: string;
+};
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
@@ -16,16 +27,30 @@ function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
   return {...row,attendance:{...row.attendance,acknowledgedVersion:ack.version},
     notice:row.notice?.attendanceVersion === ack.version && !row.notice.acknowledgedAt ? null : row.notice};
 }
-type Snapshot = { actor: Actor | null; filter: Filter; own: Source<OwnResults>; reminders: Source<Reminders>; invitations: Source<InvitationPage>; games: Record<string,Source<Results>>; review: Intent | null; command: Command | null; notice: string | null };
+type Snapshot = {
+  actor: Actor | null; filter: Filter; own: Source<OwnResults>; reminders: Source<Reminders>; invitations: Source<InvitationPage>;
+  games: Record<string,Source<Results>>; disputes: Record<string,Source<AttendanceDispute>>; histories: Record<string,Source<AttendanceHistoryPage>>;
+  selection: DisputeSelection | null; drafts: Record<string,DisputeDraft>;
+  review: Intent | null; command: Command | null; notice: string | null;
+};
 type Port = {
   own: (actor: Actor, cursor?: string) => Promise<OwnResults>;
   reminders: (actor: Actor) => Promise<Reminders>;
   invitations: (actor: Actor, cursor?: string) => Promise<InvitationPage>;
   results: (actor: Actor, game: string, query?: ResultsQuery) => Promise<Results>;
+  /** Closed dispute detail/history ports; absent neighbors keep prior PG-1 surfaces compiling. */
+  dispute?: (actor: Actor, disputeId: string) => Promise<AttendanceDispute>;
+  history?: (actor: Actor, gameId: string, contextId: string, limit?: number) => Promise<AttendanceHistoryPage>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
-const empty = (actor: Actor | null): Snapshot => ({ actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, invitations: {status:'idle'}, games: {}, review:null, command:null, notice:null });
+const empty = (actor: Actor | null): Snapshot => ({
+  actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, invitations: {status:'idle'},
+  games: {}, disputes: {}, histories: {}, selection: null, drafts: {}, review:null, command:null, notice:null,
+});
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
+function draftKey(gameId: string, contextId: string, disputeId?: string | null) {
+  return `${gameId}:${contextId}:${disputeId ?? 'create'}`;
+}
 function freezeIntent(intent: Intent): Intent {
   // Clone before freezing: caller editing a form cannot change the pending wire body.
   let copy: Intent;
@@ -34,9 +59,14 @@ function freezeIntent(intent: Intent): Intent {
     case 'outcome': copy={...intent,body:{...intent.body}}; break;
     case 'attendance': copy={...intent,body:{...intent.body}}; break;
     case 'ack': copy={...intent,body:{...intent.body}}; break;
+    case 'dispute': copy={...intent,body:{...intent.body}}; break;
+    case 'withdraw': copy={...intent,body:{...intent.body}}; break;
+    case 'respond': copy={...intent,body:{...intent.body,...(intent.body.correction ? {correction:{...intent.body.correction}} : {})}}; break;
+    case 'help': copy={...intent,body:{...intent.body}}; break;
     case 'later': copy={...intent,body:{...intent.body}}; break;
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
+  if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
   Object.freeze(copy.body); return Object.freeze(copy);
 }
 export class PostgameCoordinator {
@@ -57,9 +87,15 @@ export class PostgameCoordinator {
   private invitationsFollowup = false;
   /** Generation that owns busy/followup; stale finally must not clear a newer actor/read. */
   private invitationsBusyGen = 0;
-  private port: Port;
+  private port: Required<Port>;
   private random: () => string;
-  constructor(port: Port, random: () => string) { this.port=port; this.random=random; }
+  constructor(port: Port, random: () => string) {
+    // Keep the caller's port object identity so tests can replace lanes in place.
+    if (!port.dispute) port.dispute = async () => { throw new PostgameError('private', 404); };
+    if (!port.history) port.history = async () => ({ items: [] });
+    this.port = port as Required<Port>;
+    this.random = random;
+  }
   getSnapshot = () => this.snapshot;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => {this.listeners.delete(fn);}; };
   private show(patch: Partial<Snapshot>) { this.snapshot={...this.snapshot,...patch}; this.listeners.forEach(fn=>fn()); }
@@ -73,7 +109,15 @@ export class PostgameCoordinator {
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
-    if (saved) this.show({filter:saved.filter,command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,notice:saved.command ? unknownNotice : null});
+    // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
+    if (saved) this.show({
+      filter:saved.filter,
+      command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,
+      notice:saved.command ? unknownNotice : null,
+      review:saved.review,
+      drafts:saved.drafts,
+      selection:saved.selection,
+    });
     else this.show({});
   }
   forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.snapshot=empty(null); this.show({}); };
@@ -82,6 +126,25 @@ export class PostgameCoordinator {
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
     const denied=error instanceof PostgameError && error.kind === 'private';
     return {status:denied ? 'unavailable' : 'error',...(denied ? {} : {data:prior.data})};
+  }
+  private clearIncompatibleDrafts(gameId: string, results?: Results) {
+    const attendance = results?.attendance;
+    const rows = [...(attendance?.roster ?? []),...(attendance?.myAttendance ? [attendance.myAttendance] : [])];
+    const drafts = {...this.snapshot.drafts};
+    let changed = false;
+    for (const key of Object.keys(drafts)) {
+      if (!key.startsWith(`${gameId}:`)) continue;
+      const parts = key.split(':');
+      const contextId = parts[1];
+      const disputePart = parts.slice(2).join(':');
+      const row = rows.find(r => r.contextId === contextId);
+      // Roster pagination absence is not definitive removal — keep compatible later-page drafts.
+      if (!row) continue;
+      if (disputePart !== 'create' && row.dispute?.id !== disputePart && !this.snapshot.disputes[disputePart]?.data) {
+        delete drafts[key]; changed = true;
+      }
+    }
+    if (changed) this.show({drafts});
   }
   loadOwn = async (more = false) => {
     if (this.snapshot.own.status === 'loading') return;
@@ -169,6 +232,7 @@ export class PostgameCoordinator {
     if (append === 'roster' && (!old.data?.attendance?.rosterNextCursor || query.rosterCursor !== old.data.attendance.rosterNextCursor) ||
         append === 'revisions' && (!old.data?.revisionsNextCursor || query.revisionsCursor !== old.data.revisionsNextCursor)) return;
     const {actor,valid}=this.start(`game:${gameId}`); if (!actor) return;
+    const selection=this.snapshot.selection?.gameId === gameId ? this.snapshot.selection : this.snapshot.selection;
     const put=(source: Source<Results>)=>this.show({games:{...this.snapshot.games,[gameId]:source}});
     put({...old,status:'loading'});
     try {
@@ -200,21 +264,103 @@ export class PostgameCoordinator {
         data.attendance.roster=[...new Map([...old.data.attendance.roster,...data.attendance.roster].map(r=>[r.contextId,r])).values()];
         data.attendance.rosterNextCursor=old.data.attendance.rosterNextCursor;
       }
-      // A GET never acknowledges or settles a pending command.
+      // A GET never acknowledges or settles a pending command. Roster pagination keeps selection.
+      put({status:'ready',data});
+      this.clearIncompatibleDrafts(gameId, data);
+      if (selection?.gameId === gameId) {
+        const rows=[...(data.attendance?.roster ?? []),...(data.attendance?.myAttendance ? [data.attendance.myAttendance] : [])];
+        const still=rows.some(r=>r.contextId === selection.contextId && r.dispute?.id === selection.disputeId);
+        if (!still && !this.snapshot.disputes[selection.disputeId]?.data) this.show({selection:null});
+      }
+    } catch(error) { if(valid()) put(this.failure(error,old)); }
+  };
+  loadDispute = async (disputeId: string) => {
+    try { postgameId(disputeId); } catch { return; }
+    const old = this.snapshot.disputes[disputeId] ?? {status:'idle'};
+    const {actor,valid}=this.start(`dispute:${disputeId}`); if (!actor) return;
+    const put=(source: Source<AttendanceDispute>)=>this.show({disputes:{...this.snapshot.disputes,[disputeId]:source}});
+    put({...old,status:'loading'});
+    try {
+      const data=await this.port.dispute(actor,disputeId); if(!valid()) return;
+      if (data.id !== disputeId) throw new PostgameError('invalid');
+      put({status:'ready',data});
+      const selection=this.snapshot.selection;
+      if (selection?.disputeId === disputeId && (selection.gameId !== data.gameId || selection.contextId !== data.contextId)) {
+        this.show({selection:{gameId:data.gameId,contextId:data.contextId,disputeId}});
+      }
+    } catch(error) { if(valid()) put(this.failure(error,old)); }
+  };
+  loadHistory = async (gameId: string, contextId: string, limit?: number) => {
+    try { postgameId(gameId); postgameId(contextId); } catch { return; }
+    const key=`${gameId}:${contextId}`;
+    const old=this.snapshot.histories[key] ?? {status:'idle'};
+    const {actor,valid}=this.start(`history:${key}`); if (!actor) return;
+    const put=(source: Source<AttendanceHistoryPage>)=>this.show({histories:{...this.snapshot.histories,[key]:source}});
+    put({...old,status:'loading'});
+    try {
+      const data=await this.port.history(actor,gameId,contextId,limit); if(!valid()) return;
       put({status:'ready',data});
     } catch(error) { if(valid()) put(this.failure(error,old)); }
   };
+  selectDispute = (selection: DisputeSelection | null) => {
+    if (!this.snapshot.actor) return;
+    if (!selection) { this.show({selection:null}); return; }
+    try { postgameId(selection.gameId); postgameId(selection.contextId); postgameId(selection.disputeId); } catch { return; }
+    const prior=this.snapshot.selection;
+    // Wrong row retires private form contents that belong to another participant.
+    if (prior && (prior.gameId !== selection.gameId || prior.contextId !== selection.contextId || prior.disputeId !== selection.disputeId)) {
+      const stale=draftKey(prior.gameId, prior.contextId, prior.disputeId);
+      const drafts={...this.snapshot.drafts}; delete drafts[stale];
+      this.show({selection,drafts});
+    } else this.show({selection});
+    void this.loadDispute(selection.disputeId);
+  };
+  setDraft = (gameId: string, contextId: string, disputeId: string | null | undefined, patch: DisputeDraft) => {
+    if (!this.snapshot.actor) return;
+    try { postgameId(gameId); postgameId(contextId); if (disputeId) postgameId(disputeId); } catch { return; }
+    const key=draftKey(gameId,contextId,disputeId);
+    const prior=this.snapshot.drafts[key] ?? {};
+    this.show({drafts:{...this.snapshot.drafts,[key]:{...prior,...patch}}});
+  };
   private allowed(intent: Intent) {
     if(intent.kind === 'later') { const source=this.snapshot.reminders.data, item=source?.items.find(r=>r.id === intent.reminderId); return this.snapshot.reminders.status === 'ready' && !!source?.writesEnabled && !!item && item.gameId === intent.gameId && item.version === intent.body.expectedVersion && item.allowedActions.canLater; }
+    if (intent.kind === 'withdraw' || intent.kind === 'respond' || intent.kind === 'help') {
+      const detail=this.snapshot.disputes[intent.disputeId];
+      if (detail?.status !== 'ready' || !detail.data || detail.data.id !== intent.disputeId || detail.data.version !== intent.body.expectedVersion) return false;
+      const results=this.snapshot.games[detail.data.gameId];
+      if (results?.status !== 'ready' || !results.data?.attendance?.installed || !results.data.attendance.writesEnabled) return false;
+      if (intent.kind === 'withdraw') return detail.data.allowedActions.canWithdraw;
+      if (intent.kind === 'respond') return detail.data.allowedActions.canRespond;
+      return detail.data.allowedActions.canRequestHelp;
+    }
     const result=this.snapshot.games[intent.gameId]; if(result?.status !== 'ready' || !result.data) return false;
     const r=result.data;
     if(intent.kind === 'outcome') return r.allowedActions.canRecordOutcome && r.outcome.version === intent.body.expectedVersion;
     const attendance=r.attendance; if(!attendance?.installed || !attendance.writesEnabled) return false;
     const rows=[...(attendance.roster ?? []),...(attendance.myAttendance ? [attendance.myAttendance] : [])];
     if(intent.kind === 'bulk') return attendance.allowedActions.canBulkPresent && intent.body.items.every(item=>rows.some(row=>row.contextId === item.contextId && row.version === item.expectedVersion && row.allowedActions.canSetAttendance && row.value === 'unknown' && row.dispute?.status !== 'open'));
-    const row=rows.find(row=>row.contextId === intent.contextId); if(!row || row.dispute?.status === 'open') return false;
-    return intent.kind === 'ack' ? mayAcknowledge(row) && row.contextId === attendance.myAttendance?.contextId && row.version === intent.body.attendanceVersion
-      : row.allowedActions.canSetAttendance && row.version === intent.body.expectedVersion;
+    if (intent.kind === 'dispute') {
+      const row=rows.find(row=>row.contextId === intent.contextId);
+      return !!row && row.allowedActions.canDispute && row.version === intent.body.attendanceVersion && row.dispute?.status !== 'open';
+    }
+    const row=rows.find(row=>row.contextId === intent.contextId); if(!row) return false;
+    if (intent.kind === 'ack') {
+      const resolving = intent.body.resolvingDisputeId !== undefined && intent.body.expectedDisputeVersion !== undefined;
+      if (resolving) {
+        const detail=this.snapshot.disputes[intent.body.resolvingDisputeId!];
+        return !!detail && detail.status === 'ready' && !!detail.data && detail.data.id === intent.body.resolvingDisputeId
+          && detail.data.contextId === intent.contextId && detail.data.gameId === intent.gameId
+          && detail.data.version === intent.body.expectedDisputeVersion
+          && detail.data.currentAssertion.version === intent.body.attendanceVersion
+          && mayAcknowledgeCurrent(detail.data)
+          && row.contextId === attendance.myAttendance?.contextId;
+      }
+      // Ordinary ACK remains blocked while an open dispute is on the row.
+      return mayAcknowledge(row) && row.contextId === attendance.myAttendance?.contextId && row.version === intent.body.attendanceVersion;
+    }
+    // Open dispute blocks ordinary attendance edits; respond/ack rights come from selected dispute detail.
+    if (row.dispute?.status === 'open') return false;
+    return row.allowedActions.canSetAttendance && row.version === intent.body.expectedVersion;
   }
   review = (intent: Intent) => {
     if(!this.snapshot.actor || this.snapshot.command || this.inFlight) return;
@@ -247,9 +393,27 @@ export class PostgameCoordinator {
         if (own.status === 'loading') this.ownReadAcks.push(ack);
         if (own.data) own={...own,data:{...own.data,items:own.data.items.map(row=>applyOwnAck(row,ack))}};
       }
-      this.show({own,command:null,notice:reconciling ? 'Исходное действие подтверждено. Обновляем текущие данные.' : 'Изменения сохранены.'});
+      const disputes={...this.snapshot.disputes};
+      if ((packet.kind === 'dispute' || packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help') && 'id' in receipt && 'history' in receipt) {
+        disputes[receipt.id]={status:'ready',data:receipt};
+      }
+      // Resolving ACK: verified resolvedDispute stays on the ACK receipt only.
+      // Never fabricate dispute timestamps/rights or regress the projection from historical receipt fields.
+      // Authoritative DTO comes from loadDispute below; follow-up GET failure stays a distinct retryable read error.
+      this.show({own,disputes,command:null,notice:reconciling ? 'Исходное действие подтверждено. Обновляем текущие данные.' : 'Изменения сохранены.'});
       // Receipt replay is history; always read current rights/version separately.
-      void this.loadResults(packet.gameId); void this.loadReminders();
+      const gameId = packet.gameId;
+      void this.loadResults(gameId); void this.loadReminders();
+      const disputeWrite = packet.kind === 'dispute' || packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help';
+      const resolvingAck = packet.kind === 'ack' && packet.body.resolvingDisputeId !== undefined;
+      // Dispute lifecycle and resolving ACK refresh own hub; ordinary ACK keeps local notice settlement.
+      if (disputeWrite || resolvingAck) void this.loadOwn();
+      if (disputeWrite) {
+        const id = 'disputeId' in packet ? packet.disputeId : 'id' in receipt && 'history' in receipt ? receipt.id : null;
+        if (id) void this.loadDispute(id);
+      }
+      if (resolvingAck && packet.kind === 'ack') void this.loadDispute(packet.body.resolvingDisputeId!);
+      if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
     } catch(error) {
       if(!valid()) return;
       const definite=!reconciling && error instanceof PostgameError && error.status < 500 && error.kind === 'business' && !['COMMAND_IN_PROGRESS','KEY_REUSED','IDEMPOTENCY_KEY_REUSED'].includes(error.code);

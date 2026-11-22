@@ -92,7 +92,7 @@ export class GameAttendanceController {
     @Param("gameId") gameId: string,
     @Param("contextId") contextId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.dispute(
       actor.userId,
       actor.sessionId,
@@ -113,14 +113,14 @@ export class GameAttendanceController {
     @Param("contextId") contextId: string,
     @Query("limit") limit?: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.attendance.listAttendanceHistory(gameId, contextId, actor.userId, { limit });
   }
 
   @Get("attendance-disputes/:disputeId")
   @Header("Cache-Control", "no-store")
   async getDispute(@Req() request: FastifyRequest, @Param("disputeId") disputeId: string) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.attendance.getDispute(disputeId, actor.userId);
   }
 
@@ -131,7 +131,7 @@ export class GameAttendanceController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("disputeId") disputeId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.withdrawDispute(
       actor.userId,
       actor.sessionId,
@@ -150,7 +150,7 @@ export class GameAttendanceController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("disputeId") disputeId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.respondDispute(
       actor.userId,
       actor.sessionId,
@@ -169,7 +169,7 @@ export class GameAttendanceController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("disputeId") disputeId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.requestDisputeHelp(
       actor.userId,
       actor.sessionId,

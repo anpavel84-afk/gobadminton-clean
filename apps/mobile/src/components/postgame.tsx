@@ -1,14 +1,14 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, PropsWithChildren, RefObject } from 'react';
-import { AccessibilityInfo, findNodeHandle, Modal, Platform, Pressable, Text, View, TextInput, Switch } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Platform, Pressable, Text, View, TextInput, Switch } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
-import { attendanceLabel, mayAcknowledge, normalizeFormReason } from '../postgame.ts';
+import { attendanceLabel, mayAcknowledge, normalizeFormReason, resolvingAckAssertion } from '../postgame.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
 type FocusTarget = ComponentRef<typeof Pressable>;
-const FocusContext=createContext<RefObject<FocusTarget | null> | null>(null);
+export const FocusContext=createContext<RefObject<FocusTarget | null> | null>(null);
 export function PostgameSurface({children}:PropsWithChildren) {
   const trigger=useRef<FocusTarget>(null);
   return <FocusContext.Provider value={trigger}>{children}</FocusContext.Provider>;
@@ -18,12 +18,12 @@ function useBlocked() {
   return !!(s.command || s.review);
 }
 /** Retain the actual initiating control for focus return and visibly gate new intents. */
-function ReviewButton({title,onPress}: {title:string;onPress:()=>void}) {
+export function ReviewButton({title,onPress}: {title:string;onPress:()=>void}) {
   const trigger=useContext(FocusContext), ref=useRef<FocusTarget>(null), disabled=useBlocked();
   return <Pressable ref={ref} accessibilityRole="button" accessibilityState={{disabled}} disabled={disabled}
-    onPress={()=>{if(trigger) trigger.current=ref.current;onPress();}} style={[styles.textButton,{opacity:disabled ? 0.45 : 1}]}><Label>{title}</Label></Pressable>;
+    onPress={()=>{Keyboard.dismiss();if(trigger) trigger.current=ref.current;onPress();}} style={[styles.textButton,{opacity:disabled ? 0.45 : 1}]}><Label>{title}</Label></Pressable>;
 }
-function Choice({title,selected,onPress}: {title:string;selected:boolean;onPress:()=>void}) {
+export function Choice({title,selected,onPress}: {title:string;selected:boolean;onPress:()=>void}) {
   const disabled=useBlocked();
   return <Pressable accessibilityRole="button" accessibilityState={{selected,disabled}} disabled={disabled} onPress={onPress}
     style={[styles.chip,{maxWidth:'100%',minWidth:0,opacity:disabled ? 0.45 : 1}]}><Label>{selected ? '✓ ' : ''}{title}</Label></Pressable>;
@@ -71,6 +71,19 @@ export function CommandReview({gameId}: {gameId?:string}) {
   const otherGame=!!selected && !!gameId && selected.gameId !== gameId;
   const gameTitle=title?.trim() || own?.find(r=>r.gameTitle?.trim())?.gameTitle || reminder?.gameTitle?.trim() || (otherGame ? 'Другая игра — исходное действие' : 'Выбранная игра');
   const person=(contextId:string)=>data?.attendance?.roster?.find(r=>r.contextId === contextId) ?? (data?.attendance?.myAttendance?.contextId === contextId ? data.attendance.myAttendance : undefined);
+  // Dispute command context is locked to the frozen intent's disputeId — not the live selection.
+  const disputeCommand=selected && (selected.kind === 'withdraw' || selected.kind === 'respond' || selected.kind === 'help') ? selected : null;
+  const lockedDisputeSource=disputeCommand && readable ? s.disputes[disputeCommand.disputeId] : undefined;
+  const lockedDetail=disputeCommand && lockedDisputeSource?.status === 'ready' && lockedDisputeSource.data?.id === disputeCommand.disputeId
+    ? lockedDisputeSource.data : undefined;
+  const lockedPerson=lockedDetail ? person(lockedDetail.contextId) : undefined;
+  // Resolving ACK consent locks to frozen body + matching dispute detail — never the live roster row.
+  const resolvingAck=selected?.kind === 'ack' && selected.body.resolvingDisputeId !== undefined;
+  const resolvingSource=resolvingAck && selected.kind === 'ack' && readable ? s.disputes[selected.body.resolvingDisputeId!] : undefined;
+  const resolvingDetail=resolvingSource?.status === 'ready' && selected?.kind === 'ack' && resolvingSource.data?.id === selected.body.resolvingDisputeId
+    ? resolvingSource.data : undefined;
+  const resolvingMatch=selected?.kind === 'ack' && resolvingAck ? resolvingAckAssertion(selected, resolvingDetail) : null;
+  const canConfirm=!resolvingAck || !!resolvingMatch;
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
@@ -78,7 +91,7 @@ export function CommandReview({gameId}: {gameId?:string}) {
       onShow={()=>{const node=findNodeHandle(heading.current);if(node) AccessibilityInfo.setAccessibilityFocus(node);}}>
       <Page keyboard header={<View style={{gap:8}}>
         <TextButton title={review ? 'Отмена' : 'Закрыть'} onPress={close} />
-        {review && <PrimaryButton title="Подтвердить" onPress={()=>void owner.confirm()} />}
+        {review && <PrimaryButton title="Подтвердить" disabled={!canConfirm} onPress={()=>void owner.confirm()} />}
         {command?.status === 'sending' && <Label accessibilityLiveRegion="polite">Сохраняем…</Label>}
         {command?.status === 'unknown' && <TextButton title="Проверить исходное действие" onPress={()=>void owner.reconcile(command.packet.gameId)} />}
       </View>}>
@@ -91,7 +104,17 @@ export function CommandReview({gameId}: {gameId?:string}) {
             {selected.kind === 'outcome' && <><Label>{selected.body.outcome === 'held' ? 'Игра состоялась' : 'Игра не состоялась'}</Label>{selected.body.reason && <Label>{selected.body.reason}</Label>}</>}
             {selected.kind === 'attendance' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label><Label>{attendanceLabel(selected.body.value)}{selected.body.late ? ' · Опоздал' : ''}</Label>{selected.body.correctionReason && <Label>{selected.body.correctionReason}</Label>}</>}
             {selected.kind === 'bulk' && <><Label>Отметить «Пришёл» только выбранным участникам · {selected.body.items.length}</Label>{selected.body.items.map((item,index)=><Label key={item.contextId}>{person(item.contextId)?.displayName || `Выбранный участник ${index+1}`}</Label>)}</>}
-            {selected.kind === 'ack' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label><Label>Я согласен с отметкой посещения · {attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}</Label></>}
+            {selected.kind === 'ack' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label>
+              {selected.body.resolvingDisputeId
+                ? resolvingMatch
+                  ? <Label>{`Подтвердить отметку и закрыть уточнение · ${attendanceLabel(resolvingMatch.value)}${resolvingMatch.late ? ' · Опоздал' : ''} · версия ${resolvingMatch.version}`}</Label>
+                  : <><Label>Текущая отметка для подтверждения недоступна. Обновите уточнение.</Label>
+                    <TextButton title="Обновить уточнение" onPress={()=>void owner.loadDispute(selected.body.resolvingDisputeId!)} /></>
+                : <Label>{`Я согласен с отметкой посещения · ${attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}`}</Label>}</>}
+            {selected.kind === 'dispute' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label><Label>{selected.body.attendanceVersion === 0 ? 'Отметки пока нет' : `Версия ${selected.body.attendanceVersion}`}</Label><Label>{selected.body.explanation}</Label></>}
+            {selected.kind === 'withdraw' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Отозвать возражение · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>Отметка сохранится; согласие участника с ней не записывается.</Label>{selected.body.reason && <Label>{selected.body.reason}</Label>}</>}
+            {selected.kind === 'respond' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Ответить / исправить · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label>{selected.body.correction && <Label>{attendanceLabel(selected.body.correction.value)}{selected.body.correction.late ? ' · Опоздание' : ''} · {selected.body.correction.correctionReason}</Label>}<Label>Уточнение останется открытым</Label></>}
+            {selected.kind === 'help' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Помощь по уточнению · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label></>}
             {selected.kind === 'later' && <Label>Отложить это напоминание?</Label>}
           </>}
           {command?.status === 'sending' && <Loading title="Отправляем выбранное действие…" />}
@@ -118,10 +141,17 @@ export function OutcomePanel({data}: {data:Results}) {
 }
 export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;gameId:string;own?:boolean;writes:boolean}) {
   const owner=useAuth().postgame, blocked=useBlocked();
+  const s=useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot);
   const [value,setValue]=useState<AttendanceValue>(row.value === 'unknown' ? 'present' : row.value), [late,setLate]=useState(row.late), [reason,setReason]=useState('');
+  const [disputeOpen,setDisputeOpen]=useState(false);
   const reviewReason=normalizeFormReason(reason);
-  const disputed=row.dispute?.status === 'open';
+  const draftKey=`${gameId}:${row.contextId}:create`;
+  const disputeText=s.drafts[draftKey]?.createExplanation ?? '';
+  const disputeExplanation=normalizeFormReason(disputeText);
+  const dispute=row.dispute;
+  const disputed=dispute?.status === 'open';
   const source=row.assertion.source === 'self_attested' ? 'Сами отметили' : row.assertion.source === 'manager_explicit' ? 'Отметил организатор' : row.assertion.source === 'case_reviewer' ? 'Решение по обращению' : 'Источник неизвестен';
+  const missing=row.version === 0 && row.value === 'unknown';
   return <View style={styles.card}>
     <Label style={{fontWeight:'700'}}>{own ? 'Ваше посещение' : row.displayName}</Label><Label>{attendanceLabel(row.value)}{row.late ? ' · Опоздал' : ''}</Label>
     <Label>{disputed ? 'На уточнении' : row.value === 'unknown' ? 'Ещё без отметки' : row.acknowledgedVersion === row.version ? 'Участник подтвердил' : source}</Label>
@@ -134,7 +164,62 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
       <ReviewButton title="Проверить отметку" onPress={()=>owner.review({kind:'attendance',gameId,contextId:row.contextId,body:{expectedVersion:row.version,value,late,...(row.version > 0 ? {correctionReason:reviewReason} : {})}})} />
     </>}
     {own && writes && mayAcknowledge(row) && <><Label>Подтверждайте только если согласны с отметкой.</Label><ReviewButton title="Я согласен с отметкой" onPress={()=>owner.review({kind:'ack',gameId,contextId:row.contextId,body:{attendanceVersion:row.version}})} /></>}
+    {own && writes && row.allowedActions.canDispute && !disputed && (
+      <ReviewButton title={row.value === 'unknown' ? 'Попросить уточнение' : 'Оспорить отметку'} onPress={()=>setDisputeOpen(true)} />
+    )}
+    {own && disputed && dispute && <ReviewButton title="К уточнению" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
+    {!own && disputed && dispute && <ReviewButton title="Открыть уточнение" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
+    {own && <AttendanceHistoryPanel gameId={gameId} contextId={row.contextId} />}
+    <Modal visible={disputeOpen} animationType="none" presentationStyle="fullScreen" supportedOrientations={iosModalOrientations} onRequestClose={()=>setDisputeOpen(false)}>
+      <Page keyboard header={<View style={{gap:8}}>
+        <TextButton title="Отмена" onPress={()=>setDisputeOpen(false)} />
+        <PrimaryButton title="Отправить" disabled={!disputeExplanation} onPress={()=>{
+          setDisputeOpen(false);
+          owner.review({kind:'dispute',gameId,contextId:row.contextId,body:{attendanceVersion:row.version,explanation:disputeExplanation}});
+        }} />
+      </View>}>
+        <View style={{gap:12}}>
+          <Label accessibilityRole="header" style={{fontWeight:'700'}}>{row.value === 'unknown' ? 'Попросить уточнение' : 'Оспорить отметку'}</Label>
+          <Label>{missing ? 'Отметки пока нет' : `${attendanceLabel(row.value)} · версия ${row.version}`}</Label>
+          <Label>Пояснение</Label>
+          <TextInput editable={!blocked} multiline scrollEnabled textAlignVertical="top" accessibilityLabel="Пояснение"
+            value={disputeText} onChangeText={text=>owner.setDraft(gameId,row.contextId,null,{createExplanation:text})}
+            maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
+            style={[styles.input,{minHeight:100,maxHeight:180}]} />
+        </View>
+      </Page>
+    </Modal>
   </View>;
+}
+/** Typed attendance-history lane — reachable from own card independently of open disputes. */
+export function AttendanceHistoryPanel({ gameId, contextId }: { gameId: string; contextId: string }) {
+  const owner = useAuth().postgame;
+  const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const key = `${gameId}:${contextId}`;
+  const source = s.histories[key];
+  const [open, setOpen] = useState(false);
+  return <>
+    <TextButton title="История изменений" onPress={() => { setOpen(true); void owner.loadHistory(gameId, contextId, 20); }} />
+    <Modal visible={open} animationType="none" presentationStyle="fullScreen" supportedOrientations={iosModalOrientations} onRequestClose={() => setOpen(false)}>
+      <Page keyboard header={<TextButton title="Закрыть" onPress={() => setOpen(false)} />}>
+        <Label accessibilityRole="header" style={{ fontWeight: '700' }}>История изменений</Label>
+        {(source?.status === 'idle' || source?.status === 'loading') ? <Loading title="Загружаем историю…" /> : null}
+        {source?.status === 'error' ? <><Label>Не удалось загрузить историю.</Label><TextButton title="Повторить" onPress={() => void owner.loadHistory(gameId, contextId, 20)} /></> : null}
+        {source?.status === 'unavailable' ? <Label>История сейчас недоступна.</Label> : null}
+        {source?.status === 'ready' ? (source.data?.items.length
+          ? source.data.items.map(item => {
+            const sourceLabel = item.source === 'self_attested' ? 'Сами отметили'
+              : item.source === 'manager_explicit' ? 'Отметил организатор'
+              : item.source === 'case_reviewer' ? 'Решение по обращению'
+              : 'Источник неизвестен';
+            return <View key={item.version} style={{ gap: 4 }}>
+              <Label>v{item.version}: {attendanceLabel(item.after.value)}{item.after.late ? ' · опоздание' : ''} · {item.actorDisplay} · {sourceLabel} · {new Date(item.recordedAt).toLocaleString('ru')}</Label>
+            </View>;
+          })
+          : <Label>Пока нет записей.</Label>) : null}
+      </Page>
+    </Modal>
+  </>;
 }
 export function Roster({data}: {data:Results}) {
   const owner=useAuth().postgame, [selected,setSelected]=useState<string[]>([]), a=data.attendance;
