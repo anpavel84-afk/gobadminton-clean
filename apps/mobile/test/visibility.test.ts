@@ -34,8 +34,9 @@ function ackVisibility(packet: ProfilePacket, base: OwnProfile): OwnProfile {
 function setup(base: OwnProfile, overrides: Partial<ProfilePort> = {}, peerBusy: () => boolean = () => false) {
   const sent: { packet: ProfilePacket; authority: Actor }[] = [];
   let keys = 0;
+  let stored: OwnProfile = { ...base };
   const owner = new ProfileCoordinator({
-    read: async () => ({ ...base }),
+    read: async () => ({ ...stored }),
     cities: async () => [city],
     send: async (packet, authority) => {
       sent.push({ packet, authority });
@@ -43,9 +44,15 @@ function setup(base: OwnProfile, overrides: Partial<ProfilePort> = {}, peerBusy:
       throw new Error('unexpected profile/contactPolicy send');
     },
     ...overrides,
+    // Default read follows stored visibility ACKs; historical tests override read independently.
+    read: overrides.read ?? (async () => ({ ...stored })),
     visibility: async (packet, authority) => {
       sent.push({ packet, authority });
-      return overrides.visibility ? overrides.visibility(packet, authority) : ackVisibility(packet, base);
+      const profile = overrides.visibility
+        ? await overrides.visibility(packet, authority)
+        : ackVisibility(packet, stored);
+      stored = { ...profile };
+      return profile;
     },
   }, () => `vis-key-${++keys}`, peerBusy);
   owner.setActor(actor);
@@ -294,6 +301,126 @@ test('UNKNOWN keeps original key+body; same-account reauth no autowrite; logout 
   await late.owner.setDirectoryVisible(true);
   assert.equal(late.owner.getSnapshot().command?.status, 'unknown');
   assert.equal(late.owner.getSnapshot().profile?.version, 9);
+});
+
+test('#522: historical visibility ACK yields to post-ACK current GET; read429 keeps key; actor fence', async () => {
+  // Lost ON response → external newer OFF → historical replay ACK must not paint intended ON.
+  const base: OwnProfile = {
+    ...emptyProfile, version: 1, displayName: 'Игрок', cityId: city.id, directoryVisible: false,
+    consentPolicyVersion: 'directory-mvp-v1',
+  };
+  const historicalOn: OwnProfile = {
+    ...base, version: 2, directoryVisible: true, consentPolicyVersion: 'directory-mvp-v1',
+  };
+  const currentOff: OwnProfile = {
+    ...base, version: 3, directoryVisible: false, displayName: 'С другого устройства',
+  };
+  let phase: 'net' | 'ack' = 'net';
+  let authoritative: OwnProfile = { ...base };
+  const s = setup(base, {
+    visibility: async () => {
+      if (phase === 'net') throw new ProfileError('network');
+      return historicalOn;
+    },
+    read: async () => ({ ...authoritative }),
+  });
+  await s.owner.load();
+  s.owner.update({ displayName: 'Черновик имени', cityId: city.id, areaKey: 'метро', bio: 'локальное', levelChoice: { kind: 'none' } });
+  await s.owner.setDirectoryVisible(true);
+  const original = s.sent[0]!.packet as VisibilityPacket;
+  assert.equal(original.kind, 'visibility');
+  assert.equal(original.body.directoryVisible, true);
+  assert.equal(original.body.expectedVersion, 1);
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(s.owner.getSnapshot().profile?.directoryVisible, false);
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Черновик имени');
+  phase = 'ack';
+  authoritative = currentOff;
+  await s.owner.reconcile();
+  assert.strictEqual(s.sent[1]!.packet, original);
+  assert.equal(s.sent.length, 2);
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().profile?.version, 3);
+  assert.equal(s.owner.getSnapshot().profile?.directoryVisible, false);
+  assert.equal(s.owner.getSnapshot().profile?.displayName, 'С другого устройства');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Черновик имени');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'метро');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'локальное');
+  assert.match(s.owner.getSnapshot().notice!, /скрыт из каталога/);
+  assert.doesNotMatch(s.owner.getSnapshot().notice!, /видим в каталоге/);
+
+  // Stale nested GET older than verified ACK must not pretend success / unlock.
+  const staleNested = setup(base, {
+    visibility: async (packet) => ackVisibility(packet, base),
+    read: async () => ({ ...base, version: 1, directoryVisible: false }),
+  });
+  await staleNested.owner.load();
+  await staleNested.owner.setDirectoryVisible(true);
+  assert.equal(staleNested.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(staleNested.owner.getSnapshot().profile?.directoryVisible, false);
+  assert.equal(staleNested.keyCount, 1);
+
+  // ACK succeeded but current GET business 429 → retain exact original key/lock (not rejected mutation).
+  let readAfterAck = false;
+  const failGet = setup(base, {
+    visibility: async (packet) => ackVisibility(packet, base),
+    read: async () => {
+      if (!readAfterAck) return { ...base };
+      throw new ProfileError('business', 429, 'MODERATION_RATE_LIMITED');
+    },
+  });
+  // First load uses read before ACK; mark so post-ACK read fails.
+  await failGet.owner.load();
+  failGet.owner.update({ displayName: 'Держать черновик', bio: 'x' });
+  readAfterAck = true;
+  await failGet.owner.setDirectoryVisible(true);
+  const failOriginal = failGet.sent[0]!.packet as VisibilityPacket;
+  assert.equal(failGet.owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(failGet.owner.getSnapshot().command?.packet, failOriginal);
+  assert.equal(failGet.keyCount, 1);
+  assert.equal(failGet.owner.getSnapshot().profile?.directoryVisible, false);
+  assert.equal(failGet.owner.getSnapshot().draft.displayName, 'Держать черновик');
+  assert.match(failGet.owner.getSnapshot().notice!, /не удалось подтвердить изменение видимости/i);
+  // Explicit original-key retry still allowed; no auto-write / no new key.
+  await failGet.owner.setDirectoryVisible(true);
+  assert.equal(failGet.sent.length, 1);
+  assert.equal(failGet.keyCount, 1);
+  await failGet.owner.reconcile();
+  assert.equal(failGet.sent.length, 2);
+  assert.strictEqual(failGet.sent[1]!.packet, failOriginal);
+  assert.equal(failGet.keyCount, 1);
+  assert.equal(failGet.owner.getSnapshot().command?.status, 'unknown');
+
+  // Stale session/actor fence: mid-flight actor replacement retires sending without adopting ACK.
+  const fenceGate = deferred<OwnProfile>();
+  const fenced = setup(base, {
+    visibility: async () => fenceGate.promise,
+    read: async () => ({ ...historicalOn }),
+  });
+  await fenced.owner.load();
+  const work = fenced.owner.setDirectoryVisible(true);
+  assert.equal(fenced.sent.length, 1);
+  fenced.owner.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
+  fenceGate.resolve(historicalOn);
+  await work;
+  assert.equal(fenced.owner.getSnapshot().command, undefined);
+  assert.equal(fenced.owner.getSnapshot().profile, null);
+  assert.equal(fenced.owner.getSnapshot().actor?.actorId, 'B');
+
+  // Logout fence retires UNKNOWN without painting historical visibility.
+  const logout = setup(base, {
+    visibility: async () => { throw new ProfileError('network'); },
+  });
+  await logout.owner.load();
+  await logout.owner.setDirectoryVisible(true);
+  assert.equal(logout.owner.getSnapshot().command?.status, 'unknown');
+  logout.owner.forget();
+  assert.equal(logout.owner.getSnapshot().command, undefined);
+  assert.equal(logout.owner.getSnapshot().actor, null);
+  assert.equal(logout.owner.getSnapshot().profile, null);
 });
 
 test('own-profile visibility card after Looking before Messages; Switch + pending copy; no city helper', () => {

@@ -684,6 +684,28 @@ export class ProfileCoordinator {
     }
     if (looking.state !== 'inactive') throw new ProfileError('invalid');
   }
+  /** Validate visibility ACK against the original packet only — never against a later nested read. */
+  private assertVisibilityAck(profile: OwnProfile, packet: VisibilityPacket): void {
+    const { body } = packet;
+    if (profile.version <= body.expectedVersion || profile.directoryVisible !== body.directoryVisible) {
+      throw new ProfileError('invalid');
+    }
+  }
+  /**
+   * After a verified original visibility ACK, prefer the fresh own-profile state.
+   * Nested must not regress below ACK or the known current own-profile version.
+   * Older historical ACK alone must not deadlock when fresh current read validates.
+   */
+  private resolveVisibilityAfterAck(ack: OwnProfile, nested: OwnProfile, existing: OwnProfile | null): OwnProfile {
+    if (nested.version < ack.version) throw new ProfileError('invalid');
+    if (existing && nested.version < existing.version) throw new ProfileError('invalid');
+    return nested;
+  }
+  private visibilityNotice(adopted: OwnProfile): string {
+    return adopted.directoryVisible
+      ? 'Профиль видим в каталоге.'
+      : 'Профиль скрыт из каталога.';
+  }
   /** Canonical Looking fields excluding version/state — city/area/dates/formats/expiresAt. */
   private lookingCanonicalFieldsEqual(a: Looking, b: Looking): boolean {
     return a.cityId === b.cityId
@@ -745,6 +767,8 @@ export class ProfileCoordinator {
     // Synchronous guard precedes the first await; each call owns a frozen original packet.
     this.serial++; this.show({ command: { packet, status: 'sending' }, notice: null, noticeOwner: null });
     const valid = () => this.current(authority) && this.state.command?.packet === packet && this.state.command.status === 'sending';
+    // Visibility write ACK validated → recovery reads are not mutation rejection (Looking/trainer lesson).
+    let visibilityWriteAcked = false;
     try {
       if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') {
         if (!this.port.looking) throw new ProfileError('network');
@@ -785,23 +809,34 @@ export class ProfileCoordinator {
       }
       if (packet.kind === 'visibility') {
         if (!this.port.visibility) throw new ProfileError('network');
-        const profile = await this.port.visibility(packet, authority);
+        const ack = await this.port.visibility(packet, authority);
         if (!valid()) return;
-        const { body } = packet;
+        // Original packet ACK is historical only — current own-profile GET wins before unlock.
+        this.assertVisibilityAck(ack, packet);
+        visibilityWriteAcked = true;
+        const fresh = await this.port.read();
+        if (!valid()) return;
         const existing = this.state.profile;
-        if (profile.version <= body.expectedVersion || profile.directoryVisible !== body.directoryVisible) {
-          throw new ProfileError('invalid');
+        const adopted = this.resolveVisibilityAfterAck(ack, fresh, existing);
+        if (!existing) {
+          this.show({
+            profile: adopted,
+            draft: form(adopted),
+            command: undefined,
+            status: this.state.cities.length ? 'ready' : 'idle',
+            readIntent: null,
+            notice: this.visibilityNotice(adopted),
+            noticeOwner: 'visibility',
+          });
+          return;
         }
-        // Late historical ACK cannot regress current own-profile version or invent success from intent alone.
-        if (existing && profile.version < existing.version) throw new ProfileError('invalid');
+        // Authoritative own profile only — never wipe unsaved name/city/area/bio/level draft.
         this.show({
-          profile,
+          profile: adopted,
           command: undefined,
           status: 'ready',
           readIntent: null,
-          notice: profile.directoryVisible
-            ? 'Профиль видим в каталоге.'
-            : 'Профиль скрыт из каталога.',
+          notice: this.visibilityNotice(adopted),
           noticeOwner: 'visibility',
         });
         if (!this.state.cities.length) this.show({ status: 'idle' });
@@ -834,7 +869,12 @@ export class ProfileCoordinator {
       if (!this.state.cities.length) this.show({ status: 'idle' });
     } catch (error) {
       if (!valid()) return;
-      if (error instanceof ProfileError && error.kind === 'business' && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS') {
+      // Rejected visibility write only — post-ACK current-read failures (incl. business 429/403) stay locked UNKNOWN.
+      if (!visibilityWriteAcked
+        && error instanceof ProfileError
+        && error.kind === 'business'
+        && error.status < 500
+        && error.code !== 'COMMAND_IN_PROGRESS') {
         if (packet.kind === 'visibility' && error.code === 'CONSENT_POLICY_VERSION_INVALID') {
           this.show({
             command: undefined,

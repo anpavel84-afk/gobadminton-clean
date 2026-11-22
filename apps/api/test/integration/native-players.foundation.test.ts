@@ -419,8 +419,19 @@ run("bounded native public Players principal opt-in", () => {
     });
     expect([200, 201]).toContain(trainerOn.statusCode);
     before = await read();
+    // Seed actual radar consent true in synthetic owned DB so OFF/ON cannot compare false≈false.
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET radar_consented=true,
+           radar_consent_policy_version='radar-mvp-v1',
+           radar_consented_at=clock_timestamp()
+       WHERE user_id=$1`,
+      [a.id],
+    );
     const priorRadar = await provenance();
-    expect(priorRadar.radar_consented).toEqual(expect.anything());
+    expect(priorRadar.radar_consented).toBe(true);
+    expect(priorRadar.radar_consent_policy_version).toBe("radar-mvp-v1");
+    expect(priorRadar.radar_consented_at).toEqual(expect.anything());
     const offKey = randomUUID();
     const off = await app.inject({
       method: "PUT", url, headers: bearer(a, offKey),
@@ -437,8 +448,8 @@ run("bounded native public Players principal opt-in", () => {
     const afterOff = await provenance();
     expect(afterOff.directory_visible).toBe(false);
     expect(afterOff.directory_visibility_provenance).toBe("user_opt_out");
-    expect(afterOff.radar_consented).toEqual(priorRadar.radar_consented);
-    expect(afterOff.radar_consent_policy_version).toEqual(priorRadar.radar_consent_policy_version);
+    expect(afterOff.radar_consented).toBe(true);
+    expect(afterOff.radar_consent_policy_version).toBe(priorRadar.radar_consent_policy_version);
     expect(afterOff.radar_consented_at).toEqual(priorRadar.radar_consented_at);
     expect(afterOff.contact_policy).toEqual(priorRadar.contact_policy);
     const offReplay = await app.inject({
@@ -472,6 +483,9 @@ run("bounded native public Players principal opt-in", () => {
     expect(on.json().cityId).toBeNull();
     const onProv = await provenance();
     expect(onProv.directory_visibility_provenance).toBe("owner_default");
+    expect(onProv.radar_consented).toBe(true);
+    expect(onProv.radar_consent_policy_version).toBe(priorRadar.radar_consent_policy_version);
+    expect(onProv.radar_consented_at).toEqual(priorRadar.radar_consented_at);
     const onReplay = await app.inject({
       method: "PUT", url, headers: bearer(a, onKey),
       payload: { directoryVisible: true, expectedVersion: nullCity.version },
@@ -534,6 +548,38 @@ run("bounded native public Players principal opt-in", () => {
     });
     expect(emptyAttempt.statusCode).toBe(422);
     expect(emptyAttempt.json().code).toBe("DIRECTORY_FIELDS_REQUIRED");
+    // Fixture-only moderated stored name/bio: ON must reject via existing fake provider; profile unchanged.
+    const moderated = await actor();
+    await profile(moderated, "Clean Vis Name");
+    let moderatedOwn = await read(moderated);
+    if (moderatedOwn.directoryVisible) {
+      const hideModerated = await app.inject({
+        method: "PUT", url, headers: bearer(moderated),
+        payload: { directoryVisible: false, expectedVersion: moderatedOwn.version },
+      });
+      expect(hideModerated.statusCode).toBe(200);
+      moderatedOwn = await read(moderated);
+    }
+    await pool.query(
+      "UPDATE player_social_profiles SET display_name=$2, bio=$3, social_eligible=true WHERE user_id=$1",
+      [moderated.id, "хуй", "био хуй"],
+    );
+    const beforeModerated = await read(moderated);
+    expect(beforeModerated.directoryVisible).toBe(false);
+    expect(beforeModerated.displayName).toBe("хуй");
+    expect(beforeModerated.bio).toBe("био хуй");
+    const moderatedOn = await app.inject({
+      method: "PUT", url, headers: bearer(moderated),
+      payload: { directoryVisible: true, expectedVersion: beforeModerated.version },
+    });
+    expect(moderatedOn.statusCode).toBe(422);
+    expect(moderatedOn.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    const afterModerated = await read(moderated);
+    expect(afterModerated.directoryVisible).toBe(false);
+    expect(afterModerated.version).toBe(beforeModerated.version);
+    expect(afterModerated.displayName).toBe(beforeModerated.displayName);
+    expect(afterModerated.bio).toBe(beforeModerated.bio);
+    expect(afterModerated.contactPolicy).toBe(beforeModerated.contactPolicy);
     for (const authorization of ["", "Basic invalid", "Bearer invalid", `Bearer ${"x".repeat(43)}`]) {
       expect((await app.inject({
         method: "PUT", url, headers: { authorization, "idempotency-key": randomUUID() },
