@@ -57,7 +57,7 @@ export function GameManagement({ id }: { id: string }) {
         <Label>Изменение вместимости пока недоступно.</Label>
         {confirmingCancel && cancellable ? <>
           <Label style={styles.subtitle}>Подтверждение отмены</Label>
-          <Label>Проверьте текущие условия игры. Отмена выполняется только после явного подтверждения; возврат из входа и переход «назад» сами по себе игру не отменяют.</Label>
+          <Label>После подтверждения игра будет отменена. Новые заявки и изменения состава станут недоступны; автоматический возврат средств платформой не выполняется.</Label>
           <ManagedTerms game={d.game} />
           <Label>Причина отмены</Label>
           <TextInput accessibilityLabel="Причина отмены" value={cancelReason} onChangeText={setCancelReason} maxLength={1000} multiline allowFontScaling

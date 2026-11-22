@@ -216,10 +216,11 @@ run("native game management · self-migrating isolated database", () => {
     expect((await app.inject({url:'/v1/me/social-profile',headers:bearer(owner)})).json().trainer).toBe(false);
     const inactive=await creation(owner,true,{trainer:true}); expect(inactive.result.statusCode).toBe(422);
   });
-  it('exact eight optins preserve browser Origin/CSRF, invalid/duplicate/mixed/disabled/revoked boundaries and closed neighbors', async () => {
+  it('exact nine optins preserve browser Origin/CSRF, invalid/duplicate/mixed/disabled/revoked boundaries and closed neighbors', async () => {
     const owner=await actor(), made=await creation(owner); expect(made.result.statusCode).toBe(201); const g=made.result.json();
     const routes: {method:'GET'|'POST';url:string;payload?:object}[]=[
       {method:'POST',url:'/v1/games',payload:made.payload}, {method:'POST',url:`/v1/games/${g.id}/publish`,payload:{expectedVersion:g.version}},
+      {method:'POST',url:`/v1/games/${g.id}/cancel`,payload:{expectedVersion:g.version,reason:'Synthetic fence'}},
       {method:'GET',url:`/v1/games/${g.id}/participations`}, {method:'GET',url:'/v1/me/game-preferences'}, {method:'GET',url:'/v1/me/trainer-profile'},
       ...['confirm','reject','remove'].map(action=>({method:'POST' as const,url:`/v1/participations/${randomUUID()}/${action}`,payload:{expectedVersion:1,reason:'Synthetic reason'}})),
     ];
@@ -235,7 +236,6 @@ run("native game management · self-migrating isolated database", () => {
     }
     expect((await app.inject({url:'/v1/me/discovery-preference',headers:bearer(owner)})).statusCode).toBe(401);
     expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner),payload:{expectedVersion:1,defaultPublicGameContact:null}})).statusCode).toBe(403);
-    expect((await app.inject({method:'POST',url:`/v1/games/${g.id}/cancel`,headers:bearer(owner),payload:{expectedVersion:g.version,reason:'Not admitted'}})).statusCode).toBe(403);
     await app.get(SessionService).revokeSession(owner.sessionId);
     for(const route of routes) expect((await app.inject({...route,headers:bearer(owner)})).statusCode).toBe(401);
   });
