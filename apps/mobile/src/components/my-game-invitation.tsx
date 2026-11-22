@@ -1,6 +1,6 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { resourceKey } from '../messages-coordinator.ts';
 import type { GameInvitation, MessageResource } from '../messages.ts';
@@ -56,11 +56,12 @@ function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
   const detail = state.detail && resourceKey(state.detail.resource) === key ? state.detail : null;
   const pending = state.pending[key];
   const invitation = detail?.status === 'ready' && detail.header && 'status' in detail.header ? detail.header : null;
-  useEffect(() => {
+  // Navigation focus — not mount-only — so a retained MyGames screen re-leases after Messages blur/return.
+  useFocusEffect(useCallback(() => {
     if (auth.status !== 'authenticated') return;
-    const release = owner.leaseFocus(resource);
+    const release = owner.leaseFocus({ kind: 'invitation', id: invitationId });
     return () => { release(); };
-  }, [owner, invitationId, auth.status]);
+  }, [owner, invitationId, auth.status]));
   return <View style={{ gap: 8 }}>
     {state.notice ? <Label accessibilityRole="alert">{state.notice}</Label> : null}
     {pending?.state === 'unknown' ? <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource, state.viewGeneration, state.actor); }} /> : null}

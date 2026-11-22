@@ -525,6 +525,48 @@ test('late safety denial cannot hide a replacement actor or focus and cannot res
   }
 });
 
+test('deferred invitation A GET then focus B fetches B; lease release cannot clear a newer owner', async () => {
+  const inviteA = { kind: 'invitation', id: 'invite-a' } as const;
+  const inviteB = { kind: 'invitation', id: 'invite-b' } as const;
+  const base = {
+    status: 'pending' as const, version: 1, inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-a',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  const gateA = deferred<typeof base & { id: string; gameId: string }>();
+  const fetched: string[] = [];
+  const { owner } = setup({
+    invitation: async (id) => {
+      fetched.push(id);
+      if (id === 'invite-a') return gateA.promise;
+      return { ...base, id, gameId: 'game-' + id };
+    },
+  });
+  const root = owner.mount();
+  const focusA = owner.leaseFocus(inviteA); await tick();
+  assert.deepEqual(fetched, ['invite-a']);
+  // Fast A→B while A's detail lane is still occupied — B must not stick on loading.
+  const focusB = owner.leaseFocus(inviteB); await tick();
+  assert.deepEqual(fetched, ['invite-a']);
+  assert.equal(owner.getSnapshot().detail, null);
+  // Stale A release must not clear B's newer focus lease.
+  focusA();
+  assert.equal(owner.getSnapshot().detail, null);
+  assert.equal(fetched.length, 1);
+  gateA.resolve({ ...base, id: 'invite-a', gameId: 'game-a' }); await tick();
+  assert.deepEqual(fetched, ['invite-a', 'invite-b']);
+  assert.equal(owner.getSnapshot().detail?.resource.id, 'invite-b');
+  assert.equal(owner.getSnapshot().detail?.status, 'ready');
+  // Owner return/release: Messages takes shared focus, then re-lease restores the panel GET.
+  focusB();
+  const inbox = owner.leaseFocus('inbox'); await tick();
+  inbox();
+  const back = owner.leaseFocus(inviteB); await tick();
+  assert.equal(owner.getSnapshot().detail?.resource.id, 'invite-b');
+  assert.equal(owner.getSnapshot().detail?.status, 'ready');
+  assert.ok(fetched.filter(id => id === 'invite-b').length >= 2);
+  back(); root();
+});
+
 test('invitation decision body: zero seats disable accept, clock expiry honest, decline a11y-disabled while pending', async () => {
   const { readFileSync } = await import('node:fs');
   const { URL } = await import('node:url');

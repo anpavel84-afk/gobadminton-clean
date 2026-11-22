@@ -50,6 +50,8 @@ export class MessagesCoordinator {
   private reads = new Set<ReadLane>();
   private safetyReadGeneration = 0;
   private safetyReads = new Map<ReadLane, SafetyRead>();
+  /** Focus-fenced detail GET coalesced behind an occupied detail lane (invitations have no poll retry). */
+  private pendingDetail: { focus: number; resource: MessageResource } | null = null;
   private cancelTimer: (() => void) | null = null;
   private polling = false;
   private detailDue = 0;
@@ -121,7 +123,22 @@ export class MessagesCoordinator {
     if (!this.snapshot.actor || !this.foreground || (safety ? !this.validSafetyRead(safety) : this.blocked()) || this.reads.has(lane)) return false;
     this.reads.add(lane); this.schedule(); return true;
   }
-  private endRead(lane: ReadLane) { this.reads.delete(lane); this.runSafetyRead(lane); this.schedule(); }
+  private endRead(lane: ReadLane) {
+    this.reads.delete(lane); this.runSafetyRead(lane);
+    if (lane === 'detail') this.runPendingDetail();
+    this.schedule();
+  }
+  private runPendingDetail() {
+    const pending = this.pendingDetail;
+    if (!pending || this.reads.has('detail')) return;
+    if (pending.focus !== this.focusLease || !this.focusResource || resourceKey(this.focusResource) !== resourceKey(pending.resource)
+      || this.focused !== resourceKey(pending.resource) || !this.snapshot.actor || !this.foreground) {
+      if (pending.focus !== this.focusLease) this.pendingDetail = null;
+      return;
+    }
+    this.pendingDetail = null;
+    void this.readDetail(pending.resource);
+  }
   private clearSafetyReads() { ++this.safetyReadGeneration; this.safetyReads.clear(); }
   private validSafetyRead(read: SafetyRead) {
     return read.generation === this.safetyReadGeneration && read.revision === this.revision && !!this.snapshot.actor && this.foreground &&
@@ -143,7 +160,7 @@ export class MessagesCoordinator {
   setActor(actor: Actor | null) {
     if ((!actor && !this.snapshot.actor) || sameActor(actor, this.snapshot.actor)) return;
     this.clearSafetyReads();
-    ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision; this.focused = null; this.focusResource = null; ++this.focusLease; this.resetDue();
+    ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision; this.focused = null; this.focusResource = null; ++this.focusLease; this.pendingDetail = null; this.resetDue();
     this.safetyPeers.clear(); this.directPeers.clear();
     this.accessLoss = null; this.snapshot = initial(actor); this.show({ viewGeneration: this.focusLease });
   }
@@ -164,7 +181,7 @@ export class MessagesCoordinator {
   }
   focus(resource: MessageResource | null) {
     this.clearSafetyReads();
-    ++this.detailRevision; ++this.listRevision; ++this.focusLease;
+    ++this.detailRevision; ++this.listRevision; ++this.focusLease; this.pendingDetail = null;
     this.focused = resource ? resourceKey(resource) : null; this.focusResource = resource;
     // Pending packets/drafts stay in the root owner on tab unmount.
     this.show({ detail: null, viewGeneration: this.snapshot.viewGeneration + 1 }); this.resetDue();
@@ -252,7 +269,13 @@ export class MessagesCoordinator {
   private readDetail = async (resource: MessageResource, older = false, safety?: SafetyRead) => {
     const key = resourceKey(resource), previous = this.snapshot.detail;
     if (!this.snapshot.actor || !this.foreground || this.focused !== key || older && (!previous?.cursor || previous.loadingMore || previous.status !== 'ready')) return;
-    if (!this.beginRead('detail', safety)) return;
+    if (!this.beginRead('detail', safety)) {
+      // Occupied detail lane only — queue current focus so A→B still GETs B when A ends (no invitation poll).
+      if (!safety && !older && this.focused === key && this.reads.has('detail'))
+        this.pendingDetail = { focus: this.focusLease, resource };
+      return;
+    }
+    this.pendingDetail = null;
     const revision = this.revision, request = ++this.detailRevision;
     const fresh: Detail = { resource, status: 'loading', header: null, messages: [], cursor: null, members: [], ownId: null, error: null, loadingMore: false };
     this.show({ detail: previous && (older || safety) ? { ...previous, loadingMore: older, error: null } : fresh });
