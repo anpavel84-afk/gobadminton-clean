@@ -280,12 +280,14 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     return id;
   }
 
-  it("native own-results, attendance, bulk and ACK preserve exact contexts, self provenance, replay and cookie-only disputes", async () => {
+  it("native own-results, attendance, bulk and ACK preserve exact contexts, self provenance, replay and authorized native history/dispute", async () => {
     const g = await createEndedGame(manager);
     const contextId = await confirmWithTransition(g.id,participant.userId);
     const ownContext = await confirmWithTransition(g.id,manager.userId);
     const m = await nativeHeaders(manager), p = await nativeHeaders(participant), stranger = await nativeHeaders(outsider);
     const markUrl = `/v1/games/${g.id}/attendance/${contextId}`;
+    const historyUrl = `${markUrl}/history`;
+    const disputeUrl = `${markUrl}/disputes`;
     const command = {method:"PUT" as const,url:markUrl,headers:m.headers,payload:{expectedVersion:0,value:"present"}};
     const marked = await app.inject(command); expect(marked.statusCode).toBe(200);
     expect(marked.json()).toMatchObject({contextId,version:1,assertion:{source:"manager_explicit"}});
@@ -305,10 +307,35 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     expect(redundant.statusCode).toBe(409);expect(redundant.json().code).toBe("ATTENDANCE_SELF_ACK_REDUNDANT");
     expect((await app.inject({...command,headers:stranger.headers})).statusCode).toBe(404);
     expect((await app.inject({...ack,headers:stranger.headers})).statusCode).toBe(404);
-    expect((await app.inject({url:`${markUrl}/history`,headers:p.headers})).statusCode).toBe(401);
-    expect((await app.inject({method:"POST",url:`${markUrl}/disputes`,headers:p.headers,payload:{attendanceVersion:1,explanation:"Уточнение"}})).statusCode).toBe(403);
+    const history = await app.inject({url:historyUrl,headers:p.headers});
+    expect(history.statusCode).toBe(200);
+    expect(history.json()).toMatchObject({
+      items: [{
+        version: 1,
+        before: null,
+        after: { value: "present", late: false },
+        reason: null,
+        source: "manager_explicit",
+      }],
+    });
+    expect(history.json().items).toHaveLength(1);
+    expect((await app.inject({url:historyUrl,headers:stranger.headers})).statusCode).toBe(404);
+    const disputePayload = {attendanceVersion:1,explanation:"Уточнение"};
+    const dispute = await app.inject({method:"POST",url:disputeUrl,headers:{...p.headers,"idempotency-key":key()},payload:disputePayload});
+    expect(dispute.statusCode).toBe(201);
+    expect(dispute.json()).toMatchObject({
+      gameId: g.id,
+      contextId,
+      status: "open",
+      challengedVersion: 1,
+      version: 1,
+      explanation: "Уточнение",
+    });
+    expect((await app.inject({method:"POST",url:disputeUrl,headers:{...stranger.headers,"idempotency-key":key()},payload:disputePayload})).statusCode).toBe(404);
     await nativeGuards(participant,"/v1/me/game-results","GET");
     await nativeGuards(manager,markUrl,"PUT",command.payload);await nativeGuards(manager,bulkUrl,"POST",bulk.payload);await nativeGuards(participant,ackUrl,"POST",ack.payload);
+    await nativeGuards(participant,historyUrl,"GET");
+    await nativeGuards(participant,disputeUrl,"POST",disputePayload);
   });
 
   it("no time inference; manager marks; notice+ack+dispute; withdrawn-before-start excluded; outsider 404", async () => {
