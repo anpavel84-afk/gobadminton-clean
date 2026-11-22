@@ -57,6 +57,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
   // Last confirmed position only — never optimistic flip while sending/UNKNOWN.
   const trainerSwitchOn = trainerOn;
   // Reachable when same-actor reauth restores command with profile still null (load refuses).
+  // Trainer pending uses the same outside-branch composition as policy/looking.
   // With profile present, same fragment stays inside the owning card only — no duplicate.
   const pendingPolicyStatus = <>
     {state.noticeOwner === 'contactPolicy' && state.notice &&
@@ -99,6 +100,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
     {!profile && policyPending && pendingPolicyStatus}
     {!profile && lookingPending && pendingLookingStatus}
+    {!profile && trainerPending && pendingTrainerStatus}
     {profile && player && <>
       <PlayerProfileHero
         player={player}

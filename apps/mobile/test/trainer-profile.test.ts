@@ -399,6 +399,96 @@ test('#522 P2: historical ACK yields to post-ACK current GET; failed current rea
   assert.match(failGet.owner.getSnapshot().notice!, /не удалось подтвердить/i);
 });
 
+test('#522 P2 R2: deferred business 429 after validated ACK keeps original packet/key locked', async () => {
+  // Post-ACK current/social business failures must not share the write-rejection unlock path.
+  const gate = deferred<void>();
+  let phase: 'seed' | 'postAckRead' | 'postAckSocial' = 'seed';
+  const s = setup({
+    read: async () => {
+      if (phase === 'seed') return null;
+      if (phase === 'postAckRead') {
+        await gate.promise;
+        throw new ProfileError('business', 429, 'MODERATION_RATE_LIMITED');
+      }
+      return Object.freeze({
+        ...dto(1, 'active'),
+        displayName: 'После ACK',
+        bio: 'hold',
+      });
+    },
+    send: async (packet) => {
+      assert.equal(packet.kind, 'upsert');
+      phase = 'postAckRead';
+      return Object.freeze({
+        ...dto(1, 'active'),
+        displayName: packet.body.displayName,
+        bio: packet.body.bio,
+      });
+    },
+  });
+  await s.owner.load();
+  s.owner.updateDraft({ displayName: 'После ACK', bio: 'hold' });
+  const work = s.owner.save();
+  const original = s.sent[0]!;
+  assert.equal(s.owner.getSnapshot().command?.status, 'sending');
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.blocksMutations(), true);
+  // Still locked while deferred recovery read is in flight.
+  await s.owner.save();
+  assert.equal(s.sent.length, 1);
+  gate.resolve();
+  await work;
+  assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(s.owner.getSnapshot().trainer, null);
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'После ACK');
+  assert.match(s.owner.getSnapshot().notice!, /не удалось подтвердить/i);
+  assert.equal(s.owner.blocksMutations(), true);
+  assert.equal(s.keyCount, 1);
+  // Explicit original-key retry still allowed; no auto-write / no new key.
+  await s.owner.save();
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.keyCount, 1);
+
+  // Same rule for social refresh business 429 after current GET succeeds.
+  const socialGate = deferred<void>();
+  phase = 'seed';
+  const socialFail = setup({
+    read: async () => {
+      if (phase === 'seed') return null;
+      return Object.freeze({
+        ...dto(1, 'active'),
+        displayName: 'Соцсбой',
+        bio: 'x',
+      });
+    },
+    send: async (packet) => {
+      phase = 'postAckSocial';
+      return Object.freeze({
+        ...dto(1, 'active'),
+        displayName: packet.body.displayName,
+        bio: packet.body.bio,
+      });
+    },
+    refreshSocial: async () => {
+      await socialGate.promise;
+      throw new ProfileError('business', 429, 'MODERATION_RATE_LIMITED');
+    },
+  });
+  await socialFail.owner.load();
+  socialFail.owner.updateDraft({ displayName: 'Соцсбой', bio: 'x' });
+  const socialWork = socialFail.owner.save();
+  const socialOriginal = socialFail.sent[0]!;
+  assert.equal(socialFail.owner.getSnapshot().command?.status, 'sending');
+  socialGate.resolve();
+  await socialWork;
+  assert.strictEqual(socialFail.owner.getSnapshot().command?.packet, socialOriginal);
+  assert.equal(socialFail.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(socialFail.owner.blocksMutations(), true);
+  assert.equal(socialFail.keyCount, 1);
+  assert.equal(socialFail.socialApplies.length, 0);
+});
+
 test('#522 P2: initial read failure retry seeds saved trainer fields; dirty draft on error is kept', async () => {
   let fail = true;
   const saved = dto(2);
@@ -429,6 +519,51 @@ test('#522 P2: initial read failure retry seeds saved trainer fields; dirty draf
   assert.equal(s.owner.getSnapshot().status, 'ready');
   assert.equal(s.owner.getSnapshot().draft.displayName, 'Локально');
   assert.equal(s.owner.getSnapshot().draft.bio, 'dirty');
+});
+
+test('#522 P2 R2: same-actor reauth restores pending trainer while profile-null composition stays locked', async () => {
+  let recovered = false;
+  let current: TrainerProfile | null = null;
+  const s = setup({
+    read: async () => current,
+    send: async (packet) => {
+      if (!recovered) throw new ProfileError('network');
+      if (packet.kind === 'upsert') {
+        const ack = Object.freeze({
+          ...dto(1, 'active'),
+          displayName: packet.body.displayName,
+          bio: packet.body.bio,
+        });
+        current = ack;
+        return ack;
+      }
+      return dto(2, 'inactive');
+    },
+  });
+  await s.owner.load();
+  s.owner.updateDraft({ displayName: 'Reauth hold', bio: 'keep' });
+  await s.owner.save();
+  const original = s.sent[0]!;
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  // Same-actor reauth: ProfileCoordinator would reset profile=null; trainer pending must survive.
+  s.owner.setActor({ ...actor, sessionId: 'reauth', generation: 2 });
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(s.owner.getSnapshot().command?.packet.key, original.key);
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Reauth hold');
+  assert.equal(s.owner.blocksMutations(), true);
+  // load refuses while command exists — recovery must not depend on profile becoming available.
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(s.owner.getSnapshot().command?.packet.key, original.key);
+  assert.equal(s.keyCount, 1);
+  recovered = true;
+  await s.owner.reconcile();
+  assert.equal(s.sent[1]!.key, original.key);
+  assert.equal(s.sent[1]!.kind, original.kind);
+  assert.equal(s.sent[1]!.actor.sessionId, 'reauth');
+  assert.equal(s.sent[1]!.actor.generation, 2);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.keyCount, 1);
 });
 
 test('#522 P2: editor completion navigation fenced to mounted+focused same editor+actor', () => {

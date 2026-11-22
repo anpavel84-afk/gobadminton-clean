@@ -308,6 +308,8 @@ export class TrainerProfileCoordinator {
     this.serial++;
     this.show({ command: { packet, status: 'sending' }, notice: null });
     const valid = () => this.current(authority) && this.state.command?.packet === packet && this.state.command.status === 'sending';
+    // Write ACK validated → recovery reads are not mutation rejection (Looking-style lock until current wins).
+    let writeAcked = false;
     try {
       const ack = await this.port.send(packet, authority);
       if (!valid()) return;
@@ -330,6 +332,7 @@ export class TrainerProfileCoordinator {
       } else if (ack.version <= packet.body.expectedVersion) {
         throw new ProfileError('invalid');
       }
+      writeAcked = true;
       // Original packet ACK is historical only — current trainer GET wins before unlock (Looking recovery).
       const current = await this.port.read();
       if (!valid()) return;
@@ -349,7 +352,12 @@ export class TrainerProfileCoordinator {
       this.peers.invalidateGameTrainer?.();
     } catch (error) {
       if (!valid()) return;
-      if (error instanceof ProfileError && error.kind === 'business' && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS') {
+      // Rejected write only — post-ACK current/social failures (incl. business 429/403) stay locked UNKNOWN.
+      if (!writeAcked
+        && error instanceof ProfileError
+        && error.kind === 'business'
+        && error.status < 500
+        && error.code !== 'COMMAND_IN_PROGRESS') {
         const stale = error.status === 409;
         this.show({
           command: undefined,
