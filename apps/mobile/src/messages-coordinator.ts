@@ -270,8 +270,8 @@ export class MessagesCoordinator {
     const key = resourceKey(resource), previous = this.snapshot.detail;
     if (!this.snapshot.actor || !this.foreground || this.focused !== key || older && (!previous?.cursor || previous.loadingMore || previous.status !== 'ready')) return;
     if (!this.beginRead('detail', safety)) {
-      // Occupied detail lane only — queue current focus so A→B still GETs B when A ends (no invitation poll).
-      if (!safety && !older && this.focused === key && this.reads.has('detail'))
+      // Occupied detail lane only — invitations have no poll; queue so A→B still GETs B when A ends.
+      if (!safety && !older && resource.kind === 'invitation' && this.focused === key && this.reads.has('detail'))
         this.pendingDetail = { focus: this.focusLease, resource };
       return;
     }
