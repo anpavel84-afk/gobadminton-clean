@@ -357,7 +357,7 @@ type DraftQuarantine = {
   actorId: string;
   packet: ProfilePacket | null;
   draft: ProfileDraft;
-  /** Authoritative profile at quarantine time — dirty-field baseline after same-account restore. */
+  /** Visibility pending only — dirty-field baseline after same-account restore. */
   baseline: OwnProfile | null;
 };
 const sameLevelChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
@@ -398,14 +398,23 @@ export class ProfileCoordinator {
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || !actor && !this.state.actor) return;
     if (this.state.actor) {
-      const d = this.state.draft;
-      this.quarantined = {
-        actorId: this.state.actor.actorId,
-        packet: this.state.command?.packet ?? null,
-        draft: createProfileDraft(d.displayName, d.cityId, d.areaKey, d.bio, d.levelChoice),
-        // Keep prior restored baseline across same-account actor-null gaps / reauth chains.
-        baseline: this.state.profile ?? this.restoredBaseline,
-      };
+      const packet = this.state.command?.packet ?? null;
+      if (packet) {
+        const d = this.state.draft;
+        const retainDraft = packet.kind === 'visibility';
+        this.quarantined = {
+          actorId: this.state.actor.actorId,
+          packet,
+          // Visibility pending only: keep dirty draft + baseline across same-account gaps.
+          draft: retainDraft
+            ? createProfileDraft(d.displayName, d.cityId, d.areaKey, d.bio, d.levelChoice)
+            : createProfileDraft('', ''),
+          baseline: retainDraft ? (this.state.profile ?? this.restoredBaseline) : null,
+        };
+      } else {
+        // No pending command — do not capture unrelated private form state.
+        this.quarantined = null;
+      }
     }
     if (actor && this.quarantined?.actorId !== actor.actorId) this.quarantined = null;
     const saved = actor ? this.quarantined : null;
@@ -424,8 +433,13 @@ export class ProfileCoordinator {
     const packet = saved.packet;
     this.show({
       actor: Object.freeze({ ...actor }),
-      // Profile UNKNOWN restores from immutable packet body; other kinds keep quarantined form draft.
-      draft: packet?.kind === 'profile' ? draftFromPacket(packet.body) : saved.draft,
+      // Profile UNKNOWN: immutable packet-form. Visibility pending: retained dirty draft.
+      // contactPolicy/Looking UNKNOWN: original packet/recovery only with blank form.
+      draft: packet?.kind === 'profile'
+        ? draftFromPacket(packet.body)
+        : packet?.kind === 'visibility'
+        ? saved.draft
+        : createProfileDraft('', ''),
       ...(packet ? {
         command: { packet, status: 'unknown' as const },
         noticeOwner: noticeOwnerOf(packet),
