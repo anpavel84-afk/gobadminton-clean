@@ -170,7 +170,7 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
     {own && disputed && dispute && <ReviewButton title="К уточнению" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
     {!own && disputed && dispute && <ReviewButton title="Открыть уточнение" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
     {own && <AttendanceHistoryPanel gameId={gameId} contextId={row.contextId} />}
-    <Modal visible={disputeOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={()=>setDisputeOpen(false)} supportedOrientations={iosModalOrientations}>
+    <Modal visible={disputeOpen} animationType="none" presentationStyle="fullScreen" supportedOrientations={iosModalOrientations} onRequestClose={()=>setDisputeOpen(false)}>
       <Page keyboard header={<View style={{gap:8}}>
         <TextButton title="Отмена" onPress={()=>setDisputeOpen(false)} />
         <PrimaryButton title="Отправить" disabled={!disputeExplanation} onPress={()=>{
@@ -200,7 +200,7 @@ export function AttendanceHistoryPanel({ gameId, contextId }: { gameId: string; 
   const [open, setOpen] = useState(false);
   return <>
     <TextButton title="История изменений" onPress={() => { setOpen(true); void owner.loadHistory(gameId, contextId, 20); }} />
-    <Modal visible={open} animationType="none" presentationStyle="fullScreen" onRequestClose={() => setOpen(false)} supportedOrientations={iosModalOrientations}>
+    <Modal visible={open} animationType="none" presentationStyle="fullScreen" supportedOrientations={iosModalOrientations} onRequestClose={() => setOpen(false)}>
       <Page keyboard header={<TextButton title="Закрыть" onPress={() => setOpen(false)} />}>
         <Label accessibilityRole="header" style={{ fontWeight: '700' }}>История изменений</Label>
         {(source?.status === 'idle' || source?.status === 'loading') ? <Loading title="Загружаем историю…" /> : null}
