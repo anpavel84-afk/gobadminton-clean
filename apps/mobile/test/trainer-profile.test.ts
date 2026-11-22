@@ -463,6 +463,9 @@ test('#522 P2 R2: deferred business 429 after validated ACK keeps original packe
       });
     },
     send: async (packet) => {
+      if (packet.kind !== 'upsert') {
+        assert.fail('unexpected deactivate packet');
+      }
       phase = 'postAckSocial';
       return Object.freeze({
         ...dto(1, 'active'),
