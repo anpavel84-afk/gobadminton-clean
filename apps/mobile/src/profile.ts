@@ -2,7 +2,7 @@ import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import type { City } from './public-api.ts';
 import type { LookingPutBody, LookingTtlMinutes } from './looking-for-game.ts';
-import { isLookingTtlMinutes } from './looking-for-game.ts';
+import { isLookingTtlMinutes, lookingIntentExpired } from './looking-for-game.ts';
 
 export class ProfileError extends Error {
   readonly kind: 'network' | 'invalid' | 'authority' | 'business';
@@ -602,11 +602,14 @@ export class ProfileCoordinator {
     const { actor, command } = this.state;
     if (actor && command?.status === 'unknown' && command.packet.actor.actorId === actor.actorId) await this.dispatch(command.packet, actor);
   };
-  private lookingNotice(packet: LookingPacket, phase: 'unknown' | 'fail' | 'ok', looking?: Looking): string {
+  private lookingNotice(packet: LookingPacket, phase: 'unknown' | 'fail' | 'ok', looking?: Looking | null): string {
     if (phase === 'ok') {
-      return packet.kind === 'lookingDelete' || looking?.state === 'inactive'
-        ? '«Ищу игру» выключено.'
-        : '«Ищу игру» включено.';
+      if (packet.kind === 'lookingDelete' || !looking || looking.state === 'inactive') {
+        return '«Ищу игру» выключено.';
+      }
+      // Historical PUT replay may return the original active ACK after TTL end — never claim «включено».
+      if (lookingIntentExpired(looking)) return 'Срок «Ищу игру» истёк.';
+      return '«Ищу игру» включено.';
     }
     if (phase === 'fail') {
       return 'Статус «Ищу игру» не сохранён. Проверьте соединение или повторите.';
@@ -615,21 +618,30 @@ export class ProfileCoordinator {
       ? 'Результат выключения «Ищу игру» неизвестен. Проверка повторит только эту отправку с прежним ключом. Новые изменения пока недоступны.'
       : 'Результат статуса «Ищу игру» неизвестен. Проверка повторит только эту отправку с прежними данными и ключом. Новые изменения пока недоступны.';
   }
-  private applyLooking(looking: Looking, packet: LookingPacket): OwnProfile {
-    const profile = this.state.profile;
-    if (!profile) throw new ProfileError('invalid');
-    const current = profile.lookingForGame;
-    if (current && looking.version < current.version) throw new ProfileError('invalid');
+  /** Validate Looking ACK against the original packet only — never against a later nested read. */
+  private assertLookingAck(looking: Looking, packet: LookingPacket): void {
     if (packet.kind === 'lookingPut') {
       if (looking.state !== 'active') throw new ProfileError('invalid');
       if (looking.cityId !== packet.body.cityId) throw new ProfileError('invalid');
       if ((looking.areaKey ?? null) !== (packet.body.areaKey ?? null)) throw new ProfileError('invalid');
       if (packet.body.expectedVersion !== undefined && looking.version <= packet.body.expectedVersion) throw new ProfileError('invalid');
       if (packet.body.expectedVersion === undefined && looking.version < 1) throw new ProfileError('invalid');
-    } else if (looking.state !== 'inactive') {
+      return;
+    }
+    if (looking.state !== 'inactive') throw new ProfileError('invalid');
+  }
+  /**
+   * After a verified original ACK, prefer the fresh own-profile Looking state.
+   * Newer nested version/state wins; historical ACK never overwrites it.
+   * Canonical no-record STOP: inactive version 0 ACK + nested null → confirmed off.
+   */
+  private resolveLookingAfterAck(ack: Looking, nested: Looking | null, packet: LookingPacket): Looking | null {
+    if (nested === null) {
+      if (packet.kind === 'lookingDelete' && ack.state === 'inactive' && ack.version === 0) return null;
       throw new ProfileError('invalid');
     }
-    return { ...profile, lookingForGame: looking };
+    if (nested.version < ack.version) throw new ProfileError('invalid');
+    return nested;
   }
   private async dispatch(packet: ProfilePacket, authority: Actor) {
     // Synchronous guard precedes the first await; each call owns a frozen original packet.
@@ -638,35 +650,36 @@ export class ProfileCoordinator {
     try {
       if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') {
         if (!this.port.looking) throw new ProfileError('network');
-        const looking = await this.port.looking(packet, authority);
+        const ack = await this.port.looking(packet, authority);
         if (!valid()) return;
-        // Same-actor reauth may restore UNKNOWN with profile=null (load refuses). Looking ACK is
-        // LookingIntent-only — adopt via authoritative own-profile read; never invent SocialProfile fields.
-        if (!this.state.profile) {
-          const fresh = await this.port.read();
-          if (!valid()) return;
-          const nested = fresh.lookingForGame;
-          if (!nested || nested.version !== looking.version || nested.state !== looking.state) throw new ProfileError('invalid');
-          if (packet.kind === 'lookingPut' && nested.state !== 'active') throw new ProfileError('invalid');
-          if (packet.kind === 'lookingDelete' && nested.state !== 'inactive') throw new ProfileError('invalid');
+        // Confirm the original receipt against the immutable packet; then let a fresh own-profile
+        // Looking win without resending a new desired action. Never invent SocialProfile fields,
+        // never apply historical ACK over newer nested state, never mint a new key.
+        this.assertLookingAck(ack, packet);
+        const fresh = await this.port.read();
+        if (!valid()) return;
+        const adopted = this.resolveLookingAfterAck(ack, fresh.lookingForGame, packet);
+        const existing = this.state.profile;
+        if (!existing) {
+          const profile = { ...fresh, lookingForGame: adopted };
           this.show({
-            profile: fresh,
-            draft: form(fresh),
+            profile,
+            draft: form(profile),
             command: undefined,
             status: this.state.cities.length ? 'ready' : 'idle',
             readIntent: null,
-            notice: this.lookingNotice(packet, 'ok', looking),
+            notice: this.lookingNotice(packet, 'ok', adopted),
             noticeOwner: 'looking',
           });
           return;
         }
-        const profile = this.applyLooking(looking, packet);
+        // Looking field only — retain SP version and unsaved profile drafts.
         this.show({
-          profile,
+          profile: { ...existing, lookingForGame: adopted },
           command: undefined,
           status: 'ready',
           readIntent: null,
-          notice: this.lookingNotice(packet, 'ok', looking),
+          notice: this.lookingNotice(packet, 'ok', adopted),
           noticeOwner: 'looking',
         });
         if (!this.state.cities.length) this.show({ status: 'idle' });

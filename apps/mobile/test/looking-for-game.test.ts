@@ -364,3 +364,127 @@ test('same-actor reauth restores looking UNKNOWN with profile=null; pending retr
   assert.equal(s.lookingSent[1]!.authority.sessionId, 'reauth');
   assert.equal(s.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
 });
+
+test('address2: historical ACK yields to newer GET; no-record stop; expired notice; wrong ACK', async () => {
+  // Same-actor reauth: cached PUT ACK active v1 + fresh inactive v2 → honest current, same key.
+  const base: OwnProfile = {
+    ...emptyProfile, version: 9, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+  };
+  const ackV1 = activeLooking(1, { areaKey: 'zone' });
+  let phase: 'net' | 'ack' = 'net';
+  // Independent of setup's post-looking stored mutation — models later external stop on GET.
+  let authoritative: OwnProfile = { ...base };
+  const s = setup(base, {
+    looking: async () => {
+      if (phase === 'net') throw new ProfileError('network');
+      return ackV1;
+    },
+    read: async () => ({ ...authoritative }),
+  });
+  await s.owner.load();
+  await s.owner.enableLooking('zone', LOOKING_TTL_1H);
+  const original = s.lookingSent[0]!.packet;
+  assert.equal(s.keyCount, 1);
+  s.owner.setActor({ ...actor, sessionId: 'reauth', generation: 2 });
+  assert.equal(s.owner.getSnapshot().profile, null);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  phase = 'ack';
+  authoritative = {
+    ...base,
+    lookingForGame: { ...ackV1, version: 2, state: 'inactive' },
+  };
+  await s.owner.reconcile();
+  assert.strictEqual(s.lookingSent[1]!.packet, original);
+  assert.equal(s.lookingSent.length, 2);
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().profile?.lookingForGame?.version, 2);
+  assert.equal(s.owner.getSnapshot().profile?.lookingForGame?.state, 'inactive');
+  assert.equal(s.owner.getSnapshot().profile?.version, 9);
+  assert.match(s.owner.getSnapshot().notice!, /выключено/);
+
+  // Fresh active v2 other body wins; dirty draft + SP version retained.
+  const prior: OwnProfile = {
+    ...emptyProfile, version: 4, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+  };
+  const ackPut = activeLooking(1, { areaKey: 'a' });
+  let live: OwnProfile = { ...prior };
+  let failOnce = true;
+  const newer = setup(prior, {
+    looking: async () => {
+      if (failOnce) throw new ProfileError('network');
+      return ackPut;
+    },
+    read: async () => ({ ...live }),
+  });
+  await newer.owner.load();
+  newer.owner.update({ displayName: 'Черновик', bio: 'dirty' });
+  await newer.owner.enableLooking('a', LOOKING_TTL_1H);
+  failOnce = false;
+  live = { ...prior, lookingForGame: activeLooking(2, { areaKey: 'other-body' }) };
+  await newer.owner.reconcile();
+  assert.equal(newer.owner.getSnapshot().command, undefined);
+  assert.equal(newer.owner.getSnapshot().profile?.lookingForGame?.version, 2);
+  assert.equal(newer.owner.getSnapshot().profile?.lookingForGame?.areaKey, 'other-body');
+  assert.equal(newer.owner.getSnapshot().profile?.version, 4);
+  assert.equal(newer.owner.getSnapshot().draft.displayName, 'Черновик');
+  assert.equal(newer.owner.getSnapshot().draft.bio, 'dirty');
+  assert.match(newer.owner.getSnapshot().notice!, /включено/);
+
+  // Canonical no-record STOP: inactive v0 ACK + nested null → confirmed off.
+  const stopBase: OwnProfile = {
+    ...emptyProfile, version: 3, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+  };
+  const inactive0: Looking = {
+    version: 0, state: 'inactive', cityId: null, areaKey: null,
+    startsAt: null, endsAt: null, expiresAt: null, formatKeys: [],
+  };
+  const stop = setup(stopBase, {
+    looking: async () => inactive0,
+    read: async () => ({ ...stopBase, lookingForGame: null }),
+  });
+  await stop.owner.load();
+  await stop.owner.stopLooking();
+  assert.equal(stop.owner.getSnapshot().command, undefined);
+  assert.equal(stop.owner.getSnapshot().profile?.lookingForGame, null);
+  assert.equal(stop.owner.getSnapshot().profile?.version, 3);
+  assert.match(stop.owner.getSnapshot().notice!, /выключено/);
+
+  // Expired historical PUT replay: honest notice, no «включено», no new key/TTL renew.
+  const expiredAck = activeLooking(1, { expiresAt: '2000-01-01T00:00:00.000Z' });
+  const expiredBase: OwnProfile = {
+    ...emptyProfile, version: 2, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+  };
+  const expired = setup(expiredBase, {
+    looking: async () => expiredAck,
+    read: async () => ({ ...expiredBase, lookingForGame: expiredAck }),
+  });
+  await expired.owner.load();
+  expired.owner.update({ displayName: 'Локально' });
+  await expired.owner.enableLooking('sokol', LOOKING_TTL_1H);
+  assert.equal(expired.keyCount, 1);
+  assert.equal(expired.owner.getSnapshot().command, undefined);
+  assert.equal(expired.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
+  assert.equal(expired.owner.getSnapshot().draft.displayName, 'Локально');
+  assert.equal(expired.owner.getSnapshot().profile?.version, 2);
+  assert.doesNotMatch(expired.owner.getSnapshot().notice!, /включено/);
+  assert.match(expired.owner.getSnapshot().notice!, /истёк/);
+
+  // Wrong ACK (city mismatch) must not clear UNKNOWN.
+  const wrong = setup(base, {
+    looking: async () => activeLooking(1, { cityId: 'other-city', areaKey: 'zone' }),
+  });
+  await wrong.owner.load();
+  await wrong.owner.enableLooking('zone', LOOKING_TTL_1H);
+  assert.equal(wrong.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(wrong.owner.getSnapshot().profile?.lookingForGame, null);
+
+  // Stale nested older than verified ACK must not pretend success.
+  const staleNested = setup(base, {
+    looking: async () => activeLooking(2, { areaKey: 'zone' }),
+    read: async () => ({ ...base, lookingForGame: activeLooking(1, { areaKey: 'zone' }) }),
+  });
+  await staleNested.owner.load();
+  await staleNested.owner.enableLooking('zone', LOOKING_TTL_1H);
+  assert.equal(staleNested.owner.getSnapshot().command?.status, 'unknown');
+});

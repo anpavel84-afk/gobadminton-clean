@@ -321,12 +321,13 @@ run("bounded native public Players principal opt-in", () => {
     expect(updatedBody.version).toBe(createdBody.version + 1);
     expect(updatedBody.areaKey).toBe("north");
     expect(updatedBody.state).toBe("active");
+    // Real key reuse: same putKey + different body → KEY_REUSED (not a duplicate stale-version probe).
     const changedKey = await app.inject({
-      method: "PUT", url: lookingUrl, headers: bearer(a),
-      payload: { cityId: MOSCOW_CITY_ID, areaKey: "other", ttlMinutes: 60, expectedVersion: createdBody.version },
+      method: "PUT", url: lookingUrl, headers: bearer(a, putKey),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: "other", ttlMinutes: 60, expectedVersion: updatedBody.version },
     });
     expect(changedKey.statusCode).toBe(409);
-    expect(changedKey.json().code).toBe("VERSION_CONFLICT");
+    expect(changedKey.json().code).toMatch(/KEY_REUSED/);
     const stale = await app.inject({
       method: "PUT", url: lookingUrl, headers: bearer(a),
       payload: { cityId: MOSCOW_CITY_ID, areaKey: "stale", ttlMinutes: 60, expectedVersion: createdBody.version },
