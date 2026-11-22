@@ -7,6 +7,7 @@ import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
@@ -85,6 +86,10 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "pg2-synthetic-fingerprint-fixture!!",
       POST_GAME_INTERNAL_ENABLED: "1",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([
+        { clientId: "postgame-disputes-fixture", redirectUris: ["https://app.example.test/auth/callback"] },
+      ]),
     });
     const ref = await Test.createTestingModule({
       imports: [buildTestCoreModule(env, pool), GamesModule, VenuesModule, ProfilesModule],
@@ -120,6 +125,7 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
 
   beforeEach(async () => {
     env.POST_GAME_INTERNAL_ENABLED = true;
+    env.NATIVE_AUTH_ENABLED = true;
     manager = await actor("PG2 manager");
     participant = await actor("PG2 participant");
     outsider = await actor("PG2 outsider");
@@ -134,6 +140,18 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
       sessionId: issued.session.id,
       csrfToken: issued.csrfToken,
       cookie: `${SESSION_COOKIE}=${encodeURIComponent(issued.sessionToken)}`,
+    };
+  }
+
+  async function nativeHeaders(who: Actor, idem = key()) {
+    const native = app.get(NativeSessionService);
+    const issued = await native.transaction(async (client) => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, "postgame-disputes-fixture");
+    });
+    return {
+      credentials: issued,
+      headers: { authorization: `Bearer ${issued.accessToken}`, "idempotency-key": idem },
     };
   }
 
@@ -158,6 +176,19 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
       url,
       payload: payload as object,
       headers: headers(who, idem),
+    }) as Promise<Response>;
+  }
+  async function nativeGet(who: Actor, url: string): Promise<Response> {
+    const n = await nativeHeaders(who);
+    return app.inject({ method: "GET", url, headers: n.headers }) as Promise<Response>;
+  }
+  async function nativePost(who: Actor, url: string, payload: unknown, idem = key()): Promise<Response> {
+    const n = await nativeHeaders(who, idem);
+    return app.inject({
+      method: "POST",
+      url,
+      payload: payload as object,
+      headers: n.headers,
     }) as Promise<Response>;
   }
 
@@ -499,5 +530,168 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
         [contextId, g.id, participant.userId, unusedVersion, manager.userId],
       ),
     ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("native bearer participant/manager full loop + gates; cookie cases retained", async () => {
+    const g = await createEndedGame(manager);
+    const contextId = await confirmWithTransition(g.id, participant.userId);
+    expect(
+      (await put(manager, `/v1/games/${g.id}/attendance/${contextId}`, { expectedVersion: 0, value: "absent" })).statusCode,
+    ).toBe(200);
+
+    const dispute = await nativePost(participant, `/v1/games/${g.id}/attendance/${contextId}/disputes`, {
+      attendanceVersion: 1,
+      explanation: "Native participant clarification",
+    });
+    expect(dispute.statusCode).toBe(201);
+    const disputeId = dispute.json().id as string;
+
+    expect((await nativeGet(outsider, `/v1/attendance-disputes/${disputeId}`)).statusCode).toBe(404);
+    expect((await nativeGet(outsider, `/v1/games/${g.id}/attendance/${contextId}/history`)).statusCode).toBe(404);
+
+    const detail = await nativeGet(participant, `/v1/attendance-disputes/${disputeId}`);
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ status: "open", challengedVersion: 1 });
+
+    const history = await nativeGet(manager, `/v1/games/${g.id}/attendance/${contextId}/history?limit=20`);
+    expect(history.statusCode).toBe(200);
+    expect(Array.isArray(history.json().items)).toBe(true);
+
+    const stale = await nativePost(manager, `/v1/attendance-disputes/${disputeId}/responses`, {
+      expectedVersion: 99,
+      explanation: "stale",
+    });
+    expect(stale.statusCode).toBe(409);
+
+    const respond = await nativePost(manager, `/v1/attendance-disputes/${disputeId}/responses`, {
+      expectedVersion: 1,
+      explanation: "Native manager correction",
+      correction: {
+        expectedAttendanceVersion: 1,
+        value: "present",
+        late: false,
+        correctionReason: "На корте",
+      },
+    });
+    expect(respond.statusCode).toBe(200);
+    expect(respond.json()).toMatchObject({ status: "open", currentAssertion: { value: "present", version: 2 } });
+
+    const help = await nativePost(participant, `/v1/attendance-disputes/${disputeId}/help`, {
+      expectedVersion: 2,
+      explanation: "Native help request",
+    });
+    expect(help.statusCode).toBe(200);
+    expect(help.json()).toMatchObject({ helpProgress: "requested", caseProgress: { linked: false } });
+
+    const ackKey = key();
+    const ackBody = {
+      attendanceVersion: 2,
+      resolvingDisputeId: disputeId,
+      expectedDisputeVersion: 3,
+    };
+    const ack = await nativePost(
+      participant,
+      `/v1/games/${g.id}/attendance/${contextId}/acknowledgements`,
+      ackBody,
+      ackKey,
+    );
+    expect(ack.statusCode).toBe(200);
+    expect(ack.json().resolvedDispute).toEqual({
+      id: disputeId,
+      resultingVersion: 4,
+      status: "resolved",
+      contextId,
+      attendanceVersion: 2,
+    });
+    const replay = await nativePost(
+      participant,
+      `/v1/games/${g.id}/attendance/${contextId}/acknowledgements`,
+      ackBody,
+      ackKey,
+    );
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().resolvedDispute).toEqual(ack.json().resolvedDispute);
+
+    // Withdraw does not acknowledge attendance.
+    const g2 = await createEndedGame(manager);
+    const context2 = await confirmWithTransition(g2.id, participant.userId);
+    expect(
+      (await put(manager, `/v1/games/${g2.id}/attendance/${context2}`, { expectedVersion: 0, value: "absent" })).statusCode,
+    ).toBe(200);
+    const open2 = await nativePost(participant, `/v1/games/${g2.id}/attendance/${context2}/disputes`, {
+      attendanceVersion: 1,
+      explanation: "Will withdraw",
+    });
+    expect(open2.statusCode).toBe(201);
+    const withdrawn = await nativePost(participant, `/v1/attendance-disputes/${open2.json().id}/withdraw`, {
+      expectedVersion: 1,
+    });
+    expect(withdrawn.statusCode).toBe(200);
+    expect(withdrawn.json().status).toBe("withdrawn");
+    const afterWithdraw = await get(participant, `/v1/games/${g2.id}/results`);
+    expect(afterWithdraw.json().attendance.myAttendance.acknowledgedVersion).toBeNull();
+
+    // Mixed credentials / CSRF / disabled native / revoked session.
+    const n = await nativeHeaders(participant);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/v1/attendance-disputes/${disputeId}`,
+          headers: { ...n.headers, cookie: participant.cookie },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/games/${g.id}/attendance/${contextId}/disputes`,
+          payload: { attendanceVersion: 1, explanation: "no csrf" },
+          headers: { cookie: participant.cookie, origin },
+        })
+      ).statusCode,
+    ).toBe(403);
+    env.NATIVE_AUTH_ENABLED = false;
+    try {
+      expect((await nativeGet(participant, `/v1/attendance-disputes/${disputeId}`)).statusCode).toBe(404);
+    } finally {
+      env.NATIVE_AUTH_ENABLED = true;
+    }
+    env.POST_GAME_INTERNAL_ENABLED = false;
+    try {
+      expect(
+        (
+          await nativePost(participant, `/v1/games/${g.id}/attendance/${contextId}/disputes`, {
+            attendanceVersion: 1,
+            explanation: "writes off",
+          })
+        ).statusCode,
+      ).toBe(503);
+    } finally {
+      env.POST_GAME_INTERNAL_ENABLED = true;
+    }
+    await sessions.revokeSession(n.credentials.sessionId);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/v1/attendance-disputes/${disputeId}`,
+          headers: n.headers,
+        })
+      ).statusCode,
+    ).toBe(401);
+
+    // Admin consumer routes stay closed on these native credentials.
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/v1/admin/cases/attendance-dispute-intake",
+          headers: (await nativeHeaders(manager)).headers,
+          payload: { disputeId, expectedDisputeVersion: 1, reasonCode: "intake_test", assignToSelf: true },
+        })
+      ).statusCode,
+    ).toBeGreaterThanOrEqual(400);
   });
 });

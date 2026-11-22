@@ -20,7 +20,7 @@ function packet(intent: Intent): Packet {const w=wire(intent);return {...intent,
 const marked: Attendance={...row,value:'present',version:1,assertion:{actorDisplay:'Организатор',source:'manager_explicit',at:date},allowedActions:{...row.allowedActions,canAcknowledge:true}};
 function setup() {
   const sent:Packet[]=[], cursors:(string|undefined)[]=[];
-  const port={own:async (_actor:Actor,cursor?:string)=>{cursors.push(cursor);return {items:[own],nextCursor:cursor ? null : 'page-2'};},reminders:async()=>({items:[reminder],installed:true,writesEnabled:true}),invitations:async()=>({items:[],nextCursor:null}),results:async (_actor:Actor,id:string)=>({...structuredClone(result),gameId:id}),send:async(p:Packet):Promise<unknown>=>{sent.push(p);return marked;}};
+  const port={own:async (_actor:Actor,cursor?:string)=>{cursors.push(cursor);return {items:[own],nextCursor:cursor ? null : 'page-2'};},reminders:async()=>({items:[reminder],installed:true,writesEnabled:true}),invitations:async()=>({items:[],nextCursor:null}),results:async (_actor:Actor,id:string)=>({...structuredClone(result),gameId:id}),dispute:async()=>{throw new PostgameError('private',404);},history:async()=>({items:[]}),send:async(p:Packet):Promise<unknown>=>{sent.push(p);return marked;}};
   const coordinator=new PostgameCoordinator(port,()=>`key-${sent.length}`);coordinator.setActor(actor);return {coordinator,port,sent,cursors};
 }
 const deferred=<T,>()=>{let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>{resolve=r;});return {resolve,promise};};
@@ -102,7 +102,7 @@ test('manager cursors retain independent pages; denied private source clears dat
   await s.coordinator.loadResults(game.id);
   // Override the port with the same owning query shape to verify exact server cursors.
   const queries:unknown[]=[];
-  const owner=new PostgameCoordinator({own:s.port.own,reminders:s.port.reminders,invitations:s.port.invitations,send:s.port.send,results:async(_actor,id,query)=>{
+  const owner=new PostgameCoordinator({own:s.port.own,reminders:s.port.reminders,invitations:s.port.invitations,dispute:s.port.dispute,history:s.port.history,send:s.port.send,results:async(_actor,id,query)=>{
     queries.push(query);
     return {...structuredClone(result),gameId:id,revisions:[],revisionsNextCursor:'rev-2',attendance:{...result.attendance!,roster:query?.rosterCursor ? [second] : [row],rosterNextCursor:query?.rosterCursor ? null : 'roster-2'}};
   }},()=> 'key');

@@ -18683,10 +18683,13 @@
           "Games"
         ],
         "summary": "Open own attendance dispute for exact version",
-        "description": "PG-1b. Self only. One open dispute. Silence is not agreement. No automatic report.",
+        "description": "PG-1b. Self only. One open dispute. Silence is not agreement. No automatic report. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -18833,10 +18836,13 @@
           "Games"
         ],
         "summary": "Bounded immutable attendance revision history",
-        "description": "PG-1b. Own context or current manager. Newest-first window, ascending projection.",
+        "description": "PG-1b. Own context or current manager. Newest-first window, ascending projection. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -18924,10 +18930,13 @@
           "Games"
         ],
         "summary": "Private attendance dispute projection",
-        "description": "PG-1b. Self or current authorized manager. No foreign roster leak.",
+        "description": "PG-1b. Self or current authorized manager. No foreign roster leak. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -18995,10 +19004,13 @@
           "Games"
         ],
         "summary": "Withdraw own open attendance dispute",
-        "description": "PG-1b. Self only. Does not rewrite attendance assertion.",
+        "description": "PG-1b. Self only. Does not rewrite attendance assertion. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -20325,10 +20337,13 @@
           "Games"
         ],
         "summary": "Manager response / optional correction for open attendance dispute",
-        "description": "PG-2. Current manager. Response/correction never unilaterally closes objection. Idempotency-Key + cookie/Origin/CSRF. Writes default OFF.",
+        "description": "PG-2. Current manager. Response/correction never unilaterally closes objection. Idempotency-Key + cookie/Origin/CSRF. Writes default OFF. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -20436,10 +20451,13 @@
           "Games"
         ],
         "summary": "Request help escalation for own open attendance dispute",
-        "description": "PG-2. Self only. Records escalation progress — not an abuse report and not staff assignment. Writes default OFF.",
+        "description": "PG-2. Self only. Records escalation progress — not an abuse report and not staff assignment. Writes default OFF. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [

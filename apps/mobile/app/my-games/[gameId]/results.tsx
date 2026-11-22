@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../../src/auth.tsx';
 import { canonicalPostgamePath } from '../../../src/native-auth-protocol.ts';
 import { AttendancePanel, PostgameSurface, CommandReview, OutcomePanel, Roster, SourceNotice, ReminderActions } from '../../../src/components/postgame.tsx';
+import { ClarificationSection } from '../../../src/components/postgame-disputes.tsx';
 import { BackLink, Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
 export default function GameResults() {
   const params=useLocalSearchParams<{gameId?:string|string[]}>(), router=useRouter(), auth=useAuth(), owner=auth.postgame;
@@ -28,6 +29,7 @@ export default function GameResults() {
         {data.attendance?.installed === false && <Label>Отметки посещения сейчас недоступны.</Label>}
         {data.attendance?.myAttendance && <AttendancePanel key={`${actor}:${gameId}:own`} row={data.attendance.myAttendance} gameId={gameId} own writes={data.attendance.writesEnabled} />}
         <Roster key={`${actor}:${gameId}:roster`} data={data} />
+        <ClarificationSection key={`${actor}:${gameId}:clarify`} data={data} />
         {data.revisions && <View style={styles.card}><Label style={{fontWeight:'700'}}>История исхода</Label>{data.revisions.map(r=><View key={r.version}><Label>{r.after.value === 'held' ? 'Игра состоялась' : 'Игра не состоялась'} · {new Date(r.recordedAt).toLocaleString('ru')}</Label>{r.reason && <Label>{r.reason}</Label>}</View>)}
           {data.revisionsNextCursor && <TextButton title="Ещё изменения" onPress={()=>void owner.loadResults(gameId,{revisionsLimit:20,revisionsCursor:data.revisionsNextCursor ?? undefined},'revisions')} />}</View>}
       </>}

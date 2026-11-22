@@ -63,6 +63,8 @@ export class AuthCoordinator {
       reminders: actor => this.participationRead(access => deps.api.postgameReminders(access),actor),
       invitations: (actor,cursor) => this.participationRead(access => deps.api.myInvitations(access,cursor),actor),
       results: (actor,id,query) => this.participationRead(access => deps.api.postgameResults(access,id,query),actor),
+      dispute: (actor,disputeId) => this.participationRead(access => deps.api.postgameDispute(access,disputeId),actor),
+      history: (actor,gameId,contextId,limit) => this.participationRead(access => deps.api.postgameHistory(access,gameId,contextId,limit),actor),
       send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
     },deps.random);
     this.contact = new ContactCoordinator({
