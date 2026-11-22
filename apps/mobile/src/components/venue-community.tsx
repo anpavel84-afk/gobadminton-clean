@@ -106,9 +106,14 @@ function CommunityPanel({name}:{name:string}) {
     pendingPublish.current = notePendingPublish(pendingPublish.current, packetKey, photoIds);
   }, []);
   useEffect(() => {
-    const { pending, retireIds } = applyPublishOperationUpdates(pendingPublish.current, s.operations);
+    const { pending, retireIds, refusedWithPhotos } = applyPublishOperationUpdates(
+      pendingPublish.current,
+      s.operations,
+    );
     pendingPublish.current = pending;
     if (retireIds.length) photos.retirePublished(retireIds);
+    // photoUnavailable / TTL: drafts stay, but expired receipts must not stay Send-eligible.
+    if (refusedWithPhotos) photos.recheckExpiry();
   }, [s.operations, photos]);
   const orderLabel = orderOptions.find(([value]) => value === s.order)?.[1] ?? orderOptions[0][1];
   const login = () => router.push({pathname:'/profile',params:{returnTo:`/venues/${s.venueId}`}});

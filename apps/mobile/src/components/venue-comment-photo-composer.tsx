@@ -9,12 +9,14 @@ import {
   MAX_COMMENT_PHOTOS,
   commentSendReady,
   detectCommentPhotoMime,
+  expireStaleReadyPhotos,
   hasCheckingPhoto,
   isHeicCommentSource,
   applyPendingReadDelta,
   mapUploadFailure,
   photoComposerReducer,
-  photoStatusLabel,
+  photoItemMessage,
+  photoItemStatusLabel,
   readyPhotoIds,
   type PhotoComposerItem,
 } from '../venue-comment-photos.ts';
@@ -40,6 +42,8 @@ export type VenueCommentPhotoComposerModel = {
   clear: () => void;
   /** Drop drafts whose receipt ids were published by a confirmed create. */
   retirePublished: (photoIds: readonly string[]) => void;
+  /** After create refuse / photoUnavailable — mark ready drafts past expiresAt. */
+  recheckExpiry: (now?: number) => void;
 };
 
 /**
@@ -252,6 +256,7 @@ export function useVenueCommentPhotoComposer(
       || item.state === 'checking'
       || item.state === 'withdrawing'
       || item.state === 'ready'
+      || item.state === 'expired'
       || item.state === 'rejected'
     ) return;
     if (item.withdrawKey && item.receipt) {
@@ -302,6 +307,21 @@ export function useVenueCommentPhotoComposer(
     dispatch({ type: 'retireIds', ids: photoIds });
   }, []);
 
+  const recheckExpiry = useCallback((now = Date.now()) => {
+    const next = expireStaleReadyPhotos(itemsRef.current, now);
+    for (const item of next) {
+      const prev = itemsRef.current.find(row => row.key === item.key);
+      if (!prev || prev.state === item.state && prev.message === item.message) continue;
+      dispatch({
+        type: 'patch',
+        key: item.key,
+        state: item.state,
+        message: item.message,
+        ...(item.receipt !== undefined ? { receipt: item.receipt } : {}),
+      });
+    }
+  }, []);
+
   const reading = pendingReads > 0;
   return {
     items,
@@ -316,6 +336,7 @@ export function useVenueCommentPhotoComposer(
     remove,
     clear,
     retirePublished,
+    recheckExpiry,
   };
 }
 
@@ -359,31 +380,35 @@ export function VenueCommentPhotoComposer({
         }}
       />
       {model.notice ? <Label accessibilityRole="alert" accessibilityLiveRegion="polite">{model.notice}</Label> : null}
-      {model.items.map((item, index) => (
-        <View key={item.key} style={{ gap: 6, paddingTop: 8, borderTopWidth: 1, borderColor: colors.line }}>
-          <Label accessibilityLiveRegion="polite">
-            Фото {index + 1} · {photoStatusLabel(item.state)}
-          </Label>
-          {item.message ? <Label>{item.message}</Label> : null}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {item.state !== 'checking'
-              && item.state !== 'withdrawing'
-              && item.state !== 'ready'
-              && item.state !== 'rejected' ? (
+      {model.items.map((item, index) => {
+        const statusMessage = photoItemMessage(item);
+        return (
+          <View key={item.key} style={{ gap: 6, paddingTop: 8, borderTopWidth: 1, borderColor: colors.line }}>
+            <Label accessibilityLiveRegion="polite">
+              Фото {index + 1} · {photoItemStatusLabel(item)}
+            </Label>
+            {statusMessage ? <Label>{statusMessage}</Label> : null}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {item.state !== 'checking'
+                && item.state !== 'withdrawing'
+                && item.state !== 'ready'
+                && item.state !== 'expired'
+                && item.state !== 'rejected' ? (
+                <OutlineButton
+                  title="Повторить"
+                  disabled={locked || (!model.rights && !item.withdrawKey)}
+                  onPress={() => model.retry(item)}
+                />
+              ) : null}
               <OutlineButton
-                title="Повторить"
-                disabled={locked || (!model.rights && !item.withdrawKey)}
-                onPress={() => model.retry(item)}
+                title={`Убрать фото ${index + 1}`}
+                disabled={locked || item.state === 'checking' || item.state === 'withdrawing'}
+                onPress={() => model.remove(item)}
               />
-            ) : null}
-            <OutlineButton
-              title={`Убрать фото ${index + 1}`}
-              disabled={locked || item.state === 'checking' || item.state === 'withdrawing'}
-              onPress={() => model.remove(item)}
-            />
+            </View>
           </View>
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }

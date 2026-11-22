@@ -9,10 +9,15 @@ import {
   applyPendingReadDelta,
   applyPublishOperationUpdates,
   commentSendReady,
+  expireStaleReadyPhotos,
   isPhotoReceipt,
+  mapUploadFailure,
   notePendingPublish,
   photoComposerReducer,
+  photoItemMessage,
+  photoItemStatusLabel,
   readyPhotoIds,
+  receiptUnexpired,
   type PhotoComposerItem,
   type VenueCommentPhotoReceipt,
 } from '../src/venue-comment-photos.ts';
@@ -145,8 +150,12 @@ test('#598B reducer max 4, retry keeps key, readyPhotoIds excludes non-ready', (
   assert.deepEqual(readyPhotoIds(items), [photoId]);
   assert.equal(commentSendReady('', items), false);
   items = photoComposerReducer(items, { type: 'patch', key: keys[3]!, state: 'retryable' });
-  assert.equal(commentSendReady('', items), true);
-  assert.equal(commentSendReady('текст', items.filter(i => i.state !== 'ready')), true);
+  // r6 web parity: rejected/retryable active drafts block Send (web selected.every ready).
+  assert.equal(commentSendReady('', items), false);
+  assert.equal(commentSendReady('текст', items.filter(i => i.state !== 'ready')), false);
+  const onlyReady = items.filter(i => i.state === 'ready');
+  assert.equal(commentSendReady('', onlyReady), true);
+  assert.equal(commentSendReady('текст', onlyReady), true);
 });
 
 test('#598B withdraw drop removes ready item from composer state', () => {
@@ -586,6 +595,111 @@ test('#598B r5 composer passes alive+generation+scope permit; stale Participatio
   assert.match(withdraw, /const permit = \(\) => alive\.current && epoch === generation\.current && live\.current\.venueId === venue\s*&& itemsRef\.current\.some\(item => item\.key === key\)/);
   assert.match(withdraw, /nativeAuth\.withdrawCommentPhoto\(\s*\{ id: receiptId, key: withdrawKey, venueId: venue \},\s*current,\s*permit,/);
   assert.match(withdraw, /error instanceof ParticipationError && error\.kind === 'stale'/);
+});
+
+test('#598B r6 readyPhotoIds / Send recheck expiresAt; equal-to-now excluded (injectable now)', () => {
+  const now = 1_700_000_000_000;
+  const future = new Date(now + 3_600_000).toISOString();
+  const past = new Date(now - 1).toISOString();
+  const equal = new Date(now).toISOString();
+
+  let fresh: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  fresh = photoComposerReducer(fresh, {
+    type: 'patch', key, state: 'ready', receipt: readyReceipt(photoId, { expiresAt: future }),
+  });
+  assert.equal(receiptUnexpired(fresh[0]!.receipt!, now), true);
+  assert.deepEqual(readyPhotoIds(fresh, now), [photoId]);
+  assert.equal(commentSendReady('', fresh, now), true);
+  assert.equal(photoItemStatusLabel(fresh[0]!, now), 'Готово');
+
+  let stale: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  stale = photoComposerReducer(stale, {
+    type: 'patch', key, state: 'ready', receipt: readyReceipt(photoId, { expiresAt: past }),
+  });
+  assert.equal(receiptUnexpired(stale[0]!.receipt!, now), false);
+  assert.deepEqual(readyPhotoIds(stale, now), []);
+  assert.equal(commentSendReady('', stale, now), false);
+  assert.equal(commentSendReady('текст', stale, now), false);
+  assert.equal(photoItemStatusLabel(stale[0]!, now), 'Срок истёк');
+  assert.match(photoItemMessage(stale[0]!, now) ?? '', /Срок действия истёк/);
+
+  let boundary: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  boundary = photoComposerReducer(boundary, {
+    type: 'patch', key, state: 'ready', receipt: readyReceipt(photoId, { expiresAt: equal }),
+  });
+  assert.deepEqual(readyPhotoIds(boundary, now), []);
+  assert.equal(commentSendReady('', boundary, now), false);
+
+  const marked = expireStaleReadyPhotos(stale, now);
+  assert.equal(marked[0]!.state, 'expired');
+  assert.deepEqual(readyPhotoIds(marked, now), []);
+  assert.equal(commentSendReady('', marked, now), false);
+});
+
+test('#598B r6 mapUploadFailure parity vs web; expired excluded from photoIds (negative)', () => {
+  assert.equal(mapUploadFailure(422, 'PUBLIC_IMAGE_CONTENT_REJECTED').state, 'rejected');
+  assert.equal(mapUploadFailure(400, 'PHOTO_RIGHTS_REQUIRED').state, 'rejected');
+  assert.equal(mapUploadFailure(413, '').state, 'rejected');
+  assert.equal(mapUploadFailure(415, '').state, 'rejected');
+  assert.equal(mapUploadFailure(429, '').state, 'retryable');
+  // web: 409/503 → unknown (same key), not retryable label
+  assert.equal(mapUploadFailure(409, 'COMMENT_PHOTO_LIMIT').state, 'unknown');
+  assert.equal(mapUploadFailure(503, '').state, 'unknown');
+  assert.equal(mapUploadFailure(0, '').state, 'unknown');
+
+  const now = 1_700_000_000_000;
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/png', size: 50,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch',
+    key,
+    state: 'ready',
+    receipt: readyReceipt(photoId, { expiresAt: new Date(now - 60_000).toISOString() }),
+  });
+  assert.deepEqual(readyPhotoIds(items, now), []);
+  assert.equal(readyPhotoIds(items, now).includes(photoId), false);
+});
+
+test('#598B r6 refused create keeps drafts and marks expiry; composer wires recheckExpiry', () => {
+  const now = 1_700_000_000_000;
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch',
+    key,
+    state: 'ready',
+    receipt: readyReceipt(photoId, { expiresAt: new Date(now - 1).toISOString() }),
+  });
+  const refused = applyPublishOperationUpdates(
+    notePendingPublish(new Map(), 'op-photo-fail', [photoId]),
+    [{ packet: { key: 'op-photo-fail' }, status: 'refused' }],
+  );
+  assert.equal(refused.retireIds.length, 0);
+  assert.equal(refused.refusedWithPhotos, true);
+  assert.equal(refused.pending.size, 0);
+  // Drafts remain; expiry mark makes them non-publishable.
+  assert.deepEqual(readyPhotoIds(items, now), []);
+  const marked = expireStaleReadyPhotos(items, now);
+  assert.equal(marked[0]!.state, 'expired');
+  assert.equal(commentSendReady('', marked, now), false);
+
+  const composer = read('../src/components/venue-comment-photo-composer.tsx');
+  assert.match(composer, /recheckExpiry/);
+  assert.match(composer, /expireStaleReadyPhotos/);
+  assert.match(composer, /photoItemStatusLabel/);
+  assert.match(composer, /photoItemMessage/);
+  assert.doesNotMatch(composer, /photoStatusLabel\(item\.state\)/);
+  const ui = read('../src/components/venue-community.tsx');
+  assert.match(ui, /refusedWithPhotos/);
+  assert.match(ui, /photos\.recheckExpiry\(\)/);
 });
 
 test('#598B r5 delayed-token: stale permit never dispatches photo API; live permit calls once', async () => {

@@ -71,11 +71,20 @@ export function isHeicCommentSource(bytes: Uint8Array): boolean {
 export type PhotoItemState =
   | 'checking'
   | 'ready'
+  | 'expired'
   | 'rejected'
   | 'retryable'
   | 'unknown'
   | 'withdrawing'
   | 'withdraw_failed';
+
+/** Publish-time TTL — mirrors API `expires_at > now` / web `Date.parse(expiresAt) > Date.now()`. */
+export function receiptUnexpired(
+  receipt: Pick<VenueCommentPhotoReceipt, 'expiresAt'>,
+  now = Date.now(),
+): boolean {
+  return Date.parse(receipt.expiresAt) > now;
+}
 
 export type PhotoComposerItem = {
   key: string;
@@ -150,15 +159,17 @@ export function notePendingPublish(
 
 /**
  * When a tracked create becomes confirmed, retire those photo ids.
- * Refused clears the association only — drafts stay for retry.
+ * Refused clears the association only — drafts stay; caller rechecks expiry
+ * (photoUnavailable / TTL) so expired receipts are marked, not resubmitted.
  * Unknown/pending keep the association across composer remounts.
  */
 export function applyPublishOperationUpdates(
   pending: PendingPublishMap,
   operations: readonly { packet: { key: string }; status: string }[],
-): { pending: Map<string, readonly string[]>; retireIds: string[] } {
+): { pending: Map<string, readonly string[]>; retireIds: string[]; refusedWithPhotos: boolean } {
   const next = new Map(pending);
   const retireIds: string[] = [];
+  let refusedWithPhotos = false;
   for (const [packetKey, photoIds] of pending) {
     const operation = operations.find(o => o.packet.key === packetKey);
     if (!operation) continue;
@@ -166,10 +177,11 @@ export function applyPublishOperationUpdates(
       retireIds.push(...photoIds);
       next.delete(packetKey);
     } else if (operation.status === 'refused') {
+      refusedWithPhotos = true;
       next.delete(packetKey);
     }
   }
-  return { pending: next, retireIds };
+  return { pending: next, retireIds, refusedWithPhotos };
 }
 
 /**
@@ -187,13 +199,17 @@ export function applyPendingReadDelta(
   return Math.max(0, pending + delta);
 }
 
-/** Ready receipt ids only; withdrawing / withdraw_failed / keyed removals never count. */
-export function readyPhotoIds(items: readonly PhotoComposerItem[]): string[] {
+/**
+ * Ready receipt ids only; withdrawing / withdraw_failed / keyed removals / expired never count.
+ * `now` is injectable so expiry tests stay deterministic (web rechecks `expiresAt` at Send time).
+ */
+export function readyPhotoIds(items: readonly PhotoComposerItem[], now = Date.now()): string[] {
   return items
     .filter(item => item.state === 'ready'
       && !item.withdrawKey
       && item.receipt
-      && item.receipt.status === 'ready')
+      && item.receipt.status === 'ready'
+      && receiptUnexpired(item.receipt, now))
     .map(item => item.receipt!.id);
 }
 
@@ -201,24 +217,85 @@ export function hasCheckingPhoto(items: readonly PhotoComposerItem[]): boolean {
   return items.some(item => item.state === 'checking' || item.state === 'withdrawing');
 }
 
-/** Send when trimmed text is non-empty or ≥1 ready photo; never while a photo is checking. */
-export function commentSendReady(text: string, items: readonly PhotoComposerItem[]): boolean {
+/**
+ * Mirrors web `ready()`: every active (!withdrawKey) draft must be unexpired ready;
+ * Send when trimmed text is non-empty or ≥1 such photo; never while checking/withdrawing.
+ */
+export function commentSendReady(
+  text: string,
+  items: readonly PhotoComposerItem[],
+  now = Date.now(),
+): boolean {
   if (hasCheckingPhoto(items)) return false;
-  const ready = readyPhotoIds(items);
-  if (ready.length > MAX_COMMENT_PHOTOS) return false;
-  return Boolean(text.trim() || ready.length);
+  const active = items.filter(item => !item.withdrawKey);
+  if (active.length > MAX_COMMENT_PHOTOS) return false;
+  const allPublishable = active.every(item => item.state === 'ready'
+    && item.receipt
+    && item.receipt.status === 'ready'
+    && receiptUnexpired(item.receipt, now));
+  if (!allPublishable) return false;
+  return Boolean(text.trim() || active.length);
+}
+
+/** Patch ready drafts whose receipt TTL has elapsed — used after create photoUnavailable refuse. */
+export function expireStaleReadyPhotos(
+  items: readonly PhotoComposerItem[],
+  now = Date.now(),
+): PhotoComposerItem[] {
+  return items.map(item => {
+    if (item.state !== 'ready' || item.withdrawKey || !item.receipt) return item;
+    if (receiptUnexpired(item.receipt, now)) return item;
+    return {
+      ...item,
+      state: 'expired' as const,
+      message: 'Срок действия истёк. Уберите фото и добавьте снова.',
+    };
+  });
 }
 
 export function photoStatusLabel(state: PhotoItemState): string {
   if (state === 'checking') return 'Проверяется…';
   if (state === 'withdrawing') return 'Снимается…';
   if (state === 'ready') return 'Готово';
+  if (state === 'expired') return 'Срок истёк';
   if (state === 'rejected') return 'Отклонено';
   if (state === 'retryable') return 'Можно повторить позже';
   if (state === 'withdraw_failed') return 'Снятие не подтверждено';
   return 'Результат пока неизвестен';
 }
 
+/** Status line + derived expiry when state is still `ready` but TTL elapsed (web Send recheck). */
+export function photoItemStatusLabel(item: PhotoComposerItem, now = Date.now()): string {
+  if (
+    item.state === 'ready'
+    && item.receipt
+    && !item.withdrawKey
+    && !receiptUnexpired(item.receipt, now)
+  ) {
+    return 'Срок истёк';
+  }
+  return photoStatusLabel(item.state);
+}
+
+export function photoItemMessage(item: PhotoComposerItem, now = Date.now()): string | undefined {
+  if (
+    item.state === 'ready'
+    && item.receipt
+    && !item.withdrawKey
+    && !receiptUnexpired(item.receipt, now)
+  ) {
+    return 'Срок действия истёк. Уберите фото и добавьте снова.';
+  }
+  if (item.state === 'expired') {
+    return item.message ?? 'Срок действия истёк. Уберите фото и добавьте снова.';
+  }
+  return item.message;
+}
+
+/**
+ * Upload outcome mapping — mirrors web `perform()`:
+ * final reject: 400/403/404/413/415/422; retryable: 429; unknown: 409/503/network.
+ */
 export function mapUploadFailure(status: number, code: string): { state: PhotoItemState; message: string } {
   if (status === 422 || code === 'PUBLIC_IMAGE_CONTENT_REJECTED') {
     return { state: 'rejected', message: 'Фото отклонено. Удалите его из публикации.' };
@@ -229,8 +306,6 @@ export function mapUploadFailure(status: number, code: string): { state: PhotoIt
   if (status === 429) {
     return { state: 'retryable', message: 'Проверка временно недоступна. Повторите позже.' };
   }
-  if ([409, 503].includes(status)) {
-    return { state: 'retryable', message: 'Проверка временно недоступна. Повторите позже.' };
-  }
+  // 409 / 503 / other — web keeps UNKNOWN (same idempotency key on retry), not a fresh upload.
   return { state: 'unknown', message: 'Результат пока неизвестен. Повтор использует ту же попытку.' };
 }
