@@ -148,6 +148,89 @@ test('delegated noncreator manager uses current roster version and rights, confl
   assert.equal(s.owner.getSnapshot().details[g.id]?.status,'denied');
   await s.owner.decide(g.id,part.id,'confirm',''); assert.equal(s.sent.length,1);
 });
+test('explicit cancel succeeds, rejects invalid status/version, retains UNKNOWN packet and survives only same-packet reconcile', async () => {
+  const published = { ...g, status: 'published' as const, version: 8 };
+  const cancelled = { ...published, status: 'cancelled' as const, version: 9 };
+  let current: Game = published;
+  const s = setup({
+    managed: async () => ({ items: [{ ...current, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => current,
+    send: async p => {
+      if (p.kind !== 'cancel') return { ...part, version: 4, status: 'confirmed' };
+      current = cancelled; return cancelled;
+    },
+  });
+  await s.owner.loadDetail(g.id);
+  await s.owner.cancel(g.id, ''); assert.equal(s.sent.length, 0);
+  await s.owner.cancel(g.id, '   '); assert.equal(s.sent.length, 0);
+  await s.owner.cancel(g.id, 'Погода'); assert.equal(s.sent.length, 1);
+  assert.equal(s.sent[0]?.kind, 'cancel'); assert.deepEqual(s.sent[0]?.body, { expectedVersion: 8, reason: 'Погода' });
+  assert.equal(s.owner.getSnapshot().notice, 'Игра отменена.');
+  assert.equal(s.owner.getSnapshot().details[g.id]?.game?.status, 'cancelled');
+
+  const conflict = setup({
+    managed: async () => ({ items: [{ ...published, management: { role: 'manager', createdByMe: false } }], nextCursor: null }),
+    game: async () => published,
+    send: async () => { throw new ParticipationError('business', 409, 'VERSION_CONFLICT'); },
+  });
+  await conflict.owner.loadDetail(g.id); await conflict.owner.cancel(g.id, 'Stale version');
+  assert.equal(conflict.owner.getSnapshot().command?.status, 'rejected');
+  assert.equal(conflict.owner.getSnapshot().command?.code, 'VERSION_CONFLICT');
+
+  const invalid = setup({
+    managed: async () => ({ items: [{ ...g, status: 'completed', management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => ({ ...g, status: 'completed' }),
+  });
+  await invalid.owner.loadDetail(g.id); await invalid.owner.cancel(g.id, 'Too late'); assert.equal(invalid.sent.length, 0);
+
+  let recover = false;
+  const unknown = setup({
+    managed: async () => ({ items: [{ ...published, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => published,
+    send: async () => { if (!recover) throw new ParticipationError('network'); return cancelled; },
+  });
+  await unknown.owner.loadDetail(g.id); await unknown.owner.cancel(g.id, 'Original cancel reason');
+  const packet = unknown.sent[0]!; assert.equal(unknown.owner.getSnapshot().command?.status, 'unknown');
+  unknown.owner.setActor(null); assert.equal(unknown.owner.getSnapshot().command, undefined);
+  unknown.owner.setActor({ ...actor, sessionId: 'returned', generation: 2 });
+  assert.equal(unknown.owner.getSnapshot().command?.status, 'unknown');
+  await unknown.owner.cancel(g.id, 'Must not replace'); assert.equal(unknown.sent.length, 1);
+  recover = true; await unknown.owner.reconcile();
+  assert.equal(unknown.sent[1]?.kind, 'cancel'); assert.equal(unknown.sent[1]?.key, packet.key);
+  assert.strictEqual(unknown.sent[1]?.body, packet.body); assert.deepEqual(packet.body, { expectedVersion: 8, reason: 'Original cancel reason' });
+  assert.equal(unknown.owner.getSnapshot().notice, 'Игра отменена.');
+});
+test('cancel UI requires explicit confirmation, keeps capacity deferred, and never auto-cancels on navigation labels', () => {
+  const ui = readFileSync(new URL('../src/components/game-management.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /Подтверждение отмены/);
+  assert.match(ui, /Подтвердить отмену/);
+  assert.match(ui, /Не отменять/);
+  assert.match(ui, /Отменить игру/);
+  assert.match(ui, /Изменение вместимости пока недоступно/);
+  assert.doesNotMatch(ui, /Изменение вместимости и отмена игры пока недоступны/);
+  assert.match(ui, /setConfirmingCancel\(false\)/);
+  assert.match(ui, /owner\.cancel\(id, cancelReason\)/);
+  assert.match(ui, /router\.replace\('\/my-games'\)/);
+  assert.doesNotMatch(ui.slice(ui.indexOf('BackLink'), ui.indexOf('Управление игрой')), /owner\.cancel/);
+});
+test('closed native transport posts cancel with expectedVersion, reason and bearer-only idempotency', async () => {
+  const calls: { path: string; init: RequestInit }[] = [];
+  const cancelled = { ...g, status: 'cancelled' as const, version: 9 };
+  const api = createNativeApi(async (url, init) => {
+    calls.push({ path: String(url), init: init! });
+    return new Response(JSON.stringify(cancelled));
+  });
+  const packet = { actor, kind: 'cancel' as const, gameId: g.id, key: 'cancel-key', body: { expectedVersion: 8, reason: 'Transport reason' } };
+  assert.deepEqual(await api.managementMutation('private-access', packet), cancelled);
+  const call = calls[0]!;
+  assert.ok(call.path.endsWith(`/v1/games/${g.id}/cancel`));
+  assert.deepEqual(JSON.parse(call.init.body as string), packet.body);
+  assert.equal((call.init.headers as Record<string, string>)['Idempotency-Key'], 'cancel-key');
+  assert.equal((call.init.headers as Record<string, string>).Authorization, 'Bearer private-access');
+  assert.equal(call.init.credentials, 'omit');
+  assert.equal((call.init.headers as Record<string, string>).Origin, undefined);
+  assert.equal((call.init.headers as Record<string, string>).Cookie, undefined);
+});
 test('actor A→B→A generation fences late create, context and paginated private roster; logout clears contact/DTO/packet', async () => {
   const gate = deferred<Game>(), s = setup({ send: async () => gate.promise }); await preview(s.owner); const work = s.owner.publishPreview();
   s.owner.setActor(null); s.owner.setActor({...actor,actorId:'b',generation:2}); s.owner.setActor({...actor,generation:3});

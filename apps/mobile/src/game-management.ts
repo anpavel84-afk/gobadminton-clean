@@ -57,6 +57,7 @@ export function creationInput(form: CreationForm, profile: CreatorProfile, prefe
 export type ManagementPacket = Readonly<{ actor: Actor; key: string } & (
   { kind: 'create'; body: Readonly<CreateGame> } |
   { kind: 'publish'; gameId: string; body: Readonly<{ expectedVersion: number }> } |
+  { kind: 'cancel'; gameId: string; body: Readonly<{ expectedVersion: number; reason: string }> } |
   { kind: 'confirm' | 'reject' | 'remove'; gameId: string; participationId: string; body: Readonly<{ expectedVersion: number; reason?: string }> })>;
 type CommandState = { packet: ManagementPacket; status: 'sending' | 'unknown' | 'settled' | 'rejected'; code?: string };
 type Detail = { status: 'loading' | 'ready' | 'error' | 'denied'; game?: Game; management?: ManagedGame['management']; participants: Participation[]; cursor: string | null; roster: 'loading' | 'ready' | 'error'; notice?: string };
@@ -247,6 +248,13 @@ export class GameManagementCoordinator {
         if (!game.id || !Number.isInteger(game.version) || (packet.kind === 'create' ? game.status !== 'draft' : game.id !== packet.gameId || game.status !== 'published' || game.version <= packet.body.expectedVersion)) throw new ParticipationError('invalid');
         this.show({ created: game, creationReference: { id: game.id, version: game.version }, command: { packet, status: 'settled' } });
         if (packet.kind === 'publish') await this.loadDetail(game.id);
+      } else if (packet.kind === 'cancel') {
+        const game = result as Game;
+        if (!game.id || game.id !== packet.gameId || !Number.isInteger(game.version) || game.status !== 'cancelled' || game.version <= packet.body.expectedVersion) throw new ParticipationError('invalid');
+        this.show({ command: { packet, status: 'settled' }, notice: 'Игра отменена.',
+          ...(this.state.created?.id === packet.gameId || this.state.creationReference?.id === packet.gameId
+            ? { created: game, creationReference: { id: game.id, version: game.version } } : {}) });
+        await this.loadDetail(packet.gameId);
       } else {
         const p = result as Participation;
         if (p.id !== packet.participationId || p.gameId !== packet.gameId || p.version <= packet.body.expectedVersion ||
@@ -314,5 +322,13 @@ export class GameManagementCoordinator {
       (kind === 'remove' ? p.status !== 'confirmed' : p.status !== 'pending') || (kind === 'confirm' && d.game.availablePlaces < 1)) return;
     await this.dispatch(freeze({ actor, kind, gameId: id, participationId, key: this.random(),
       body: { expectedVersion: p.version, ...(kind === 'confirm' ? {} : { reason: reason.trim() || (kind === 'reject' ? 'Организатор отклонил заявку' : 'Организатор снял участие') }) } }));
+  };
+  /** Explicit confirmation only. Auth return, navigation and detail refresh never dispatch cancel. */
+  cancel = async (id: string, reason: string) => {
+    const actor = this.state.actor, d = this.state.details[id], trimmed = reason.trim();
+    if (!actor || this.locked() || d?.status !== 'ready' || !d.management || !d.game ||
+      (d.game.status !== 'draft' && d.game.status !== 'published') || trimmed.length < 1 || trimmed.length > 1000) return;
+    await this.dispatch(freeze({ actor, kind: 'cancel', gameId: id, key: this.random(),
+      body: { expectedVersion: d.game.version, reason: trimmed } }));
   };
 }

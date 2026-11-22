@@ -486,9 +486,10 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     gameParticipants: async (access: string, id: string, cursor?: string) => parseCursorPage(await request(`/games/${encodeURIComponent(id)}/participations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseParticipation),
     managementMutation: async (access: string, packet: ManagementPacket) => {
       const path = packet.kind === 'create' ? '/games' : packet.kind === 'publish' ? `/games/${encodeURIComponent(packet.gameId)}/publish`
+        : packet.kind === 'cancel' ? `/games/${encodeURIComponent(packet.gameId)}/cancel`
         : `/participations/${encodeURIComponent(packet.participationId)}/${packet.kind}`;
       const value = await request(path, 'POST', packet.body, access, packet.key, true);
-      return packet.kind === 'create' || packet.kind === 'publish' ? parseAuthenticatedGame(value) : parseParticipation(value);
+      return packet.kind === 'create' || packet.kind === 'publish' || packet.kind === 'cancel' ? parseAuthenticatedGame(value) : parseParticipation(value);
     },
     inbox: async (access: string, filter: InboxFilter, cursor?: string) => parseInbox(await privateMessage(`/me/inbox?limit=50&filter=${filter}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, access)),
     inboxCounts: async (access: string) => parseCounts(await privateMessage('/me/inbox/counts', access)),
