@@ -275,21 +275,31 @@ export type ProfileBody = Readonly<{
 }>;
 /** Policy-only command — wire is exactly {expectedVersion,contactPolicy}; never carries name/city/bio. */
 export type ContactPolicyBody = Readonly<{ expectedVersion: number; contactPolicy: 'requests' | 'closed' }>;
+/** Catalog visibility — PUT body only; consentPolicyVersion only when ON and already stored. */
+export type VisibilityBody = Readonly<{
+  directoryVisible: boolean;
+  expectedVersion: number;
+  consentPolicyVersion?: string;
+}>;
 export type LookingPacket =
   | Readonly<{ kind: 'lookingPut'; actor: Readonly<Actor>; key: string; body: LookingPutBody }>
   | Readonly<{ kind: 'lookingDelete'; actor: Readonly<Actor>; key: string }>;
+export type VisibilityPacket =
+  Readonly<{ kind: 'visibility'; actor: Readonly<Actor>; key: string; body: VisibilityBody }>;
 export type ProfileMutationPacket =
   | Readonly<{ kind: 'profile'; actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>
   | Readonly<{ kind: 'contactPolicy'; actor: Readonly<Actor>; key: string; body: ContactPolicyBody }>;
-export type ProfilePacket = ProfileMutationPacket | LookingPacket;
+export type ProfilePacket = ProfileMutationPacket | LookingPacket | VisibilityPacket;
 export type ProfilePort = { read: () => Promise<OwnProfile>; cities: () => Promise<City[]>;
   send: (packet: ProfileMutationPacket, authority: Actor) => Promise<OwnProfile>;
   /** Optional until a looking mutation is admitted; missing port refuses looking writes. */
-  looking?: (packet: LookingPacket, authority: Actor) => Promise<Looking> };
+  looking?: (packet: LookingPacket, authority: Actor) => Promise<Looking>;
+  /** Optional until visibility PUT is admitted; missing port refuses catalog visibility writes. */
+  visibility?: (packet: VisibilityPacket, authority: Actor) => Promise<OwnProfile> };
 export type ProfileDraft = { displayName: string; cityId: string; areaKey: string; bio: string; levelChoice: LevelGuideChoice };
 /** Typed read routing — never inferred from localized notice text. */
 export type ProfileReadIntent = null | 'rebase';
-export type ProfileNoticeOwner = null | 'profile' | 'contactPolicy' | 'looking';
+export type ProfileNoticeOwner = null | 'profile' | 'contactPolicy' | 'looking' | 'visibility';
 type Snapshot = { actor: Actor | null; profile: OwnProfile | null; cities: City[]; draft: ProfileDraft;
   status: 'idle' | 'loading' | 'ready' | 'error' | 'stale'; command?: { packet: ProfilePacket; status: 'sending' | 'unknown' };
   notice: string | null; noticeOwner: ProfileNoticeOwner; readIntent: ProfileReadIntent };
@@ -310,7 +320,19 @@ const initial = (): Snapshot => ({
 function noticeOwnerOf(packet: ProfilePacket): ProfileNoticeOwner {
   if (packet.kind === 'contactPolicy') return 'contactPolicy';
   if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') return 'looking';
+  if (packet.kind === 'visibility') return 'visibility';
   return 'profile';
+}
+/** Exact visibility PUT wire — never invents consent; omits consentPolicyVersion unless ON+present. */
+export function visibilityWireBody(body: VisibilityBody): Record<string, unknown> {
+  const wire: Record<string, unknown> = {
+    directoryVisible: body.directoryVisible,
+    expectedVersion: body.expectedVersion,
+  };
+  if (body.directoryVisible && body.consentPolicyVersion !== undefined) {
+    wire.consentPolicyVersion = body.consentPolicyVersion;
+  }
+  return wire;
 }
 const form = (p: OwnProfile): ProfileDraft => createProfileDraft(
   p.displayName, p.cityId ?? '', p.areaKey ?? '', p.bio ?? '', levelGuideChoiceFromProfile(p.level),
@@ -331,10 +353,39 @@ export function profileWireBody(body: ProfileBody | ContactPolicyBody): Record<s
   return wire;
 }
 export const moderationCodes = ['PUBLIC_TEXT_CONTENT_REJECTED','MODERATION_TEMPORARILY_UNAVAILABLE','MODERATION_POLICY_MISMATCH','MODERATION_RATE_LIMITED'];
+type DraftQuarantine = {
+  actorId: string;
+  packet: ProfilePacket | null;
+  draft: ProfileDraft;
+  /** Visibility pending only — dirty-field baseline after same-account restore. */
+  baseline: OwnProfile | null;
+};
+const sameLevelChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'none' && b.kind === 'none') return true;
+  if (a.kind === 'ntrp' && b.kind === 'ntrp') return a.levelId === b.levelId;
+  if (a.kind === 'pilot' && b.kind === 'pilot') return a.levelId === b.levelId;
+  if (a.kind === 'keep' && b.kind === 'keep') return sameFullLevelIdentity(a.level, b.level);
+  return false;
+};
+/** Merge locally dirty draft fields over a fresh authoritative form using a known baseline. */
+function mergeDirtyDraft(draft: ProfileDraft, baseline: OwnProfile, fresh: OwnProfile): ProfileDraft {
+  const baseForm = form(baseline);
+  const next = form(fresh);
+  return createProfileDraft(
+    draft.displayName === baseForm.displayName ? next.displayName : draft.displayName,
+    draft.cityId === baseForm.cityId ? next.cityId : draft.cityId,
+    draft.areaKey === baseForm.areaKey ? next.areaKey : draft.areaKey,
+    draft.bio === baseForm.bio ? next.bio : draft.bio,
+    sameLevelChoice(draft.levelChoice, baseForm.levelChoice) ? next.levelChoice : draft.levelChoice,
+  );
+}
 /** Root lifetime owner. No disk persistence, generic mutation framework or automatic writes. */
 export class ProfileCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private serial = 0;
-  private quarantined: ProfilePacket | null = null;
+  private quarantined: DraftQuarantine | null = null;
+  /** Baseline kept after same-account restore until the next authoritative adopt/load. */
+  private restoredBaseline: OwnProfile | null = null;
   private readonly port: ProfilePort; private readonly random: () => string;
   private readonly isPeerBusy: () => boolean;
   constructor(port: ProfilePort, random: () => string, isPeerBusy: () => boolean = () => false) {
@@ -346,21 +397,66 @@ export class ProfileCoordinator {
   private current(actor: Actor) { return sameActor(actor, this.state.actor); }
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || !actor && !this.state.actor) return;
-    if (this.state.command) this.quarantined = this.state.command.packet;
-    if (actor && this.quarantined?.actor.actorId !== actor.actorId) this.quarantined = null;
-    const packet = actor ? this.quarantined : null;
+    if (this.state.actor) {
+      const packet = this.state.command?.packet ?? null;
+      if (packet) {
+        const d = this.state.draft;
+        const retainDraft = packet.kind === 'visibility';
+        this.quarantined = {
+          actorId: this.state.actor.actorId,
+          packet,
+          // Visibility pending only: keep dirty draft + baseline across same-account gaps.
+          draft: retainDraft
+            ? createProfileDraft(d.displayName, d.cityId, d.areaKey, d.bio, d.levelChoice)
+            : createProfileDraft('', ''),
+          baseline: retainDraft ? (this.state.profile ?? this.restoredBaseline) : null,
+        };
+      } else {
+        // No pending command — do not capture unrelated private form state.
+        this.quarantined = null;
+      }
+    }
+    if (actor && this.quarantined?.actorId !== actor.actorId) this.quarantined = null;
+    const saved = actor ? this.quarantined : null;
     if (actor) this.quarantined = null;
     this.serial++; this.state = initial();
-    this.show({ actor: actor ? Object.freeze({ ...actor }) : null, ...(packet ? { command: { packet, status: 'unknown' as const },
-      draft: packet.kind === 'profile' ? draftFromPacket(packet.body) : createProfileDraft('', ''),
-      noticeOwner: noticeOwnerOf(packet),
-      notice: packet.kind === 'contactPolicy'
-        ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
-        : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete'
-        ? 'Результат статуса «Ищу игру» неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и данными.'
-        : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
+    this.restoredBaseline = null;
+    if (!actor) {
+      this.show({ actor: null });
+      return;
+    }
+    if (!saved) {
+      this.show({ actor: Object.freeze({ ...actor }) });
+      return;
+    }
+    this.restoredBaseline = saved.baseline;
+    const packet = saved.packet;
+    this.show({
+      actor: Object.freeze({ ...actor }),
+      // Profile UNKNOWN: immutable packet-form. Visibility pending: retained dirty draft.
+      // contactPolicy/Looking UNKNOWN: original packet/recovery only with blank form.
+      draft: packet?.kind === 'profile'
+        ? draftFromPacket(packet.body)
+        : packet?.kind === 'visibility'
+        ? saved.draft
+        : createProfileDraft('', ''),
+      ...(packet ? {
+        command: { packet, status: 'unknown' as const },
+        noticeOwner: noticeOwnerOf(packet),
+        notice: packet.kind === 'contactPolicy'
+          ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+          : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete'
+          ? 'Результат статуса «Ищу игру» неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и данными.'
+          : packet.kind === 'visibility'
+          ? 'Пока не удалось подтвердить изменение видимости. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+          : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.',
+      } : {}),
+    });
   }
-  forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
+  forget = () => {
+    this.quarantined = null; this.restoredBaseline = null;
+    this.serial++; this.state = initial(); this.show({});
+  };
   /** Authoritative avatar/version only — never replaces unsaved name/level/area/bio draft. Delayed older receipts cannot overwrite newer state. */
   applyAvatarReceipt = (receipt: AvatarReceipt) => {
     const profile = this.state.profile;
@@ -391,29 +487,12 @@ export class ProfileCoordinator {
     const profile = this.state.profile;
     if (!profile || this.state.command) return false;
     if (fresh.version < profile.version) return false;
-    const draft = this.state.draft;
-    const baseline = form(profile);
-    const next = form(fresh);
-    const sameChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
-      if (a.kind !== b.kind) return false;
-      if (a.kind === 'none' && b.kind === 'none') return true;
-      if (a.kind === 'ntrp' && b.kind === 'ntrp') return a.levelId === b.levelId;
-      if (a.kind === 'pilot' && b.kind === 'pilot') return a.levelId === b.levelId;
-      if (a.kind === 'keep' && b.kind === 'keep') return sameFullLevelIdentity(a.level, b.level);
-      return false;
-    };
     this.show({
       profile: {
         ...fresh,
         avatar: { uploadedUrl: fresh.avatar.uploadedUrl, providerUrl: null },
       },
-      draft: createProfileDraft(
-        draft.displayName === baseline.displayName ? next.displayName : draft.displayName,
-        draft.cityId === baseline.cityId ? next.cityId : draft.cityId,
-        draft.areaKey === baseline.areaKey ? next.areaKey : draft.areaKey,
-        draft.bio === baseline.bio ? next.bio : draft.bio,
-        sameChoice(draft.levelChoice, baseline.levelChoice) ? next.levelChoice : draft.levelChoice,
-      ),
+      draft: mergeDirtyDraft(this.state.draft, profile, fresh),
       status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
     });
     return true;
@@ -426,18 +505,28 @@ export class ProfileCoordinator {
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
+      // Visibility/same-actor recovery may retain restoredBaseline so a later idle load
+      // preserves dirty fields and adopts only pristine ones from the fresh GET.
+      const baseline = this.restoredBaseline;
+      this.restoredBaseline = null;
+      const draft = baseline
+        ? mergeDirtyDraft(this.state.draft, baseline, profile)
+        : form(profile);
       this.show({
-        profile, cities, draft: form(profile), status: 'ready', readIntent: null,
+        profile, cities, draft, status: 'ready', readIntent: null,
         notice: profile.displayName.trim() && profile.cityId ? null : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
         noticeOwner: profile.displayName.trim() && profile.cityId ? null : 'profile',
       });
     } catch {
+      // Keep restoredBaseline + draft; retry stays reachable. Never invent UNKNOWN clearance.
       if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.', noticeOwner: 'profile' });
     }
   };
   /**
-   * Authoritative GET + rebaseFromAuthoritative while readIntent==='rebase'.
+   * Authoritative GET + dirty-preserving adopt while readIntent==='rebase'.
    * Allowed from status stale, or error after a failed rebase GET (intent retained).
+   * Works with a loaded profile OR null-profile same-actor visibility recovery that still
+   * holds restoredBaseline (409 / consent-invalid / explicit refresh after rejection).
    * Preserves dirty name/city/area/bio/level; adopts fresh version/policy/pristine fields.
    * No auto write / policy resend. Does not infer cause from notice text.
    * Lower historical GET must not claim ready/fresh.
@@ -446,33 +535,55 @@ export class ProfileCoordinator {
     const actor = this.state.actor;
     const canRebase = this.state.status === 'stale'
       || (this.state.status === 'error' && this.state.readIntent === 'rebase');
-    if (!actor || !this.state.profile || this.state.command || !canRebase || this.isPeerBusy()) return;
+    const existing = this.state.profile;
+    const baseline = existing ?? this.restoredBaseline;
+    // Null-profile recovery needs the retained baseline; never require a loaded profile alone.
+    if (!actor || this.state.command || !canRebase || this.isPeerBusy() || !baseline) return;
     const serial = ++this.serial;
     this.show({ status: 'loading', notice: null, noticeOwner: null });
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
       this.show({ cities });
-      const applied = this.rebaseFromAuthoritative(profile);
-      if (!this.current(actor) || serial !== this.serial) return;
-      if (!applied) {
+      if (existing) {
+        const applied = this.rebaseFromAuthoritative(profile);
+        if (!this.current(actor) || serial !== this.serial) return;
+        if (!applied) {
+          this.show({
+            status: 'stale',
+            notice: 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.',
+            noticeOwner: 'profile',
+          });
+          return;
+        }
+        // Adopted profile is the new dirty baseline for any later idle load.
+        this.restoredBaseline = this.state.profile;
+        const adopted = this.state.profile!;
         this.show({
-          status: 'stale',
-          notice: 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.',
-          noticeOwner: 'profile',
+          status: 'ready',
+          readIntent: null,
+          notice: adopted.displayName.trim() && adopted.cityId
+            ? null
+            : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+          noticeOwner: adopted.displayName.trim() && adopted.cityId ? null : 'profile',
         });
         return;
       }
-      const adopted = this.state.profile;
+      // profile=null same-actor path: merge against restored baseline, then keep adopted for load().
+      const draft = mergeDirtyDraft(this.state.draft, baseline, profile);
+      this.restoredBaseline = profile;
       this.show({
+        profile,
+        draft,
         status: 'ready',
         readIntent: null,
-        notice: adopted.displayName.trim() && adopted.cityId
+        notice: profile.displayName.trim() && profile.cityId
           ? null
           : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
-        noticeOwner: adopted.displayName.trim() && adopted.cityId ? null : 'profile',
+        noticeOwner: profile.displayName.trim() && profile.cityId ? null : 'profile',
       });
     } catch {
+      // Retain rebase intent + restoredBaseline; never clear original UNKNOWN by assumption.
       if (this.current(actor) && serial === this.serial) {
         this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.', noticeOwner: 'profile' });
       }
@@ -503,6 +614,7 @@ export class ProfileCoordinator {
   };
   cancel = () => {
     if (this.state.command || this.state.status !== 'ready' || !this.state.profile || this.isPeerBusy()) return;
+    this.restoredBaseline = null;
     this.show({ draft: form(this.state.profile), notice: 'Изменения отменены.', noticeOwner: 'profile' });
   };
   save = async () => {
@@ -598,6 +710,34 @@ export class ProfileCoordinator {
     });
     await this.dispatch(packet, actor);
   };
+  /**
+   * Explicit catalog visibility only. Requires authoritative version≥1.
+   * Never auto-runs on mount/login/reauth/foreground/refresh; city is not a gate;
+   * consent is forwarded only when ON and already stored — never fabricated.
+   */
+  setDirectoryVisible = async (desired: boolean) => {
+    const { actor, profile, status, command } = this.state;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
+    if (profile.version < 1) {
+      this.show({ notice: 'Сначала сохраните игровой профиль.', noticeOwner: 'visibility' });
+      return;
+    }
+    if (profile.directoryVisible === desired) return;
+    const body: VisibilityBody = Object.freeze({
+      directoryVisible: desired,
+      expectedVersion: profile.version,
+      ...(desired && profile.consentPolicyVersion
+        ? { consentPolicyVersion: profile.consentPolicyVersion }
+        : {}),
+    });
+    const packet = Object.freeze({
+      kind: 'visibility' as const,
+      actor: Object.freeze({ ...actor }),
+      key: this.random(),
+      body,
+    });
+    await this.dispatch(packet, actor);
+  };
   reconcile = async () => {
     const { actor, command } = this.state;
     if (actor && command?.status === 'unknown' && command.packet.actor.actorId === actor.actorId) await this.dispatch(command.packet, actor);
@@ -631,6 +771,28 @@ export class ProfileCoordinator {
       return;
     }
     if (looking.state !== 'inactive') throw new ProfileError('invalid');
+  }
+  /** Validate visibility ACK against the original packet only — never against a later nested read. */
+  private assertVisibilityAck(profile: OwnProfile, packet: VisibilityPacket): void {
+    const { body } = packet;
+    if (profile.version <= body.expectedVersion || profile.directoryVisible !== body.directoryVisible) {
+      throw new ProfileError('invalid');
+    }
+  }
+  /**
+   * After a verified original visibility ACK, prefer the fresh own-profile state.
+   * Nested must not regress below ACK or the known current own-profile version.
+   * Older historical ACK alone must not deadlock when fresh current read validates.
+   */
+  private resolveVisibilityAfterAck(ack: OwnProfile, nested: OwnProfile, existing: OwnProfile | null): OwnProfile {
+    if (nested.version < ack.version) throw new ProfileError('invalid');
+    if (existing && nested.version < existing.version) throw new ProfileError('invalid');
+    return nested;
+  }
+  private visibilityNotice(adopted: OwnProfile): string {
+    return adopted.directoryVisible
+      ? 'Профиль видим в каталоге.'
+      : 'Профиль скрыт из каталога.';
   }
   /** Canonical Looking fields excluding version/state — city/area/dates/formats/expiresAt. */
   private lookingCanonicalFieldsEqual(a: Looking, b: Looking): boolean {
@@ -693,6 +855,8 @@ export class ProfileCoordinator {
     // Synchronous guard precedes the first await; each call owns a frozen original packet.
     this.serial++; this.show({ command: { packet, status: 'sending' }, notice: null, noticeOwner: null });
     const valid = () => this.current(authority) && this.state.command?.packet === packet && this.state.command.status === 'sending';
+    // Visibility write ACK validated → recovery reads are not mutation rejection (Looking/trainer lesson).
+    let visibilityWriteAcked = false;
     try {
       if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') {
         if (!this.port.looking) throw new ProfileError('network');
@@ -731,6 +895,51 @@ export class ProfileCoordinator {
         if (!this.state.cities.length) this.show({ status: 'idle' });
         return;
       }
+      if (packet.kind === 'visibility') {
+        if (!this.port.visibility) throw new ProfileError('network');
+        const ack = await this.port.visibility(packet, authority);
+        if (!valid()) return;
+        // Original packet ACK is historical only — current own-profile GET wins before unlock.
+        this.assertVisibilityAck(ack, packet);
+        visibilityWriteAcked = true;
+        const fresh = await this.port.read();
+        if (!valid()) return;
+        const existing = this.state.profile;
+        const adopted = this.resolveVisibilityAfterAck(ack, fresh, existing);
+        if (!existing) {
+          // Same-account reauth: profile was cleared but dirty draft + baseline may be restored.
+          const baseline = this.restoredBaseline;
+          const draft = baseline
+            ? mergeDirtyDraft(this.state.draft, baseline, adopted)
+            : this.state.draft;
+          // Keep adopted as baseline so a later idle load()/editor remount preserves dirty fields.
+          this.restoredBaseline = adopted;
+          this.show({
+            profile: adopted,
+            draft,
+            command: undefined,
+            status: this.state.cities.length ? 'ready' : 'idle',
+            readIntent: null,
+            notice: this.visibilityNotice(adopted),
+            noticeOwner: 'visibility',
+          });
+          return;
+        }
+        // Rebase pristine fields to current GET; preserve each locally dirty draft field.
+        const draft = mergeDirtyDraft(this.state.draft, existing, adopted);
+        this.restoredBaseline = adopted;
+        this.show({
+          profile: adopted,
+          draft,
+          command: undefined,
+          status: 'ready',
+          readIntent: null,
+          notice: this.visibilityNotice(adopted),
+          noticeOwner: 'visibility',
+        });
+        if (!this.state.cities.length) this.show({ status: 'idle' });
+        return;
+      }
       const profile = await this.port.send(packet, authority);
       if (!valid()) return;
       if (packet.kind === 'contactPolicy') {
@@ -753,28 +962,59 @@ export class ProfileCoordinator {
       const { body } = packet;
       if (profile.version <= body.expectedVersion || profile.displayName !== body.displayName || profile.cityId !== body.cityId
           || profile.areaKey !== body.areaKey || profile.bio !== body.bio || !sameStoredLevel(profile.level, body.level)) throw new ProfileError('invalid');
+      this.restoredBaseline = null;
       this.show({ profile, draft: form(profile), command: undefined, status: 'ready', readIntent: null, notice: 'Профиль сохранён.', noticeOwner: 'profile' });
       // A restored UNKNOWN has no catalog yet. Read only on the next explicit editor load.
       if (!this.state.cities.length) this.show({ status: 'idle' });
     } catch (error) {
       if (!valid()) return;
-      if (error instanceof ProfileError && error.kind === 'business' && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS') {
+      // Rejected visibility write only — post-ACK current-read failures (incl. business 429/403) stay locked UNKNOWN.
+      if (!visibilityWriteAcked
+        && error instanceof ProfileError
+        && error.kind === 'business'
+        && error.status < 500
+        && error.code !== 'COMMAND_IN_PROGRESS') {
+        // profile=null after same-actor restore: keep restoredBaseline; expose reachable recovery.
+        const nullProfile = !this.state.profile;
+        if (packet.kind === 'visibility' && error.code === 'CONSENT_POLICY_VERSION_INVALID') {
+          this.show({
+            command: undefined,
+            status: 'stale',
+            readIntent: 'rebase',
+            noticeOwner: 'visibility',
+            notice: 'Не удалось включить видимость. Обновите данные профиля',
+          });
+          return;
+        }
         const stale = error.status === 409;
+        // Other definitive visibility 4xx with no profile → error so retry/load is reachable
+        // (ready+null hid all controls). Profile present keeps ready for an in-place retry.
+        const status = stale ? 'stale'
+          : (packet.kind === 'visibility' && nullProfile ? 'error' : 'ready');
+        const readIntent = stale ? 'rebase' as const
+          : (packet.kind === 'visibility' && nullProfile ? null : this.state.readIntent);
         this.show({
           command: undefined,
-          status: stale ? 'stale' : 'ready',
-          readIntent: stale ? 'rebase' : this.state.readIntent,
-          noticeOwner: stale ? 'profile' : noticeOwnerOf(packet),
+          status,
+          readIntent,
+          noticeOwner: stale
+            ? (packet.kind === 'visibility' ? 'visibility' : 'profile')
+            : noticeOwnerOf(packet),
           notice: stale
-            ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'
+            ? (packet.kind === 'visibility'
+              ? 'Профиль изменился. Обновите данные, чтобы проверить видимость.'
+              : 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.')
             : packet.kind === 'contactPolicy' ? 'Настройка личных сообщений не сохранена. Проверьте соединение или повторите.'
             : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete' ? this.lookingNotice(packet, 'fail')
+            : packet.kind === 'visibility' ? 'Изменение видимости не сохранено. Проверьте соединение или повторите.'
             : moderationCodes.includes(error.code) ? 'Изменения не сохранены. Проверьте публичный текст или повторите позже. Введённые данные сохранены в форме.'
             : 'Изменения не сохранены. Проверьте поля и повторите.',
         });
       } else this.show({ command: { packet, status: 'unknown' }, noticeOwner: noticeOwnerOf(packet), notice: packet.kind === 'contactPolicy'
         ? 'Результат настройки личных сообщений неизвестен. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
         : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete' ? this.lookingNotice(packet, 'unknown')
+        : packet.kind === 'visibility'
+        ? 'Пока не удалось подтвердить изменение видимости. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
         : 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
     }
   }

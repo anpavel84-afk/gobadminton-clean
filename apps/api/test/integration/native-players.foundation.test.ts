@@ -363,15 +363,8 @@ run("bounded native public Players principal opt-in", () => {
     expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { ...browser(a), "x-csrf-token": "invalid" }, payload: putBody })).statusCode).toBe(403);
     const neighbor = await actor();
     await profile(neighbor, "Closed Neighbor");
-    const neighborOwn = await app.inject({ url: socialUrl, headers: bearer(neighbor) });
-    expect(neighborOwn.statusCode).toBe(200);
-    const visibility = await app.inject({
-      method: "PUT", url: "/v1/me/social-profile/visibility",
-      headers: bearer(neighbor),
-      payload: { directoryVisible: false, expectedVersion: neighborOwn.json().version, consentPolicyVersion: "directory-mvp-v1" },
-    });
-    expect([401, 403, 404]).toContain(visibility.statusCode);
     // Native trainer create is admitted; management fixture owns full lifecycle/credential matrix.
+    // Visibility native PUT lives in the dedicated visibility case below — do not restore old denial.
     const trainer = await app.inject({
       method: "PUT", url: "/v1/me/trainer-profile", headers: bearer(neighbor),
       payload: { selfDeclared: true, displayName: "Nope" },
@@ -392,6 +385,257 @@ run("bounded native public Players principal opt-in", () => {
     expect((await app.inject({ method: "PUT", url: lookingUrl, headers: bearer(a), payload: putBody })).statusCode).toBe(401);
     await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [inactive.id]);
     expect((await app.inject({ method: "PUT", url: lookingUrl, headers: bearer(inactive), payload: putBody })).statusCode).toBe(401);
+  });
+
+  it("native bearer visibility PUT on/off/replay/stale/consent/provenance; cookie Origin/CSRF; authority gates; hide from peers", async () => {
+    const a = await actor(), viewer = await actor(), inactive = await actor();
+    await profile(a, "Visibility Owner");
+    await profile(viewer, "Visibility Viewer");
+    const url = "/v1/me/social-profile/visibility";
+    const socialUrl = "/v1/me/social-profile";
+    const lookingUrl = "/v1/me/looking-for-game";
+    const read = async (who: Actor = a) => {
+      const response = await app.inject({ url: socialUrl, headers: bearer(who) });
+      expect(response.statusCode).toBe(200);
+      return response.json();
+    };
+    const provenance = async () => (await pool.query(
+      "SELECT directory_visible, directory_visibility_provenance, consent_policy_version, opted_in_at, radar_consented, radar_consent_policy_version, radar_consented_at, contact_policy FROM player_social_profiles WHERE user_id=$1",
+      [a.id],
+    )).rows[0];
+    let before = await read();
+    expect(before.directoryVisible).toBe(true);
+    expect(before.publicPlayerId).toBeTruthy();
+    const publicId = before.publicPlayerId as string;
+    const lookingPut = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(a),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: "vis", ttlMinutes: 60 },
+    });
+    expect([200, 201]).toContain(lookingPut.statusCode);
+    const lookingBody = lookingPut.json();
+    const trainerOn = await app.inject({
+      method: "PUT", url: "/v1/me/trainer-profile", headers: bearer(a),
+      payload: { selfDeclared: true, displayName: "Vis Trainer" },
+    });
+    expect([200, 201]).toContain(trainerOn.statusCode);
+    before = await read();
+    // Seed actual radar consent true in synthetic owned DB so OFF/ON cannot compare false≈false.
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET radar_consented=true,
+           radar_consent_policy_version='radar-mvp-v1',
+           radar_consented_at=clock_timestamp()
+       WHERE user_id=$1`,
+      [a.id],
+    );
+    const priorRadar = await provenance();
+    expect(priorRadar.radar_consented).toBe(true);
+    expect(priorRadar.radar_consent_policy_version).toBe("radar-mvp-v1");
+    expect(priorRadar.radar_consented_at).toEqual(expect.anything());
+    const offKey = randomUUID();
+    const off = await app.inject({
+      method: "PUT", url, headers: bearer(a, offKey),
+      payload: { directoryVisible: false, expectedVersion: before.version },
+    });
+    expect(off.statusCode).toBe(200);
+    expect(off.headers["cache-control"]).toBe("no-store");
+    const hidden = off.json();
+    expect(hidden.directoryVisible).toBe(false);
+    expect(hidden.version).toBe(before.version + 1);
+    expect(hidden.contactPolicy).toBe(before.contactPolicy);
+    expect(hidden.lookingForGame).toEqual(lookingBody);
+    expect(hidden.trainer).toBe(true);
+    const afterOff = await provenance();
+    expect(afterOff.directory_visible).toBe(false);
+    expect(afterOff.directory_visibility_provenance).toBe("user_opt_out");
+    expect(afterOff.radar_consented).toBe(true);
+    expect(afterOff.radar_consent_policy_version).toBe(priorRadar.radar_consent_policy_version);
+    expect(afterOff.radar_consented_at).toEqual(priorRadar.radar_consented_at);
+    expect(afterOff.contact_policy).toEqual(priorRadar.contact_policy);
+    const offReplay = await app.inject({
+      method: "PUT", url, headers: bearer(a, offKey),
+      payload: { directoryVisible: false, expectedVersion: before.version },
+    });
+    expect(offReplay.statusCode).toBe(200);
+    expect(offReplay.json()).toEqual(hidden);
+    expect((await app.inject({ url: `/v1/players/${publicId}` })).statusCode).toBe(404);
+    expect((await app.inject({ url: `/v1/players/${publicId}`, headers: bearer(viewer) })).statusCode).toBe(404);
+    expect((await read()).directoryVisible).toBe(false);
+    expect((await read()).publicPlayerId).toBe(publicId);
+    const stale = await app.inject({
+      method: "PUT", url, headers: bearer(a),
+      payload: { directoryVisible: true, expectedVersion: before.version, consentPolicyVersion: "directory-mvp-v1" },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe("VERSION_CONFLICT");
+    // Null city must not block ON under Owner #448; omit consent to exercise OWNER_DEFAULT path.
+    await pool.query("UPDATE player_social_profiles SET city_id=NULL, consent_policy_version=NULL, opted_in_at=NULL WHERE user_id=$1", [a.id]);
+    const nullCity = await read();
+    expect(nullCity.cityId).toBeNull();
+    expect(nullCity.consentPolicyVersion).toBeNull();
+    const onKey = randomUUID();
+    const on = await app.inject({
+      method: "PUT", url, headers: bearer(a, onKey),
+      payload: { directoryVisible: true, expectedVersion: nullCity.version },
+    });
+    expect(on.statusCode).toBe(200);
+    expect(on.json().directoryVisible).toBe(true);
+    expect(on.json().cityId).toBeNull();
+    const onProv = await provenance();
+    expect(onProv.directory_visibility_provenance).toBe("owner_default");
+    expect(onProv.radar_consented).toBe(true);
+    expect(onProv.radar_consent_policy_version).toBe(priorRadar.radar_consent_policy_version);
+    expect(onProv.radar_consented_at).toEqual(priorRadar.radar_consented_at);
+    const onReplay = await app.inject({
+      method: "PUT", url, headers: bearer(a, onKey),
+      payload: { directoryVisible: true, expectedVersion: nullCity.version },
+    });
+    expect(onReplay.statusCode).toBe(200);
+    expect(onReplay.json()).toEqual(on.json());
+    const withConsent = await read();
+    const consentOn = await app.inject({
+      method: "PUT", url, headers: bearer(a),
+      payload: {
+        directoryVisible: false, expectedVersion: withConsent.version,
+      },
+    });
+    expect(consentOn.statusCode).toBe(200);
+    const again = await read();
+    const badConsent = await app.inject({
+      method: "PUT", url, headers: bearer(a),
+      payload: {
+        directoryVisible: true, expectedVersion: again.version,
+        consentPolicyVersion: "stale-or-unknown-policy",
+      },
+    });
+    expect(badConsent.statusCode).toBe(422);
+    expect(badConsent.json().code).toBe("CONSENT_POLICY_VERSION_INVALID");
+    expect((await read()).directoryVisible).toBe(false);
+    const ineligible = await actor();
+    await profile(ineligible, "Ineligible Vis");
+    const inOwn = await read(ineligible);
+    const close = await app.inject({
+      method: "PATCH", url: socialUrl, headers: bearer(ineligible),
+      payload: { expectedVersion: inOwn.version, socialEligible: false },
+    });
+    expect(close.statusCode).toBe(200);
+    const denied = await app.inject({
+      method: "PUT", url, headers: bearer(ineligible),
+      payload: { directoryVisible: true, expectedVersion: close.json().version },
+    });
+    expect(denied.statusCode).toBe(422);
+    expect(denied.json().code).toBe("SOCIAL_INELIGIBLE");
+    const nameless = await actor();
+    let namelessOwn = await app.inject({ url: socialUrl, headers: bearer(nameless) });
+    expect(namelessOwn.statusCode).toBe(200);
+    // Default provisioned row may already be visible; force OFF then attempt ON with empty name.
+    if (namelessOwn.json().directoryVisible) {
+      const hideName = await app.inject({
+        method: "PUT", url, headers: bearer(nameless),
+        payload: { directoryVisible: false, expectedVersion: namelessOwn.json().version },
+      });
+      expect(hideName.statusCode).toBe(200);
+      namelessOwn = await app.inject({ url: socialUrl, headers: bearer(nameless) });
+    }
+    await pool.query(
+      "UPDATE player_social_profiles SET display_name='', social_eligible=true WHERE user_id=$1",
+      [nameless.id],
+    );
+    const emptyLatest = await read(nameless);
+    const emptyAttempt = await app.inject({
+      method: "PUT", url, headers: bearer(nameless),
+      payload: { directoryVisible: true, expectedVersion: emptyLatest.version },
+    });
+    expect(emptyAttempt.statusCode).toBe(422);
+    expect(emptyAttempt.json().code).toBe("DIRECTORY_FIELDS_REQUIRED");
+    // Fixture-only moderated stored name/bio: ON must reject via existing fake provider; profile unchanged.
+    const moderated = await actor();
+    await profile(moderated, "Clean Vis Name");
+    let moderatedOwn = await read(moderated);
+    if (moderatedOwn.directoryVisible) {
+      const hideModerated = await app.inject({
+        method: "PUT", url, headers: bearer(moderated),
+        payload: { directoryVisible: false, expectedVersion: moderatedOwn.version },
+      });
+      expect(hideModerated.statusCode).toBe(200);
+      moderatedOwn = await read(moderated);
+    }
+    await pool.query(
+      "UPDATE player_social_profiles SET display_name=$2, bio=$3, social_eligible=true WHERE user_id=$1",
+      [moderated.id, "хуй", "био хуй"],
+    );
+    const beforeModerated = await read(moderated);
+    expect(beforeModerated.directoryVisible).toBe(false);
+    expect(beforeModerated.displayName).toBe("хуй");
+    expect(beforeModerated.bio).toBe("био хуй");
+    const moderatedOn = await app.inject({
+      method: "PUT", url, headers: bearer(moderated),
+      payload: { directoryVisible: true, expectedVersion: beforeModerated.version },
+    });
+    expect(moderatedOn.statusCode).toBe(422);
+    expect(moderatedOn.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    const afterModerated = await read(moderated);
+    expect(afterModerated.directoryVisible).toBe(false);
+    expect(afterModerated.version).toBe(beforeModerated.version);
+    expect(afterModerated.displayName).toBe(beforeModerated.displayName);
+    expect(afterModerated.bio).toBe(beforeModerated.bio);
+    expect(afterModerated.contactPolicy).toBe(beforeModerated.contactPolicy);
+    for (const authorization of ["", "Basic invalid", "Bearer invalid", `Bearer ${"x".repeat(43)}`]) {
+      expect((await app.inject({
+        method: "PUT", url, headers: { authorization, "idempotency-key": randomUUID() },
+        payload: { directoryVisible: false, expectedVersion: 1 },
+      })).statusCode).toBe(401);
+    }
+    expect((await app.inject({
+      method: "PUT", url,
+      headers: { Authorization: [`Bearer ${a.accessToken}`, `Bearer ${a.accessToken}`], "idempotency-key": randomUUID() },
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(401);
+    expect((await app.inject({
+      method: "PUT", url, headers: { ...bearer(a), cookie: a.cookie },
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(403);
+    expect((await app.inject({
+      method: "PUT", url, headers: { "idempotency-key": randomUUID() },
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(403);
+    expect((await disabledApp.inject({
+      method: "PUT", url, headers: bearer(a),
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(404);
+    expect((await app.inject({
+      method: "PUT", url, headers: { ...browser(a), origin: "https://outside.example.test" },
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(403);
+    expect((await app.inject({
+      method: "PUT", url, headers: { origin, cookie: a.cookie, "idempotency-key": randomUUID() },
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(403);
+    expect((await app.inject({
+      method: "PUT", url, headers: { ...browser(a), "x-csrf-token": "invalid" },
+      payload: { directoryVisible: false, expectedVersion: 1 },
+    })).statusCode).toBe(403);
+    const cookieActor = await actor();
+    await profile(cookieActor, "Cookie Vis");
+    const cookieOwn = await app.inject({ url: socialUrl, headers: { cookie: cookieActor.cookie } });
+    const cookieHide = await disabledApp.inject({
+      method: "PUT", url, headers: browser(cookieActor),
+      payload: { directoryVisible: false, expectedVersion: cookieOwn.json().version },
+    });
+    expect(cookieHide.statusCode).toBe(200);
+    expect(cookieHide.json().directoryVisible).toBe(false);
+    // Unadmitted neighbor remains closed.
+    expect((await app.inject({ url: "/v1/me/discovery-preference", headers: bearer(a) })).statusCode).toBe(401);
+    await app.get(SessionService).revokeSession(a.sessionId);
+    expect((await app.inject({
+      method: "PUT", url, headers: bearer(a),
+      payload: { directoryVisible: true, expectedVersion: 1 },
+    })).statusCode).toBe(401);
+    await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [inactive.id]);
+    expect((await app.inject({
+      method: "PUT", url, headers: bearer(inactive),
+      payload: { directoryVisible: true, expectedVersion: 1 },
+    })).statusCode).toBe(401);
   });
 
   it("looking PUT rejects no-profile/ineligible/invalid city without inventing eligibility", async () => {

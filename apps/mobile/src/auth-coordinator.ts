@@ -101,6 +101,7 @@ export class AuthCoordinator {
       cities: () => publicApi.cities(),
       send: (packet, authority) => this.participationRead(access => deps.api.saveOwnProfile(access, packet), authority),
       looking: (packet, authority) => this.participationRead(access => deps.api.mutateOwnLooking(access, packet), authority),
+      visibility: (packet, authority) => this.participationRead(access => deps.api.mutateOwnVisibility(access, packet), authority),
     }, deps.random, () => this.avatar.blocksEdits() || this.cover.blocksEdits() || this.trainer.blocksMutations());
     this.trainer = new TrainerProfileCoordinator({
       read: () => this.participationRead(access => deps.api.ownTrainerProfile(access)),

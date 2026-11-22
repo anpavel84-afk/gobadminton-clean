@@ -2572,6 +2572,14 @@
     },
     "/me/social-profile/visibility": {
       "put": {
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "putMySocialProfileVisibility",
         "tags": [
           "Profiles"
@@ -2637,7 +2645,7 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "Opt-in/out of directory visibility (does not clear Radar consent) Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores."
+        "description": "Opt-in/out of directory visibility (does not clear Radar consent). NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores."
       }
     },
     "/me/looking-for-game": {

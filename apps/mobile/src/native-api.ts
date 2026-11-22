@@ -14,8 +14,8 @@ import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
 import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
 import type { ContactPacket } from './contact.ts';
-import { ProfileError, parseCoverReceipt, parseLookingIntent, parseOwnAvatar, parseOwnProfile, profileWireBody } from './profile.ts';
-import type { AvatarReceipt, CoverReceipt, LookingPacket, ProfileMutationPacket } from './profile.ts';
+import { ProfileError, parseCoverReceipt, parseLookingIntent, parseOwnAvatar, parseOwnProfile, profileWireBody, visibilityWireBody } from './profile.ts';
+import type { AvatarReceipt, CoverReceipt, LookingPacket, ProfileMutationPacket, VisibilityPacket } from './profile.ts';
 import { lookingDeleteWire, lookingPutWire } from './looking-for-game.ts';
 import type { AvatarPacket } from './profile-avatar.ts';
 import type { CoverPacket } from './profile-cover.ts';
@@ -384,6 +384,9 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       return parseLookingIntent(await request('/me/looking-for-game', 'DELETE',
         lookingDeleteWire(), access, packet.key, false, false, false, true));
     },
+    /** Closed visibility PUT — never routed through profileWireBody/PATCH; consent only when ON+present. */
+    mutateOwnVisibility: async (access: string, packet: VisibilityPacket) => parseOwnProfile(await request(
+      '/me/social-profile/visibility', 'PUT', visibilityWireBody(packet.body), access, packet.key, false, false, false, true)),
     /** Closed RAW BINARY avatar port — PUT/DELETE /me/avatar only; never JSON.stringify binary/multipart/base64. */
     mutateOwnAvatar: async (access: string, packet: AvatarPacket): Promise<AvatarReceipt> => {
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);

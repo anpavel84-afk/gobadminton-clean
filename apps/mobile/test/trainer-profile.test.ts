@@ -296,8 +296,9 @@ test('own-profile card + editor route copy and root trainer wiring', () => {
   assert.match(own, /После отключения вы по-прежнему сможете управлять созданными играми/);
   assert.match(own, /nativeAuth\.trainer/);
   assert.match(own, /\/profile\/trainer/);
-  const idxMessages = own.indexOf('Личные сообщения');
-  const idxTrainer = own.indexOf('Тренерский профиль');
+  // Card order anchors: Messages switch label (not visibility-preview «Тренерский профиль:»), then trainer card accessibilityLabel.
+  const idxMessages = own.indexOf('accessibilityLabel="Разрешать личные сообщения"');
+  const idxTrainer = own.indexOf('accessibilityLabel="Тренерский профиль"');
   assert.ok(idxMessages >= 0 && idxTrainer > idxMessages);
 
   const editor = read('../src/components/trainer-profile-editor.tsx');
