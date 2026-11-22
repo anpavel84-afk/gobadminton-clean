@@ -1,7 +1,8 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { Keyboard, Platform, TextInput, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { nativeAuth } from '../auth-runtime.ts';
+import { sameActor, type Actor } from '../participation.ts';
 import {
   TRAINER_BIO_MAX, TRAINER_NAME_MAX, trainerActive,
 } from '../trainer-profile.ts';
@@ -13,11 +14,23 @@ export function TrainerProfileEditor() {
   const owner = nativeAuth.trainer;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const actor = state.actor;
+  const mounted = useRef(true);
+  const focused = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useFocusEffect(useCallback(() => {
+    focused.current = true;
+    return () => { focused.current = false; };
+  }, []));
   useEffect(() => {
     if (nativeAuth.getSnapshot().status === 'authenticated' && owner.getSnapshot().status === 'idle') {
       void owner.load();
     }
   }, [owner, actor?.actorId, actor?.sessionId, actor?.generation]);
+  const canCompleteNav = (origin: Actor | null) =>
+    mounted.current && focused.current && sameActor(origin, owner.getSnapshot().actor);
   const locked = owner.blocksMutations() || state.status !== 'ready';
   const active = trainerActive(state.trainer);
   const primaryTitle = !state.trainer || state.trainer.status !== 'active'
@@ -84,8 +97,10 @@ export function TrainerProfileEditor() {
         disabled={locked || !state.draft.displayName.trim()}
         onPress={() => {
           Keyboard.dismiss();
+          const origin = owner.getSnapshot().actor;
           void (async () => {
             await owner.save();
+            if (!canCompleteNav(origin)) return;
             const snap = owner.getSnapshot();
             if (!snap.command && snap.status === 'ready' && snap.notice === 'Профиль тренера сохранён.') {
               router.replace('/profile');
@@ -99,8 +114,10 @@ export function TrainerProfileEditor() {
           title="Отключить профиль тренера"
           onPress={() => {
             if (locked) return;
+            const origin = owner.getSnapshot().actor;
             void (async () => {
               await owner.deactivate();
+              if (!canCompleteNav(origin)) return;
               const snap = owner.getSnapshot();
               if (!snap.command && snap.status === 'ready' && snap.notice === 'Профиль тренера отключён.') {
                 router.replace('/profile');

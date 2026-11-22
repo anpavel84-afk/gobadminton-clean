@@ -63,6 +63,19 @@ test('#522 own-profile trainer card after personal messages', () => {
   assert.ok(source.indexOf('Личные сообщения') < source.indexOf('Тренерский профиль'));
 });
 
+test('#522 P2: trainer card stale exposes reachable authoritative refresh CTA', () => {
+  const source = read('../src/components/own-profile.tsx');
+  const trainerCard = source.slice(source.indexOf('Тренерский профиль'));
+  assert.match(trainerCard, /trainerState\.status === 'stale'/);
+  assert.match(trainerCard, /refreshAuthoritative/);
+  assert.match(trainerCard, /Обновить данные/);
+  // Loading/error/UNKNOWN recovery controls remain reachable on the card.
+  assert.match(trainerCard, /status === 'error'/);
+  assert.match(trainerCard, /Повторить/);
+  assert.match(trainerCard, /command\?\.status === 'unknown'/);
+  assert.match(trainerCard, /reconcile/);
+});
+
 test('#605 player-card.tsx exports PlayerCover; PlayerProfile uses shared hero', () => {
   const source = read('../src/components/player-card.tsx');
   assert.match(source, /export function PlayerCover\(/);

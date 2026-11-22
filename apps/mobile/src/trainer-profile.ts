@@ -114,6 +114,8 @@ export class TrainerProfileCoordinator {
   private state = initial();
   private listeners = new Set<() => void>();
   private serial = 0;
+  /** True after a successful seed or user edit — empty draft from a failed first read is not preserved. */
+  private draftInitialized = false;
   private quarantine: { actorId: string; packet?: TrainerPacket; draft: TrainerDraft; trainer: TrainerProfile | null } | null = null;
   private port: TrainerPort;
   private random: () => string;
@@ -156,11 +158,13 @@ export class TrainerProfileCoordinator {
     const saved = actor ? this.quarantine : null;
     if (actor) this.quarantine = null;
     this.serial++;
+    this.draftInitialized = false;
     this.state = initial(actor ? Object.freeze({ ...actor }) : null);
     if (saved) {
       const restoredPacket = saved.packet
         ? Object.freeze({ ...saved.packet, actor: Object.freeze({ ...actor }) }) as TrainerPacket
         : undefined;
+      this.draftInitialized = true;
       this.show({
         draft: saved.draft,
         trainer: saved.trainer,
@@ -175,12 +179,14 @@ export class TrainerProfileCoordinator {
   forget = () => {
     this.quarantine = null;
     this.serial++;
+    this.draftInitialized = false;
     this.state = initial();
     this.show({});
   };
 
   updateDraft = (patch: Partial<TrainerDraft>) => {
     if (!this.state.actor || this.locked()) return;
+    this.draftInitialized = true;
     this.show({
       draft: Object.freeze({
         displayName: patch.displayName ?? this.state.draft.displayName,
@@ -195,12 +201,16 @@ export class TrainerProfileCoordinator {
     const actor = this.state.actor;
     if (!actor || this.state.command || this.state.status === 'loading' || this.peers.isPeerBusy()) return;
     const serial = ++this.serial;
-    const preserveDraft = options?.preserveDraft === true || this.state.status === 'ready' || this.state.status === 'stale' || this.state.status === 'error';
+    const preserveDraft = options?.preserveDraft === true
+      || this.state.status === 'ready'
+      || this.state.status === 'stale'
+      || (this.state.status === 'error' && this.draftInitialized);
     const priorDraft = this.state.draft;
     this.show({ status: 'loading', notice: null });
     try {
       const trainer = await this.port.read();
       if (!this.current(actor) || serial !== this.serial) return;
+      this.draftInitialized = true;
       this.show({
         trainer,
         draft: preserveDraft ? priorDraft : trainerDraftFrom(trainer, this.peers.accountDisplayName()),
@@ -229,6 +239,7 @@ export class TrainerProfileCoordinator {
     try {
       const trainer = await this.port.read();
       if (!this.current(actor) || serial !== this.serial) return;
+      this.draftInitialized = true;
       this.show({
         trainer,
         draft: priorDraft,
@@ -319,12 +330,16 @@ export class TrainerProfileCoordinator {
       } else if (ack.version <= packet.body.expectedVersion) {
         throw new ProfileError('invalid');
       }
+      // Original packet ACK is historical only — current trainer GET wins before unlock (Looking recovery).
+      const current = await this.port.read();
+      if (!valid()) return;
       const social = await this.port.refreshSocial(authority);
       if (!valid()) return;
       this.peers.applySocial?.(social);
+      this.draftInitialized = true;
       this.show({
-        trainer: ack,
-        draft: trainerDraftFrom(ack, this.peers.accountDisplayName()),
+        trainer: current,
+        draft: trainerDraftFrom(current, this.peers.accountDisplayName()),
         command: undefined,
         status: 'ready',
         notice: packet.kind === 'deactivate'

@@ -88,6 +88,8 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
           : 'Повторить прежнее сохранение'}
         onPress={() => void trainerOwner.reconcile()}
       />}
+    {trainerState.status === 'stale' && !trainerPending &&
+      <PrimaryButton title="Обновить данные" onPress={() => void trainerOwner.refreshAuthoritative()} />}
   </>;
   return <View style={{ gap: 12 }}>
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}

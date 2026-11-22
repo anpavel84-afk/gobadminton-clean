@@ -145,15 +145,20 @@ test('create/edit/deactivate/reactivate: CAS versions, social refresh, game-trai
 
 test('UNKNOWN keeps original packet/key; same-actor reauth restores; different actor/logout wipe; no auto resend', async () => {
   let recovered = false;
+  let current: TrainerProfile | null = null;
   const s = setup({
+    read: async () => current,
     send: async (packet) => {
       if (!recovered) throw new ProfileError('network');
       if (packet.kind === 'upsert') {
-        return Object.freeze({
+        const ack = Object.freeze({
           ...dto(1, 'active'),
           displayName: packet.body.displayName,
           bio: packet.body.bio,
         });
+        // Simulate committed write so post-ACK GET sees current truth.
+        current = ack;
+        return ack;
       }
       return dto(2, 'inactive');
     },
@@ -325,4 +330,125 @@ test('own-profile card + editor route copy and root trainer wiring', () => {
   const controller = read('../../api/src/trainers/trainers.controller.ts');
   assert.equal([...controller.matchAll(/requirePrincipalMutation\(request\)/g)].length, 2);
   assert.doesNotMatch(controller, /requireCookieMutation\(request\)/);
+});
+
+test('#522 P2: historical ACK yields to post-ACK current GET; failed current read does not unlock', async () => {
+  const historical = Object.freeze({
+    ...dto(1, 'active'),
+    displayName: 'Историческое имя',
+    bio: 'старое',
+  });
+  const newer = Object.freeze({
+    ...dto(3, 'inactive'),
+    displayName: 'Актуальное имя',
+    bio: 'новое после другой сессии',
+  });
+  let phase: 'net' | 'ack' = 'net';
+  let authoritative: TrainerProfile | null = null;
+  const s = setup({
+    read: async () => authoritative,
+    send: async (packet) => {
+      if (phase === 'net') throw new ProfileError('network');
+      assert.equal(packet.kind, 'upsert');
+      return historical;
+    },
+  });
+  await s.owner.load();
+  s.owner.updateDraft({ displayName: 'Историческое имя', bio: 'старое' });
+  await s.owner.save();
+  const original = s.sent[0]!;
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  phase = 'ack';
+  authoritative = newer;
+  await s.owner.reconcile();
+  assert.strictEqual(s.sent[1], original);
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().trainer?.version, 3);
+  assert.equal(s.owner.getSnapshot().trainer?.status, 'inactive');
+  assert.equal(s.owner.getSnapshot().trainer?.displayName, 'Актуальное имя');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Актуальное имя');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'новое после другой сессии');
+
+  // ACK succeeded but current GET fails → no false success / no historical unlock.
+  let readAfterAck = false;
+  const failGet = setup({
+    read: async () => {
+      if (!readAfterAck) return null;
+      throw new ProfileError('network');
+    },
+    send: async (packet) => {
+      if (packet.kind !== 'upsert') return dto(2, 'inactive');
+      const ack = Object.freeze({
+        ...dto(1, 'active'),
+        displayName: packet.body.displayName,
+        bio: packet.body.bio,
+      });
+      readAfterAck = true;
+      return ack;
+    },
+  });
+  await failGet.owner.load();
+  failGet.owner.updateDraft({ displayName: 'Черновик', bio: 'b' });
+  await failGet.owner.save();
+  assert.equal(failGet.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(failGet.owner.getSnapshot().status, 'ready');
+  assert.equal(failGet.owner.getSnapshot().trainer, null);
+  assert.equal(failGet.owner.getSnapshot().draft.displayName, 'Черновик');
+  assert.match(failGet.owner.getSnapshot().notice!, /не удалось подтвердить/i);
+});
+
+test('#522 P2: initial read failure retry seeds saved trainer fields; dirty draft on error is kept', async () => {
+  let fail = true;
+  const saved = dto(2);
+  const s = setup({
+    read: async () => {
+      if (fail) throw new ProfileError('network');
+      return saved;
+    },
+  });
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().status, 'error');
+  assert.equal(s.owner.getSnapshot().draft.displayName, '');
+  assert.equal(s.owner.getSnapshot().draft.bio, '');
+  fail = false;
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Тренер Анна');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Описание');
+
+  // After a real draft exists, a later read failure must not wipe it on retry.
+  s.owner.updateDraft({ displayName: 'Локально', bio: 'dirty' });
+  fail = true;
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().status, 'error');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Локально');
+  fail = false;
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Локально');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'dirty');
+});
+
+test('#522 P2: editor completion navigation fenced to mounted+focused same editor+actor', () => {
+  const editor = read('../src/components/trainer-profile-editor.tsx');
+  assert.match(editor, /useFocusEffect/);
+  assert.match(editor, /mounted\.current/);
+  assert.match(editor, /focused\.current/);
+  assert.match(editor, /sameActor/);
+  assert.match(editor, /canCompleteNav/);
+  // Both save and deactivate completion paths must fence before replace.
+  const saveIdx = editor.indexOf('await owner.save()');
+  const deactIdx = editor.indexOf('await owner.deactivate()');
+  assert.ok(saveIdx >= 0 && deactIdx > saveIdx);
+  const afterSave = editor.slice(saveIdx, deactIdx);
+  assert.match(afterSave, /canCompleteNav\(origin\)/);
+  assert.match(afterSave, /router\.replace\('\/profile'\)/);
+  const afterDeact = editor.slice(deactIdx);
+  assert.match(afterDeact, /canCompleteNav\(origin\)/);
+  assert.match(afterDeact, /router\.replace\('\/profile'\)/);
+  // Do not disable back / global nav as the recovery strategy.
+  assert.doesNotMatch(editor, /usePreventRemove/);
+  assert.doesNotMatch(editor, /BackHandler/);
 });
