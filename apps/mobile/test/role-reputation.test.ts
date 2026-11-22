@@ -491,7 +491,7 @@ test('#522 loadMore authoritative unavailable retires public material', async ()
   assert.equal(after.loadingMore, false);
 });
 
-test('#522 native role-history source wiring, composition slot, APK22 counter', () => {
+test('#522 native role-history source wiring, composition slot, APK23 counter', () => {
   const card = read('../src/components/game-card.tsx');
   const disclosure = read('../src/components/game-role-reputation.tsx');
   const api = read('../src/public-api.ts');
@@ -526,5 +526,5 @@ test('#522 native role-history source wiring, composition slot, APK22 counter', 
   assert.match(module, /moreError/);
   assert.match(module, /gameId/);
   assert.match(module, /phase: 'error'/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 22);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 23);
 });

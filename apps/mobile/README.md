@@ -1,3 +1,9 @@
+## #522 native swipe bounded next-card media warmup (source only) · APK23
+
+Ports accepted WEB browse neighborhood media preparation (`PlayerBrowseMedia` current + up to 4 ahead + previous) into native swipe using existing `Image.prefetch` only. New small owner `player-browse-media.ts`; hooked from `player-browse.tsx`. Prefetch never blocks gestures/match commands and never commits a previous peer image into the visible card. Only media already on the loaded peer DTO via unchanged `playerMediaUrl`; no speculative profile GET, no new cache/service/dependency. Source counter **22→23** only (four APK counter literals + README). Behavior contract row added as **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**. No latency claim without measured readiness; Owner/S23/device UAT=NOT_TESTED. Gestures, interest submission, backend/auth/contracts/API/SDK/lock/role-history unchanged.
+
+---
+
 ## #522 public role-history native card parity (source only) · APK22
 
 Ports accepted web public organizer/trainer role reviews and confirmed history into native discovery `GameCard` inline disclosure. Authority: accepted web `DiscoveryGameCard` / `RoleReputationPanel` + `RoleReputationCardActions` and existing PUBLIC READ `RoleReputationController` routes. Source counter **21→22** only (same six APK literals as prior bump pattern). No cancellation/capacity work; draft PR664 / C3aca not used.
