@@ -77,10 +77,12 @@ export default function GuestGames() {
   const skill = levelGuideSkillFor(level);
   const closeSheet = () => setSheet(null);
   const emptySettled = !!city && state.status === 'ready' && !items.length;
-  const mapEntry = () => city ? (
+  const mapEntry = (placement: 'inline' | 'floating') => city ? (
     <Pressable accessibilityRole="button" accessibilityLabel="Все игры на карте" onPress={openMap}
-      onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
-      style={[{position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,...(emptySettled ? {right:16} : {alignSelf:'center'})},
+      onLayout={placement === 'floating' ? event => setMapEntryHeight(event.nativeEvent.layout.height) : undefined}
+      style={[placement === 'floating'
+        ? {position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,alignSelf:'center'}
+        : {alignSelf:'flex-start'},
       {minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
         flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}]}>
@@ -139,6 +141,7 @@ export default function GuestGames() {
             {activityKind !== 'all'
               ? <TextButton title="Сбросить фильтр" onPress={() => setActivityKind('all')} />
               : <PrimaryButton title="Создать игру" onPress={() => router.push('/games/create')} />}
+            {mapEntry('inline')}
           </View>}
           {list.levelEmpty && <View style={styles.card} accessibilityLiveRegion="polite">
             <Label style={styles.subtitle}>Среди загруженных игр нет подходящих</Label>
@@ -153,7 +156,7 @@ export default function GuestGames() {
         {city && list.canLoadMore && state.status !== 'error'
           ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : null}
       </View>} />
-    {mapEntry()}
+    {!emptySettled && mapEntry('floating')}
     <DiscoverySheet visible={sheet === 'day'} title="Когда играем" onClose={closeSheet} returnFocusRef={dayTrigger}>
       <DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => { setSelectedDay(''); closeSheet(); }} />
       {today && Array.from({ length: 7 }, (_, i) => nextCalendarDay(today, i)).map(value => <DiscoveryChip key={value} title={discoveryDateLabel(value)} selected={day === value} onPress={() => { setSelectedDay(value); closeSheet(); }} />)}
