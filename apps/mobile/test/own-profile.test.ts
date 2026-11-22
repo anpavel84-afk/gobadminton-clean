@@ -65,15 +65,22 @@ test('#522 own-profile trainer card after personal messages', () => {
 
 test('#522 P2: trainer card stale exposes reachable authoritative refresh CTA', () => {
   const source = read('../src/components/own-profile.tsx');
-  const trainerCard = source.slice(source.indexOf('Тренерский профиль'));
-  assert.match(trainerCard, /trainerState\.status === 'stale'/);
-  assert.match(trainerCard, /refreshAuthoritative/);
-  assert.match(trainerCard, /Обновить данные/);
+  const pendingStart = source.indexOf('const pendingTrainerStatus');
+  assert.ok(pendingStart >= 0);
+  const pendingEnd = source.indexOf('</>;', pendingStart);
+  assert.ok(pendingEnd > pendingStart);
+  const pendingFragment = source.slice(pendingStart, pendingEnd);
+  // Recovery CTAs live in pendingTrainerStatus, then inject into the trainer card.
+  assert.match(pendingFragment, /trainerState\.status === 'stale'/);
+  assert.match(pendingFragment, /refreshAuthoritative/);
+  assert.match(pendingFragment, /Обновить данные/);
+  assert.match(pendingFragment, /command\?\.status === 'unknown'/);
+  assert.match(pendingFragment, /reconcile/);
+  const trainerCard = source.slice(source.indexOf('accessibilityLabel="Тренерский профиль"'));
+  assert.match(trainerCard, /\{pendingTrainerStatus\}/);
   // Loading/error/UNKNOWN recovery controls remain reachable on the card.
   assert.match(trainerCard, /status === 'error'/);
   assert.match(trainerCard, /Повторить/);
-  assert.match(trainerCard, /command\?\.status === 'unknown'/);
-  assert.match(trainerCard, /reconcile/);
 });
 
 test('#605 player-card.tsx exports PlayerCover; PlayerProfile uses shared hero', () => {
