@@ -152,11 +152,12 @@ export class PostgameCoordinator {
       this.show({invitations:this.failure(mapped,this.snapshot.invitations)});
     } finally {
       // Only the generation that set busy may clear it or consume a queued refresh.
-      if (this.invitationsBusyGen !== busyGen) return;
-      this.invitationsBusy=false;
-      if (this.invitationsFollowup) {
-        this.invitationsFollowup=false;
-        if (actor && sameActor(actor,this.snapshot.actor)) void this.loadInvitations(false);
+      if (this.invitationsBusyGen === busyGen) {
+        this.invitationsBusy=false;
+        if (this.invitationsFollowup) {
+          this.invitationsFollowup=false;
+          if (actor && sameActor(actor,this.snapshot.actor)) void this.loadInvitations(false);
+        }
       }
     }
   };
