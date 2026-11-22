@@ -12,6 +12,7 @@ import { parseVenueReviewsSummary } from './venue-reviews.ts';
 import {
   gameRoleReputationPath,
   parseRoleReputationSummary,
+  playerRoleReputationPath,
   roleReputationPath,
 } from './role-reputation.ts';
 import type { RoleKind, RoleReputationSummary } from './role-reputation.ts';
@@ -225,6 +226,18 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
       return parseRoleReputationSummary(
         await get(roleReputationPath(roleHandle, query), signal),
         { roleHandle },
+      );
+    },
+    /** PUBLIC READ player-profile role reputation — credential omit; null/404 stay unavailable. */
+    async playerRoleReputation(
+      publicPlayerId: string,
+      role: RoleKind,
+      query: { cursor?: string; limit?: number } = {},
+      signal?: AbortSignal,
+    ): Promise<RoleReputationSummary> {
+      return parseRoleReputationSummary(
+        await get(playerRoleReputationPath(publicPlayerId, role, query), signal),
+        { role },
       );
     },
   };

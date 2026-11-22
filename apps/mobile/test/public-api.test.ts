@@ -180,3 +180,39 @@ test('map coordinate reader is abortable and separate from unchanged create cata
     await assert.rejects(bad.mapVenues(cityId),PublicApiError);
   }
 });
+
+test('#522 playerRoleReputation uses fixed-origin credential-omit player path; null is unavailable', async () => {
+  const peer = 'public-peer';
+  const handle = 'a'.repeat(32);
+  const body = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: null,
+    heldGamesCount: 2,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 0,
+    projectionVersion: 'p'.repeat(32),
+    items: [],
+    nextCursor: 'next',
+    availability: 'available',
+  };
+  const calls: { url: string; init: RequestInit }[] = [];
+  const api = createPublicApi(async (url, init) => {
+    calls.push({ url: String(url), init: init! });
+    if (String(url).includes(`/players/${peer}/role-reputations/organization`)) {
+      return Response.json(body);
+    }
+    return Response.json(null);
+  });
+  const summary = await api.playerRoleReputation(peer, 'organization', { cursor: 'c1', limit: 20 });
+  assert.equal(summary.roleHandle, handle);
+  assert.equal(summary.nextCursor, 'next');
+  assert.equal(calls[0]?.url, `${API_ORIGIN}/v1/players/${peer}/role-reputations/organization?cursor=c1&limit=20`);
+  assert.equal(calls[0]?.init.credentials, 'omit');
+  assert.equal(calls[0]?.init.method, 'GET');
+  await assert.rejects(
+    api.playerRoleReputation(peer, 'training'),
+    (error: unknown) => error instanceof PublicApiError && error.kind === 'unavailable',
+  );
+});

@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { PlayersCoordinator, PlayersError, appendPlayers, parsePlayer, parsePlayerPage, playerQuery, playerFilterKey, resetPlayerFilters } from '../src/players.ts';
 import type { PlayerFilters, PlayerPage, PublicPlayer } from '../src/players.ts';
 import { playerMediaUrl } from '../src/media.ts';
@@ -450,4 +452,17 @@ test('area changes fence cursor reuse and late responses across area/reset/auth 
   pending.resolve(page('old-area-guest')); await late;
   assert.equal(c.getSnapshot().scope, 'native:new-actor:session:2');
   assert.equal(c.getSnapshot().list.data?.items[0]?.publicPlayerId, 'new-actor');
+});
+
+test('#522 player detail mounts role lanes only inside loaded peer gate, before safety', () => {
+  const detail = readFileSync(new URL('../app/players/[publicPlayerId].tsx', import.meta.url), 'utf8');
+  assert.match(detail, /detail\?\.data \? <>/);
+  assert.match(detail, /PlayerProfile[\s\S]*NativeContactAction[\s\S]*PlayerRoleReputation/);
+  assert.match(detail, /PlayerRoleReputation key=\{viewScope\} publicPlayerId=\{id\}/);
+  assert.match(detail, /PlayerRoleReputation[\s\S]*NativeSafety/);
+  assert.doesNotMatch(detail, /PlayerRoleReputation[\s\S]*Отзывы и история/);
+  // JSX mount of role history stays inside the loaded-detail branch (import above is fine).
+  const gated = detail.slice(detail.indexOf('detail?.data ?'), detail.indexOf('{id && auth.status'));
+  assert.match(gated, /<PlayerRoleReputation/);
+  assert.doesNotMatch(detail.slice(detail.indexOf('return <Page'), detail.indexOf('detail?.data ?')), /<PlayerRoleReputation/);
 });

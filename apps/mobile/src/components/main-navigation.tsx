@@ -2,7 +2,7 @@ import { fullscreenPlayerBrowse } from '../player-browse.ts';
 import { PlayInterestProvider } from '../play-interest-runtime.tsx';
 import { fullscreenGamesMap } from '../maps.ts';
 import type { PropsWithChildren } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -13,6 +13,21 @@ import { colors } from '../theme.ts';
 /** Venue create formSheet over the map — hide bottom nav like the fullscreen games map. */
 export function venueCreateSheetPath(path: string): boolean {
   return path === '/games/create/venue' || path.startsWith('/games/create/venue/');
+}
+
+/**
+ * Compact bottom-nav cells when equal-width captions cannot fit the longest label.
+ * Gutters 4+4, cell paddingHorizontal 2+2; threshold ≈ longest caption (~67.5) with margin at fontScale.
+ */
+export function mainNavCompactCells(input: {
+  windowWidth: number;
+  insetLeft: number;
+  insetRight: number;
+  fontScale: number;
+}): boolean {
+  const rowInner = input.windowWidth - input.insetLeft - input.insetRight - 8;
+  const equalContent = rowInner / 4 - 4;
+  return equalContent < 70 * Math.max(input.fontScale, 0);
 }
 
 // Ported verbatim from WEB nav-items.ts / nav-icon-paths.tsx. Accepted fourth Messages tab uses the same root owner.
@@ -42,11 +57,27 @@ const icons = {
     <Path d="m7.85 14.05 2.7 2.7 5.9-6.1" />
   </>,
 };
+
+function messagesAccessibilityLabel(label: string, count: number | null, signedIn: boolean): string {
+  if (!signedIn) return label;
+  if (count === null) return `${label}, количество загружается или недоступно`;
+  if (count <= 0) return label;
+  const shown = count > 99 ? '99+' : String(count);
+  return `${label}, ${shown} требуют внимания`;
+}
+
 /** Always owns the same Stack subtree; changing sections never rekeys an auth/participation owner. */
 export function MainNavigation({ children }: PropsWithChildren) {
   const { state } = useMessages();
   const count = state.counts ? state.counts.pendingRequestCount + state.counts.pendingInvitationCount + state.counts.dmUnread + state.counts.gameChatUnread : null;
   const path = usePathname(), router = useRouter(), insets = useSafeAreaInsets();
+  const { width, fontScale } = useWindowDimensions();
+  const compact = mainNavCompactCells({
+    windowWidth: width,
+    insetLeft: insets.left,
+    insetRight: insets.right,
+    fontScale,
+  });
   const visible = !fullscreenGamesMap(path) && !venueCreateSheetPath(path) && !fullscreenPlayerBrowse(path) && /^\/(games|players|my-games|messages|profile)(\/|$)/.test(path);
   return <PlayInterestProvider><View style={{ flex: 1, backgroundColor: colors.card }}>
     <View style={{ flex: 1 }}>{children}</View>
@@ -55,13 +86,22 @@ export function MainNavigation({ children }: PropsWithChildren) {
       paddingBottom: insets.bottom + 5, paddingTop: 7, borderTopWidth: 1, borderTopColor: colors.line,
     }}>{MAIN_NAV_ITEMS.map(item => {
       const selected = item.path === '/my-games' && path.startsWith('/games/manage/') || item.path === '/games' && !path.startsWith('/games/manage/') && (path === item.path || path.startsWith(`${item.path}/`)) || item.path !== '/games' && (path === item.path || path.startsWith(`${item.path}/`));
+      const a11yLabel = item.icon === 'messages'
+        ? messagesAccessibilityLabel(item.label, count, !!state.actor)
+        : item.label;
       return <Pressable key={item.path} accessibilityRole="tab" accessibilityState={{ selected }}
+        accessibilityLabel={a11yLabel}
         onPress={() => { if (path !== item.path) router.navigate(item.path); }}
-        style={({ pressed }) => ({ flex: 1, minWidth: 48, minHeight: 64, paddingHorizontal: 2, paddingVertical: 2, gap: 2,
+        style={({ pressed }) => ({
+          ...(compact
+            ? { flexBasis: 'auto' as const, flexGrow: 1, flexShrink: 1 }
+            : { flex: 1 }),
+          minWidth: 48, minHeight: 64, paddingHorizontal: 2, paddingVertical: 2, gap: 2,
           alignItems: 'center', justifyContent: 'center', borderRadius: 12,
-          backgroundColor: pressed ? colors.paper : colors.card })}>
+          backgroundColor: pressed ? colors.paper : colors.card,
+        })}>
         <View style={{ padding: 4, borderRadius: 24, backgroundColor: selected ? colors.limeSoft : colors.card }}><Svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke={selected ? colors.ink : colors.secondary} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" accessible={false}>{icons[item.icon]}</Svg></View>
-        {item.icon === 'messages' && state.actor && <View accessibilityLabel={count === null ? 'Количество сообщений загружается или недоступно' : `${count} требуют внимания`}
+        {item.icon === 'messages' && state.actor && <View accessible={false} importantForAccessibility="no-hide-descendants"
           style={{ position: 'absolute', top: 0, right: 6, minWidth: 20, minHeight: 20, borderRadius: 10, backgroundColor: count === null ? colors.paper : count > 0 ? colors.limeSoft : 'transparent' }}>
           <Label style={{ textAlign: 'center', fontSize: 12 }}>{count === null ? '…' : count > 99 ? '99+' : count > 0 ? count : ''}</Label></View>}
         {selected && <View style={{ position: 'absolute',bottom: 0,width: 30,height: 3,borderRadius: 3,backgroundColor: colors.limeDeep }} />}
