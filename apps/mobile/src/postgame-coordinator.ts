@@ -398,14 +398,12 @@ export class PostgameCoordinator {
         if (own.data) own={...own,data:{...own.data,items:own.data.items.map(row=>applyOwnAck(row,ack))}};
       }
       const disputes={...this.snapshot.disputes};
-      if ((packet.kind === 'dispute' || packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help') && 'id' in receipt) {
+      if ((packet.kind === 'dispute' || packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help') && 'id' in receipt && 'history' in receipt) {
         disputes[receipt.id]={status:'ready',data:receipt};
       }
-      if (packet.kind === 'ack' && 'resolvedDispute' in receipt && receipt.resolvedDispute) {
-        const id=receipt.resolvedDispute.id;
-        const prior=disputes[id]?.data;
-        if (prior) disputes[id]={status:'ready',data:{...prior,status:'resolved',version:receipt.resolvedDispute.resultingVersion,resolvedAt:prior.resolvedAt ?? new Date(0).toISOString()}};
-      }
+      // Resolving ACK: verified resolvedDispute stays on the ACK receipt only.
+      // Never fabricate dispute timestamps/rights or regress the projection from historical receipt fields.
+      // Authoritative DTO comes from loadDispute below; follow-up GET failure stays a distinct retryable read error.
       this.show({own,disputes,command:null,notice:reconciling ? 'Исходное действие подтверждено. Обновляем текущие данные.' : 'Изменения сохранены.'});
       // Receipt replay is history; always read current rights/version separately.
       const gameId = packet.gameId;
@@ -415,7 +413,7 @@ export class PostgameCoordinator {
       // Dispute lifecycle and resolving ACK refresh own hub; ordinary ACK keeps local notice settlement.
       if (disputeWrite || resolvingAck) void this.loadOwn();
       if (disputeWrite) {
-        const id = 'disputeId' in packet ? packet.disputeId : 'id' in receipt ? receipt.id : null;
+        const id = 'disputeId' in packet ? packet.disputeId : 'id' in receipt && 'history' in receipt ? receipt.id : null;
         if (id) void this.loadDispute(id);
       }
       if (resolvingAck && packet.kind === 'ack') void this.loadDispute(packet.body.resolvingDisputeId!);

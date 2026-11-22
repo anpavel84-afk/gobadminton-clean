@@ -138,9 +138,15 @@ function HistoryPanel({ gameId, contextId }: { gameId: string; contextId: string
         {source?.status === 'error' ? <><Label>Не удалось загрузить историю.</Label><TextButton title="Повторить" onPress={() => void owner.loadHistory(gameId, contextId, 20)} /></> : null}
         {source?.status === 'unavailable' ? <Label>История сейчас недоступна.</Label> : null}
         {source?.status === 'ready' ? (source.data?.items.length
-          ? source.data.items.map(item => <View key={item.version} style={{ gap: 4 }}>
-            <Label>v{item.version}: {attendanceLabel(item.after.value)}{item.after.late ? ' · опоздание' : ''} · {item.actorDisplay} · {item.source} · {new Date(item.recordedAt).toLocaleString('ru')}</Label>
-          </View>)
+          ? source.data.items.map(item => {
+            const sourceLabel = item.source === 'self_attested' ? 'Сами отметили'
+              : item.source === 'manager_explicit' ? 'Отметил организатор'
+              : item.source === 'case_reviewer' ? 'Решение по обращению'
+              : 'Источник неизвестен';
+            return <View key={item.version} style={{ gap: 4 }}>
+              <Label>v{item.version}: {attendanceLabel(item.after.value)}{item.after.late ? ' · опоздание' : ''} · {item.actorDisplay} · {sourceLabel} · {new Date(item.recordedAt).toLocaleString('ru')}</Label>
+            </View>;
+          })
           : <Label>Пока нет записей.</Label>) : null}
       </Page>
     </Modal>
@@ -150,31 +156,39 @@ function HistoryPanel({ gameId, contextId }: { gameId: string; contextId: string
 export function ClarificationSection({ data }: { data: Results }) {
   const { owner, s } = useOwner();
   const attendance = data.attendance;
-  if (!attendance?.installed) return null;
-  const openRows = [
+  const installed = !!attendance?.installed;
+  const openRows = installed && attendance ? [
     ...(attendance.roster ?? []).filter(r => r.dispute?.status === 'open'),
     ...(attendance.myAttendance?.dispute?.status === 'open' ? [attendance.myAttendance] : []),
-  ];
+  ] : [];
   const seen = new Set<string>();
   const opens = openRows.filter(r => { if (seen.has(r.contextId)) return false; seen.add(r.contextId); return true; });
   const selection = s.selection?.gameId === data.gameId ? s.selection : null;
   const selectedRow = selection ? opens.find(r => r.contextId === selection.contextId && r.dispute?.id === selection.disputeId) : null;
   const detailSource = selection ? s.disputes[selection.disputeId] : undefined;
-  const writes = attendance.writesEnabled;
+  const writes = attendance?.writesEnabled ?? false;
   const onlyOpen = opens.length === 1 ? opens[0] : null;
 
+  // Hooks must run before any conditional return (installed gate).
   useEffect(() => {
-    if (selection || !onlyOpen?.dispute) return;
-    owner.selectDispute({ gameId: data.gameId, contextId: onlyOpen.contextId, disputeId: onlyOpen.dispute.id });
-  }, [selection, onlyOpen, data.gameId, owner]);
+    if (!installed || selection || !onlyOpen) return;
+    const dispute = onlyOpen.dispute;
+    if (!dispute) return;
+    owner.selectDispute({ gameId: data.gameId, contextId: onlyOpen.contextId, disputeId: dispute.id });
+  }, [installed, selection, onlyOpen, data.gameId, owner]);
+
+  if (!installed || !attendance) return null;
 
   return <View style={{ gap: 12 }}>
     <Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>Уточнение</Label>
     {opens.length > 1 ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }} accessibilityLabel="Открытые уточнения">
-      {opens.map(row => row.dispute ? <Choice key={row.dispute.id}
-        title={`${row.displayName}${selection?.disputeId === row.dispute.id ? ' · выбрано' : ''}`}
-        selected={selection?.disputeId === row.dispute.id}
-        onPress={() => owner.selectDispute({ gameId: data.gameId, contextId: row.contextId, disputeId: row.dispute!.id })} /> : null)}
+      {opens.map(row => {
+        const rowDispute = row.dispute;
+        return rowDispute ? <Choice key={rowDispute.id}
+          title={`${row.displayName}${selection?.disputeId === rowDispute.id ? ' · выбрано' : ''}`}
+          selected={selection?.disputeId === rowDispute.id}
+          onPress={() => owner.selectDispute({ gameId: data.gameId, contextId: row.contextId, disputeId: rowDispute.id })} /> : null;
+      })}
     </View> : null}
     {selection && selectedRow ? <>
       {(detailSource?.status === 'idle' || detailSource?.status === 'loading') ? <Loading title="Загружаем уточнение…" /> : null}

@@ -6,7 +6,7 @@ import {
   PostgameError, parseAttendance, parseAttendanceDispute, parseAttendanceHistory, parseResolvedDispute,
   mayAcknowledge, mayAcknowledgeCurrent, wire, validateReceipt,
 } from '../src/postgame.ts';
-import type { Attendance, AttendanceDispute, Intent, Packet, Results } from '../src/postgame.ts';
+import type { AckReceipt, Attendance, AttendanceDispute, Intent, Packet, Receipt, Results, ResultsQuery } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import { game as publicGame } from './fixtures.ts';
 
@@ -46,6 +46,16 @@ const openDispute: AttendanceDispute = {
 function packet(intent: Intent): Packet {
   const w = wire(intent);
   return { ...intent, actor, key: 'original-key', method: w.method, path: w.path };
+}
+function asDisputeReceipt(raw: unknown, p: Packet): AttendanceDispute {
+  const r: Receipt = validateReceipt(raw, p);
+  if (!('history' in r) || !('helpProgress' in r) || !('caseProgress' in r)) throw new PostgameError('invalid');
+  return r;
+}
+function asAckReceipt(raw: unknown, p: Packet): AckReceipt {
+  const r: Receipt = validateReceipt(raw, p);
+  if (!('acknowledgedVersion' in r) || !('displayName' in r) || 'history' in r) throw new PostgameError('invalid');
+  return r;
 }
 function setup(overrides: Partial<AttendanceDispute> = {}) {
   const detail = { ...openDispute, ...overrides, allowedActions: { ...openDispute.allowedActions, ...(overrides.allowedActions ?? {}) },
@@ -90,26 +100,26 @@ test('participant open dispute, withdraw does not agree, help stays requested, r
     currentAssertion: { value: 'unknown', version: 0, late: false, assertion: { actorDisplay: null, source: null, at: null } },
     allowedActions: { canWithdraw: true, canRespond: false, canRequestHelp: true, canAcknowledgeCurrent: false },
   });
-  assert.equal(validateReceipt(created, create).status, 'open');
+  assert.equal(asDisputeReceipt(created, create).status, 'open');
 
   const withdrawn = packet({ kind: 'withdraw', gameId: game.id, disputeId: 'dispute-a', body: { expectedVersion: 1 } });
-  assert.equal(validateReceipt({ ...openDispute, status: 'withdrawn', version: 2, withdrawnAt: date }, withdrawn).status, 'withdrawn');
+  assert.equal(asDisputeReceipt({ ...openDispute, status: 'withdrawn', version: 2, withdrawnAt: date }, withdrawn).status, 'withdrawn');
   assert.equal(mayAcknowledge({ ...marked, dispute: { id: 'dispute-a', status: 'withdrawn', challengedVersion: 1, version: 2 }, acknowledgedVersion: null }), true);
 
   const help = packet({ kind: 'help', gameId: game.id, disputeId: 'dispute-a', body: { expectedVersion: 1, explanation: 'Нужна помощь' } });
-  const helped = validateReceipt({ ...openDispute, version: 2, helpProgress: 'requested', history: [...openDispute.history, { version: 2, action: 'help_requested', explanation: 'Нужна помощь', recordedAt: date }] }, help);
+  const helped = asDisputeReceipt({ ...openDispute, version: 2, helpProgress: 'requested', history: [...openDispute.history, { version: 2, action: 'help_requested', explanation: 'Нужна помощь', recordedAt: date }] }, help);
   assert.equal(helped.helpProgress, 'requested');
   assert.equal(helped.caseProgress.linked, false);
 
   const resolving: Intent = { kind: 'ack', gameId: game.id, contextId: row.contextId, body: { attendanceVersion: 1, resolvingDisputeId: 'dispute-a', expectedDisputeVersion: 1 } };
   assert.throws(() => wire({ ...resolving, body: { attendanceVersion: 1, resolvingDisputeId: 'dispute-a' } }), PostgameError);
   assert.throws(() => validateReceipt({ ...marked, acknowledgedVersion: 1, dispute: null }, packet(resolving)), PostgameError);
-  const closed = validateReceipt({
+  const closed = asAckReceipt({
     ...marked, acknowledgedVersion: 1, dispute: null,
     resolvedDispute: { id: 'dispute-a', resultingVersion: 2, status: 'resolved', contextId: row.contextId, attendanceVersion: 1 },
   }, packet(resolving));
   assert.equal(closed.acknowledgedVersion, 1);
-  assert.deepEqual(parseResolvedDispute((closed as Attendance & { resolvedDispute: unknown }).resolvedDispute!), {
+  assert.deepEqual(parseResolvedDispute(closed.resolvedDispute!), {
     id: 'dispute-a', resultingVersion: 2, status: 'resolved', contextId: row.contextId, attendanceVersion: 1,
   });
 });
@@ -122,7 +132,7 @@ test('manager respond+correction stays open; wrong id/context/version rejected',
       correction: { expectedAttendanceVersion: 1, value: 'absent', correctionReason: 'Ошибка' },
     },
   };
-  const receipt = validateReceipt({
+  const receipt = asDisputeReceipt({
     ...openDispute, version: 2, latestManagerResponse: 'Исправляю',
     currentAssertion: { value: 'absent', version: 2, late: false, assertion: marked.assertion },
   }, packet(respond));
@@ -163,12 +173,12 @@ test('selection change retires other draft; roster append keeps selection; late 
   s.coordinator.selectDispute({ gameId: game.id, contextId: row.contextId, disputeId: 'dispute-a' });
   await new Promise<void>(r => setImmediate(r));
   const second = { ...marked, contextId: 'context-b', displayName: 'Другой' };
-  s.port.results = async (_a, id, query) => ({
+  s.port.results = async (_a: Actor, id: string, query?: ResultsQuery): Promise<Results> => ({
     ...structuredClone(result), gameId: id,
     attendance: {
       ...result.attendance!,
-      myAttendance: { ...marked, dispute: { id: 'dispute-a', status: 'open', challengedVersion: 1, version: 1 } },
-      roster: query?.rosterCursor ? [second] : [{ ...marked, dispute: { id: 'dispute-a', status: 'open', challengedVersion: 1, version: 1 } }],
+      myAttendance: { ...marked, dispute: { id: 'dispute-a', status: 'open' as const, challengedVersion: 1, version: 1 } },
+      roster: query?.rosterCursor ? [second] : [{ ...marked, dispute: { id: 'dispute-a', status: 'open' as const, challengedVersion: 1, version: 1 } }],
       rosterNextCursor: query?.rosterCursor ? null : 'roster-2',
     },
   });
@@ -183,6 +193,51 @@ test('selection change retires other draft; roster append keeps selection; late 
   deferred.resolve(openDispute);
   await stale;
   assert.deepEqual(s.coordinator.getSnapshot().disputes, {});
+});
+
+test('resolving ACK success stays distinct from followup GET failure; no fake resolved metadata; refresh operable', async () => {
+  const s = setup({ allowedActions: { canWithdraw: false, canRespond: false, canRequestHelp: false, canAcknowledgeCurrent: true } });
+  await s.coordinator.loadResults(game.id);
+  s.coordinator.selectDispute({ gameId: game.id, contextId: row.contextId, disputeId: 'dispute-a' });
+  await new Promise<void>(r => setImmediate(r));
+  assert.equal(s.coordinator.getSnapshot().disputes['dispute-a']?.status, 'ready');
+
+  s.port.send = async (p: Packet): Promise<unknown> => {
+    s.sent.push(p);
+    return {
+      ...marked, acknowledgedVersion: 1, dispute: null,
+      resolvedDispute: { id: 'dispute-a', resultingVersion: 2, status: 'resolved', contextId: row.contextId, attendanceVersion: 1 },
+    };
+  };
+  s.port.dispute = async () => { throw new PostgameError('network'); };
+
+  s.coordinator.review({
+    kind: 'ack', gameId: game.id, contextId: row.contextId,
+    body: { attendanceVersion: 1, resolvingDisputeId: 'dispute-a', expectedDisputeVersion: 1 },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.coordinator.getSnapshot().command, null);
+
+  // Follow-up loadDispute is fire-and-forget after ACK; wait for the distinct read failure.
+  for (let i = 0; i < 20 && s.coordinator.getSnapshot().disputes['dispute-a']?.status !== 'error'; i += 1) {
+    await new Promise<void>(r => setImmediate(r));
+  }
+  const afterAck = s.coordinator.getSnapshot().disputes['dispute-a'];
+  // ACK settled; follow-up read failed separately — never synthesize 1970/resolvedAt or regress rights from receipt.
+  assert.equal(afterAck?.status, 'error');
+  assert.notEqual(afterAck?.data?.resolvedAt, new Date(0).toISOString());
+  assert.notEqual(afterAck?.data?.status, 'resolved');
+
+  s.port.dispute = async (): Promise<AttendanceDispute> => ({
+    ...openDispute, status: 'resolved', version: 2, resolvedAt: date, resolutionKind: 'party_acknowledged',
+    allowedActions: { canWithdraw: false, canRespond: false, canRequestHelp: false, canAcknowledgeCurrent: false },
+  });
+  await s.coordinator.loadDispute('dispute-a');
+  const refreshed = s.coordinator.getSnapshot().disputes['dispute-a'];
+  assert.equal(refreshed?.status, 'ready');
+  assert.equal(refreshed?.data?.status, 'resolved');
+  assert.equal(refreshed?.data?.resolvedAt, date);
 });
 
 test('UNKNOWN exact retry, no autowrite, draft preserved across cancel/reauth', async () => {

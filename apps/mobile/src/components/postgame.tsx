@@ -71,6 +71,12 @@ export function CommandReview({gameId}: {gameId?:string}) {
   const otherGame=!!selected && !!gameId && selected.gameId !== gameId;
   const gameTitle=title?.trim() || own?.find(r=>r.gameTitle?.trim())?.gameTitle || reminder?.gameTitle?.trim() || (otherGame ? 'Другая игра — исходное действие' : 'Выбранная игра');
   const person=(contextId:string)=>data?.attendance?.roster?.find(r=>r.contextId === contextId) ?? (data?.attendance?.myAttendance?.contextId === contextId ? data.attendance.myAttendance : undefined);
+  // Dispute command context is locked to the frozen intent's disputeId — not the live selection.
+  const disputeCommand=selected && (selected.kind === 'withdraw' || selected.kind === 'respond' || selected.kind === 'help') ? selected : null;
+  const lockedDisputeSource=disputeCommand && readable ? s.disputes[disputeCommand.disputeId] : undefined;
+  const lockedDetail=disputeCommand && lockedDisputeSource?.status === 'ready' && lockedDisputeSource.data?.id === disputeCommand.disputeId
+    ? lockedDisputeSource.data : undefined;
+  const lockedPerson=lockedDetail ? person(lockedDetail.contextId) : undefined;
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
@@ -96,9 +102,9 @@ export function CommandReview({gameId}: {gameId?:string}) {
                 ? `Подтвердить отметку и закрыть уточнение · ${attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}`
                 : `Я согласен с отметкой посещения · ${attendanceLabel(person(selected.contextId)?.value ?? 'unknown')}`}</Label></>}
             {selected.kind === 'dispute' && <><Label>{person(selected.contextId)?.displayName || 'Выбранный участник'}</Label><Label>{selected.body.attendanceVersion === 0 ? 'Отметки пока нет' : `Версия ${selected.body.attendanceVersion}`}</Label><Label>{selected.body.explanation}</Label></>}
-            {selected.kind === 'withdraw' && <><Label>Отозвать возражение</Label><Label>Отметка сохранится; согласие участника с ней не записывается.</Label>{selected.body.reason && <Label>{selected.body.reason}</Label>}</>}
-            {selected.kind === 'respond' && <><Label>Ответить / исправить</Label><Label>{selected.body.explanation}</Label>{selected.body.correction && <Label>{attendanceLabel(selected.body.correction.value)}{selected.body.correction.late ? ' · Опоздание' : ''} · {selected.body.correction.correctionReason}</Label>}<Label>Уточнение останется открытым</Label></>}
-            {selected.kind === 'help' && <><Label>Помощь по уточнению</Label><Label>{selected.body.explanation}</Label></>}
+            {selected.kind === 'withdraw' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Отозвать возражение · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>Отметка сохранится; согласие участника с ней не записывается.</Label>{selected.body.reason && <Label>{selected.body.reason}</Label>}</>}
+            {selected.kind === 'respond' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Ответить / исправить · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label>{selected.body.correction && <Label>{attendanceLabel(selected.body.correction.value)}{selected.body.correction.late ? ' · Опоздание' : ''} · {selected.body.correction.correctionReason}</Label>}<Label>Уточнение останется открытым</Label></>}
+            {selected.kind === 'help' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Помощь по уточнению · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label></>}
             {selected.kind === 'later' && <Label>Отложить это напоминание?</Label>}
           </>}
           {command?.status === 'sending' && <Loading title="Отправляем выбранное действие…" />}
@@ -132,7 +138,8 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
   const draftKey=`${gameId}:${row.contextId}:create`;
   const disputeText=s.drafts[draftKey]?.createExplanation ?? '';
   const disputeExplanation=normalizeFormReason(disputeText);
-  const disputed=row.dispute?.status === 'open';
+  const dispute=row.dispute;
+  const disputed=dispute?.status === 'open';
   const source=row.assertion.source === 'self_attested' ? 'Сами отметили' : row.assertion.source === 'manager_explicit' ? 'Отметил организатор' : row.assertion.source === 'case_reviewer' ? 'Решение по обращению' : 'Источник неизвестен';
   const missing=row.version === 0 && row.value === 'unknown';
   return <View style={styles.card}>
@@ -150,8 +157,8 @@ export function AttendancePanel({row,gameId,own=false,writes}: {row:Attendance;g
     {own && writes && row.allowedActions.canDispute && !disputed && (
       <ReviewButton title={row.value === 'unknown' ? 'Попросить уточнение' : 'Оспорить отметку'} onPress={()=>setDisputeOpen(true)} />
     )}
-    {own && disputed && row.dispute && <ReviewButton title="К уточнению" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:row.dispute.id})} />}
-    {!own && disputed && row.dispute && <ReviewButton title="Открыть уточнение" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:row.dispute.id})} />}
+    {own && disputed && dispute && <ReviewButton title="К уточнению" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
+    {!own && disputed && dispute && <ReviewButton title="Открыть уточнение" onPress={()=>owner.selectDispute({gameId,contextId:row.contextId,disputeId:dispute.id})} />}
     <Modal visible={disputeOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={()=>setDisputeOpen(false)} supportedOrientations={iosModalOrientations}>
       <Page keyboard header={<View style={{gap:8}}>
         <TextButton title="Отмена" onPress={()=>setDisputeOpen(false)} />

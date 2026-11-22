@@ -73,7 +73,9 @@ export type Intent =
   | { kind: 'help'; gameId: string; disputeId: string; body: { expectedVersion: number; explanation: string } }
   | { kind: 'later'; gameId: string; reminderId: string; body: { command: 'later'; expectedVersion: number } };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST'; path: string }>;
-export type Receipt = Results | Attendance | AttendanceDispute | { items: Attendance[] } | Reminders;
+/** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
+export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
+export type Receipt = Results | AckReceipt | AttendanceDispute | { items: Attendance[] } | Reminders;
 const invalid = (): never => { throw new PostgameError('invalid'); };
 export function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function str(v: unknown): string { return typeof v === 'string' ? v : invalid(); }
@@ -119,12 +121,14 @@ export function parseAttendance(v: unknown): Attendance {
   if (r.resolvedDispute !== undefined) invalid();
   return result;
 }
-function parseAttendanceAckBody(v: unknown, expectResolved: boolean): Attendance & { resolvedDispute?: ResolvedDispute } {
+function parseAttendanceAckBody(v: unknown, expectResolved: boolean): AckReceipt {
   const r = object(v);
   const resolved = r.resolvedDispute;
   if (expectResolved) {
     if (resolved === undefined) invalid();
-    const { resolvedDispute: _drop, ...rest } = r;
+    // Strip ACK-only proof before ordinary Attendance parse (which still rejects resolvedDispute).
+    const rest: Record<string, unknown> = { ...r };
+    delete rest.resolvedDispute;
     return { ...parseAttendance(rest), resolvedDispute: parseResolvedDispute(resolved) };
   }
   if (resolved !== undefined) invalid();
