@@ -275,21 +275,31 @@ export type ProfileBody = Readonly<{
 }>;
 /** Policy-only command — wire is exactly {expectedVersion,contactPolicy}; never carries name/city/bio. */
 export type ContactPolicyBody = Readonly<{ expectedVersion: number; contactPolicy: 'requests' | 'closed' }>;
+/** Catalog visibility — PUT body only; consentPolicyVersion only when ON and already stored. */
+export type VisibilityBody = Readonly<{
+  directoryVisible: boolean;
+  expectedVersion: number;
+  consentPolicyVersion?: string;
+}>;
 export type LookingPacket =
   | Readonly<{ kind: 'lookingPut'; actor: Readonly<Actor>; key: string; body: LookingPutBody }>
   | Readonly<{ kind: 'lookingDelete'; actor: Readonly<Actor>; key: string }>;
+export type VisibilityPacket =
+  Readonly<{ kind: 'visibility'; actor: Readonly<Actor>; key: string; body: VisibilityBody }>;
 export type ProfileMutationPacket =
   | Readonly<{ kind: 'profile'; actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>
   | Readonly<{ kind: 'contactPolicy'; actor: Readonly<Actor>; key: string; body: ContactPolicyBody }>;
-export type ProfilePacket = ProfileMutationPacket | LookingPacket;
+export type ProfilePacket = ProfileMutationPacket | LookingPacket | VisibilityPacket;
 export type ProfilePort = { read: () => Promise<OwnProfile>; cities: () => Promise<City[]>;
   send: (packet: ProfileMutationPacket, authority: Actor) => Promise<OwnProfile>;
   /** Optional until a looking mutation is admitted; missing port refuses looking writes. */
-  looking?: (packet: LookingPacket, authority: Actor) => Promise<Looking> };
+  looking?: (packet: LookingPacket, authority: Actor) => Promise<Looking>;
+  /** Optional until visibility PUT is admitted; missing port refuses catalog visibility writes. */
+  visibility?: (packet: VisibilityPacket, authority: Actor) => Promise<OwnProfile> };
 export type ProfileDraft = { displayName: string; cityId: string; areaKey: string; bio: string; levelChoice: LevelGuideChoice };
 /** Typed read routing — never inferred from localized notice text. */
 export type ProfileReadIntent = null | 'rebase';
-export type ProfileNoticeOwner = null | 'profile' | 'contactPolicy' | 'looking';
+export type ProfileNoticeOwner = null | 'profile' | 'contactPolicy' | 'looking' | 'visibility';
 type Snapshot = { actor: Actor | null; profile: OwnProfile | null; cities: City[]; draft: ProfileDraft;
   status: 'idle' | 'loading' | 'ready' | 'error' | 'stale'; command?: { packet: ProfilePacket; status: 'sending' | 'unknown' };
   notice: string | null; noticeOwner: ProfileNoticeOwner; readIntent: ProfileReadIntent };
@@ -310,7 +320,19 @@ const initial = (): Snapshot => ({
 function noticeOwnerOf(packet: ProfilePacket): ProfileNoticeOwner {
   if (packet.kind === 'contactPolicy') return 'contactPolicy';
   if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') return 'looking';
+  if (packet.kind === 'visibility') return 'visibility';
   return 'profile';
+}
+/** Exact visibility PUT wire — never invents consent; omits consentPolicyVersion unless ON+present. */
+export function visibilityWireBody(body: VisibilityBody): Record<string, unknown> {
+  const wire: Record<string, unknown> = {
+    directoryVisible: body.directoryVisible,
+    expectedVersion: body.expectedVersion,
+  };
+  if (body.directoryVisible && body.consentPolicyVersion !== undefined) {
+    wire.consentPolicyVersion = body.consentPolicyVersion;
+  }
+  return wire;
 }
 const form = (p: OwnProfile): ProfileDraft => createProfileDraft(
   p.displayName, p.cityId ?? '', p.areaKey ?? '', p.bio ?? '', levelGuideChoiceFromProfile(p.level),
@@ -358,6 +380,8 @@ export class ProfileCoordinator {
         ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
         : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete'
         ? 'Результат статуса «Ищу игру» неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и данными.'
+        : packet.kind === 'visibility'
+        ? 'Пока не удалось подтвердить изменение видимости. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
         : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
   }
   forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
@@ -598,6 +622,34 @@ export class ProfileCoordinator {
     });
     await this.dispatch(packet, actor);
   };
+  /**
+   * Explicit catalog visibility only. Requires authoritative version≥1.
+   * Never auto-runs on mount/login/reauth/foreground/refresh; city is not a gate;
+   * consent is forwarded only when ON and already stored — never fabricated.
+   */
+  setDirectoryVisible = async (desired: boolean) => {
+    const { actor, profile, status, command } = this.state;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
+    if (profile.version < 1) {
+      this.show({ notice: 'Сначала сохраните игровой профиль.', noticeOwner: 'visibility' });
+      return;
+    }
+    if (profile.directoryVisible === desired) return;
+    const body: VisibilityBody = Object.freeze({
+      directoryVisible: desired,
+      expectedVersion: profile.version,
+      ...(desired && profile.consentPolicyVersion
+        ? { consentPolicyVersion: profile.consentPolicyVersion }
+        : {}),
+    });
+    const packet = Object.freeze({
+      kind: 'visibility' as const,
+      actor: Object.freeze({ ...actor }),
+      key: this.random(),
+      body,
+    });
+    await this.dispatch(packet, actor);
+  };
   reconcile = async () => {
     const { actor, command } = this.state;
     if (actor && command?.status === 'unknown' && command.packet.actor.actorId === actor.actorId) await this.dispatch(command.packet, actor);
@@ -731,6 +783,30 @@ export class ProfileCoordinator {
         if (!this.state.cities.length) this.show({ status: 'idle' });
         return;
       }
+      if (packet.kind === 'visibility') {
+        if (!this.port.visibility) throw new ProfileError('network');
+        const profile = await this.port.visibility(packet, authority);
+        if (!valid()) return;
+        const { body } = packet;
+        const existing = this.state.profile;
+        if (profile.version <= body.expectedVersion || profile.directoryVisible !== body.directoryVisible) {
+          throw new ProfileError('invalid');
+        }
+        // Late historical ACK cannot regress current own-profile version or invent success from intent alone.
+        if (existing && profile.version < existing.version) throw new ProfileError('invalid');
+        this.show({
+          profile,
+          command: undefined,
+          status: 'ready',
+          readIntent: null,
+          notice: profile.directoryVisible
+            ? 'Профиль видим в каталоге.'
+            : 'Профиль скрыт из каталога.',
+          noticeOwner: 'visibility',
+        });
+        if (!this.state.cities.length) this.show({ status: 'idle' });
+        return;
+      }
       const profile = await this.port.send(packet, authority);
       if (!valid()) return;
       if (packet.kind === 'contactPolicy') {
@@ -759,22 +835,39 @@ export class ProfileCoordinator {
     } catch (error) {
       if (!valid()) return;
       if (error instanceof ProfileError && error.kind === 'business' && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS') {
+        if (packet.kind === 'visibility' && error.code === 'CONSENT_POLICY_VERSION_INVALID') {
+          this.show({
+            command: undefined,
+            status: 'stale',
+            readIntent: 'rebase',
+            noticeOwner: 'visibility',
+            notice: 'Не удалось включить видимость. Обновите данные профиля',
+          });
+          return;
+        }
         const stale = error.status === 409;
         this.show({
           command: undefined,
           status: stale ? 'stale' : 'ready',
           readIntent: stale ? 'rebase' : this.state.readIntent,
-          noticeOwner: stale ? 'profile' : noticeOwnerOf(packet),
+          noticeOwner: stale
+            ? (packet.kind === 'visibility' ? 'visibility' : 'profile')
+            : noticeOwnerOf(packet),
           notice: stale
-            ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'
+            ? (packet.kind === 'visibility'
+              ? 'Профиль изменился. Обновите данные, чтобы проверить видимость.'
+              : 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.')
             : packet.kind === 'contactPolicy' ? 'Настройка личных сообщений не сохранена. Проверьте соединение или повторите.'
             : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete' ? this.lookingNotice(packet, 'fail')
+            : packet.kind === 'visibility' ? 'Изменение видимости не сохранено. Проверьте соединение или повторите.'
             : moderationCodes.includes(error.code) ? 'Изменения не сохранены. Проверьте публичный текст или повторите позже. Введённые данные сохранены в форме.'
             : 'Изменения не сохранены. Проверьте поля и повторите.',
         });
       } else this.show({ command: { packet, status: 'unknown' }, noticeOwner: noticeOwnerOf(packet), notice: packet.kind === 'contactPolicy'
         ? 'Результат настройки личных сообщений неизвестен. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
         : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete' ? this.lookingNotice(packet, 'unknown')
+        : packet.kind === 'visibility'
+        ? 'Пока не удалось подтвердить изменение видимости. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
         : 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
     }
   }

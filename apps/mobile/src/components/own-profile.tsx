@@ -47,17 +47,25 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
   const peerBusy = auth.avatar.blocksEdits() || auth.cover.blocksEdits() || trainerOwner.blocksMutations();
   const coverLocked = !!state.command || state.status !== 'ready' || peerBusy;
   const policyLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile || profile.version < 1;
+  const visibilityLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile || profile.version < 1;
   const lookingLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile;
   const trainerLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile
     || trainerState.status === 'loading' || !!trainerState.command || trainerState.status === 'stale';
   const policyPending = state.command?.packet.kind === 'contactPolicy';
+  const visibilityPending = state.command?.packet.kind === 'visibility';
   const lookingPending = state.command?.packet.kind === 'lookingPut' || state.command?.packet.kind === 'lookingDelete';
   const trainerPending = !!trainerState.command;
   const trainerOn = trainerActive(trainerState.trainer);
   // Last confirmed position only — never optimistic flip while sending/UNKNOWN.
   const trainerSwitchOn = trainerOn;
+  const shown = Boolean(profile?.directoryVisible && profile.socialEligible);
+  const visibilityRetryTitle = state.command?.packet.kind === 'visibility'
+    ? (state.command.packet.body.directoryVisible
+      ? 'Повторить включение видимости'
+      : 'Повторить отключение видимости')
+    : 'Повторить изменение видимости';
   // Reachable when same-actor reauth restores command with profile still null (load refuses).
-  // Trainer pending uses the same outside-branch composition as policy/looking.
+  // Trainer/visibility pending use the same outside-branch composition as policy/looking.
   // With profile present, same fragment stays inside the owning card only — no duplicate.
   const pendingPolicyStatus = <>
     {state.noticeOwner === 'contactPolicy' && state.notice &&
@@ -66,6 +74,16 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
       <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем настройку…</Label>}
     {policyPending && state.command?.status === 'unknown' &&
       <PrimaryButton title="Повторить прежнюю настройку личных сообщений" onPress={() => void owner.reconcile()} />}
+  </>;
+  const pendingVisibilityStatus = <>
+    {state.noticeOwner === 'visibility' && state.notice &&
+      <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+    {visibilityPending && state.command?.status === 'sending' &&
+      <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем видимость профиля…</Label>}
+    {visibilityPending && state.command?.status === 'unknown' &&
+      <PrimaryButton title={visibilityRetryTitle} onPress={() => void owner.reconcile()} />}
+    {state.status === 'stale' && state.noticeOwner === 'visibility' && !visibilityPending &&
+      <PrimaryButton title="Обновить данные" onPress={() => void owner.refreshAuthoritative()} />}
   </>;
   const pendingLookingStatus = <>
     {state.noticeOwner === 'looking' && state.notice &&
@@ -96,9 +114,10 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}
     {(state.status === 'error' || state.status === 'idle') &&
       <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.retryRead()} />}
-    {state.status === 'stale' &&
+    {state.status === 'stale' && state.noticeOwner !== 'visibility' &&
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
     {!profile && policyPending && pendingPolicyStatus}
+    {!profile && visibilityPending && pendingVisibilityStatus}
     {!profile && lookingPending && pendingLookingStatus}
     {!profile && trainerPending && pendingTrainerStatus}
     {profile && player && <>
@@ -153,6 +172,36 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
         pendingLooking={lookingPending}
         pendingStatus={lookingPending ? state.command?.status : undefined}
       />
+      <View style={styles.card} accessibilityLabel="Видимость профиля">
+        <Label style={{ color: colors.secondary, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>Что увидят другие игроки</Label>
+        <Label accessibilityRole="header" style={styles.subtitle}>Видимость профиля</Label>
+        <View style={{ gap: 8 }}>
+          <Label>Имя: {profile.displayName || 'Не указано'} · {shown ? 'Показывается' : 'Скрыто'}</Label>
+          <Label>Район: {[cityName, profile.areaKey].filter(Boolean).join(' · ') || 'Не указан'} · {shown && Boolean(profile.cityId || profile.areaKey) ? 'Показывается' : 'Скрыто'}</Label>
+          <Label>Уровень: {playerLevelLabel(profile.level)} · {shown && Boolean(profile.level) ? 'Показывается' : 'Скрыто'}</Label>
+          <Label>Игровое описание: {profile.bio ? 'Заполнено' : 'Не заполнено'} · {shown && Boolean(profile.bio) ? 'Показывается' : 'Скрыто'}</Label>
+          <Label>Тренерский профиль: {profile.trainer ? 'Включён' : 'Выключен'} · {shown && profile.trainer ? 'Показывается' : 'Скрыто'}</Label>
+        </View>
+        <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 18 }}>
+          Если включить видимость, эти сведения смогут видеть посетители каталога, в том числе без входа.
+        </Label>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <Label style={{ flex: 1, flexShrink: 1 }}>Показывать профиль в каталоге</Label>
+          <Switch
+            accessibilityRole="switch"
+            accessibilityLabel="Показывать профиль в каталоге"
+            accessibilityState={{ checked: profile.directoryVisible, disabled: visibilityLocked }}
+            value={profile.directoryVisible}
+            disabled={visibilityLocked}
+            onValueChange={next => {
+              if (visibilityLocked) return;
+              void owner.setDirectoryVisible(next);
+            }}
+          />
+        </View>
+        {profile.version < 1 && <Label>Сначала сохраните игровой профиль.</Label>}
+        {pendingVisibilityStatus}
+      </View>
       <View style={styles.card}>
         <Label style={{ color: colors.secondary, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>Настройки сообщений</Label>
         <Label accessibilityRole="header" style={styles.subtitle}>Личные сообщения</Label>

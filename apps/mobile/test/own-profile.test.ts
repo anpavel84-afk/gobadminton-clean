@@ -60,7 +60,10 @@ test('#522 own-profile trainer card after personal messages', () => {
   assert.match(source, /Я тренер/);
   assert.match(source, /Профиль тренера выключен/);
   assert.match(source, /nativeAuth\.trainer/);
-  assert.ok(source.indexOf('Личные сообщения') < source.indexOf('Тренерский профиль'));
+  const visibilityCard = source.indexOf('accessibilityLabel="Видимость профиля"');
+  const messagesCard = source.indexOf('Настройки сообщений');
+  const trainerCard = source.indexOf('accessibilityLabel="Тренерский профиль"');
+  assert.ok(visibilityCard >= 0 && messagesCard > visibilityCard && trainerCard > messagesCard);
 });
 
 test('#522 P2: trainer card stale exposes reachable authoritative refresh CTA', () => {

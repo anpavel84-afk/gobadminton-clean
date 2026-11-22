@@ -112,9 +112,22 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Trigger | Explicit Switch only; checked iff authoritative `contactPolicy === 'requests'`; disabled while version&lt;1, command/peer busy, or not ready |
 | Expected | Policy-only wire; serialize with name/avatar/cover; receipt confirms server policy+version; dirty name/level/area/bio draft preserved; closed blocks new incoming / history retained; no catalog visibility, trainer, looking, Radar, consent, or identity side effects; UNKNOWN exact-packet retry; late ACK cannot repaint new actor; version0 not faked |
 | Accessibility | Named Switch + helper; busy/unknown pending copy; large-text row layout |
-| Non-scope | Directory visibility PUT (cookie-only); trainer/looking activation; first-message admission policy; new consent defaults; PROD |
+| Non-scope | Directory visibility PUT (separate P-06); trainer/looking activation; first-message admission policy; new consent defaults; PROD |
 | Evidence | Mobile unit `contact-policy.test.ts` / profile·auth; optional API `native-players.foundation` bearer policy case; source APK counter 24 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 contactPolicy native parity source; not VERIFIED_SOURCE / not device PASS |
+
+## P-06 · Own profile catalog visibility / directoryVisible (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `ProfilePage.tsx` «Показывать профиль в каталоге» + `PUT /v1/me/social-profile/visibility`; native `profile.ts` / `own-profile.tsx` Switch; Owner #448 city not prerequisite; consent only when ON+stored |
+| Entry | Authenticated `/profile` own-profile card — «Видимость профиля» after «Ищу игру», before «Личные сообщения» |
+| Trigger | Explicit Switch only; checked iff authoritative `directoryVisible`; disabled while version&lt;1, command/peer busy, or not ready; no autowrite on mount/login/reauth/foreground/refresh |
+| Expected | Visibility-only PUT wire `{directoryVisible,expectedVersion,consentPolicyVersion?}`; never via profileWireBody/PATCH; serialize with text/contactPolicy/Looking/avatar/cover/trainer peers; OFF retains Radar consent and leaves contact/Looking/trainer untouched; UNKNOWN exact-packet retry; 409/consent-invalid → rebase refresh; success copy from adopted DTO |
+| Accessibility | Named Switch + five preview rows (Показывается/Скрыто); busy/unknown pending copy with intent-named retry; no city-required helper |
+| Non-scope | New coordinator/framework; fabricated consent; PROD; store permissions |
+| Evidence | Mobile unit `visibility.test.ts` / own-profile·profile·contact·looking; API `native-players.foundation` bearer visibility case; source APK counter 29 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 catalog visibility native parity source; not VERIFIED_SOURCE / not device PASS |
 
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
