@@ -696,3 +696,165 @@ test('address4: coherent DELETE ACK→GET timeline; monotonic current; equal-ver
     t.mock.timers.reset();
   }
 });
+
+test('address5: same-version server expiry projection active→inactive; guards retained', async (t) => {
+  // Canonical server loadLookingEffective/mapLooking: expires-on-read flips active→inactive
+  // at the same version without a bump. Prior equal-version state guard was overstrict.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-22T12:00:00.000Z') });
+  try {
+    const expiredAt = '2026-11-22T11:00:00.000Z';
+    const ackActiveExpired = activeLooking(1, { areaKey: 'zone', expiresAt: expiredAt });
+    const projectedInactive: Looking = { ...ackActiveExpired, state: 'inactive' };
+
+    // Same-actor reauth: cached PUT ACK active v1 expired + fresh GET inactive v1 → adopt, same key.
+    const reauthBase: OwnProfile = {
+      ...emptyProfile, version: 9, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+    };
+    let reauthPhase: 'net' | 'ack' = 'net';
+    let reauthAuth: OwnProfile = { ...reauthBase };
+    const reauth = setup(reauthBase, {
+      looking: async () => {
+        if (reauthPhase === 'net') throw new ProfileError('network');
+        return ackActiveExpired;
+      },
+      read: async () => ({ ...reauthAuth }),
+    });
+    await reauth.owner.load();
+    await reauth.owner.enableLooking('zone', LOOKING_TTL_1H);
+    const reauthOriginal = reauth.lookingSent[0]!.packet;
+    assert.equal(reauth.keyCount, 1);
+    reauth.owner.setActor({ ...actor, sessionId: 'reauth', generation: 2 });
+    assert.equal(reauth.owner.getSnapshot().profile, null);
+    assert.equal(reauth.owner.getSnapshot().command?.status, 'unknown');
+    reauthPhase = 'ack';
+    reauthAuth = { ...reauthBase, lookingForGame: projectedInactive };
+    await reauth.owner.reconcile();
+    assert.strictEqual(reauth.lookingSent[1]!.packet, reauthOriginal);
+    assert.equal(reauth.lookingSent.length, 2);
+    assert.equal(reauth.keyCount, 1);
+    assert.equal(reauth.owner.getSnapshot().command, undefined);
+    assert.equal(reauth.owner.getSnapshot().profile?.lookingForGame?.version, 1);
+    assert.equal(reauth.owner.getSnapshot().profile?.lookingForGame?.state, 'inactive');
+    assert.equal(reauth.owner.getSnapshot().profile?.lookingForGame?.expiresAt, expiredAt);
+    assert.equal(reauth.owner.getSnapshot().profile?.version, 9);
+    assert.doesNotMatch(reauth.owner.getSnapshot().notice!, /включено/);
+    assert.match(reauth.owner.getSnapshot().notice!, /выключено/);
+
+    // Retained profile + dirty draft: same projection; SP version and draft kept; no extra key.
+    const retainedBase: OwnProfile = {
+      ...emptyProfile, version: 4, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+    };
+    let retainedPhase: 'net' | 'ack' = 'net';
+    let retainedAuth: OwnProfile = { ...retainedBase };
+    const retained = setup(retainedBase, {
+      looking: async () => {
+        if (retainedPhase === 'net') throw new ProfileError('network');
+        return ackActiveExpired;
+      },
+      read: async () => ({ ...retainedAuth }),
+    });
+    await retained.owner.load();
+    retained.owner.update({ displayName: 'Черновик', bio: 'dirty' });
+    await retained.owner.enableLooking('zone', LOOKING_TTL_1H);
+    const retainedOriginal = retained.lookingSent[0]!.packet;
+    assert.equal(retained.keyCount, 1);
+    assert.equal(retained.owner.getSnapshot().command?.status, 'unknown');
+    retainedPhase = 'ack';
+    retainedAuth = { ...retainedBase, lookingForGame: projectedInactive };
+    await retained.owner.reconcile();
+    assert.strictEqual(retained.lookingSent[1]!.packet, retainedOriginal);
+    assert.equal(retained.lookingSent.length, 2);
+    assert.equal(retained.keyCount, 1);
+    assert.equal(retained.owner.getSnapshot().command, undefined);
+    assert.equal(retained.owner.getSnapshot().profile?.lookingForGame?.state, 'inactive');
+    assert.equal(retained.owner.getSnapshot().profile?.lookingForGame?.version, 1);
+    assert.equal(retained.owner.getSnapshot().profile?.version, 4);
+    assert.equal(retained.owner.getSnapshot().draft.displayName, 'Черновик');
+    assert.equal(retained.owner.getSnapshot().draft.bio, 'dirty');
+    assert.doesNotMatch(retained.owner.getSnapshot().notice!, /включено/);
+    assert.match(retained.owner.getSnapshot().notice!, /выключено/);
+
+    // Reject inactive→active at equal version (DELETE ACK inactive v1 + GET active v1).
+    const flipBase: OwnProfile = {
+      ...emptyProfile, version: 7, displayName: 'Игрок', cityId: city.id,
+      lookingForGame: activeLooking(1, { areaKey: 'zone', expiresAt: expiredAt }),
+    };
+    let flipPhase: 'net' | 'ack' = 'net';
+    let flipAuth: OwnProfile = { ...flipBase };
+    const flip = setup(flipBase, {
+      looking: async () => {
+        if (flipPhase === 'net') throw new ProfileError('network');
+        return projectedInactive;
+      },
+      read: async () => ({ ...flipAuth }),
+    });
+    await flip.owner.load();
+    await flip.owner.stopLooking();
+    assert.equal(flip.owner.getSnapshot().command?.status, 'unknown');
+    assert.equal(flip.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
+    flipPhase = 'ack';
+    flipAuth = { ...flipBase, lookingForGame: ackActiveExpired };
+    await flip.owner.reconcile();
+    assert.equal(flip.owner.getSnapshot().command?.status, 'unknown');
+    assert.equal(flip.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
+    assert.equal(flip.owner.getSnapshot().profile?.lookingForGame?.version, 1);
+
+    // Premature inactive: future expiresAt at equal version must not pretend success.
+    const futureAt = '2026-11-22T13:00:00.000Z';
+    const prematureAck = activeLooking(1, { areaKey: 'zone', expiresAt: futureAt });
+    const prematureBase: OwnProfile = {
+      ...emptyProfile, version: 3, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+    };
+    let prematurePhase: 'net' | 'ack' = 'net';
+    let prematureAuth: OwnProfile = { ...prematureBase };
+    const premature = setup(prematureBase, {
+      looking: async () => {
+        if (prematurePhase === 'net') throw new ProfileError('network');
+        return prematureAck;
+      },
+      read: async () => ({ ...prematureAuth }),
+    });
+    await premature.owner.load();
+    await premature.owner.enableLooking('zone', LOOKING_TTL_1H);
+    assert.equal(premature.owner.getSnapshot().command?.status, 'unknown');
+    prematurePhase = 'ack';
+    prematureAuth = {
+      ...prematureBase,
+      lookingForGame: { ...prematureAck, state: 'inactive' },
+    };
+    await premature.owner.reconcile();
+    assert.equal(premature.owner.getSnapshot().command?.status, 'unknown');
+    assert.equal(premature.owner.getSnapshot().profile?.lookingForGame, null);
+
+    // Changed city/area under inactive cloak at equal version → UNKNOWN.
+    const mutateBase: OwnProfile = {
+      ...emptyProfile, version: 5, displayName: 'Игрок', cityId: city.id, lookingForGame: null,
+    };
+    let mutatePhase: 'net' | 'ack' = 'net';
+    let mutateAuth: OwnProfile = { ...mutateBase };
+    const mutate = setup(mutateBase, {
+      looking: async () => {
+        if (mutatePhase === 'net') throw new ProfileError('network');
+        return ackActiveExpired;
+      },
+      read: async () => ({ ...mutateAuth }),
+    });
+    await mutate.owner.load();
+    await mutate.owner.enableLooking('zone', LOOKING_TTL_1H);
+    assert.equal(mutate.owner.getSnapshot().command?.status, 'unknown');
+    mutatePhase = 'ack';
+    mutateAuth = {
+      ...mutateBase,
+      lookingForGame: { ...projectedInactive, areaKey: 'other-area' },
+    };
+    await mutate.owner.reconcile();
+    assert.equal(mutate.owner.getSnapshot().command?.status, 'unknown');
+    assert.equal(mutate.owner.getSnapshot().profile?.lookingForGame, null);
+
+    // Honesty case retained elsewhere (address2): fresh GET still active+expired → «истёк».
+    // Here prove canonical projection notice never claims «включено».
+    assert.match(reauth.owner.getSnapshot().notice!, /выключено/);
+  } finally {
+    t.mock.timers.reset();
+  }
+});

@@ -632,10 +632,9 @@ export class ProfileCoordinator {
     }
     if (looking.state !== 'inactive') throw new ProfileError('invalid');
   }
-  /** Canonical Looking body equality — version excluded; clock expiry does not mutate fields. */
-  private lookingCanonicalEqual(a: Looking, b: Looking): boolean {
-    return a.state === b.state
-      && a.cityId === b.cityId
+  /** Canonical Looking fields excluding version/state — city/area/dates/formats/expiresAt. */
+  private lookingCanonicalFieldsEqual(a: Looking, b: Looking): boolean {
+    return a.cityId === b.cityId
       && a.areaKey === b.areaKey
       && a.startsAt === b.startsAt
       && a.endsAt === b.endsAt
@@ -643,10 +642,33 @@ export class ProfileCoordinator {
       && a.formatKeys.length === b.formatKeys.length
       && a.formatKeys.every((key, index) => key === b.formatKeys[index]);
   }
+  /** Full canonical Looking equality — version excluded; state included. */
+  private lookingCanonicalEqual(a: Looking, b: Looking): boolean {
+    return a.state === b.state && this.lookingCanonicalFieldsEqual(a, b);
+  }
+  /**
+   * Real server expires-on-read may flip active→inactive at the same version without a bump
+   * (identical other canonical fields + past valid expiresAt). Never inactive→active,
+   * premature inactive, or field mutations at equal version.
+   * Clock skew: only adopt when expiresAt is already past on the local clock (conservative);
+   * never invent a write/TTL or new protocol to paper over skew.
+   */
+  private lookingServerExpiryProjection(prior: Looking, nested: Looking, nowMs = Date.now()): boolean {
+    if (prior.state !== 'active' || nested.state !== 'inactive') return false;
+    if (!this.lookingCanonicalFieldsEqual(prior, nested)) return false;
+    if (!nested.expiresAt) return false;
+    const expires = Date.parse(nested.expiresAt);
+    return !Number.isNaN(expires) && expires <= nowMs;
+  }
+  private lookingEqualVersionAllowed(prior: Looking, nested: Looking): boolean {
+    return this.lookingCanonicalEqual(nested, prior)
+      || this.lookingServerExpiryProjection(prior, nested);
+  }
   /**
    * After a verified original ACK, prefer the fresh own-profile Looking state.
    * Nested must not regress below ACK or the known current Looking version.
-   * Same version may expire via clock, but canonical fields/state cannot diverge without a bump.
+   * Same-version active→inactive is legitimate only as server expiry projection;
+   * other equal-version divergences still require a version bump.
    * Canonical no-record STOP: inactive version 0 ACK + nested null → confirmed off.
    */
   private resolveLookingAfterAck(ack: Looking, nested: Looking | null, packet: LookingPacket): Looking | null {
@@ -655,13 +677,13 @@ export class ProfileCoordinator {
       throw new ProfileError('invalid');
     }
     if (nested.version < ack.version) throw new ProfileError('invalid');
-    if (nested.version === ack.version && !this.lookingCanonicalEqual(nested, ack)) {
+    if (nested.version === ack.version && !this.lookingEqualVersionAllowed(ack, nested)) {
       throw new ProfileError('invalid');
     }
     const current = this.state.profile?.lookingForGame ?? null;
     if (current) {
       if (nested.version < current.version) throw new ProfileError('invalid');
-      if (nested.version === current.version && !this.lookingCanonicalEqual(nested, current)) {
+      if (nested.version === current.version && !this.lookingEqualVersionAllowed(current, nested)) {
         throw new ProfileError('invalid');
       }
     }
