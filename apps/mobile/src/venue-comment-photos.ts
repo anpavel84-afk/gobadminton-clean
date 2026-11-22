@@ -218,8 +218,24 @@ export function hasCheckingPhoto(items: readonly PhotoComposerItem[]): boolean {
 }
 
 /**
- * Mirrors web `ready()`: every active (!withdrawKey) draft must be unexpired ready;
- * Send when trimmed text is non-empty or ≥1 such photo; never while checking/withdrawing.
+ * Marked-expired or ready-but-past-TTL drafts are excluded from photoIds (press-time
+ * recheck); they must not block text-only Send after the expiry timer fires.
+ */
+export function isExpiredComposerDraft(
+  item: PhotoComposerItem,
+  now = Date.now(),
+): boolean {
+  if (item.state === 'expired') return true;
+  return item.state === 'ready'
+    && !!item.receipt
+    && !receiptUnexpired(item.receipt, now);
+}
+
+/**
+ * Active (!withdrawKey) non-expired drafts must all be unexpired ready; expired
+ * drafts are skipped so text-only Send stays enabled (aligns with
+ * evaluateCommentCreateAtPress). Send when trimmed text is non-empty or ≥1
+ * publishable photo; never while checking/withdrawing.
  */
 export function commentSendReady(
   text: string,
@@ -229,12 +245,14 @@ export function commentSendReady(
   if (hasCheckingPhoto(items)) return false;
   const active = items.filter(item => !item.withdrawKey);
   if (active.length > MAX_COMMENT_PHOTOS) return false;
-  const allPublishable = active.every(item => item.state === 'ready'
+  // Expired (timer-marked or TTL-elapsed) excluded — same as readyPhotoIds / press-time.
+  const publishable = active.filter(item => !isExpiredComposerDraft(item, now));
+  const allReady = publishable.every(item => item.state === 'ready'
     && item.receipt
     && item.receipt.status === 'ready'
     && receiptUnexpired(item.receipt, now));
-  if (!allPublishable) return false;
-  return Boolean(text.trim() || active.length);
+  if (!allReady) return false;
+  return Boolean(text.trim() || publishable.length);
 }
 
 /** Patch ready drafts whose receipt TTL has elapsed — used after create photoUnavailable refuse. */

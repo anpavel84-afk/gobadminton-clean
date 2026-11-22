@@ -8,6 +8,7 @@ import type { Comment, Action, CreateVenueCommunityReportRequest, Packet } from 
 import { commentText } from '../venue-community.ts';
 import {
   applyPublishOperationUpdates,
+  evaluateCommentCreateAtPress,
   notePendingPublish,
   type PendingPublishMap,
 } from '../venue-comment-photos.ts';
@@ -221,7 +222,17 @@ function RootCommentComposer({
   const draft = s.drafts.root ?? '';
   // No create→photoIds association state here — this composer unmounts when canCreate is false;
   // CommunityPanel owns that association next to drafts so reconcile can still retire them.
-  const sendEnabled = !locked && photos.canSend(draft) && (!draft.trim() || validText(draft));
+  const textValid = !draft.trim() || validText(draft);
+  // Button gate must match press-time evaluateCommentCreateAtPress (r7c / r8): after expiry
+  // timer marks drafts expired, valid text-only Send stays enabled (expired photoIds excluded).
+  // photos.canSend still blocks checking / rejected / retryable / pending reads.
+  const sendEnabled = !locked
+    && photos.canSend(draft)
+    && textValid
+    && evaluateCommentCreateAtPress(draft, photos.items, {
+      textValid,
+      checking: photos.checking,
+    }).submit;
   return <>
     <Field label="Ваш комментарий" value={draft} disabled={locked} onChange={text => owner.setDraft('root', text)} />
     <VenueCommentPhotoComposer model={photos} disabled={locked} />

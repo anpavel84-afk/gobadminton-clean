@@ -11,6 +11,7 @@ import {
   commentSendReady,
   evaluateCommentCreateAtPress,
   expireStaleReadyPhotos,
+  isExpiredComposerDraft,
   isPhotoReceipt,
   mapUploadFailure,
   nextReadyPhotoExpiresAt,
@@ -627,7 +628,8 @@ test('#598B r6 readyPhotoIds / Send recheck expiresAt; equal-to-now excluded (in
   assert.equal(receiptUnexpired(stale[0]!.receipt!, now), false);
   assert.deepEqual(readyPhotoIds(stale, now), []);
   assert.equal(commentSendReady('', stale, now), false);
-  assert.equal(commentSendReady('текст', stale, now), false);
+  // r8: TTL-stale must not block text-only Send (was false — pinned old button-gate bug).
+  assert.equal(commentSendReady('текст', stale, now), true);
   assert.equal(photoItemStatusLabel(stale[0]!, now), 'Срок истёк');
   assert.match(photoItemMessage(stale[0]!, now) ?? '', /Срок действия истёк/);
 
@@ -644,6 +646,8 @@ test('#598B r6 readyPhotoIds / Send recheck expiresAt; equal-to-now excluded (in
   assert.equal(marked[0]!.state, 'expired');
   assert.deepEqual(readyPhotoIds(marked, now), []);
   assert.equal(commentSendReady('', marked, now), false);
+  // r8: timer-marked expired + text → Send ready (photoIds excluded at press).
+  assert.equal(commentSendReady('текст', marked, now), true);
 });
 
 test('#598B r6 mapUploadFailure parity vs web; expired excluded from photoIds (negative)', () => {
@@ -746,6 +750,9 @@ test('#598B r7 press-time ready ids: idle past expiry then Send (a)(b)(c)', () =
   assert.deepEqual(withText, { submit: true, photoIds: [] });
   // Stale render-time array must not be used for create.
   assert.notDeepEqual(renderReadyIds, withText.submit ? withText.photoIds : null);
+  // Button gate (commentSendReady) must agree with press-time (c) — not only the helper.
+  assert.equal(commentSendReady('текст', items, afterIdle), true);
+  assert.equal(commentSendReady('', items, afterIdle), false);
 
   // Checking / pending blocks submit even with text.
   assert.deepEqual(
@@ -805,6 +812,76 @@ test('#598B r7 source: press-time takeReadyIds in submit; expiry timer to next e
   assert.equal(nextReadyPhotoExpiresAt(items, near), far);
   assert.equal(nextReadyPhotoExpiresAt(items, far), null);
   assert.equal(nextReadyPhotoExpiresAt([], now), null);
+});
+
+test('#598B r8 Send gate: expiry timer / TTL-stale must not block text-only (negative)', () => {
+  const now = 1_700_000_000_000;
+  let items: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/jpeg', size: 100,
+  });
+  items = photoComposerReducer(items, {
+    type: 'patch',
+    key,
+    state: 'ready',
+    receipt: readyReceipt(photoId, { expiresAt: new Date(now - 1).toISOString() }),
+  });
+  assert.equal(isExpiredComposerDraft(items[0]!, now), true);
+  // NEGATIVE: photo-only after TTL → Send disabled; ids empty.
+  assert.deepEqual(readyPhotoIds(items, now), []);
+  assert.equal(commentSendReady('', items, now), false);
+  assert.equal(
+    evaluateCommentCreateAtPress('', items, { textValid: true, checking: false, now }).submit,
+    false,
+  );
+
+  // Timer path: expireStaleReadyPhotos marks state=expired (UI recheckExpiry).
+  const marked = expireStaleReadyPhotos(items, now);
+  assert.equal(marked[0]!.state, 'expired');
+  assert.equal(isExpiredComposerDraft(marked[0]!, now), true);
+  // NEGATIVE: still no photo-only Send after mark.
+  assert.equal(commentSendReady('', marked, now), false);
+  // Text-only MUST enable — this is the r7 FAIL / r8 fix (button used commentSendReady).
+  assert.equal(commentSendReady('текст', marked, now), true);
+  assert.deepEqual(
+    evaluateCommentCreateAtPress('текст', marked, { textValid: true, checking: false, now }),
+    { submit: true, photoIds: [] },
+  );
+
+  // NEGATIVE: rejected / retryable still block text Send (expiry exclusion must not widen).
+  let rejected: PhotoComposerItem[] = photoComposerReducer([], {
+    type: 'add', key, mime: 'image/png', size: 50,
+  });
+  rejected = photoComposerReducer(rejected, { type: 'patch', key, state: 'rejected' });
+  assert.equal(isExpiredComposerDraft(rejected[0]!, now), false);
+  assert.equal(commentSendReady('текст', rejected, now), false);
+
+  // Mix: one publishable ready + one timer-expired → Send with photo; expired id excluded.
+  const liveId = photoId2;
+  let mixed: PhotoComposerItem[] = photoComposerReducer(marked, {
+    type: 'add', key: liveId, mime: 'image/png', size: 40,
+  });
+  mixed = photoComposerReducer(mixed, {
+    type: 'patch',
+    key: liveId,
+    state: 'ready',
+    receipt: readyReceipt(liveId, { expiresAt: new Date(now + 60_000).toISOString() }),
+  });
+  assert.equal(commentSendReady('', mixed, now), true);
+  assert.deepEqual(readyPhotoIds(mixed, now), [liveId]);
+  assert.deepEqual(
+    evaluateCommentCreateAtPress('текст', mixed, { textValid: true, checking: false, now }),
+    { submit: true, photoIds: [liveId] },
+  );
+
+  // UI button gate must call evaluateCommentCreateAtPress (not only canSend / press helper in tests).
+  const ui = read('../src/components/venue-community.tsx');
+  const root = ui.slice(ui.indexOf('function RootCommentComposer'), ui.indexOf('function ThreadNotice'));
+  assert.match(root, /evaluateCommentCreateAtPress\(draft, photos\.items/);
+  assert.match(root, /photos\.canSend\(draft\)/);
+  assert.match(root, /\.submit/);
+  const helpers = read('../src/venue-comment-photos.ts');
+  assert.match(helpers, /export function isExpiredComposerDraft/);
+  assert.match(helpers, /publishable = active\.filter\(item => !isExpiredComposerDraft\(item, now\)\)/);
 });
 
 test('#598B r5 delayed-token: stale permit never dispatches photo API; live permit calls once', async () => {
