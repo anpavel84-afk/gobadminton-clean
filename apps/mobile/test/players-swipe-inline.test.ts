@@ -84,7 +84,21 @@ test('#660 r3: no fixed-height placeholder slot — font scaling safe (Codex r2 
   // NEGATIVE / regression: r2 slot View with minHeight:48 collapsed from ~72px (fontScale=2) to 48px when button unmounted.
   assert.doesNotMatch(beforeSwipe, /<View onLayout=\{event => setInlineSwipeBottom/);
   assert.doesNotMatch(header, /setInlineSwipeBottom[^;]+;\s*style=\{\{[^}]*minHeight:48/);
-  assert.doesNotMatch(header, /minHeight:48\}\>\s*\{!showFloatingSwipe/);
+  assert.doesNotMatch(header, /minHeight:48\}>\s*\{!showFloatingSwipe/);
   // onLayout lives on the always-mounted Pressable (actual scaled height), not a fixed slot.
   assert.match(header.slice(pressableStart), /onLayout=\{event => setInlineSwipeBottom\(22 \+ event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
+});
+
+test('#660 r4: no useless escaped greater-than in swipe-inline regexes (Codex r3s finding 1)', () => {
+  // NEGATIVE / regression: eslint no-useless-escape on greater-than outside a character class.
+  // Build the forbidden backslash+greater-than sequence without embedding it in this file.
+  const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const uselessGt = String.fromCharCode(0x5c, 0x3e);
+  assert.equal(self.includes(uselessGt), false, 'swipe-inline tests must not contain useless escaped greater-than');
+  // Semantics of the r3 slot NEGATIVE stay identical without the escape.
+  const players = read('../app/players/index.tsx');
+  const headerStart = players.indexOf('ListHeaderComponent=');
+  const headerEnd = players.indexOf('renderItem=', headerStart);
+  const header = players.slice(headerStart, headerEnd);
+  assert.doesNotMatch(header, /minHeight:48\}>\s*\{!showFloatingSwipe/);
 });
