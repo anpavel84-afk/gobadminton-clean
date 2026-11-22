@@ -58,8 +58,8 @@ export function ProfileEditor() {
           : 'Повторить прежнее сохранение с теми же данными'} onPress={() => void owner.reconcile()} />}
       <Label>Можно уйти со страницы. Результат останется неизвестным до явной проверки; новое сохранение пока недоступно.</Label>
     </> : <>
-      {(state.status === 'error' || state.status === 'idle') && <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.load()} />}
-      {state.status === 'stale' && <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.load()} />}
+      {(state.status === 'error' || state.status === 'idle') && <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.retryRead()} />}
+      {state.status === 'stale' && <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
       {state.profile && <>
         <View accessible accessibilityLabel="Фото профиля" accessibilityState={{ busy: avatarOwner.busy() }} style={{ gap: 8 }}>
           <View style={{ width: 96, height: 96, borderRadius: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.yellow }}>

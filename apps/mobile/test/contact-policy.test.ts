@@ -295,6 +295,108 @@ test('stale policy conflict then refreshAuthoritative rebases: dirty draft kept,
   assert.equal(writes, 2);
 });
 
+test('policy 409 → refresh network error → UI retryRead keeps dirty; pristine adopted; no auto write; late/lower fenced', async () => {
+  const serverV2: OwnProfile = {
+    ...emptyProfile, version: 2, displayName: 'Servername', cityId: city.id, areaKey: null, bio: 'Serverbio',
+    level: null, contactPolicy: 'requests',
+  };
+  let server: OwnProfile = { ...serverV2 };
+  let writes = 0;
+  let readMode: 'ok' | 'fail' | 'gate' = 'ok';
+  let readGate = deferred<OwnProfile>();
+  const s = setup(serverV2, {
+    read: async () => {
+      if (readMode === 'fail') throw new ProfileError('network');
+      if (readMode === 'gate') return readGate.promise;
+      return { ...server };
+    },
+    send: async () => {
+      writes += 1;
+      throw new ProfileError('business', 409, 'VERSION_CONFLICT');
+    },
+  });
+  await s.owner.load();
+  s.owner.update({
+    displayName: 'Unsavedname', bio: 'Unsavedbio', areaKey: 'метро', cityId: city.id,
+    levelChoice: { kind: 'pilot', levelId: 'intermediate' },
+  });
+  await s.owner.setContactPolicy('closed');
+  assert.equal(s.owner.getSnapshot().status, 'stale');
+  assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
+  assert.equal(writes, 1);
+
+  // Refresh GET network error: status error, dirty + rebase intent retained (not wiped).
+  readMode = 'fail';
+  await s.owner.refreshAuthoritative();
+  assert.equal(s.owner.getSnapshot().status, 'error');
+  assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsavedname');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsavedbio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'метро');
+  assert.equal(s.owner.getSnapshot().draft.cityId, city.id);
+  assert.deepEqual(s.owner.getSnapshot().draft.levelChoice, { kind: 'pilot', levelId: 'intermediate' });
+  assert.equal(writes, 1);
+
+  // Concurrent authoritative v3 — pristine server fields + policy; dirty fields must survive UI retry.
+  readMode = 'ok';
+  server = {
+    ...serverV2, version: 3, displayName: 'Servername', bio: 'Serverbio', areaKey: 'server-area',
+    contactPolicy: 'closed', level: { scaleId: 'ntrp', scaleVersion: 1, levelId: '3.0', provenance: 'self_declared' },
+  };
+  // Exact OwnProfileCard / ProfileEditor error retry path: retryRead (not ordinary load wipe).
+  await s.owner.retryRead();
+  assert.equal(writes, 1);
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().readIntent, null);
+  assert.equal(s.owner.getSnapshot().profile?.version, 3);
+  assert.equal(s.owner.getSnapshot().profile?.contactPolicy, 'closed');
+  assert.equal(s.owner.getSnapshot().profile?.displayName, 'Servername');
+  assert.equal(s.owner.getSnapshot().profile?.bio, 'Serverbio');
+  assert.equal(s.owner.getSnapshot().profile?.areaKey, 'server-area');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsavedname');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsavedbio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'метро');
+  assert.equal(s.owner.getSnapshot().draft.cityId, city.id);
+  assert.deepEqual(s.owner.getSnapshot().draft.levelChoice, { kind: 'pilot', levelId: 'intermediate' });
+
+  // Lower historical GET after another conflict must not claim fresh or wipe dirty.
+  await s.owner.setContactPolicy('requests');
+  assert.equal(s.owner.getSnapshot().status, 'stale');
+  assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
+  assert.equal(writes, 2);
+  const beforeLower = s.owner.getSnapshot().draft;
+  readMode = 'gate';
+  readGate = deferred<OwnProfile>();
+  const lowerWork = s.owner.refreshAuthoritative();
+  readGate.resolve({
+    ...server, version: 1, displayName: 'Ancient', bio: 'AncientBio', contactPolicy: 'requests',
+  });
+  await lowerWork;
+  assert.equal(s.owner.getSnapshot().status, 'stale');
+  assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
+  assert.equal(s.owner.getSnapshot().profile?.version, 3);
+  assert.deepEqual(s.owner.getSnapshot().draft, beforeLower);
+  assert.equal(writes, 2);
+
+  // Late actor fence on retryRead after refresh network error — no paint, intent cleared with actor.
+  readMode = 'fail';
+  await s.owner.refreshAuthoritative();
+  assert.equal(s.owner.getSnapshot().status, 'error');
+  assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsavedname');
+  readMode = 'gate';
+  readGate = deferred<OwnProfile>();
+  server = { ...server, version: 4, displayName: 'LateServer', bio: 'LateBio', contactPolicy: 'requests' };
+  const late = s.owner.retryRead();
+  s.owner.setActor({ ...actor, generation: 9 });
+  readGate.resolve({ ...server });
+  await late;
+  assert.equal(s.owner.getSnapshot().profile, null);
+  assert.equal(s.owner.getSnapshot().readIntent, null);
+  assert.notEqual(s.owner.getSnapshot().draft.displayName, 'LateServer');
+  assert.equal(writes, 2);
+});
+
 test('own-profile Switch and profile-editor pending copy reference contactPolicy command', () => {
   const own = readFileSync(new URL('../src/components/own-profile.tsx', import.meta.url), 'utf8');
   assert.match(own, /Разрешать личные сообщения/);
@@ -303,6 +405,8 @@ test('own-profile Switch and profile-editor pending copy reference contactPolicy
   assert.match(own, /profile\.version < 1/);
   assert.match(own, /status === 'stale'[\s\S]*refreshAuthoritative/);
   assert.doesNotMatch(own, /status === 'stale'[\s\S]*owner\.load\(\)/);
+  assert.match(own, /status === 'error'[\s\S]*retryRead/);
+  assert.doesNotMatch(own, /\(state\.status === 'error' \|\| state\.status === 'idle'\)[\s\S]*owner\.load\(\)/);
   const policyBlock = own.slice(own.indexOf('Настройки сообщений'));
   assert.doesNotMatch(policyBlock, /directoryVisible|setDirectory|radarConsent/);
   assert.match(policyBlock, /setContactPolicy\(allow \? 'requests' : 'closed'\)/);
@@ -310,4 +414,8 @@ test('own-profile Switch and profile-editor pending copy reference contactPolicy
   assert.match(editor, /kind === 'contactPolicy'/);
   assert.match(editor, /Сохранение настройки личных сообщений/);
   assert.match(editor, /Повторить прежнюю настройку личных сообщений/);
+  assert.match(editor, /status === 'stale'[\s\S]*refreshAuthoritative/);
+  assert.doesNotMatch(editor, /status === 'stale'[\s\S]*owner\.load\(\)/);
+  assert.match(editor, /status === 'error'[\s\S]*retryRead/);
+  assert.doesNotMatch(editor, /\(state\.status === 'error' \|\| state\.status === 'idle'\)[\s\S]*owner\.load\(\)/);
 });

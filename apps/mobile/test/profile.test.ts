@@ -168,9 +168,12 @@ test('stale409 blocks editing/new save until explicit authoritative reread and d
   let dto = emptyProfile, conflict = true;
   const s = setup({ read: async () => dto, send: async p => { if (conflict) throw new ProfileError('business',409,'VERSION_CONFLICT'); return ackFrom(p, { ...dto, version: 10 }); } });
   await edit(s.owner); await s.owner.save(); assert.equal(s.owner.getSnapshot().status, 'stale');
+  assert.equal(s.owner.getSnapshot().readIntent, 'rebase');
   s.owner.update({ displayName: 'Silent rebase' }); await s.owner.save(); assert.equal(s.sent.length, 1);
   dto = { ...emptyProfile, version: 10, displayName: 'Новое на сервере', cityId: city.id };
+  // Ordinary load still wipes draft (retryRead is the UI rebase path; load must not regress).
   await s.owner.load(); assert.equal(s.sent.length, 1); assert.equal(s.owner.getSnapshot().draft.displayName, dto.displayName);
+  assert.equal(s.owner.getSnapshot().readIntent, null);
   conflict = false; s.owner.update({ displayName: 'Проверенное' }); await s.owner.save();
   assert.equal(s.sent[1]?.packet.kind, 'profile');
   assert.equal(s.sent[1]?.packet.body.expectedVersion, 10);
