@@ -79,9 +79,22 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Scenario P2; mobile unit `profile-avatar.test.ts`; API `native-avatar.foundation.test.ts` (DB harness) |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — ADDRESS1 source repair against Astra/Root findings; genuine lock/native modules/binary/device remain Root/QA; iOS original-container fallback and native white-flatten are bounded blockers, not parity claims; not VERIFIED_SOURCE |
 
+## R-01 · Discovery card public role history (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `DiscoveryGameCard` + `RoleReputationCardActions` / `RoleReputationPanel` / `RoleReviewsDialog` read path; backend `RoleReputationController` PUBLIC GET; Style Guide; no new design concept |
+| Entry | Native `GameCard` people band — TRAINER → ORGANIZER → «Отзывы и история» → details/share (ordinary: organizer actions stay on host row; trainer-led actions after disclosure) |
+| Trigger | Explicit expand only; no eager per-card fetch, polling, or synthetic counts |
+| Expected | Lazy `GET /games/:gameId/role-reputations/:role` then cursor `GET /role-reputations/:handle?gameId`; separate organization/training lanes; confirmed-history label never invents 0 from null; published review text + public reply; `basis_under_review` keeps text with «Основание на проверке»; empty/unavailable/loading/error+retry; pagination append/dedupe with game/role/handle provenance; late callbacks retired on collapse/game switch |
+| Non-scope | Auth-bound authoring/replies/reports/private context; cancellation/capacity; Bearer broadening; profile identity projection; PROD |
+| Evidence | Mobile unit `role-reputation.test.ts`; source APK counter 22 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL; not VERIFIED_SOURCE / not device PASS |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.
 - Emulator success is not Xiaomi success; Owner Xiaomi FAIL stays separate.
 - This scope does not close full native parity for the rest of #522.
 - code14 is planned source `versionCode` only — new native modules require a fresh code14 binary; code13 cannot gain modules through OTA/export; no build/device/iOS/OTA acceptance claim.
+- R-01 role-history is source-only PARTIAL; authoring and private surfaces remain unfinished.

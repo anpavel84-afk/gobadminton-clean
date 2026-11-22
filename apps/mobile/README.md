@@ -1,8 +1,18 @@
+## #522 public role-history native card parity (source only) · APK22
+
+Ports accepted web public organizer/trainer role reviews and confirmed history into native discovery `GameCard` inline disclosure. Authority: accepted web `DiscoveryGameCard` / `RoleReputationPanel` + `RoleReputationCardActions` and existing PUBLIC READ `RoleReputationController` routes. Source counter **21→22** only (same six APK literals as prior bump pattern). No cancellation/capacity work; draft PR664 / C3aca not used.
+
+Native card order matches accepted web: TRAINER → ORGANIZER → «Отзывы и история» → details/share. Expand-gated lazy PUBLIC GET (`credentials:omit`, fixed DEV origin): `GET /games/:gameId/role-reputations/:role` then paginated `GET /role-reputations/:roleHandle?gameId&cursor&limit`. Honest unavailable/empty/loading/error+retry; `basis_under_review` keeps published text with qualifier; null held count is never shown as zero. No write/report/reply CTAs, no Bearer opt-in, no backend/catalog/deps/permission mutations.
+
+**#522 PARTIAL** — auth-bound role review authoring/replies/reports/private context remain unfinished. Behavior rows are **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**; no build/device/DEV ACCEPTED claim in this author step.
+
+---
+
 ## #522 P-02 — Own profile avatar change/remove (source only)
 
 Implements change/remove of the own avatar inside the existing native profile editor (web `AvatarEditor` composition authority). Manifest pins only: `expo-image-picker@58.0.10`, `expo-image-manipulator@58.0.16`, `expo-file-system@58.0.13`. **Do not treat this source as ready for native-module tests/build** until the trusted parent generates a genuine lock/deps child (isolated store, ignore-scripts, unrelated importers frozen). Author did not install/fetch/hand-edit `pnpm-lock.yaml`, run package scripts/network, or upgrade Expo/RN/React.
 
-Android `versionCode` source counter **21** (no 21→22); verified picker plugin `photosPermission/cameraPermission/microphonePermission: false`; existing `blockedPermissions` preserved. Closed raw-binary native port PUT/DELETE `/me/avatar`; AvatarController uses `requirePrincipalMutation`; OpenAPI NativeBearer on those two operations only (API **0.44.0**, schema inventory **72**, wholeNative **74** + selected **32** inherited). Behavior/parity rows are **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**, not VERIFIED_SOURCE.
+Android `versionCode` source counter **21** (historical P-02 pin; current counter is **22** above); verified picker plugin `photosPermission/cameraPermission/microphonePermission: false`; existing `blockedPermissions` preserved. Closed raw-binary native port PUT/DELETE `/me/avatar`; AvatarController uses `requirePrincipalMutation`; OpenAPI NativeBearer on those two operations only (API **0.44.0**, schema inventory **72**, wholeNative **74** + selected **32** inherited). Behavior/parity rows are **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**, not VERIFIED_SOURCE.
 
 ADDRESS1 (Root-review prep): AuthContext projects `avatar` coordinator; UNKNOWN Retry reachable via `!busy` while `blocksEdits` fences replacement/text; oriented crop uses EXIF-normalized size (device/Glide gap preserved); derivative oversize stays inside compression ladder; local deadline retires ownership and cleans late app-owned outputs; authoritative GET rebase preserves dirty draft fields; live runtime uses `typeof import` SDK types; plain Russian transparency guidance; API unit mock uses `requirePrincipalMutation`.
 

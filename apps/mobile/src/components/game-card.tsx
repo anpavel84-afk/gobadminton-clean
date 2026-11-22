@@ -7,6 +7,7 @@ import { canShareGame, cardWhen, gamePeople, playerInitials, formatLabel, levelL
 import { colors, interaction } from '../theme.ts';
 import { Label, TextButton } from './ui.tsx';
 import { DiscoveryArrow, DiscoveryIcon, ShareIcon } from './discovery-icon.tsx';
+import { GameRoleReputationDisclosure } from './game-role-reputation.tsx';
 
 export function PublicGameMedia({ game }: { game: PublicGame }) {
   const sources = gameCoverSources(game);
@@ -31,6 +32,7 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
   const format = formatLabel(game.formatKey);
   const [trainerExpanded, setTrainerExpanded] = useState(false);
   const hasMedia = gameCoverSources(game).length > 0;
+  const trainerLed = game.activityKind === 'trainer_led';
   return <View style={card.surface}>
     <View><PublicGameMedia game={game} />
       {hasMedia && <View style={{ position: 'absolute', top: 14, left: 14 }}><Label style={[card.activity, game.activityKind === 'trainer_led' && { backgroundColor: colors.lavender, color: colors.purple }]}>{game.activityKind === 'trainer_led' ? 'С тренером' : 'Обычная игра'}</Label></View>}
@@ -57,6 +59,7 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
         {format && <Label style={card.secondary}>{format}</Label>}
       </View>
       <Label style={card.secondary}>{settlementTerms(game.settlement)}</Label>
+      {/* #521/#522 order: TRAINER → ORGANIZER → Отзывы и история → details/share → expanded body. */}
       {gamePeople(game).map(person => <View key={person.role} style={card.host}>
         <GamePersonAvatar key={`${game.id}:${person.role}:${person.name}:${person.avatar?.uploadedUrl}:${person.avatar?.providerUrl}`} name={person.trainer && !game.trainer ? '' : person.name} avatar={person.avatar} trainer={person.trainer} />
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -64,10 +67,13 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
           <Label style={{ fontSize: 13, lineHeight: 18, fontWeight: '600' }}>{person.name}</Label>
         </View>
         {person.trainer && game.trainingDescription && <Pressable accessibilityRole="button" accessibilityLabel="Подробнее о тренировке" accessibilityState={{ expanded: trainerExpanded }} onPress={() => setTrainerExpanded(v => !v)} style={card.details}><DiscoveryIcon name="chevron" /></Pressable>}
-        {!person.trainer && <GameActions game={game} onOpen={onOpen} />}
-        {person.trainer && <Label style={[card.secondary, { width: '100%' }]}>Отзывы и история ролей пока недоступны.</Label>}
+        {!person.trainer && !trainerLed && <GameActions game={game} onOpen={onOpen} />}
         {person.trainer && trainerExpanded && game.trainingDescription && <Label style={[card.secondary, { width: '100%' }]}>{game.trainingDescription}</Label>}
       </View>)}
+      <GameRoleReputationDisclosure
+        game={game}
+        actions={trainerLed ? <View style={card.actionsRow}><GameActions game={game} onOpen={onOpen} /></View> : undefined}
+      />
     </View>
   </View>;
 }
@@ -121,5 +127,6 @@ const card = StyleSheet.create({
   meta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   host: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12, marginTop: 6 },
   actions: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginLeft: 'auto', flexShrink: 1, maxWidth: '100%' },
+  actionsRow: { flexDirection: 'row', justifyContent: 'flex-end', width: '100%', marginTop: 4 },
   details: { ...interaction, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderWidth: 1, borderColor: colors.lineDark, borderRadius: 12, justifyContent: 'center' },
 });
