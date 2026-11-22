@@ -91,6 +91,18 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `role-reputation.test.ts`; source APK counter 22 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL; not VERIFIED_SOURCE / not device PASS |
 
+## S-01 · Swipe bounded next-card media warmup (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `PlayerBrowseMedia.browseMediaNeighborhood` / `PlayerBrowseDeck` prepare window; native `player-browse-media.ts` + `player-browse.tsx`; existing `playerMediaUrl` + RN `Image.prefetch` |
+| Entry | «Свайп» browse episode with already-loaded eligible peers |
+| Trigger | Selected card / episode / actor / filter / focus / foreground changes |
+| Expected | Warm cover+avatar for current + up to 4 ahead (+ previous); strict cap/dedupe by publicPlayerId+mediaKey; current priority; abort/retire on filter/logout/actor/blur/background/close; never block swipe or match commands; never commit previous peer image into the visible card; only DTO-authorized media (no speculative profile GET); load/error/fallback remain honest |
+| Non-scope | Gesture/match redesign; new cache framework/dependency; revocation guarantees beyond platform image cache; latency claims without measured readiness; PROD |
+| Evidence | Mobile unit `player-browse-media.test.ts` / `players-swipe-inline` / `player-browse`; source APK counter 23 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 media-warmup source slice; not VERIFIED_SOURCE / not device PASS / no latency claim |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.

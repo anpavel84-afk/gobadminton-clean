@@ -17,6 +17,8 @@ import { DiscoveryIcon } from './discovery-icon.tsx';
 import { PlayerAvatar } from './player-card.tsx';
 import { SvgXml } from 'react-native-svg';
 import { playerMediaUrl } from '../media.ts';
+import { playerFilterKey } from '../players.ts';
+import { createBrowseMediaWarmup, type BrowseMediaWarmup } from '../player-browse-media.ts';
 import { FriendlyMatch } from './friendly-match.tsx';
 import { iosModalOrientations, Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
 import { bindIosBack } from '../ios-back.ts';
@@ -71,6 +73,29 @@ export function PlayerBrowse({owner,state,self,focused,placeLabel,cities=[],stat
   const cityName = cities.find(c=>c.id===display?.cityId)?.nameRu;
   const pages = display ? detailPages(display,bioMeasure?.key===measureKey ? measuredBioPages(bio,bioMeasure.lines,bodySize.height-4) : undefined) : [];
   const infoLast = pages.length; // facts → bio pages → public games availability / profile
+  // Bounded next-card media warmup (WEB neighborhood parity). Prefetch only — never blocks gestures
+  // or replaces the visible cover/avatar. typeof guards keep auth VM mounts working without the import.
+  const mediaWarmup = useRef<BrowseMediaWarmup | null>(null);
+  useEffect(() => {
+    if (typeof createBrowseMediaWarmup !== 'function') return;
+    if (!mediaWarmup.current) {
+      const prefetch = typeof Image !== 'undefined' && typeof Image.prefetch === 'function'
+        ? (url: string) => Image.prefetch(url)
+        : async () => false;
+      mediaWarmup.current = createBrowseMediaWarmup(prefetch);
+    }
+    const selectedIndex = card ? players.findIndex(p => p.publicPlayerId === card) : -1;
+    mediaWarmup.current.sync(players, selectedIndex, {
+      episode,
+      actorId: state.actor?.actorId ?? null,
+      sessionId: state.actor?.sessionId ?? null,
+      generation: state.actor?.generation ?? 0,
+      filterKey: playerFilterKey(state.filters),
+      focused,
+      foreground: state.foreground,
+    });
+  }, [players, card, episode, focused, state.foreground, state.filters, state.actor?.actorId, state.actor?.sessionId, state.actor?.generation]);
+  useEffect(() => () => { mediaWarmup.current?.retire(); }, []);
   useLayoutEffect(() => {
     gesture.current?.cancel(); flying.current=false;pose.stopAnimation();pose.setValue({x:0,y:0});setInfo(null);setIntent(null);
     if(card) AccessibilityInfo.announceForAccessibility(`Игрок: ${peer!.displayName}`);

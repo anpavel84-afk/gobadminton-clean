@@ -102,3 +102,23 @@ test('#660 r4: no useless escaped greater-than in swipe-inline regexes (Codex r3
   const header = players.slice(headerStart, headerEnd);
   assert.doesNotMatch(header, /minHeight:48\}>\s*\{!showFloatingSwipe/);
 });
+
+test('#522 bounded swipe media warmup does not retarget inline Свайп CTA or browse gestures/commands', () => {
+  const players = read('../app/players/index.tsx');
+  // Inline/floating entry path unchanged — still stages catalog and opens browse.
+  assert.match(players, /const openSwipeBrowse = \(\) => \{ browse\.stage\(filters, list\?\.data \?\? null\); router\.push\('\/players\/browse'\); \};/);
+  assert.equal((players.match(/onPress=\{openSwipeBrowse\}/g) ?? []).length, 2);
+  assert.doesNotMatch(players, /createBrowseMediaWarmup|Image\.prefetch|player-browse-media/);
+
+  const browse = read('../src/components/player-browse.tsx');
+  assert.match(browse, /createBrowseMediaWarmup/);
+  assert.match(browse, /mediaWarmup\.current\.sync\(/);
+  // Prefetch must not wrap or replace PanResponder / owner.act ownership.
+  assert.match(browse, /PanResponder\.create\(/);
+  assert.match(browse, /new BrowseGesture\(/);
+  assert.match(browse, /void owner\.act\(kind==='request'\?'send':'withdraw'/);
+  const action = browse.slice(browse.indexOf("const action = (kind:'skip'|'request'|'withdraw'"), browse.indexOf('const callbacks:PanResponderCallbacks'));
+  assert.doesNotMatch(action, /mediaWarmup|prefetch|await.*warmup/i);
+  // Visible card remains a single keyed Animated.View (no prepared-peer commit swap).
+  assert.equal((browse.match(/<Animated\.View key=\{/g) ?? []).length, 1);
+});

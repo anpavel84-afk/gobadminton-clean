@@ -51,3 +51,14 @@ test('native measured bio pages adapt to line height and body size without dropp
   const long='Оченьдлиннаябиография'.repeat(60);
   assert.deepEqual(detailPages({bio:long} as never),['Игровой профиль',long]);
 });
+
+test('#522 browse component wires bounded media warmup; gesture helpers stay in player-browse.ts',()=>{
+  const ui=readFileSync(new URL('../src/components/player-browse.tsx',import.meta.url),'utf8');
+  assert.match(ui,/from '\.\.\/player-browse-media\.ts'/);
+  assert.match(ui,/createBrowseMediaWarmup/);
+  assert.match(ui,/mediaWarmup\.current\.sync\(/);
+  assert.match(ui,/mediaWarmup\.current\?\.retire\(\)/);
+  // Pure gesture/catalog helpers remain outside the media helper.
+  assert.match(ui,/new BrowseGesture\(/);
+  assert.doesNotMatch(ui,/commitPreparedPeer/);
+});
