@@ -42,6 +42,8 @@ export type RoleLaneState = {
   phase: RoleLoadPhase;
   summary: RoleReputationSummary | null;
   loadingMore: boolean;
+  /** Scoped next-page failure — accepted summary/cursor stay until unavailable/privacy. */
+  moreError: boolean;
 };
 
 export type RoleReputationCardState = {
@@ -282,7 +284,7 @@ export function reviewReplyLabel(role: RoleKind, text: string): string {
 }
 
 function emptyLane(role: RoleKind): RoleLaneState {
-  return { role, phase: 'idle', summary: null, loadingMore: false };
+  return { role, phase: 'idle', summary: null, loadingMore: false, moreError: false };
 }
 
 function appendItems(
@@ -420,7 +422,7 @@ export class RoleReputationCoordinator {
     const cursorValue = lane.summary.nextCursor;
     const key = `more:${role}`;
     const { signal, alive } = this.ticket(key);
-    this.setLane(role, { ...lane, loadingMore: true });
+    this.setLane(role, { ...lane, loadingMore: true, moreError: false });
     // Fulfilment throws (e.g. wrong-role page) must not escape .then(success, error) —
     // that path is unhandled and would leave loadingMore stuck true.
     void (async () => {
@@ -430,15 +432,20 @@ export class RoleReputationCoordinator {
         if (this.state.gameId !== gameId) return;
         const current = this.state[this.laneKey(role)];
         if (!current.summary || current.summary.roleHandle !== handle) return;
+        // Stale page must still target the cursor we requested (retry same page).
+        if (current.summary.nextCursor !== cursorValue) return;
         if (page.roleHandle !== handle || page.role !== role) throw new PublicApiError('invalid');
         if (page.availability !== 'available') {
-          this.setLane(role, { role, phase: 'unavailable', summary: page, loadingMore: false });
+          this.setLane(role, {
+            role, phase: 'unavailable', summary: page, loadingMore: false, moreError: false,
+          });
           return;
         }
         this.setLane(role, {
           role,
           phase: 'ready',
           loadingMore: false,
+          moreError: false,
           summary: {
             ...page,
             items: appendItems(current.summary.items, page.items),
@@ -448,11 +455,23 @@ export class RoleReputationCoordinator {
         });
       } catch (error: unknown) {
         if (!alive()) return;
+        if (this.state.gameId !== gameId) return;
+        const current = this.state[this.laneKey(role)];
+        if (!current.summary || current.summary.roleHandle !== handle) return;
         if (error instanceof PublicApiError && error.kind === 'unavailable') {
-          this.setLane(role, { role, phase: 'unavailable', summary: null, loadingMore: false });
+          // Authoritative privacy/unavailable retires public material — do not retain revoked content.
+          this.setLane(role, {
+            role, phase: 'unavailable', summary: null, loadingMore: false, moreError: false,
+          });
           return;
         }
-        this.setLane(role, { role, phase: 'error', summary: null, loadingMore: false });
+        // Transient/malformed next page: keep accepted summary/items/handle/cursor for page retry.
+        this.setLane(role, {
+          ...current,
+          phase: 'ready',
+          loadingMore: false,
+          moreError: true,
+        });
       }
     })();
   };
@@ -463,23 +482,23 @@ export class RoleReputationCoordinator {
     if (role === 'training' && !this.state.wantTraining) return;
     const key = `load:${role}`;
     const { signal, alive } = this.ticket(key);
-    this.setLane(role, { role, phase: 'loading', summary: null, loadingMore: false });
+    this.setLane(role, { role, phase: 'loading', summary: null, loadingMore: false, moreError: false });
     try {
       const summary = await this.ports.gameRole(gameId, role, signal);
       if (!alive() || this.state.gameId !== gameId || !this.state.expanded) return;
       if (summary.role !== role) throw new PublicApiError('invalid');
       if (summary.availability !== 'available') {
-        this.setLane(role, { role, phase: 'unavailable', summary, loadingMore: false });
+        this.setLane(role, { role, phase: 'unavailable', summary, loadingMore: false, moreError: false });
         return;
       }
-      this.setLane(role, { role, phase: 'ready', summary, loadingMore: false });
+      this.setLane(role, { role, phase: 'ready', summary, loadingMore: false, moreError: false });
     } catch (error) {
       if (!alive() || this.state.gameId !== gameId || !this.state.expanded) return;
       if (error instanceof PublicApiError && error.kind === 'unavailable') {
-        this.setLane(role, { role, phase: 'unavailable', summary: null, loadingMore: false });
+        this.setLane(role, { role, phase: 'unavailable', summary: null, loadingMore: false, moreError: false });
         return;
       }
-      this.setLane(role, { role, phase: 'error', summary: null, loadingMore: false });
+      this.setLane(role, { role, phase: 'error', summary: null, loadingMore: false, moreError: false });
     }
   }
 }

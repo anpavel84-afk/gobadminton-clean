@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { publicApi } from '../public-api.ts';
 import type { PublicGame } from '../public-api.ts';
@@ -24,11 +24,17 @@ function createCardCoordinator() {
   });
 }
 
-/** Inline public role-history disclosure for discovery cards — read-only, expand-gated. */
+/**
+ * Inline public role-history disclosure for discovery cards — read-only, expand-gated.
+ * Composition: toggle → optional actions slot → expanded body (canonical trainer card order).
+ */
 export function GameRoleReputationDisclosure({
   game,
+  actions,
 }: {
   game: PublicGame;
+  /** Placed after the underline toggle and before the expanded review body. */
+  actions?: ReactNode;
 }) {
   const [coordinator] = useState(createCardCoordinator);
   const state = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
@@ -54,6 +60,7 @@ export function GameRoleReputationDisclosure({
         <DiscoveryIcon name="chevron" />
       </View>
     </Pressable>
+    {actions}
     {expanded ? <View style={styles.details} accessibilityLiveRegion="polite">
       {wantTraining ? <RoleLaneView lane={state.training} onRetry={() => coordinator.retry('training')}
         onMore={() => coordinator.loadMore('training')} /> : null}
@@ -113,7 +120,10 @@ function ReadyRoleBody({ lane, onMore }: { lane: RoleLaneState; onMore: () => vo
         {item.reply ? <Label style={styles.reply}>{reviewReplyLabel(item.role, item.reply.text)}</Label> : null}
       </View>
     ))}
-    {summary.nextCursor ? (
+    {lane.moreError ? <>
+      <Label accessibilityRole="alert">Не удалось загрузить следующие отзывы. Уже загруженные сохранены.</Label>
+      <OutlineButton title="Повторить" onPress={onMore} />
+    </> : summary.nextCursor ? (
       lane.loadingMore
         ? <Label>Загружаем ещё отзывы…</Label>
         : <TextButton title="Ещё отзывы" onPress={onMore} />

@@ -59,7 +59,7 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
         {format && <Label style={card.secondary}>{format}</Label>}
       </View>
       <Label style={card.secondary}>{settlementTerms(game.settlement)}</Label>
-      {/* #521/#522 order: TRAINER → ORGANIZER → Отзывы и история → details/share. */}
+      {/* #521/#522 order: TRAINER → ORGANIZER → Отзывы и история → details/share → expanded body. */}
       {gamePeople(game).map(person => <View key={person.role} style={card.host}>
         <GamePersonAvatar key={`${game.id}:${person.role}:${person.name}:${person.avatar?.uploadedUrl}:${person.avatar?.providerUrl}`} name={person.trainer && !game.trainer ? '' : person.name} avatar={person.avatar} trainer={person.trainer} />
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -70,8 +70,10 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
         {!person.trainer && !trainerLed && <GameActions game={game} onOpen={onOpen} />}
         {person.trainer && trainerExpanded && game.trainingDescription && <Label style={[card.secondary, { width: '100%' }]}>{game.trainingDescription}</Label>}
       </View>)}
-      <GameRoleReputationDisclosure game={game} />
-      {trainerLed ? <View style={card.actionsRow}><GameActions game={game} onOpen={onOpen} /></View> : null}
+      <GameRoleReputationDisclosure
+        game={game}
+        actions={trainerLed ? <View style={card.actionsRow}><GameActions game={game} onOpen={onOpen} /></View> : undefined}
+      />
     </View>
   </View>;
 }
