@@ -102,7 +102,7 @@ function OwnGame({ row, activeInvite, onActiveInvite }: {
     {game ? <GameCard game={game} onOpen={() => router.push({ pathname: '/games/[id]', params: { id: row.gameId } })} /> : <View style={styles.card}>
       <Label>{row.own[0]?.gameTitle ?? row.reminders[0]?.gameTitle ?? (row.invites.length ? 'Приглашение в игру' : 'Игра')}</Label>
       <Label>{row.own[0]?.endsAt ?? row.reminders[0]?.endsAt ?? 'Дата и время недоступны'}</Label>
-      {inviteUnavailable ? <Label>Обычный просмотр игры сейчас недоступен. Условия приглашения ниже — без обхода доступа.</Label> : null}
+      {inviteUnavailable ? <Label>Условия игры доступны в приглашении ниже.</Label> : null}
     </View>}
     {(!state || state.status === 'loading') && <Loading title="Загружаем условия игры…" />}
     {state?.status === 'error' && !inviteUnavailable && <ErrorState error={state.error} retry={() => void owner.loadGame(row.gameId)} />}

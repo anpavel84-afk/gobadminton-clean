@@ -161,6 +161,7 @@ export class AuthCoordinator {
         : deps.api.withdrawParticipation(access, packet.participationId, packet.body, packet.key), packet.actor),
     }, deps.random, undefined, id => this.participationRead(access => deps.api.gameDetail(access, id)));
     // One hub reload after an acknowledged invitation receipt; never auto-accept or settle on list read.
+    // loadInvitations invalidates/queues a fresh root GET across any in-flight initial or load-more.
     this.messages.invitationSettled = () => {
       void this.postgame.loadInvitations();
       void this.participation.loadOwn();

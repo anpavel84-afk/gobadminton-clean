@@ -31,7 +31,7 @@ export function MyGameInvitations({
     {invitations.map(invite => {
       const pending = isPendingInvite(invite);
       const selected = activeId === invite.id;
-      return <View key={`${invite.id}:${invite.version}`} style={styles.card} accessibilityLabel={`invitation-${invite.id}`}>
+      return <View key={`${invite.id}:${invite.version}`} style={styles.card} accessibilityLabel={pending ? 'Приглашение в игру, ожидает решения' : `Приглашение: ${invitationCopy[invite.status]}`}>
         {!selected ? <Label style={{ fontWeight: '700' }}>{pending ? 'Приглашение в игру' : invitationCopy[invite.status]}</Label> : null}
         {!selected && invite.status === 'accepted' ? <Label>Актуальный статус участия указан отдельно.</Label> : null}
         {pending && !selected ? <TextButton title="Условия и решение" onPress={() => onActive(invite.id)} /> : null}

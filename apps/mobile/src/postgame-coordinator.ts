@@ -52,6 +52,9 @@ export class PostgameCoordinator {
   private ownReadAcks: OwnAck[] = [];
   private resultCursors = new Map<string,Set<string>>();
   private inFlight: Packet | null = null;
+  /** Coalesce one fresh root invitations GET after ACK while an initial/load-more is in flight. */
+  private invitationsBusy = false;
+  private invitationsFollowup = false;
   private port: Port;
   private random: () => string;
   constructor(port: Port, random: () => string) { this.port=port; this.random=random; }
@@ -65,12 +68,13 @@ export class PostgameCoordinator {
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
+    this.invitationsBusy=false; this.invitationsFollowup=false;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     if (saved) this.show({filter:saved.filter,command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,notice:saved.command ? unknownNotice : null});
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -113,10 +117,22 @@ export class PostgameCoordinator {
   };
   /** Own invitations list — independent lane; never settles Messages invitation writes. */
   loadInvitations = async (more = false) => {
-    if (this.snapshot.invitations.status === 'loading') return;
+    // ACK/callback refresh during in-flight initial or load-more: invalidate the stale
+    // page and coalesce exactly one fresh authoritative root GET. Never apply list
+    // reads to unknown Messages packets; cursor/retry/dedupe stay on the fresh read.
+    // Busy (not status) gates re-entry so a queued followup can start after invalidation
+    // while UI status is still loading.
+    if (this.invitationsBusy) {
+      if (!more) {
+        this.invitationsFollowup = true;
+        this.reads.set('invitations', ++this.serial);
+      }
+      return;
+    }
     const old=this.snapshot.invitations, cursor=more ? old.data?.nextCursor : undefined;
     if (more && !cursor) return;
     const {actor,valid}=this.start('invitations'); if (!actor) return;
+    this.invitationsBusy=true;
     this.show({invitations:{...old,status:'loading'}});
     try {
       const page=await this.port.invitations(actor,cursor ?? undefined); if (!valid()) return;
@@ -131,6 +147,12 @@ export class PostgameCoordinator {
         ? new PostgameError(error.kind === 'private' ? 'private' : error.kind === 'invalid' ? 'invalid' : 'network', error.status, error.code)
         : error;
       this.show({invitations:this.failure(mapped,this.snapshot.invitations)});
+    } finally {
+      this.invitationsBusy=false;
+      if (this.invitationsFollowup) {
+        this.invitationsFollowup=false;
+        if (actor && sameActor(actor,this.snapshot.actor)) void this.loadInvitations(false);
+      }
     }
   };
   loadResults = async (gameId: string, query: ResultsQuery = {}, append?: 'roster' | 'revisions') => {

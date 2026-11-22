@@ -219,6 +219,95 @@ test('Messages owner across MyGames/detail keeps same UNKNOWN key, no auto-write
   assert.equal(messages.getSnapshot().pending['invitation:invite-a'], undefined);
 });
 
+test('ACK during in-flight invitations GET/load-more queues one fresh root read; stale pending never wins; actor fence drops queued work', async () => {
+  const pending = invite({ id: 'invite-a', status: 'pending', version: 3 });
+  const accepted = invite({ id: 'invite-a', status: 'accepted', version: 4, participationId: 'part-1' });
+  const gate = deferred<{ items: GameInvitation[]; nextCursor: string | null }>();
+  let reads = 0;
+  const owner = new PostgameCoordinator({
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async (_a, cursor) => {
+      reads++;
+      if (reads === 1) {
+        assert.equal(cursor, undefined);
+        return gate.promise;
+      }
+      assert.equal(cursor, undefined, 'followup after ACK must be a fresh root GET');
+      return { items: [accepted], nextCursor: null };
+    },
+    results: async () => { throw new PostgameError('invalid'); },
+    send: async () => { throw new PostgameError('invalid'); },
+  }, () => 'key');
+  owner.setActor(actor);
+  const first = owner.loadInvitations();
+  await tick();
+  assert.equal(owner.getSnapshot().invitations.status, 'loading');
+  // Exact Auth invitationSettled → postgame.loadInvitations while list is still loading.
+  void owner.loadInvitations();
+  assert.equal(reads, 1, 'coalesce: do not start a second GET until the invalidated one ends');
+  gate.resolve({ items: [pending], nextCursor: null });
+  await first; await tick();
+  assert.equal(reads, 2);
+  assert.equal(owner.getSnapshot().invitations.status, 'ready');
+  assert.equal(owner.getSnapshot().invitations.data!.items[0]!.status, 'accepted');
+  assert.equal(pendingInviteCount(owner.getSnapshot().invitations.data!.items, now), 0);
+  assert.equal(owner.getSnapshot().invitations.data!.items.length, 1);
+
+  // Load-more in flight: ACK invalidates the partial page and refreshes from root once.
+  const moreGate = deferred<{ items: GameInvitation[]; nextCursor: string | null }>();
+  let moreReads = 0;
+  const paging = new PostgameCoordinator({
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async (_a, cursor) => {
+      moreReads++;
+      if (moreReads === 1) return { items: [pending], nextCursor: 'next' };
+      if (moreReads === 2) {
+        assert.equal(cursor, 'next');
+        return moreGate.promise;
+      }
+      assert.equal(cursor, undefined);
+      return { items: [accepted], nextCursor: null };
+    },
+    results: async () => { throw new PostgameError('invalid'); },
+    send: async () => { throw new PostgameError('invalid'); },
+  }, () => 'key');
+  paging.setActor(actor);
+  await paging.loadInvitations();
+  assert.equal(pendingInviteCount(paging.getSnapshot().invitations.data!.items, now), 1);
+  const more = paging.loadInvitations(true);
+  await tick();
+  void paging.loadInvitations();
+  moreGate.resolve({ items: [invite({ id: 'invite-b', status: 'pending' })], nextCursor: null });
+  await more; await tick();
+  assert.equal(moreReads, 3);
+  assert.equal(paging.getSnapshot().invitations.data!.items[0]!.status, 'accepted');
+  assert.equal(paging.getSnapshot().invitations.data!.nextCursor, null);
+  assert.equal(pendingInviteCount(paging.getSnapshot().invitations.data!.items, now), 0);
+
+  // Logout / actor change must fence a queued followup — no extra read for the old principal.
+  const logoutGate = deferred<{ items: GameInvitation[]; nextCursor: string | null }>();
+  let logoutReads = 0;
+  const fenced = new PostgameCoordinator({
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => { logoutReads++; return logoutGate.promise; },
+    results: async () => { throw new PostgameError('invalid'); },
+    send: async () => { throw new PostgameError('invalid'); },
+  }, () => 'key');
+  fenced.setActor(actor);
+  const logoutFirst = fenced.loadInvitations();
+  await tick();
+  void fenced.loadInvitations();
+  fenced.setActor(null);
+  logoutGate.resolve({ items: [pending], nextCursor: null });
+  await logoutFirst; await tick();
+  assert.equal(logoutReads, 1);
+  assert.equal(fenced.getSnapshot().invitations.status, 'idle');
+  assert.equal(fenced.getSnapshot().invitations.data, undefined);
+});
+
 test('parseInvitationPage validates list DTO; screen keeps invites filter inside MyGames', () => {
   const page = parseInvitationPage({
     items: [{
@@ -235,7 +324,13 @@ test('parseInvitationPage validates list DTO; screen keeps invites filter inside
   assert.doesNotMatch(screen, /router\.push\('\/messages'\)/);
   assert.match(screen, /MyGameInvitations/);
   assert.match(screen, /loadInvitations/);
+  assert.match(screen, /Условия игры доступны в приглашении ниже/);
+  assert.doesNotMatch(screen, /без обхода доступа/);
   assert.match(read('../src/components/my-game-invitation.tsx'), /leaseFocus/);
+  assert.match(read('../src/components/my-game-invitation.tsx'), /accessibilityLabel=\{pending \? 'Приглашение в игру, ожидает решения'/);
+  assert.doesNotMatch(read('../src/components/my-game-invitation.tsx'), /invitation-\$\{invite\.id\}/);
   assert.match(read('../src/auth-coordinator.ts'), /myInvitations/);
   assert.match(read('../src/auth-coordinator.ts'), /invitationSettled/);
+  assert.match(read('../src/components/messages.tsx'), /import type \{[^}]*GameInvitation[^}]*\} from '\.\.\/messages\.ts'/);
+  assert.doesNotMatch(read('../src/components/messages.tsx'), /invitation: import\('\.\.\/messages\.ts'\)\.GameInvitation/);
 });

@@ -8,7 +8,7 @@ import { useAuth } from '../auth.tsx';
 import type { MessagesCoordinator } from '../messages-coordinator.ts';
 import { resourceKey } from '../messages-coordinator.ts';
 import { inboxDestination } from '../messages.ts';
-import type { DirectMessage, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
+import type { DirectMessage, GameInvitation, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
 import { playerMediaUrl } from '../media.ts';
 import { formatLabel, levelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
@@ -125,7 +125,7 @@ const requestCopy = { pending: 'Запрос на общение', accepted: 'П
 export const invitationCopy = { pending: 'Вас приглашают в игру', accepted: 'Приглашение принято', declined: 'Приглашение отклонено', expired: 'Срок приглашения истёк', revoked: 'Приглашение отозвано', cancelled_by_game: 'Игра отменена' } as const;
 /** Shared safe invitation terms + accept/decline; MyGames and Messages reuse one MessagesCoordinator owner. */
 export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, onDecline, onOpenGame }: {
-  invitation: import('../messages.ts').GameInvitation;
+  invitation: GameInvitation;
   ownId: string | null;
   pending: boolean;
   onAccept: () => void;
