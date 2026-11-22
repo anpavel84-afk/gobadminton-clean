@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, Switch, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import type { PublicPlayer } from '../players.ts';
 import { playerLevelLabel } from '../presentation.ts';
@@ -42,7 +42,10 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     avatar: { uploadedUrl: profile.avatar.uploadedUrl, providerUrl: null },
     cover: profile.cover ?? { uploadedUrl: null },
   } : null;
-  const coverLocked = !!state.command || state.status !== 'ready' || auth.avatar.blocksEdits() || auth.cover.blocksEdits();
+  const peerBusy = auth.avatar.blocksEdits() || auth.cover.blocksEdits();
+  const coverLocked = !!state.command || state.status !== 'ready' || peerBusy;
+  const policyLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile || profile.version < 1;
+  const policyPending = state.command?.packet.kind === 'contactPolicy';
   return <View style={{ gap: 12 }}>
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}
     {(state.status === 'error' || state.status === 'idle') &&
@@ -91,6 +94,34 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
         <Label>Город: {cityName || 'Не указан'}</Label>
         <Label>Район / метро: {profile.areaKey || 'Не указан'}</Label>
         <Label>О себе: {profile.bio || 'Не заполнено'}</Label>
+      </View>
+      <View style={styles.card}>
+        <Label style={{ color: colors.secondary, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>Настройки сообщений</Label>
+        <Label accessibilityRole="header" style={styles.subtitle}>Личные сообщения</Label>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <Label style={{ flex: 1, flexShrink: 1 }}>Разрешать личные сообщения</Label>
+          <Switch
+            accessibilityRole="switch"
+            accessibilityLabel="Разрешать личные сообщения"
+            accessibilityHint="Другие игроки смогут написать вам, когда ваш профиль виден в каталоге. Выключение блокирует новые входящие; история переписок сохраняется."
+            accessibilityState={{ checked: profile.contactPolicy === 'requests', disabled: policyLocked }}
+            value={profile.contactPolicy === 'requests'}
+            disabled={policyLocked}
+            onValueChange={allow => {
+              if (policyLocked) return;
+              void owner.setContactPolicy(allow ? 'requests' : 'closed');
+            }}
+          />
+        </View>
+        <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 18 }}>
+          Другие игроки смогут написать вам, когда ваш профиль виден в каталоге. Выключение блокирует новые входящие; история переписок сохраняется.
+        </Label>
+        {profile.version < 1 && <Label>Сначала сохраните игровой профиль.</Label>}
+        {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+        {policyPending && state.command?.status === 'sending' &&
+          <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем настройку…</Label>}
+        {policyPending && state.command?.status === 'unknown' &&
+          <PrimaryButton title="Повторить прежнюю настройку личных сообщений" onPress={() => void owner.reconcile()} />}
       </View>
     </>}
   </View>;

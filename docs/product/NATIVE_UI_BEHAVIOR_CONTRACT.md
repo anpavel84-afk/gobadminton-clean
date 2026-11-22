@@ -65,7 +65,7 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Expected | Unknown scale/version preserved until explicit change; wire omits unchanged level/area/bio; explicit null clears; saving these fields does not mutate visibility/contact/consent/trainer/looking; frozen packet + exact retry; actor/session retirement unchanged |
 | Accessibility | Labelled controls; multiline bio; level sheet uses existing DiscoverySheet focus return |
 | Evidence | Scenario P1; mobile unit `profile.test.ts` |
-| Status | **SOURCE_ONLY** implementation/source for this slice pending actual owning review, independent QA, and device gates; parse/selftest is not independent QA or device PASS; **UNVERIFIED_DEVICE** no current device/emulator PASS; photos/privacy/contactPolicy/linked identity remain unfinished |
+| Status | **SOURCE_ONLY** implementation/source for this slice pending actual owning review, independent QA, and device gates; parse/selftest is not independent QA or device PASS; **UNVERIFIED_DEVICE** no current device/emulator PASS; photos/privacy/linked identity remain unfinished; contactPolicy see P-03 |
 
 ## P-02 · Own profile avatar change/remove
 
@@ -102,6 +102,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Non-scope | Gesture/match redesign; new cache framework/dependency; revocation guarantees beyond platform image cache; latency claims without measured readiness; PROD |
 | Evidence | Mobile unit `player-browse-media.test.ts` / `players-swipe-inline` / `player-browse`; source APK counter 23 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 media-warmup source slice; not VERIFIED_SOURCE / not device PASS / no latency claim |
+
+## P-03 · Own profile personal-message permission / contactPolicy (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `ProfilePage.tsx` «Разрешать личные сообщения» + `PATCH /v1/me/social-profile` `{expectedVersion,contactPolicy}`; native `profile.ts` / `own-profile.tsx` Switch; existing bearer own-profile port |
+| Entry | Authenticated `/profile` own-profile card — «Личные сообщения» section (settings composition) |
+| Trigger | Explicit Switch only; checked iff authoritative `contactPolicy === 'requests'`; disabled while version&lt;1, command/peer busy, or not ready |
+| Expected | Policy-only wire; serialize with name/avatar/cover; receipt confirms server policy+version; dirty name/level/area/bio draft preserved; closed blocks new incoming / history retained; no catalog visibility, trainer, looking, Radar, consent, or identity side effects; UNKNOWN exact-packet retry; late ACK cannot repaint new actor; version0 not faked |
+| Accessibility | Named Switch + helper; busy/unknown pending copy; large-text row layout |
+| Non-scope | Directory visibility PUT (cookie-only); trainer/looking activation; first-message admission policy; new consent defaults; PROD |
+| Evidence | Mobile unit `contact-policy.test.ts` / profile·auth; optional API `native-players.foundation` bearer policy case; source APK counter 24 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 contactPolicy native parity source; not VERIFIED_SOURCE / not device PASS |
 
 ## Explicit non-claims
 

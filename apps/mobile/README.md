@@ -1,3 +1,9 @@
+## #522 native contactPolicy personal-message permission (source only) · APK24
+
+Ports accepted WEB explicit «Разрешать личные сообщения» (`ProfilePage` contactPolicy requests↔closed) into native own-profile settings via existing `PATCH /v1/me/social-profile` bearer path. `ProfileCoordinator` gains policy-only packet/command with minimal wire `{expectedVersion,contactPolicy}`; serializes with name/avatar/cover writers; policy receipt updates authoritative policy/version without wiping dirty name/level/area/bio draft. Version≥1 required; no auto-toggle on mount/login; closed blocks new incoming while history retained — same WEB helper. Catalog visibility / trainer / looking / Radar / consent excluded. Source counter **23→24** only (existing five APK counter gates + README). Focused `contact-policy` unit + optional disposable `native-players.foundation` bearer policy case. Behavior contract row **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**. No API/auth/contract/migration/deps/PROD change; device/OTA/iOS UAT=NOT_TESTED.
+
+---
+
 ## #522 native swipe bounded next-card media warmup (source only) · APK23
 
 Ports accepted WEB browse neighborhood media preparation (`PlayerBrowseMedia` current + up to 4 ahead + previous) into native swipe using existing `Image.prefetch` only. New small owner `player-browse-media.ts`; hooked from `player-browse.tsx`. Prefetch never blocks gestures/match commands and never commits a previous peer image into the visible card. Only media already on the loaded peer DTO via unchanged `playerMediaUrl`; no speculative profile GET, no new cache/service/dependency. Source counter **22→23** only (four APK counter literals + README). Behavior contract row added as **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**. No latency claim without measured readiness; Owner/S23/device UAT=NOT_TESTED. Gestures, interest submission, backend/auth/contracts/API/SDK/lock/role-history unchanged.

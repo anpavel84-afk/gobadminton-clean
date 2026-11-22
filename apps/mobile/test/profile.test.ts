@@ -28,6 +28,13 @@ const actor = { actorId: 'A', sessionId: 'session-A', generation: 1 };
 const city = { id: 'catalog-city', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' };
 const deferred = <T>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 function ackFrom(packet: ProfilePacket, base: OwnProfile = emptyProfile): OwnProfile {
+  if (packet.kind === 'contactPolicy') {
+    return {
+      ...base,
+      version: packet.body.expectedVersion + 1,
+      contactPolicy: packet.body.contactPolicy,
+    };
+  }
   return {
     ...base,
     version: packet.body.expectedVersion + 1,
@@ -95,7 +102,10 @@ test('frozen name/city-only save uses returned versions on repeated edits and le
   const before = { ...stored };
   const s = setup({ read: () => api.ownProfile('private-access'), send: p => api.saveOwnProfile('private-access', p) });
   await edit(s.owner); await s.owner.save(); s.owner.update({ displayName: 'Следующее' }); await s.owner.save();
-  assert.deepEqual(s.sent.map(s => ({ expectedVersion: s.packet.body.expectedVersion, displayName: s.packet.body.displayName, cityId: s.packet.body.cityId })),
+  assert.deepEqual(s.sent.map(s => {
+    assert.equal(s.packet.kind, 'profile');
+    return { expectedVersion: s.packet.body.expectedVersion, displayName: s.packet.body.displayName, cityId: s.packet.body.cityId };
+  }),
     [{ expectedVersion: 7, displayName: 'Игрок', cityId: city.id }, { expectedVersion: 8, displayName: 'Следующее', cityId: city.id }]);
   assert.equal(s.owner.getSnapshot().profile?.version, 9);
   for (const key of ['level','bio','areaKey','directoryVisible','socialEligible','contactPolicy','consentPolicyVersion','radarConsented','radarConsentPolicyVersion'] as const) assert.deepEqual(stored[key], before[key]);
@@ -123,7 +133,8 @@ test('UNKNOWN survives navigation/read and same-actor reauth: only explicit reco
   s.owner.setActor(null); assert.equal(s.owner.getSnapshot().command, undefined); assert.equal(s.owner.getSnapshot().profile, null);
   assertDraft(s.owner.getSnapshot().draft, emptyDraft); await s.owner.reconcile(); assert.equal(s.sent.length, 1);
   const returned = { ...actor, sessionId: 'new-session', generation: 2 }; s.owner.setActor(returned);
-  assert.equal(s.owner.getSnapshot().command?.packet.cityName, city.nameRu);
+  assert.equal(s.owner.getSnapshot().command?.packet.kind, 'profile');
+  assert.equal(s.owner.getSnapshot().command?.packet.kind === 'profile' ? s.owner.getSnapshot().command?.packet.cityName : undefined, city.nameRu);
   await s.owner.load(); await s.owner.save(); assert.equal(s.sent.length, 1); recovered = true;
   await s.owner.reconcile(); assert.strictEqual(s.sent[1]?.packet, original); assert.deepEqual(s.sent[1]?.authority, returned);
   assert.equal(s.owner.getSnapshot().profile?.version, 1);
@@ -142,9 +153,12 @@ test('logout and account B wipe private pending; old A→B→A completion cannot
 });
 test('reauth while sending fences late original response after same-packet reconciliation', async () => {
   const gate = deferred<OwnProfile>();
-  const s = setup({ send: p => s.sent.length === 1 ? gate.promise : Promise.resolve({
-    ...emptyProfile, version: 2, displayName: p.body.displayName, cityId: p.body.cityId, areaKey: p.body.areaKey, bio: p.body.bio, level: p.body.level,
-  }) });
+  const s = setup({ send: p => {
+    assert.equal(p.kind, 'profile');
+    return s.sent.length === 1 ? gate.promise : Promise.resolve({
+      ...emptyProfile, version: 2, displayName: p.body.displayName, cityId: p.body.cityId, areaKey: p.body.areaKey, bio: p.body.bio, level: p.body.level,
+    });
+  } });
   await edit(s.owner); const work = s.owner.save(); s.owner.setActor(null); s.owner.setActor({ ...actor, generation: 2 });
   await s.owner.reconcile(); gate.resolve({ ...emptyProfile, version: 99, displayName: 'Late', cityId: city.id }); await work;
   assert.equal(s.owner.getSnapshot().profile?.version, 2); assert.equal(s.sent.length, 2);
@@ -156,7 +170,9 @@ test('stale409 blocks editing/new save until explicit authoritative reread and d
   s.owner.update({ displayName: 'Silent rebase' }); await s.owner.save(); assert.equal(s.sent.length, 1);
   dto = { ...emptyProfile, version: 10, displayName: 'Новое на сервере', cityId: city.id };
   await s.owner.load(); assert.equal(s.sent.length, 1); assert.equal(s.owner.getSnapshot().draft.displayName, dto.displayName);
-  conflict = false; s.owner.update({ displayName: 'Проверенное' }); await s.owner.save(); assert.equal(s.sent[1]?.packet.body.expectedVersion, 10);
+  conflict = false; s.owner.update({ displayName: 'Проверенное' }); await s.owner.save();
+  assert.equal(s.sent[1]?.packet.kind, 'profile');
+  assert.equal(s.sent[1]?.packet.body.expectedVersion, 10);
   assert.notEqual(s.sent[0]?.packet.key, s.sent[1]?.packet.key);
 });
 test('controlled moderation errors retain editable form; 5xx, malformed receipt and in-progress keep UNKNOWN', async () => {
@@ -211,6 +227,7 @@ for (const [status, code] of [[503, 'MODERATION_TEMPORARILY_UNAVAILABLE'], [503,
     const returned = { ...actor, sessionId: 'reauth-session', generation: 2 };
     s.owner.setActor(returned);
     assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+    assert.equal(original.kind, 'profile');
     assertDraft(s.owner.getSnapshot().draft, createProfileDraft(
       original.body.displayName, original.body.cityId, original.body.areaKey ?? '', original.body.bio ?? '', { kind: 'none' },
     ));
@@ -377,6 +394,7 @@ test('save freezes cloned Level identity; caller/profile/draft aliases cannot mu
   assert.equal(draftLevel.kind, 'keep');
   await s.owner.save();
   const original = s.sent[0]!.packet;
+  assert.equal(original.kind, 'profile');
   const bodyLevel = original.body.level!;
   const wireBefore = JSON.stringify(profileWireBody(original.body));
   const keyBefore = original.key;
@@ -402,6 +420,7 @@ test('save freezes cloned Level identity; caller/profile/draft aliases cannot mu
   assert.strictEqual(s.sent[1]!.packet, original);
   assert.equal(s.sent[1]!.packet.key, keyBefore);
   assert.equal(JSON.stringify(profileWireBody(s.sent[1]!.packet.body)), wireBefore);
+  assert.equal(s.sent[1]!.packet.kind, 'profile');
   assert.deepEqual(s.sent[1]!.packet.body.level, {
     scaleId: 'future-scale', scaleVersion: 9, levelId: 'opaque-level', provenance: 'self_declared',
   });
@@ -414,6 +433,7 @@ test('explicit ntrp save freezes new Level; retained selection aliases cannot re
   const choice = s.owner.getSnapshot().draft.levelChoice;
   await s.owner.save();
   const packet = s.sent[0]!.packet;
+  assert.equal(packet.kind, 'profile');
   const level = packet.body.level!;
   const wire = JSON.stringify(profileWireBody(packet.body));
   assert.ok(Object.isFrozen(level));

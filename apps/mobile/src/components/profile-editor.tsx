@@ -47,9 +47,15 @@ export function ProfileEditor() {
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}
     {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
     {state.command ? <>
-      <Label>Сохранение: {state.command.packet.body.displayName} · {state.command.packet.cityName}</Label>
-      {state.command.status === 'sending' ? <Label accessibilityState={{ busy: true }}>Сохраняем…</Label>
-        : <PrimaryButton title="Повторить прежнее сохранение с теми же данными" onPress={() => void owner.reconcile()} />}
+      {state.command.packet.kind === 'contactPolicy'
+        ? <Label>Сохранение настройки личных сообщений ({state.command.packet.body.contactPolicy === 'requests' ? 'разрешить' : 'выключить'})…</Label>
+        : <Label>Сохранение: {state.command.packet.body.displayName} · {state.command.packet.cityName}</Label>}
+      {state.command.status === 'sending' ? <Label accessibilityState={{ busy: true }}>
+        {state.command.packet.kind === 'contactPolicy' ? 'Сохраняем настройку…' : 'Сохраняем…'}
+      </Label>
+        : <PrimaryButton title={state.command.packet.kind === 'contactPolicy'
+          ? 'Повторить прежнюю настройку личных сообщений'
+          : 'Повторить прежнее сохранение с теми же данными'} onPress={() => void owner.reconcile()} />}
       <Label>Можно уйти со страницы. Результат останется неизвестным до явной проверки; новое сохранение пока недоступно.</Label>
     </> : <>
       {(state.status === 'error' || state.status === 'idle') && <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.load()} />}

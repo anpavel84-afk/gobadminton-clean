@@ -265,7 +265,11 @@ export type ProfileBody = Readonly<{
   areaKey: string | null; bio: string | null; level: Level | null;
   patch: ProfilePatchFlags;
 }>;
-export type ProfilePacket = Readonly<{ actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>;
+/** Policy-only command — wire is exactly {expectedVersion,contactPolicy}; never carries name/city/bio. */
+export type ContactPolicyBody = Readonly<{ expectedVersion: number; contactPolicy: 'requests' | 'closed' }>;
+export type ProfilePacket =
+  | Readonly<{ kind: 'profile'; actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>
+  | Readonly<{ kind: 'contactPolicy'; actor: Readonly<Actor>; key: string; body: ContactPolicyBody }>;
 export type ProfilePort = { read: () => Promise<OwnProfile>; cities: () => Promise<City[]>;
   send: (packet: ProfilePacket, authority: Actor) => Promise<OwnProfile> };
 export type ProfileDraft = { displayName: string; cityId: string; areaKey: string; bio: string; levelChoice: LevelGuideChoice };
@@ -290,7 +294,10 @@ const form = (p: OwnProfile): ProfileDraft => createProfileDraft(
 const draftFromPacket = (body: ProfileBody): ProfileDraft => createProfileDraft(
   body.displayName, body.cityId, body.areaKey ?? '', body.bio ?? '', levelGuideChoiceFromProfile(body.level),
 );
-export function profileWireBody(body: ProfileBody): Record<string, unknown> {
+export function profileWireBody(body: ProfileBody | ContactPolicyBody): Record<string, unknown> {
+  if ('contactPolicy' in body) {
+    return { expectedVersion: body.expectedVersion, contactPolicy: body.contactPolicy };
+  }
   const wire: Record<string, unknown> = {
     expectedVersion: body.expectedVersion, displayName: body.displayName, cityId: body.cityId,
   };
@@ -321,7 +328,10 @@ export class ProfileCoordinator {
     if (actor) this.quarantined = null;
     this.serial++; this.state = initial();
     this.show({ actor: actor ? Object.freeze({ ...actor }) : null, ...(packet ? { command: { packet, status: 'unknown' as const },
-      draft: draftFromPacket(packet.body), notice: 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
+      draft: packet.kind === 'profile' ? draftFromPacket(packet.body) : createProfileDraft('', ''),
+      notice: packet.kind === 'contactPolicy'
+        ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+        : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
   }
   forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
   /** Authoritative avatar/version only — never replaces unsaved name/level/area/bio draft. Delayed older receipts cannot overwrite newer state. */
@@ -428,7 +438,7 @@ export class ProfileCoordinator {
       this.show({ notice: 'О себе — до 500 символов.' }); return;
     }
     const level = copyFrozenLevel(resolveProfileLevelForSave(draft.levelChoice, profile.level));
-    const packet = Object.freeze({ actor: Object.freeze({ ...actor }), key: this.random(), cityName: city.nameRu,
+    const packet = Object.freeze({ kind: 'profile' as const, actor: Object.freeze({ ...actor }), key: this.random(), cityName: city.nameRu,
       body: Object.freeze({
         expectedVersion: profile.version, displayName, cityId: draft.cityId, areaKey, bio, level,
         patch: Object.freeze({
@@ -437,6 +447,26 @@ export class ProfileCoordinator {
           level: !sameStoredLevel(level, profile.level),
         }),
       }) });
+    await this.dispatch(packet, actor);
+  };
+  /**
+   * Explicit personal-message permission only. Requires authoritative version≥1.
+   * Never auto-runs on mount/login; preserves dirty name/level/area/bio draft on receipt.
+   */
+  setContactPolicy = async (desired: 'requests' | 'closed') => {
+    const { actor, profile, status, command } = this.state;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
+    if (profile.version < 1) {
+      this.show({ notice: 'Сначала сохраните игровой профиль.' });
+      return;
+    }
+    if (profile.contactPolicy === desired) return;
+    const packet = Object.freeze({
+      kind: 'contactPolicy' as const,
+      actor: Object.freeze({ ...actor }),
+      key: this.random(),
+      body: Object.freeze({ expectedVersion: profile.version, contactPolicy: desired }),
+    });
     await this.dispatch(packet, actor);
   };
   reconcile = async () => {
@@ -450,6 +480,21 @@ export class ProfileCoordinator {
     try {
       const profile = await this.port.send(packet, authority);
       if (!valid()) return;
+      if (packet.kind === 'contactPolicy') {
+        const { body } = packet;
+        if (profile.version <= body.expectedVersion || profile.contactPolicy !== body.contactPolicy) throw new ProfileError('invalid');
+        // Authoritative policy/version only — never wipe unsaved name/level/area/bio draft.
+        this.show({
+          profile,
+          command: undefined,
+          status: 'ready',
+          notice: profile.contactPolicy === 'requests'
+            ? 'Личные сообщения разрешены.'
+            : 'Личные сообщения выключены. Новые входящие не принимаются; история переписок сохраняется.',
+        });
+        if (!this.state.cities.length) this.show({ status: 'idle' });
+        return;
+      }
       const { body } = packet;
       if (profile.version <= body.expectedVersion || profile.displayName !== body.displayName || profile.cityId !== body.cityId
           || profile.areaKey !== body.areaKey || profile.bio !== body.bio || !sameStoredLevel(profile.level, body.level)) throw new ProfileError('invalid');
@@ -462,9 +507,12 @@ export class ProfileCoordinator {
         const stale = error.status === 409;
         this.show({ command: undefined, status: stale ? 'stale' : 'ready', notice: stale
           ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'
+          : packet.kind === 'contactPolicy' ? 'Настройка личных сообщений не сохранена. Проверьте соединение или повторите.'
           : moderationCodes.includes(error.code) ? 'Изменения не сохранены. Проверьте публичный текст или повторите позже. Введённые данные сохранены в форме.'
           : 'Изменения не сохранены. Проверьте поля и повторите.' });
-      } else this.show({ command: { packet, status: 'unknown' }, notice: 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
+      } else this.show({ command: { packet, status: 'unknown' }, notice: packet.kind === 'contactPolicy'
+        ? 'Результат настройки личных сообщений неизвестен. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
+        : 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
     }
   }
 }
