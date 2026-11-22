@@ -421,36 +421,40 @@ export class RoleReputationCoordinator {
     const key = `more:${role}`;
     const { signal, alive } = this.ticket(key);
     this.setLane(role, { ...lane, loadingMore: true });
-    void this.ports.byHandle(handle, { gameId, cursor: cursorValue, limit: 20 }, signal).then(page => {
-      if (!alive()) return;
-      if (this.state.gameId !== gameId) return;
-      const current = this.state[this.laneKey(role)];
-      if (!current.summary || current.summary.roleHandle !== handle) return;
-      if (page.roleHandle !== handle || page.role !== role) throw new PublicApiError('invalid');
-      if (page.availability !== 'available') {
-        this.setLane(role, { role, phase: 'unavailable', summary: page, loadingMore: false });
-        return;
+    // Fulfilment throws (e.g. wrong-role page) must not escape .then(success, error) —
+    // that path is unhandled and would leave loadingMore stuck true.
+    void (async () => {
+      try {
+        const page = await this.ports.byHandle(handle, { gameId, cursor: cursorValue, limit: 20 }, signal);
+        if (!alive()) return;
+        if (this.state.gameId !== gameId) return;
+        const current = this.state[this.laneKey(role)];
+        if (!current.summary || current.summary.roleHandle !== handle) return;
+        if (page.roleHandle !== handle || page.role !== role) throw new PublicApiError('invalid');
+        if (page.availability !== 'available') {
+          this.setLane(role, { role, phase: 'unavailable', summary: page, loadingMore: false });
+          return;
+        }
+        this.setLane(role, {
+          role,
+          phase: 'ready',
+          loadingMore: false,
+          summary: {
+            ...page,
+            items: appendItems(current.summary.items, page.items),
+            // Preserve provenance: only the page that matches the requested cursor may advance it.
+            nextCursor: page.nextCursor,
+          },
+        });
+      } catch (error: unknown) {
+        if (!alive()) return;
+        if (error instanceof PublicApiError && error.kind === 'unavailable') {
+          this.setLane(role, { role, phase: 'unavailable', summary: null, loadingMore: false });
+          return;
+        }
+        this.setLane(role, { role, phase: 'error', summary: null, loadingMore: false });
       }
-      this.setLane(role, {
-        role,
-        phase: 'ready',
-        loadingMore: false,
-        summary: {
-          ...page,
-          items: appendItems(current.summary.items, page.items),
-          // Preserve provenance: only the page that matches the requested cursor may advance it.
-          nextCursor: page.nextCursor,
-        },
-      });
-    }, (error: unknown) => {
-      if (!alive()) return;
-      if (error instanceof PublicApiError && error.kind === 'unavailable') {
-        this.setLane(role, { role, phase: 'unavailable', summary: null, loadingMore: false });
-        return;
-      }
-      const current = this.state[this.laneKey(role)];
-      this.setLane(role, { ...current, loadingMore: false });
-    });
+    })();
   };
 
   private async loadRole(role: RoleKind) {

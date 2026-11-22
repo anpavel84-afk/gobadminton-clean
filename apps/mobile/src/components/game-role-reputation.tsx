@@ -13,7 +13,7 @@ import {
   ROLE_TOPIC_LABEL,
 } from '../role-reputation.ts';
 import type { RoleKind, RoleLaneState } from '../role-reputation.ts';
-import { colors, interaction } from '../theme.ts';
+import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
 import { Label, OutlineButton, TextButton } from './ui.tsx';
 
@@ -47,10 +47,12 @@ export function GameRoleReputationDisclosure({
       accessibilityState={{ expanded }}
       accessibilityLabel={`Отзывы и история: ${game.title}`}
       onPress={() => coordinator.toggle()}
-      style={({ pressed }) => [styles.toggle, pressed && { backgroundColor: colors.paper }]}
+      style={({ pressed }) => [styles.toggle, pressed && styles.togglePressed]}
     >
       <Label style={styles.toggleLabel}>{expanded ? 'Свернуть' : 'Отзывы и история'}</Label>
-      <DiscoveryIcon name="chevron" />
+      <View style={expanded ? styles.chevronExpanded : styles.chevron} accessible={false}>
+        <DiscoveryIcon name="chevron" />
+      </View>
     </Pressable>
     {expanded ? <View style={styles.details} accessibilityLiveRegion="polite">
       {wantTraining ? <RoleLaneView lane={state.training} onRetry={() => coordinator.retry('training')}
@@ -121,20 +123,33 @@ function ReadyRoleBody({ lane, onMore }: { lane: RoleLaneState; onMore: () => vo
 
 const styles = StyleSheet.create({
   wrap: { width: '100%', gap: 8, marginTop: 4 },
+  // Canonical web discovery.css disclosure (327–343 + mobile 597–600):
+  // border:0, transparent, underline, min-height 44; mobile stretch / space-between / padding 8 0.
   toggle: {
-    ...interaction,
     alignSelf: 'stretch',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: colors.lineDark,
-    borderRadius: 12,
+    gap: 8,
+    minHeight: 44,
+    minWidth: 44,
+    paddingVertical: 8,
+    paddingHorizontal: 0,
+    borderWidth: 0,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
   },
-  toggleLabel: { flex: 1, fontWeight: '600', fontSize: 14, lineHeight: 20 },
+  togglePressed: { opacity: 0.72 },
+  toggleLabel: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+    textDecorationColor: colors.ink,
+  },
+  chevron: { transform: [{ rotate: '0deg' }] },
+  chevronExpanded: { transform: [{ rotate: '180deg' }] },
   details: { width: '100%', gap: 14, paddingTop: 4 },
   section: { width: '100%', gap: 6 },
   eyebrow: {

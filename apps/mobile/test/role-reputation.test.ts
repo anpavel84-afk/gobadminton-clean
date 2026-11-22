@@ -270,6 +270,60 @@ test('coordinator expands lazily, paginates with dedupe, retires late game/role 
   assert.equal(retrying.getSnapshot().organization.phase, 'ready');
 });
 
+test('#522 loadMore wrong-role page via PublicApi does not unhandled-reject or stick loader', async () => {
+  const rejections: unknown[] = [];
+  const onReject = (reason: unknown) => { rejections.push(reason); };
+  process.on('unhandledRejection', onReject);
+  try {
+    const api = createPublicApi(async (url) => {
+      const path = String(url);
+      if (path.includes(`/games/${gameId}/role-reputations/organization`)) {
+        return Response.json(summary({
+          role: 'organization',
+          roleHandle: orgHandle,
+          publishedReviewCount: 1,
+          items: [review('d'.repeat(32), 'organization', 'Старт')],
+          nextCursor: 'cursor-a32',
+        }));
+      }
+      if (path.includes(`/role-reputations/${orgHandle}`)) {
+        // Same handle, wrong role — parser accepts (roleHandle-only expected); coordinator must catch.
+        return Response.json(summary({
+          role: 'training',
+          roleHandle: orgHandle,
+          heldGamesCount: null,
+          publishedReviewCount: 1,
+          items: [review('e'.repeat(32), 'training', 'Чужой роль')],
+          nextCursor: null,
+        }));
+      }
+      return new Response(null, { status: 404 });
+    });
+    const coordinator = new RoleReputationCoordinator({
+      gameRole: (id, role, signal) => api.gameRoleReputation(id, role, signal),
+      byHandle: (handle, query, signal) => api.roleReputation(handle, query, signal),
+    });
+    coordinator.bind(gameId, { wantTraining: false });
+    coordinator.expand();
+    await flush();
+    assert.equal(coordinator.getSnapshot().organization.phase, 'ready');
+    assert.equal(coordinator.getSnapshot().organization.summary?.nextCursor, 'cursor-a32');
+
+    coordinator.loadMore('organization');
+    assert.equal(coordinator.getSnapshot().organization.loadingMore, true);
+    await flush();
+    await flush();
+
+    const after = coordinator.getSnapshot().organization;
+    assert.equal(after.loadingMore, false);
+    assert.equal(after.phase, 'error');
+    assert.equal(after.summary, null);
+    assert.equal(rejections.length, 0);
+  } finally {
+    process.off('unhandledRejection', onReject);
+  }
+});
+
 test('#522 native role-history source wiring and APK22 counter', () => {
   const card = read('../src/components/game-card.tsx');
   const disclosure = read('../src/components/game-role-reputation.tsx');
@@ -282,6 +336,13 @@ test('#522 native role-history source wiring and APK22 counter', () => {
   assert.match(disclosure, /basis_under_review/);
   assert.match(disclosure, /Ещё отзывы/);
   assert.match(disclosure, /Основание на проверке/);
+  assert.match(disclosure, /minHeight:\s*44/);
+  assert.match(disclosure, /borderWidth:\s*0/);
+  assert.match(disclosure, /backgroundColor:\s*'transparent'/);
+  assert.match(disclosure, /textDecorationLine:\s*'underline'/);
+  assert.match(disclosure, /paddingVertical:\s*8/);
+  assert.match(disclosure, /rotate:\s*'180deg'/);
+  assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
   assert.doesNotMatch(disclosure, /Поделиться опытом|Сообщить о нарушении|canReply|canReport/);
   assert.match(api, /gameRoleReputation/);
   assert.match(api, /roleReputation/);
@@ -289,5 +350,6 @@ test('#522 native role-history source wiring and APK22 counter', () => {
   assert.match(api, /gameRoleReputationPath|roleReputationPath|parseRoleReputationSummary/);
   assert.match(module, /RoleReputationCoordinator/);
   assert.match(module, /gameId/);
+  assert.match(module, /phase: 'error'/);
   assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 22);
 });
