@@ -9,6 +9,7 @@ import {
   browseMediaNeighborhood,
   browsePeerMediaKey,
   browsePeerMediaUrls,
+  acquireBrowseMediaWarmup,
   createBrowseMediaWarmup,
   type BrowseMediaScope,
 } from '../src/player-browse-media.ts';
@@ -293,12 +294,132 @@ test('#522 deferred prefetch: rapid 20 sync bounds real inflight; obsolete queue
   assert.equal(browsePeerMediaUrls(player('evil', { provider: 'https://evil.example/a' })).avatars.length, 0);
 });
 
+test('#522 route remount reuses stable-owner warmup; deferred retire never exceeds cap', async () => {
+  type Gate = { resolve: (ok: boolean) => void; reject: (err: Error) => void };
+  const openGates = new Set<Gate>();
+  const started: string[] = [];
+  let probeInflight = 0;
+  let maxProbeInflight = 0;
+
+  const deferredPrefetch = (url: string) => {
+    started.push(url);
+    probeInflight += 1;
+    maxProbeInflight = Math.max(maxProbeInflight, probeInflight);
+    return new Promise<boolean>((resolve, reject) => {
+      const gate: Gate = {
+        resolve: (ok) => {
+          openGates.delete(gate);
+          probeInflight -= 1;
+          resolve(ok);
+        },
+        reject: (err) => {
+          openGates.delete(gate);
+          probeInflight -= 1;
+          reject(err);
+        },
+      };
+      openGates.add(gate);
+    });
+  };
+
+  const settleAll = async (warmup: ReturnType<typeof createBrowseMediaWarmup>, mode: 'ok' | 'fail' = 'ok') => {
+    let guard = 0;
+    while ((openGates.size > 0 || warmup.realInflight() > 0 || warmup.pendingPeerIds().length > 0
+      || warmup.activeWarmCount() > 0) && guard < 400) {
+      guard += 1;
+      const batch = [...openGates];
+      for (const g of batch) {
+        if (mode === 'ok') g.resolve(true);
+        else g.reject(new Error('native failure'));
+      }
+      await flush();
+    }
+  };
+
+  // Distinct stable root owner identity (PlayInterestCoordinator stand-in).
+  const stableOwner = { id: 'play-interest-provider-owner' };
+  const deckA = Array.from({ length: 12 }, (_, i) => player(`a${i}`, { cover: i }));
+  const deckB = Array.from({ length: 12 }, (_, i) => player(`b${i}`, { cover: i + 40 }));
+
+  // Route 1: acquire for stable provider owner → fill full 6-peer window.
+  const route1 = acquireBrowseMediaWarmup(stableOwner, deferredPrefetch);
+  route1.sync(deckA, 1, liveScope());
+  assert.equal(route1.activeWarmCount(), NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  assert.ok(route1.realInflight() > 0);
+  assert.ok(route1.realInflight() <= NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  const inflightAtClose = route1.realInflight();
+  const activeAtClose = route1.activeWarmCount();
+  const startedAtClose = [...started];
+
+  // Teardown: retire clears queued/local URL identity; ghost counts survive.
+  route1.retire();
+  assert.deepEqual(route1.occupancy(), { retained: [], loading: [] });
+  assert.deepEqual(route1.pendingPeerIds(), []);
+  assert.equal(route1.realInflight(), inflightAtClose);
+  assert.equal(route1.activeWarmCount(), activeAtClose);
+
+  // Route 2: SAME stable owner, different peers — must not exceed cap while old OS work unsettled.
+  const route2 = acquireBrowseMediaWarmup(stableOwner, deferredPrefetch);
+  assert.equal(route2, route1, 'remount must reuse warmup bound to stable provider owner');
+  route2.sync(deckB, 1, liveScope());
+  assert.equal(route2.activeWarmCount(), activeAtClose, 'ghosts hold every cap slot until settle');
+  assert.ok(route2.realInflight() <= NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  assert.ok(maxProbeInflight <= NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  // No new native dispatch while saturated; latest window only sits in pending.
+  assert.deepEqual(started, startedAtClose, 'stale/queued URLs must not dispatch while ghosts hold cap');
+  for (const id of route2.pendingPeerIds()) {
+    assert.ok(id.startsWith('b'), `pending must be latest window only, got ${id}`);
+  }
+  assert.ok(route2.pendingPeerIds().length > 0, 'latest scope should queue until ghost settlement');
+
+  // Settlement frees slots → latest scope progresses; prior-route peers never resurrect.
+  await settleAll(route2, 'ok');
+  assert.equal(route2.realInflight(), 0);
+  assert.equal(route2.activeWarmCount(), 0);
+  for (const id of browseMediaNeighborhood(1, deckB.length).map(i => `b${i}`)) {
+    assert.ok(route2.occupancy().retained.includes(id), `latest retained missing ${id}`);
+  }
+  assert.equal(route2.occupancy().retained.some(id => id.startsWith('a')), false);
+
+  // Repeated reopen + actor/session change still share the same accounting owner.
+  route2.retire();
+  const route3 = acquireBrowseMediaWarmup(stableOwner, deferredPrefetch);
+  assert.equal(route3, route1);
+  openGates.clear();
+  started.length = 0;
+  route3.sync(deckB, 3, liveScope({ actorId: 'actor-2', sessionId: 'session-2', generation: 2 }));
+  assert.ok(route3.realInflight() <= NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  assert.ok(route3.activeWarmCount() <= NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  route3.retire();
+  const route4 = acquireBrowseMediaWarmup(stableOwner, deferredPrefetch);
+  assert.equal(route4, route1);
+  route4.sync(deckA, 1, liveScope({ actorId: 'actor-3', sessionId: 'session-3', generation: 3 }));
+  assert.ok(route4.realInflight() <= NATIVE_BROWSE_PREFETCH_INFLIGHT_CAP);
+  await settleAll(route4, 'ok');
+
+  // Isolated createBrowseMediaWarmup must not share the WeakMap (no test pollution).
+  const isolated = createBrowseMediaWarmup(deferredPrefetch);
+  assert.notEqual(isolated, route1);
+  isolated.sync(deckA, 0, liveScope());
+  assert.ok(isolated.activeWarmCount() > 0);
+  assert.equal(route4.activeWarmCount(), 0);
+  isolated.retire();
+  await settleAll(isolated, 'ok');
+
+  // Distinct stable owners stay independent.
+  const otherOwner = { id: 'other-provider' };
+  const other = acquireBrowseMediaWarmup(otherOwner, deferredPrefetch);
+  assert.notEqual(other, route1);
+});
+
 test('#522 player-browse hooks warmup without retargeting gestures or match commands', () => {
   const browse = readFileSync(new URL('../src/components/player-browse.tsx', import.meta.url), 'utf8');
-  assert.match(browse, /createBrowseMediaWarmup/);
+  assert.match(browse, /acquireBrowseMediaWarmup/);
+  assert.match(browse, /acquireBrowseMediaWarmup\(owner,/);
   assert.match(browse, /mediaWarmup\.current\.sync\(/);
   assert.match(browse, /Image\.prefetch/);
-  assert.match(browse, /typeof createBrowseMediaWarmup !== 'function'/);
+  assert.match(browse, /typeof acquireBrowseMediaWarmup !== 'function'/);
+  assert.doesNotMatch(browse, /createBrowseMediaWarmup\(/);
   // Still only one visible keyed card surface — no offscreen Image commit into the animated card.
   assert.match(browse, /<Animated\.View key=\{card\}/);
   assert.equal((browse.match(/<Animated\.View key=\{/g) ?? []).length, 1);

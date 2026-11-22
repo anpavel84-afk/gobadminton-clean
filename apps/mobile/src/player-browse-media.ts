@@ -282,3 +282,22 @@ export class BrowseMediaWarmup {
 export function createBrowseMediaWarmup(prefetch: BrowseMediaPrefetch): BrowseMediaWarmup {
   return new BrowseMediaWarmup(prefetch);
 }
+
+/**
+ * Weak association from a stable root owner (PlayInterestCoordinator) to warmup accounting.
+ * Browse route remounts reuse the same instance so unabortable native prefetch counts survive
+ * teardown. Direct createBrowseMediaWarmup() stays available for isolated tests (no shared map).
+ */
+const warmupByStableOwner = new WeakMap<object, BrowseMediaWarmup>();
+
+export function acquireBrowseMediaWarmup(
+  stableOwner: object,
+  prefetch: BrowseMediaPrefetch,
+): BrowseMediaWarmup {
+  let existing = warmupByStableOwner.get(stableOwner);
+  if (!existing) {
+    existing = createBrowseMediaWarmup(prefetch);
+    warmupByStableOwner.set(stableOwner, existing);
+  }
+  return existing;
+}

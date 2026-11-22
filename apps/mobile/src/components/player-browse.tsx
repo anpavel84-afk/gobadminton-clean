@@ -18,7 +18,7 @@ import { PlayerAvatar } from './player-card.tsx';
 import { SvgXml } from 'react-native-svg';
 import { playerMediaUrl } from '../media.ts';
 import { playerFilterKey } from '../players.ts';
-import { createBrowseMediaWarmup, type BrowseMediaWarmup } from '../player-browse-media.ts';
+import { acquireBrowseMediaWarmup, type BrowseMediaWarmup } from '../player-browse-media.ts';
 import { FriendlyMatch } from './friendly-match.tsx';
 import { iosModalOrientations, Label, PrimaryButton, ScreenFrame, TextButton } from './ui.tsx';
 import { bindIosBack } from '../ios-back.ts';
@@ -74,16 +74,17 @@ export function PlayerBrowse({owner,state,self,focused,placeLabel,cities=[],stat
   const pages = display ? detailPages(display,bioMeasure?.key===measureKey ? measuredBioPages(bio,bioMeasure.lines,bodySize.height-4) : undefined) : [];
   const infoLast = pages.length; // facts → bio pages → public games availability / profile
   // Bounded next-card media warmup (WEB neighborhood parity). Prefetch only — never blocks gestures
-  // or replaces the visible cover/avatar. typeof guards keep auth VM mounts working without the import.
+  // or replaces the visible cover/avatar. Accounting binds to stable PlayInterestCoordinator (root
+  // provider owner), not this route instance — remount must not reset unabortable native counts.
+  // typeof guards keep auth VM mounts working without the import.
   const mediaWarmup = useRef<BrowseMediaWarmup | null>(null);
   useEffect(() => {
-    if (typeof createBrowseMediaWarmup !== 'function') return;
-    if (!mediaWarmup.current) {
-      const prefetch = typeof Image !== 'undefined' && typeof Image.prefetch === 'function'
-        ? (url: string) => Image.prefetch(url)
-        : async () => false;
-      mediaWarmup.current = createBrowseMediaWarmup(prefetch);
-    }
+    if (typeof acquireBrowseMediaWarmup !== 'function') return;
+    const prefetch = typeof Image !== 'undefined' && typeof Image.prefetch === 'function'
+      ? (url: string) => Image.prefetch(url)
+      : async () => false;
+    // Same coordinator identity → same warmup across close/reopen; useRef only caches the handle.
+    mediaWarmup.current = acquireBrowseMediaWarmup(owner, prefetch);
     const selectedIndex = card ? players.findIndex(p => p.publicPlayerId === card) : -1;
     mediaWarmup.current.sync(players, selectedIndex, {
       episode,
@@ -94,7 +95,7 @@ export function PlayerBrowse({owner,state,self,focused,placeLabel,cities=[],stat
       focused,
       foreground: state.foreground,
     });
-  }, [players, card, episode, focused, state.foreground, state.filters, state.actor?.actorId, state.actor?.sessionId, state.actor?.generation]);
+  }, [owner, players, card, episode, focused, state.foreground, state.filters, state.actor?.actorId, state.actor?.sessionId, state.actor?.generation]);
   useEffect(() => () => { mediaWarmup.current?.retire(); }, []);
   useLayoutEffect(() => {
     gesture.current?.cancel(); flying.current=false;pose.stopAnimation();pose.setValue({x:0,y:0});setInfo(null);setIntent(null);

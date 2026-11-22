@@ -108,10 +108,10 @@ test('#522 bounded swipe media warmup does not retarget inline Свайп CTA or
   // Inline/floating entry path unchanged — still stages catalog and opens browse.
   assert.match(players, /const openSwipeBrowse = \(\) => \{ browse\.stage\(filters, list\?\.data \?\? null\); router\.push\('\/players\/browse'\); \};/);
   assert.equal((players.match(/onPress=\{openSwipeBrowse\}/g) ?? []).length, 2);
-  assert.doesNotMatch(players, /createBrowseMediaWarmup|Image\.prefetch|player-browse-media/);
+  assert.doesNotMatch(players, /acquireBrowseMediaWarmup|createBrowseMediaWarmup|Image\.prefetch|player-browse-media/);
 
   const browse = read('../src/components/player-browse.tsx');
-  assert.match(browse, /createBrowseMediaWarmup/);
+  assert.match(browse, /acquireBrowseMediaWarmup\(owner,/);
   assert.match(browse, /mediaWarmup\.current\.sync\(/);
   // Prefetch must not wrap or replace PanResponder / owner.act ownership.
   assert.match(browse, /PanResponder\.create\(/);

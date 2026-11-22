@@ -55,7 +55,8 @@ test('native measured bio pages adapt to line height and body size without dropp
 test('#522 browse component wires bounded media warmup; gesture helpers stay in player-browse.ts',()=>{
   const ui=readFileSync(new URL('../src/components/player-browse.tsx',import.meta.url),'utf8');
   assert.match(ui,/from '\.\.\/player-browse-media\.ts'/);
-  assert.match(ui,/createBrowseMediaWarmup/);
+  assert.match(ui,/acquireBrowseMediaWarmup/);
+  assert.match(ui,/acquireBrowseMediaWarmup\(owner,/);
   assert.match(ui,/mediaWarmup\.current\.sync\(/);
   assert.match(ui,/mediaWarmup\.current\?\.retire\(\)/);
   // Pure gesture/catalog helpers remain outside the media helper.
