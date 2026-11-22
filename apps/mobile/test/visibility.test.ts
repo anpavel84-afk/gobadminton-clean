@@ -686,7 +686,7 @@ test('#522 P1: success with empty cities → subsequent load/editor remount pres
   };
   let authoritative: OwnProfile = { ...serverV1 };
   let phase: 'lost' | 'ack' = 'lost';
-  let citiesEmpty = false;
+  const citiesEmpty = false;
   const s = setup(serverV1, {
     visibility: async (packet) => {
       if (phase === 'lost') throw new ProfileError('network');
