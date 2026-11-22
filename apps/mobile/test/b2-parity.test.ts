@@ -14,11 +14,14 @@ test('#603 #604 #606 #588 Group B2 source assertions', () => {
   const radar = read('../src/components/radar-controls.tsx');
   const ui = read('../src/components/ui.tsx');
 
-  // #603 MYGAMES-01
+  // #603 MYGAMES-01 — invites stay on MyGames (inline MyGameInvitations; no Messages redirect)
   assert.match(myGames, /PrimaryButton title="Создать игру"/);
   assert.match(myGames, /flexDirection:\s*'row'/);
   assert.match(myGames, /label:\s*'Приглашения'/);
-  assert.match(myGames, /router\.push\('\/messages'\)/);
+  assert.match(myGames, /value:\s*'invites'/);
+  assert.match(myGames, /owner\.filter\(f\.value\)/);
+  assert.match(myGames, /MyGameInvitations/);
+  assert.doesNotMatch(myGames, /router\.push\('\/messages'\)/);
   assert.match(myGames, /После игры ждут ответа · \{attention\.length\}/);
   assert.match(myGames, /К итогам ↓/);
   assert.match(myGames, /colors\.lavender/);
