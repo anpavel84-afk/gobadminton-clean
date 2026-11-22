@@ -58,6 +58,8 @@ export class MessagesCoordinator {
   private readonly clock: MessagesClock;
   private readonly port: MessagesPort;
   private readonly random: () => string;
+  /** Auth wires one MyGames/participation reload after a validated invitation receipt. */
+  invitationSettled: (() => void) | null = null;
   constructor(port: MessagesPort, random: () => string, scheduler: MessagesClock = clock) { this.port = port; this.random = random; this.clock = scheduler; }
   /** Root lease: rerenders and overlapping mount cleanup cannot own extra timers. */
   mount = () => {
@@ -406,6 +408,7 @@ export class MessagesCoordinator {
       this.show({ pending, drafts, detail, notice: null });
       if (packet.action !== 'read' && this.focused === key && packet.resource.kind !== 'invitation') void this.catchUp(packet.resource);
       void this.loadCounts();
+      if (packet.resource.kind === 'invitation' && (packet.action === 'accept' || packet.action === 'decline')) this.invitationSettled?.();
     } catch (error) {
       if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || !this.mayDispatchSafety(packet, permit) || this.failed(error)) return;
       if (error instanceof MessagesError && error.kind === 'business' && !['IDEMPOTENCY_KEY_REUSED','KEY_REUSED','CLIENT_MESSAGE_ID_REUSED','CLIENT_MESSAGE_ID_UNAVAILABLE'].includes(error.code)) {

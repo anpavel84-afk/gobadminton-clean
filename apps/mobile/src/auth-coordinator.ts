@@ -59,6 +59,7 @@ export class AuthCoordinator {
     this.postgame = new PostgameCoordinator({
       own: (actor,cursor) => this.participationRead(access => deps.api.postgameOwn(access,cursor),actor),
       reminders: actor => this.participationRead(access => deps.api.postgameReminders(access),actor),
+      invitations: (actor,cursor) => this.participationRead(access => deps.api.myInvitations(access,cursor),actor),
       results: (actor,id,query) => this.participationRead(access => deps.api.postgameResults(access,id,query),actor),
       send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
     },deps.random);
@@ -159,6 +160,11 @@ export class AuthCoordinator {
         ? deps.api.requestParticipation(access, packet.gameId, packet.body, packet.key)
         : deps.api.withdrawParticipation(access, packet.participationId, packet.body, packet.key), packet.actor),
     }, deps.random, undefined, id => this.participationRead(access => deps.api.gameDetail(access, id)));
+    // One hub reload after an acknowledged invitation receipt; never auto-accept or settle on list read.
+    this.messages.invitationSettled = () => {
+      void this.postgame.loadInvitations();
+      void this.participation.loadOwn();
+    };
   }
   /** Thin closed Radar ports. Existing token/session fences still own authentication. */
   radarRead = (operation: RadarRead, actor: Actor) => this.participationRead(access => this.deps.api.radarRead(access, operation, this.deps.random()), actor);

@@ -1,9 +1,12 @@
 import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
+import type { GameInvitation } from './messages.ts';
+import { MessagesError } from './messages.ts';
 import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, needsAttention } from './postgame.ts';
 import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult } from './postgame.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
-export type Filter = 'all' | 'manage' | 'participate';
+export type Filter = 'all' | 'manage' | 'participate' | 'invites';
+export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
@@ -13,14 +16,15 @@ function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
   return {...row,attendance:{...row.attendance,acknowledgedVersion:ack.version},
     notice:row.notice?.attendanceVersion === ack.version && !row.notice.acknowledgedAt ? null : row.notice};
 }
-type Snapshot = { actor: Actor | null; filter: Filter; own: Source<OwnResults>; reminders: Source<Reminders>; games: Record<string,Source<Results>>; review: Intent | null; command: Command | null; notice: string | null };
+type Snapshot = { actor: Actor | null; filter: Filter; own: Source<OwnResults>; reminders: Source<Reminders>; invitations: Source<InvitationPage>; games: Record<string,Source<Results>>; review: Intent | null; command: Command | null; notice: string | null };
 type Port = {
   own: (actor: Actor, cursor?: string) => Promise<OwnResults>;
   reminders: (actor: Actor) => Promise<Reminders>;
+  invitations: (actor: Actor, cursor?: string) => Promise<InvitationPage>;
   results: (actor: Actor, game: string, query?: ResultsQuery) => Promise<Results>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
-const empty = (actor: Actor | null): Snapshot => ({ actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, games: {}, review:null, command:null, notice:null });
+const empty = (actor: Actor | null): Snapshot => ({ actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, invitations: {status:'idle'}, games: {}, review:null, command:null, notice:null });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
 function freezeIntent(intent: Intent): Intent {
   // Clone before freezing: caller editing a form cannot change the pending wire body.
@@ -42,6 +46,7 @@ export class PostgameCoordinator {
   private serial = 0;
   private reads = new Map<string,number>();
   private seenOwn = new Set<string>();
+  private seenInvites = new Set<string>();
   // Evidence belongs only to the currently pending own GET. Later GETs establish
   // current truth themselves; a historical receipt must not override them.
   private ownReadAcks: OwnAck[] = [];
@@ -59,14 +64,14 @@ export class PostgameCoordinator {
     const saved=actor && this.quarantine?.actorId === actor.actorId ? this.quarantine.snapshot : null;
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     if (actor) this.quarantine=null;
-    this.reads.clear(); this.seenOwn.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
+    this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     if (saved) this.show({filter:saved.filter,command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,notice:saved.command ? unknownNotice : null});
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.snapshot=empty(null); this.show({}); };
-  filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate'].includes(filter)) this.show({filter}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.snapshot=empty(null); this.show({}); };
+  filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
     const denied=error instanceof PostgameError && error.kind === 'private';
@@ -105,6 +110,28 @@ export class PostgameCoordinator {
     this.show({reminders:{...old,status:'loading'}});
     try { const data=await this.port.reminders(actor); if(valid()) this.show({reminders:{status:'ready',data}}); }
     catch(error) { if(valid()) this.show({reminders:this.failure(error,old)}); }
+  };
+  /** Own invitations list — independent lane; never settles Messages invitation writes. */
+  loadInvitations = async (more = false) => {
+    if (this.snapshot.invitations.status === 'loading') return;
+    const old=this.snapshot.invitations, cursor=more ? old.data?.nextCursor : undefined;
+    if (more && !cursor) return;
+    const {actor,valid}=this.start('invitations'); if (!actor) return;
+    this.show({invitations:{...old,status:'loading'}});
+    try {
+      const page=await this.port.invitations(actor,cursor ?? undefined); if (!valid()) return;
+      if (page.nextCursor && (page.nextCursor === cursor || more && this.seenInvites.has(page.nextCursor))) throw new PostgameError('invalid');
+      if (!more) this.seenInvites.clear(); if (page.nextCursor) this.seenInvites.add(page.nextCursor);
+      const rows=new Map<string,GameInvitation>();
+      for (const item of [...(more ? this.snapshot.invitations.data?.items ?? [] : []),...page.items]) rows.set(item.id,item);
+      this.show({invitations:{status:'ready',data:{items:[...rows.values()],nextCursor:page.nextCursor}}});
+    } catch(error) {
+      if (!valid()) return;
+      const mapped = error instanceof MessagesError
+        ? new PostgameError(error.kind === 'private' ? 'private' : error.kind === 'invalid' ? 'invalid' : 'network', error.status, error.code)
+        : error;
+      this.show({invitations:this.failure(mapped,this.snapshot.invitations)});
+    }
   };
   loadResults = async (gameId: string, query: ResultsQuery = {}, append?: 'roster' | 'revisions') => {
     try { postgameId(gameId); } catch { return; }

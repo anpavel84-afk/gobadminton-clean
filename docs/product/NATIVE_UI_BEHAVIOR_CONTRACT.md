@@ -116,6 +116,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `contact-policy.test.ts` / profile·auth; optional API `native-players.foundation` bearer policy case; source APK counter 24 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 contactPolicy native parity source; not VERIFIED_SOURCE / not device PASS |
 
+## R-03 · MyGames invitations filter + in-card decisions (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `MyGamesPage` invitations composition + existing native Messages invitation detail/accept/decline; `GET /me/invitations` requirePrincipal + OpenAPI NativeBearer on that list only |
+| Entry | Authenticated `/my-games` relation chip «Приглашения» (stays on MyGames; not Messages redirect) |
+| Trigger | Idle load of invitations source; explicit chip filter; one selected inline panel leases Messages focus; accept/decline only with fresh detail acceptanceContext |
+| Expected | Invite rows union by real gameId with managed/parts/own/reminders; invites in `all`; invites filter invitations-only; pending loaded-count/+ while cursor open; accepted/declined/expired visible without fake participation; private game GET 404 keeps safe invite card; UNKNOWN keeps original key; post-receipt reloads invitations+participations once |
+| Accessibility | Chip badge for loaded pending; single active decision panel; Russian status/action labels; large-text/safe-area retained |
+| Non-scope | Trainer profile; create/revoke/organizer invitation lists; PROD; full parity/OTA/iOS claims |
+| Evidence | Mobile unit `my-games.test.ts` / messages·postgame; API `native-messages.foundation` list NativeBearer cases; source APK counter 27 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 MyGames invitations source; not VERIFIED_SOURCE / not device PASS / empty account ≠ invite action UAT |
+
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
 | Field | Content |

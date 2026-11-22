@@ -195,6 +195,39 @@ run("native Messages · self-migrating isolated database", () => {
     await pool.query("UPDATE game_invitations SET expires_at=now()-interval '1 second' WHERE id=$1",[expired.id]);
     const expiration=await app.inject({url:`/v1/invitations/${expired.id}`,headers:bearer(player)}); expect(expiration.json().status).toBe('expired'); expect(expiration.json().acceptanceContext).toBeNull();
   });
+  it('GET /me/invitations NativeBearer list: invitee isolation, pagination, expiry, cookie/bearer auth and closed neighbors', async () => {
+    const owner=await actor(), player=await actor(), other=await actor();
+    await profile(owner); const p=await profile(player); const o=await profile(other);
+    const g1=await game(owner), g2=await game(owner), g3=await game(owner);
+    const a=await invite(owner,p.publicPlayerId,g1), b=await invite(owner,p.publicPlayerId,g2);
+    await invite(owner,o.publicPlayerId,g3);
+    await pool.query("UPDATE game_invitations SET expires_at=now()-interval '1 second' WHERE id=$1",[b.id]);
+    const listUrl='/v1/me/invitations';
+    const cookieList=await app.inject({url:listUrl,headers:{cookie:player.cookie}}); expect(cookieList.statusCode).toBe(200);
+    const bearerList=await app.inject({url:listUrl,headers:bearer(player)}); expect(bearerList.statusCode).toBe(200);
+    expect(bearerList.json().items.map((row:{id:string})=>row.id).sort()).toEqual([a.id,b.id].sort());
+    expect(bearerList.json().items.every((row:{inviteePublicPlayerId:string})=>row.inviteePublicPlayerId===p.publicPlayerId)).toBe(true);
+    expect(bearerList.json().items.find((row:{id:string})=>row.id===b.id)?.status).toBe('expired');
+    const page1=await app.inject({url:listUrl+'?limit=1',headers:bearer(player)}); expect(page1.statusCode).toBe(200);
+    expect(page1.json().items).toHaveLength(1); expect(page1.json().nextCursor).toBeTruthy();
+    const page2=await app.inject({url:listUrl+'?limit=1&cursor='+encodeURIComponent(page1.json().nextCursor),headers:bearer(player)});
+    expect(page2.statusCode).toBe(200); expect(page2.json().items).toHaveLength(1);
+    expect([page1.json().items[0].id,page2.json().items[0].id].sort()).toEqual([a.id,b.id].sort());
+    const outsider=await app.inject({url:listUrl,headers:bearer(other)}); expect(outsider.statusCode).toBe(200);
+    expect(outsider.json().items.every((row:{id:string})=>row.id!==a.id && row.id!==b.id)).toBe(true);
+    expect((await app.inject({url:listUrl,headers:{}})).statusCode).toBe(401);
+    for (const headers of [{authorization:'Basic invalid'},{authorization:'Bearer invalid'},{authorization:`Bearer ${'x'.repeat(43)}`},
+      {Authorization:[`Bearer ${player.accessToken}`,`Bearer ${player.accessToken}`]}]) {
+      expect((await app.inject({url:listUrl,headers})).statusCode).toBe(401);
+    }
+    expect((await app.inject({url:listUrl,headers:{...bearer(player),cookie:player.cookie}})).statusCode).toBe(403);
+    expect((await disabledApp.inject({url:listUrl,headers:bearer(player)})).statusCode).toBe(404);
+    for (const [method,closed] of [['POST',`/v1/games/${g1.id}/invitations`],['POST',`/v1/invitations/${a.id}/revoke`],['GET',`/v1/games/${g1.id}/invitations`]] as const) {
+      expect([401,403]).toContain((await app.inject({method,url:closed,headers:bearer(player),payload:{}})).statusCode);
+    }
+    await app.get(SessionService).revokeSession(player.sessionId);
+    expect((await app.inject({url:listUrl,headers:bearer(player)})).statusCode).toBe(401);
+  });
   it('all four actual inbox kinds, direct request decisions/text/history/read privacy and game member authority', async () => {
     const owner=await actor(), player=await actor(), other=await actor();
     await profile(owner); const p=await profile(player); await profile(other);
@@ -473,5 +506,5 @@ run("native Messages · self-migrating isolated database", () => {
     expect((await counts()).messages).toBe(before.messages+1); expect((await counts()).conversations).toBe(before.conversations+1);
     const csrf=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:{cookie:viewer.cookie,origin,'idempotency-key':randomUUID()},payload}); expect(csrf.statusCode).toBe(403);
   });
-
+  // pinned suite size after #522 MyGames invitations list admission: 10
 });

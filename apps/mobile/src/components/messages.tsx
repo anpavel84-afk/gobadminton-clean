@@ -122,7 +122,30 @@ export function NativeMessagesInbox() {
   </ScreenFrame>;
 }
 const requestCopy = { pending: 'Запрос на общение', accepted: 'Переписка', declined: 'Запрос отклонён', expired: 'Срок запроса истёк', closed: 'Переписка закрыта' };
-const invitationCopy = { pending: 'Вас приглашают в игру', accepted: 'Приглашение принято', declined: 'Приглашение отклонено', expired: 'Срок приглашения истёк', revoked: 'Приглашение отозвано', cancelled_by_game: 'Игра отменена' };
+export const invitationCopy = { pending: 'Вас приглашают в игру', accepted: 'Приглашение принято', declined: 'Приглашение отклонено', expired: 'Срок приглашения истёк', revoked: 'Приглашение отозвано', cancelled_by_game: 'Игра отменена' } as const;
+/** Shared safe invitation terms + accept/decline; MyGames and Messages reuse one MessagesCoordinator owner. */
+export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, onDecline, onOpenGame }: {
+  invitation: import('../messages.ts').GameInvitation;
+  ownId: string | null;
+  pending: boolean;
+  onAccept: () => void;
+  onDecline: () => void;
+  onOpenGame?: () => void;
+}) {
+  const context = invitation.acceptanceContext, recipient = ownId === invitation.inviteePublicPlayerId;
+  return <View style={{ gap: 8 }}>
+    <Label style={styles.subtitle}>{invitationCopy[invitation.status]}</Label>
+    {context ? <><Label style={{ fontWeight: '700' }}>{context.title}</Label><Label>{new Date(context.startsAt).toLocaleString('ru', { timeZone: context.timezone })} · {context.timezone}</Label>
+      <Label>{context.venueName} · {context.venueAddress}</Label><Label>{formatLabel(context.formatKey)} · {levelLabel({ scaleId: context.levelScaleId, scaleVersion: context.levelScaleVersion, allowedLevelIds: context.allowedLevelIds })}</Label>
+      {context.activityKind === 'trainer_led' && <Label>С тренером{context.trainerDisplayName ? ` · ${context.trainerDisplayName}` : ''}</Label>}
+      {context.trainingDescription && <Label>{context.trainingDescription}</Label>}
+      <Label>{context.settlementPurpose === 'no_trainer_fee' ? 'Без тренерского сбора' : context.priceStatus === 'fixed' ? `${context.priceMinor ? (BigInt(context.priceMinor) / 100n).toString() + '.' + (BigInt(context.priceMinor) % 100n).toString().padStart(2, '0') : ''} ${context.currency} / игрока за занятие` : 'Цена по договорённости'}</Label>
+      <Label>{context.settlementTerms}</Label><Label>Свободных мест: {context.availablePlaces}. Окончательное место проверяется при принятии.</Label></> : invitation.status === 'pending' && <Label>Условия сейчас недоступны. Обновите приглашение.</Label>}
+    {recipient && invitation.status === 'pending' && <><PrimaryButton title="Принять приглашение" disabled={!!pending || !context} onPress={onAccept} />
+      <TextButton title="Отклонить" onPress={onDecline} /></>}
+    {invitation.status === 'accepted' && invitation.participationId && onOpenGame ? <TextButton title="Открыть игру" onPress={onOpenGame} /> : null}
+  </View>;
+}
 export function NativeMessageThread({ resource }: { resource: MessageResource }) {
   const { owner, state } = useMessages(), auth = useAuth(), router = useRouter(), key = resourceKey(resource);
   const resourceRef = useRef(resource); resourceRef.current = resource;
@@ -147,19 +170,13 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
   if (!detail || detail.status !== 'ready' || !h) return <Page header={<MessageHeader name={title} />}><Label>{detail?.status === 'error' ? detail.error : 'Загружаем…'}</Label><TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />{notice}</Page>;
   if (invitation) {
-    const context = invitation.acceptanceContext, recipient = detail.ownId === invitation.inviteePublicPlayerId;
     return <Page keyboard header={<MessageHeader name="Приглашение в игру" subtitle="Участие и условия игры" />}>
-      <View style={styles.card}><Label style={styles.subtitle}>{invitationCopy[invitation.status]}</Label>
-        {context ? <><Label style={{ fontWeight: '700' }}>{context.title}</Label><Label>{new Date(context.startsAt).toLocaleString('ru', { timeZone: context.timezone })} · {context.timezone}</Label>
-          <Label>{context.venueName} · {context.venueAddress}</Label><Label>{formatLabel(context.formatKey)} · {levelLabel({ scaleId: context.levelScaleId, scaleVersion: context.levelScaleVersion, allowedLevelIds: context.allowedLevelIds })}</Label>
-          {context.activityKind === 'trainer_led' && <Label>С тренером{context.trainerDisplayName ? ` · ${context.trainerDisplayName}` : ''}</Label>}
-          {context.trainingDescription && <Label>{context.trainingDescription}</Label>}
-          <Label>{context.settlementPurpose === 'no_trainer_fee' ? 'Без тренерского сбора' : context.priceStatus === 'fixed' ? `${context.priceMinor ? (BigInt(context.priceMinor) / 100n).toString() + '.' + (BigInt(context.priceMinor) % 100n).toString().padStart(2, '0') : ''} ${context.currency} / игрока за занятие` : 'Цена по договорённости'}</Label>
-          <Label>{context.settlementTerms}</Label><Label>Свободных мест: {context.availablePlaces}. Окончательное место проверяется при принятии.</Label></> : invitation.status === 'pending' && <Label>Условия сейчас недоступны. Обновите приглашение.</Label>}
-        {recipient && invitation.status === 'pending' && <><PrimaryButton title="Принять приглашение" disabled={!!pending || !context} onPress={() => { void owner.act(resource, 'accept'); }} />
-          <TextButton title="Отклонить" onPress={() => { if (!pending) void owner.act(resource, 'decline'); }} /></>}
-        {invitation.status === 'accepted' && invitation.participationId && <TextButton title="Открыть игру" onPress={() => router.push(`/games/${invitation.gameId}` as '/games')} />}
-      </View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
+      <View style={styles.card}><InvitationDecisionBody
+        invitation={invitation} ownId={detail.ownId} pending={!!pending}
+        onAccept={() => { void owner.act(resource, 'accept'); }}
+        onDecline={() => { if (!pending) void owner.act(resource, 'decline'); }}
+        onOpenGame={() => router.push(`/games/${invitation.gameId}` as '/games')}
+      /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
     </Page>;
   }
   const canSend = direct ? direct.requestState === 'accepted' && !owner.isPeerSafetyHeld(direct.peer.publicPlayerId) : chat?.lifecycleState === 'active';

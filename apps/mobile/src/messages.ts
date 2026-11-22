@@ -66,6 +66,9 @@ export function parseInvitation(v: unknown): GameInvitation {
     inviterPublicPlayerId: nullable(r.inviterPublicPlayerId), inviteePublicPlayerId: nullable(r.inviteePublicPlayerId), expiresAt: nullable(r.expiresAt), participationId: nullable(r.participationId),
     ...(r.acceptanceContext === undefined ? {} : { acceptanceContext: r.acceptanceContext === null ? null : parseContext(r.acceptanceContext) }) };
 }
+export function parseInvitationPage(v: unknown): MessagePage<GameInvitation> {
+  return parseMessagePage(v, parseInvitation);
+}
 /** Own social profile is identity only: never keep contact, profile extras or NativeMe's internal user id as public identity. */
 export const parseOwnMessageIdentity = (v: unknown): string => messageId(obj(v).publicPlayerId);
 export function mergeMessages(old: DirectMessage[], page: DirectMessage[]): DirectMessage[] {

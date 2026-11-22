@@ -21,7 +21,7 @@ import type { AvatarPacket } from './profile-avatar.ts';
 import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
-import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
+import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseInvitationPage, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
 import type { InboxFilter, MessageResource, MessageAction, MessageBody } from './messages.ts';
 import { PlayersError, parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
 import type { PlayerFilters } from './players.ts';
@@ -507,6 +507,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     gameChat: async (access: string, id: string) => parseChat(await privateMessage(resourcePath({ kind: 'game', id }), access)),
     chatMembers: async (access: string, id: string) => parseMembers(await privateMessage(`/games/${messageId(id)}/chat/members`, access)),
     invitation: async (access: string, id: string) => parseInvitation(await privateMessage(resourcePath({ kind: 'invitation', id }), access)),
+    myInvitations: async (access: string, cursor?: string) => parseInvitationPage(await privateMessage(`/me/invitations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, access)),
     messageHistory: async (access: string, r: MessageResource, before?: string, after?: string) => {
       if (r.kind === 'invitation') throw new MessagesError('invalid');
       return parseMessagePage(await privateMessage(`${resourcePath(r)}/messages?limit=50${before ? `&beforeSeq=${encodeURIComponent(before)}` : ''}${after ? `&afterSeq=${encodeURIComponent(after)}` : ''}`, access), parseMessage);
