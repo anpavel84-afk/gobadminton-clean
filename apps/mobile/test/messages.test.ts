@@ -567,6 +567,42 @@ test('deferred invitation A GET then focus B fetches B; lease release cannot cle
   back(); root();
 });
 
+test('deferred invitation A→B: background A completion then foreground drains queued B once', async () => {
+  const inviteA = { kind: 'invitation', id: 'invite-a' } as const;
+  const inviteB = { kind: 'invitation', id: 'invite-b' } as const;
+  const base = {
+    status: 'pending' as const, version: 1, inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-a',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  const gateA = deferred<typeof base & { id: string; gameId: string }>();
+  const fetched: string[] = [];
+  const { owner } = setup({
+    invitation: async (id) => {
+      fetched.push(id);
+      if (id === 'invite-a') return gateA.promise;
+      return { ...base, id, gameId: 'game-' + id };
+    },
+  });
+  const root = owner.mount();
+  owner.leaseFocus(inviteA); await tick();
+  assert.deepEqual(fetched, ['invite-a']);
+  owner.leaseFocus(inviteB); await tick();
+  assert.deepEqual(fetched, ['invite-a']);
+  assert.equal(owner.getSnapshot().detail, null);
+  owner.setForeground(false);
+  gateA.resolve({ ...base, id: 'invite-a', gameId: 'game-a' }); await tick();
+  assert.deepEqual(fetched, ['invite-a']);
+  assert.equal(owner.getSnapshot().detail, null);
+  owner.setForeground(true); await tick();
+  assert.deepEqual(fetched, ['invite-a', 'invite-b']);
+  assert.equal(owner.getSnapshot().detail?.resource.id, 'invite-b');
+  assert.equal(owner.getSnapshot().detail?.status, 'ready');
+  assert.equal(fetched.filter(id => id === 'invite-a').length, 1);
+  assert.equal(fetched.filter(id => id === 'invite-b').length, 1);
+  assert.equal(owner.getSnapshot().actor?.actorId, 'internal-a');
+  root();
+});
+
 test('invitation decision body: zero seats disable accept, clock expiry honest, decline a11y-disabled while pending', async () => {
   const { readFileSync } = await import('node:fs');
   const { URL } = await import('node:url');

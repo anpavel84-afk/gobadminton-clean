@@ -176,7 +176,7 @@ export class MessagesCoordinator {
       else if (detail && this.focused === resourceKey(detail.resource)) {
         if (detail.status === 'ready' && detail.resource.kind !== 'invitation') void this.catchUp(detail.resource);
         else void this.loadDetail(detail.resource);
-      }
+      } else this.runPendingDetail();
     }
   }
   focus(resource: MessageResource | null) {
