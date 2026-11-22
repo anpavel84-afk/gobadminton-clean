@@ -265,13 +265,19 @@ export type ProfileBody = Readonly<{
   areaKey: string | null; bio: string | null; level: Level | null;
   patch: ProfilePatchFlags;
 }>;
-export type ProfilePacket = Readonly<{ actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>;
+/** Policy-only command — wire is exactly {expectedVersion,contactPolicy}; never carries name/city/bio. */
+export type ContactPolicyBody = Readonly<{ expectedVersion: number; contactPolicy: 'requests' | 'closed' }>;
+export type ProfilePacket =
+  | Readonly<{ kind: 'profile'; actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>
+  | Readonly<{ kind: 'contactPolicy'; actor: Readonly<Actor>; key: string; body: ContactPolicyBody }>;
 export type ProfilePort = { read: () => Promise<OwnProfile>; cities: () => Promise<City[]>;
   send: (packet: ProfilePacket, authority: Actor) => Promise<OwnProfile> };
 export type ProfileDraft = { displayName: string; cityId: string; areaKey: string; bio: string; levelChoice: LevelGuideChoice };
+/** Typed read routing — never inferred from localized notice text. */
+export type ProfileReadIntent = null | 'rebase';
 type Snapshot = { actor: Actor | null; profile: OwnProfile | null; cities: City[]; draft: ProfileDraft;
   status: 'idle' | 'loading' | 'ready' | 'error' | 'stale'; command?: { packet: ProfilePacket; status: 'sending' | 'unknown' };
-  notice: string | null };
+  notice: string | null; readIntent: ProfileReadIntent };
 /** Ordinary enumerable draft — displayName/cityId/areaKey/bio/levelChoice copy and spread without dropped fields. */
 export function createProfileDraft(displayName: string, cityId: string, areaKey = '', bio = '', levelChoice: LevelGuideChoice = { kind: 'none' }): ProfileDraft {
   return { displayName, cityId, areaKey, bio, levelChoice };
@@ -283,14 +289,19 @@ function copyFrozenLevel(level: Level | null): Level | null {
     scaleId: level.scaleId, scaleVersion: level.scaleVersion, levelId: level.levelId, provenance: level.provenance,
   });
 }
-const initial = (): Snapshot => ({ actor: null, profile: null, cities: [], draft: createProfileDraft('', ''), status: 'idle', notice: null });
+const initial = (): Snapshot => ({
+  actor: null, profile: null, cities: [], draft: createProfileDraft('', ''), status: 'idle', notice: null, readIntent: null,
+});
 const form = (p: OwnProfile): ProfileDraft => createProfileDraft(
   p.displayName, p.cityId ?? '', p.areaKey ?? '', p.bio ?? '', levelGuideChoiceFromProfile(p.level),
 );
 const draftFromPacket = (body: ProfileBody): ProfileDraft => createProfileDraft(
   body.displayName, body.cityId, body.areaKey ?? '', body.bio ?? '', levelGuideChoiceFromProfile(body.level),
 );
-export function profileWireBody(body: ProfileBody): Record<string, unknown> {
+export function profileWireBody(body: ProfileBody | ContactPolicyBody): Record<string, unknown> {
+  if ('contactPolicy' in body) {
+    return { expectedVersion: body.expectedVersion, contactPolicy: body.contactPolicy };
+  }
   const wire: Record<string, unknown> = {
     expectedVersion: body.expectedVersion, displayName: body.displayName, cityId: body.cityId,
   };
@@ -321,7 +332,10 @@ export class ProfileCoordinator {
     if (actor) this.quarantined = null;
     this.serial++; this.state = initial();
     this.show({ actor: actor ? Object.freeze({ ...actor }) : null, ...(packet ? { command: { packet, status: 'unknown' as const },
-      draft: draftFromPacket(packet.body), notice: 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
+      draft: packet.kind === 'profile' ? draftFromPacket(packet.body) : createProfileDraft('', ''),
+      notice: packet.kind === 'contactPolicy'
+        ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+        : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
   }
   forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
   /** Authoritative avatar/version only — never replaces unsaved name/level/area/bio draft. Delayed older receipts cannot overwrite newer state. */
@@ -348,11 +362,12 @@ export class ProfileCoordinator {
    * Full authoritative GET rebase: adopt fresh baseline/pristine fields and version/avatar,
    * while preserving each locally dirty name/city/level/area/bio draft field.
    * Older historical receipts cannot dominate the current version authority.
+   * @returns false when ignored (no profile, command in flight, or lower historical version).
    */
-  rebaseFromAuthoritative = (fresh: OwnProfile) => {
+  rebaseFromAuthoritative = (fresh: OwnProfile): boolean => {
     const profile = this.state.profile;
-    if (!profile || this.state.command) return;
-    if (fresh.version < profile.version) return;
+    if (!profile || this.state.command) return false;
+    if (fresh.version < profile.version) return false;
     const draft = this.state.draft;
     const baseline = form(profile);
     const next = form(fresh);
@@ -378,6 +393,7 @@ export class ProfileCoordinator {
       ),
       status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
     });
+    return true;
   };
   load = async () => {
     const actor = this.state.actor;
@@ -387,10 +403,62 @@ export class ProfileCoordinator {
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
-      this.show({ profile, cities, draft: form(profile), status: 'ready', notice: profile.displayName.trim() && profile.cityId ? null : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.' });
+      this.show({
+        profile, cities, draft: form(profile), status: 'ready', readIntent: null,
+        notice: profile.displayName.trim() && profile.cityId ? null : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+      });
     } catch {
       if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.' });
     }
+  };
+  /**
+   * Authoritative GET + rebaseFromAuthoritative while readIntent==='rebase'.
+   * Allowed from status stale, or error after a failed rebase GET (intent retained).
+   * Preserves dirty name/city/area/bio/level; adopts fresh version/policy/pristine fields.
+   * No auto write / policy resend. Does not infer cause from notice text.
+   * Lower historical GET must not claim ready/fresh.
+   */
+  refreshAuthoritative = async () => {
+    const actor = this.state.actor;
+    const canRebase = this.state.status === 'stale'
+      || (this.state.status === 'error' && this.state.readIntent === 'rebase');
+    if (!actor || !this.state.profile || this.state.command || !canRebase || this.isPeerBusy()) return;
+    const serial = ++this.serial;
+    this.show({ status: 'loading', notice: null });
+    try {
+      const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
+      if (!this.current(actor) || serial !== this.serial) return;
+      this.show({ cities });
+      const applied = this.rebaseFromAuthoritative(profile);
+      if (!this.current(actor) || serial !== this.serial) return;
+      if (!applied) {
+        this.show({
+          status: 'stale',
+          notice: 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.',
+        });
+        return;
+      }
+      const adopted = this.state.profile;
+      this.show({
+        status: 'ready',
+        readIntent: null,
+        notice: adopted.displayName.trim() && adopted.cityId
+          ? null
+          : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+      });
+    } catch {
+      if (this.current(actor) && serial === this.serial) {
+        this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.' });
+      }
+    }
+  };
+  /**
+   * Exact idle/error retry wired by OwnProfileCard and ProfileEditor.
+   * Routes by typed readIntent (rebase vs ordinary load); never notice-text matching.
+   */
+  retryRead = async () => {
+    if (this.state.readIntent === 'rebase') return this.refreshAuthoritative();
+    return this.load();
   };
   update = (patch: Partial<ProfileDraft>) => {
     if (!this.state.actor || this.state.command || this.state.status !== 'ready' || this.isPeerBusy()) return;
@@ -428,7 +496,7 @@ export class ProfileCoordinator {
       this.show({ notice: 'О себе — до 500 символов.' }); return;
     }
     const level = copyFrozenLevel(resolveProfileLevelForSave(draft.levelChoice, profile.level));
-    const packet = Object.freeze({ actor: Object.freeze({ ...actor }), key: this.random(), cityName: city.nameRu,
+    const packet = Object.freeze({ kind: 'profile' as const, actor: Object.freeze({ ...actor }), key: this.random(), cityName: city.nameRu,
       body: Object.freeze({
         expectedVersion: profile.version, displayName, cityId: draft.cityId, areaKey, bio, level,
         patch: Object.freeze({
@@ -437,6 +505,26 @@ export class ProfileCoordinator {
           level: !sameStoredLevel(level, profile.level),
         }),
       }) });
+    await this.dispatch(packet, actor);
+  };
+  /**
+   * Explicit personal-message permission only. Requires authoritative version≥1.
+   * Never auto-runs on mount/login; preserves dirty name/level/area/bio draft on receipt.
+   */
+  setContactPolicy = async (desired: 'requests' | 'closed') => {
+    const { actor, profile, status, command } = this.state;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
+    if (profile.version < 1) {
+      this.show({ notice: 'Сначала сохраните игровой профиль.' });
+      return;
+    }
+    if (profile.contactPolicy === desired) return;
+    const packet = Object.freeze({
+      kind: 'contactPolicy' as const,
+      actor: Object.freeze({ ...actor }),
+      key: this.random(),
+      body: Object.freeze({ expectedVersion: profile.version, contactPolicy: desired }),
+    });
     await this.dispatch(packet, actor);
   };
   reconcile = async () => {
@@ -450,21 +538,45 @@ export class ProfileCoordinator {
     try {
       const profile = await this.port.send(packet, authority);
       if (!valid()) return;
+      if (packet.kind === 'contactPolicy') {
+        const { body } = packet;
+        if (profile.version <= body.expectedVersion || profile.contactPolicy !== body.contactPolicy) throw new ProfileError('invalid');
+        // Authoritative policy/version only — never wipe unsaved name/level/area/bio draft.
+        this.show({
+          profile,
+          command: undefined,
+          status: 'ready',
+          readIntent: null,
+          notice: profile.contactPolicy === 'requests'
+            ? 'Личные сообщения разрешены.'
+            : 'Личные сообщения выключены. Новые входящие не принимаются; история переписок сохраняется.',
+        });
+        if (!this.state.cities.length) this.show({ status: 'idle' });
+        return;
+      }
       const { body } = packet;
       if (profile.version <= body.expectedVersion || profile.displayName !== body.displayName || profile.cityId !== body.cityId
           || profile.areaKey !== body.areaKey || profile.bio !== body.bio || !sameStoredLevel(profile.level, body.level)) throw new ProfileError('invalid');
-      this.show({ profile, draft: form(profile), command: undefined, status: 'ready', notice: 'Профиль сохранён.' });
+      this.show({ profile, draft: form(profile), command: undefined, status: 'ready', readIntent: null, notice: 'Профиль сохранён.' });
       // A restored UNKNOWN has no catalog yet. Read only on the next explicit editor load.
       if (!this.state.cities.length) this.show({ status: 'idle' });
     } catch (error) {
       if (!valid()) return;
       if (error instanceof ProfileError && error.kind === 'business' && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS') {
         const stale = error.status === 409;
-        this.show({ command: undefined, status: stale ? 'stale' : 'ready', notice: stale
-          ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'
-          : moderationCodes.includes(error.code) ? 'Изменения не сохранены. Проверьте публичный текст или повторите позже. Введённые данные сохранены в форме.'
-          : 'Изменения не сохранены. Проверьте поля и повторите.' });
-      } else this.show({ command: { packet, status: 'unknown' }, notice: 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
+        this.show({
+          command: undefined,
+          status: stale ? 'stale' : 'ready',
+          readIntent: stale ? 'rebase' : this.state.readIntent,
+          notice: stale
+            ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'
+            : packet.kind === 'contactPolicy' ? 'Настройка личных сообщений не сохранена. Проверьте соединение или повторите.'
+            : moderationCodes.includes(error.code) ? 'Изменения не сохранены. Проверьте публичный текст или повторите позже. Введённые данные сохранены в форме.'
+            : 'Изменения не сохранены. Проверьте поля и повторите.',
+        });
+      } else this.show({ command: { packet, status: 'unknown' }, notice: packet.kind === 'contactPolicy'
+        ? 'Результат настройки личных сообщений неизвестен. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
+        : 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
     }
   }
 }

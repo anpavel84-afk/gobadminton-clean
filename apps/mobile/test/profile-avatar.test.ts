@@ -371,7 +371,7 @@ test('raw binary native avatar port never JSON.stringifies body; logout forgets 
   assert.equal(pkg.dependencies['expo-image-manipulator'], '58.0.16');
   assert.equal(pkg.dependencies['expo-file-system'], '58.0.13');
   const app = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8'));
-  assert.equal(app.expo.android.versionCode, 23);
+  assert.equal(app.expo.android.versionCode, 24);
   const picker = app.expo.plugins.find((p: unknown) => Array.isArray(p) && p[0] === 'expo-image-picker');
   assert.deepEqual(picker[1], { photosPermission: false, cameraPermission: false, microphonePermission: false });
   assert.ok(app.expo.android.blockedPermissions.includes('android.permission.RECORD_AUDIO'));
@@ -547,6 +547,7 @@ test('authoritative GET rebase preserves dirty bio and adopts concurrent name/ve
       read: async () => text.getSnapshot().profile!,
       cities: async () => [{ id: 'c', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' }],
       send: async (packet) => {
+        assert.equal(packet.kind, 'profile');
         savedVersion = packet.body.expectedVersion;
         return { ...text.getSnapshot().profile!, version: packet.body.expectedVersion + 1, bio: packet.body.bio };
       },

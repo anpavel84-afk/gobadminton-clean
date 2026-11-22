@@ -472,6 +472,7 @@ test('root profile owner never copies email-looking auth name; UNKNOWN reauth re
   s.auth.profile.update({displayName:'Публичное имя',cityId:'city',areaKey:'sokol',bio:'О себе частное',levelChoice:{kind:'ntrp',levelId:'3.5'}});
   await s.auth.profile.save(); assert.equal(lost,true);
   const packet = s.auth.profile.getSnapshot().command!.packet;
+  if (packet.kind !== 'profile') throw new Error('expected profile packet');
   assert.equal(packet.body.areaKey,'sokol'); assert.equal(packet.body.bio,'О себе частное');
   assert.deepEqual(packet.body.level,{scaleId:'ntrp',scaleVersion:1,levelId:'3.5',provenance:'self_declared'});
   // Loss of verified identity quarantines private state. Starting reauth is not explicit logout.
@@ -502,7 +503,9 @@ test('root profile owner never copies email-looking auth name; UNKNOWN reauth re
   s.auth.profile.update({displayName:'Следующее имя',areaKey:'метро',bio:'второе',levelChoice:{kind:'pilot',levelId:'beginner'}});
   s.setHandler(async () => { throw new Error('unknown again'); }); await s.auth.profile.save();
   assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
-  assert.equal(s.auth.profile.getSnapshot().command?.packet.body.areaKey,'метро');
+  assert.equal(s.auth.profile.getSnapshot().command?.packet.kind,'profile');
+  const pendingPacket = s.auth.profile.getSnapshot().command?.packet;
+  assert.equal(pendingPacket?.kind === 'profile' ? pendingPacket.body.areaKey : undefined,'метро');
   await s.auth.logout(); assert.equal(s.auth.profile.getSnapshot().command,undefined); assert.equal(s.auth.profile.getSnapshot().profile,null);
   assert.deepEqual(s.auth.profile.getSnapshot().draft,emptyFive);
 });

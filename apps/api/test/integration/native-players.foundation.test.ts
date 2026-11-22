@@ -209,6 +209,55 @@ run("bounded native public Players principal opt-in", () => {
       expect(await read(a)).toEqual(stable);
     }
   });
+  it("native bearer contactPolicy-only on/off readback with existing disposable fixture; no incidental profile fields", async () => {
+    const a = await actor();
+    await profile(a, "Policy Owner");
+    const url = "/v1/me/social-profile";
+    const read = async () => {
+      const response = await app.inject({ url, headers: bearer(a) });
+      expect(response.statusCode).toBe(200);
+      return response.json();
+    };
+    const before = await read();
+    const closeKey = randomUUID();
+    const close = await app.inject({
+      method: "PATCH", url, headers: bearer(a, closeKey),
+      payload: { expectedVersion: before.version, contactPolicy: "closed" },
+    });
+    expect(close.statusCode).toBe(200);
+    const closed = close.json();
+    expect(closed.version).toBe(before.version + 1);
+    expect(closed.contactPolicy).toBe("closed");
+    expect(closed.displayName).toBe(before.displayName);
+    expect(closed.cityId).toBe(before.cityId);
+    expect(closed.directoryVisible).toBe(before.directoryVisible);
+    expect(closed.socialEligible).toBe(before.socialEligible);
+    expect(await read()).toEqual(closed);
+    const replay = await app.inject({
+      method: "PATCH", url, headers: bearer(a, closeKey),
+      payload: { expectedVersion: before.version, contactPolicy: "closed" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(closed);
+    const openKey = randomUUID();
+    const open = await app.inject({
+      method: "PATCH", url, headers: bearer(a, openKey),
+      payload: { expectedVersion: closed.version, contactPolicy: "requests" },
+    });
+    expect(open.statusCode).toBe(200);
+    const opened = open.json();
+    expect(opened.contactPolicy).toBe("requests");
+    expect(opened.version).toBe(closed.version + 1);
+    expect(await read()).toEqual(opened);
+    const stale = await app.inject({
+      method: "PATCH", url, headers: bearer(a),
+      payload: { expectedVersion: closed.version, contactPolicy: "closed" },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe("VERSION_CONFLICT");
+    expect(await read()).toEqual(opened);
+  });
+
   it("keeps own PATCH cookie Origin/CSRF and native malformed/revoked/disabled/mixed authority gates without anonymous fallback", async () => {
     const a = await actor(), inactive = await actor(), url = "/v1/me/social-profile";
     const own = await app.inject({ url, headers: bearer(a) }); expect(own.statusCode).toBe(200);
