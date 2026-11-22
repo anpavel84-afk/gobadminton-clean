@@ -48,6 +48,8 @@ export type RoleLaneState = {
 
 export type RoleReputationCardState = {
   gameId: string | null;
+  /** Profile-surface peer; mutually exclusive with gameId provenance. */
+  publicPlayerId: string | null;
   wantTraining: boolean;
   expanded: boolean;
   organization: RoleLaneState;
@@ -59,6 +61,13 @@ export type RoleReputationPorts = {
   byHandle: (
     roleHandle: string,
     query: { gameId: string; cursor?: string; limit?: number },
+    signal?: AbortSignal,
+  ) => Promise<RoleReputationSummary>;
+  /** PUBLIC player profile role lane — never invents a gameId. Optional so game cards stay unchanged. */
+  playerRole?: (
+    publicPlayerId: string,
+    role: RoleKind,
+    query?: { cursor?: string; limit?: number },
     signal?: AbortSignal,
   ) => Promise<RoleReputationSummary>;
 };
@@ -236,6 +245,34 @@ export function roleReputationPath(
   return `/role-reputations/${encodeURIComponent(handle)}?${params}`;
 }
 
+const PUBLIC_PLAYER_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+function publicPlayerIdValue(value: unknown): string {
+  if (!text(value) || !PUBLIC_PLAYER_ID.test(value)) throw new PublicApiError('invalid');
+  return value;
+}
+
+/** PUBLIC player-profile role path — no gameId; cursor/limit optional. */
+export function playerRoleReputationPath(
+  publicPlayerId: string,
+  role: RoleKind,
+  query: { cursor?: string; limit?: number } = {},
+): string {
+  const id = publicPlayerIdValue(publicPlayerId);
+  if (role !== 'organization' && role !== 'training') throw new PublicApiError('invalid');
+  if (query.cursor !== undefined && (!query.cursor || query.cursor.length > 4096)) {
+    throw new PublicApiError('invalid');
+  }
+  if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 50)) {
+    throw new PublicApiError('invalid');
+  }
+  const params = new URLSearchParams();
+  if (query.cursor) params.set('cursor', query.cursor);
+  if (query.limit) params.set('limit', String(query.limit));
+  const qs = params.toString();
+  return `/players/${encodeURIComponent(id)}/role-reputations/${role}${qs ? `?${qs}` : ''}`;
+}
+
 function ruForm(count: number, one: string, few: string, many: string): string {
   const n10 = count % 10;
   const n100 = count % 100;
@@ -302,12 +339,14 @@ function appendItems(
 }
 
 /**
- * Per-card public role-history owner. Loads only after explicit expand.
- * Game/role switches and collapse retire in-flight work so late payloads cannot cross cards.
+ * Per-card / profile public role-history owner.
+ * Game cards load only after explicit expand; profile binds both lanes immediately.
+ * Game/role/peer switches and collapse retire in-flight work so late payloads cannot cross scopes.
  */
 export class RoleReputationCoordinator {
   private state: RoleReputationCardState = {
     gameId: null,
+    publicPlayerId: null,
     wantTraining: false,
     expanded: false,
     organization: emptyLane('organization'),
@@ -372,10 +411,15 @@ export class RoleReputationCoordinator {
   /** Bind discovery card identity. Different game clears expanded content immediately. */
   bind(gameId: string, options: { wantTraining: boolean }) {
     if (!isVenueId(gameId)) throw new PublicApiError('invalid');
-    if (this.state.gameId === gameId && this.state.wantTraining === options.wantTraining) return;
+    if (
+      this.state.gameId === gameId
+      && this.state.publicPlayerId === null
+      && this.state.wantTraining === options.wantTraining
+    ) return;
     this.retire();
     this.show({
       gameId,
+      publicPlayerId: null,
       wantTraining: options.wantTraining,
       expanded: false,
       organization: emptyLane('organization'),
@@ -383,18 +427,40 @@ export class RoleReputationCoordinator {
     });
   }
 
+  /**
+   * Bind public player profile surface — both organization and training lanes load immediately.
+   * Peer change clears prior reviews immediately; never invents a gameId.
+   */
+  bindPlayer(publicPlayerId: string) {
+    if (!this.ports.playerRole) throw new PublicApiError('invalid');
+    const id = publicPlayerIdValue(publicPlayerId);
+    if (this.state.publicPlayerId === id && this.state.gameId === null && this.state.expanded) return;
+    this.retire();
+    this.show({
+      gameId: null,
+      publicPlayerId: id,
+      wantTraining: true,
+      expanded: true,
+      organization: emptyLane('organization'),
+      training: emptyLane('training'),
+    });
+    void this.loadRole('organization');
+    void this.loadRole('training');
+  }
+
   collapse = () => {
-    if (!this.state.expanded) return;
+    if (!this.state.expanded && !this.state.publicPlayerId) return;
     this.retire();
     this.show({
       expanded: false,
+      publicPlayerId: null,
       organization: emptyLane('organization'),
       training: emptyLane('training'),
     });
   };
 
   expand = () => {
-    if (!this.state.gameId) return;
+    if (!this.state.gameId || this.state.publicPlayerId) return;
     if (this.state.expanded) return;
     this.show({ expanded: true });
     void this.loadRole('organization');
@@ -402,27 +468,86 @@ export class RoleReputationCoordinator {
   };
 
   toggle = () => {
+    if (this.state.publicPlayerId) return;
     if (this.state.expanded) this.collapse();
     else this.expand();
   };
 
   retry = (role: RoleKind) => {
-    if (!this.state.expanded || !this.state.gameId) return;
+    if (!this.state.expanded) return;
     if (role === 'training' && !this.state.wantTraining) return;
+    if (!this.state.gameId && !this.state.publicPlayerId) return;
     void this.loadRole(role);
   };
 
   loadMore = (role: RoleKind) => {
-    if (!this.state.expanded || !this.state.gameId) return;
+    if (!this.state.expanded) return;
     const lane = this.state[this.laneKey(role)];
     if (lane.phase !== 'ready' || !lane.summary || lane.loadingMore) return;
     if (lane.summary.availability !== 'available' || !lane.summary.nextCursor) return;
-    const gameId = this.state.gameId;
     const handle = lane.summary.roleHandle;
     const cursorValue = lane.summary.nextCursor;
     const key = `more:${role}`;
     const { signal, alive } = this.ticket(key);
     this.setLane(role, { ...lane, loadingMore: true, moreError: false });
+
+    if (this.state.publicPlayerId) {
+      const publicPlayerId = this.state.publicPlayerId;
+      const playerRole = this.ports.playerRole;
+      if (!playerRole) {
+        this.setLane(role, { ...lane, loadingMore: false, moreError: true });
+        return;
+      }
+      void (async () => {
+        try {
+          const page = await playerRole(publicPlayerId, role, { cursor: cursorValue, limit: 20 }, signal);
+          if (!alive()) return;
+          if (this.state.publicPlayerId !== publicPlayerId) return;
+          const current = this.state[this.laneKey(role)];
+          if (!current.summary || current.summary.roleHandle !== handle) return;
+          if (current.summary.nextCursor !== cursorValue) return;
+          if (page.roleHandle !== handle || page.role !== role) throw new PublicApiError('invalid');
+          if (page.availability !== 'available') {
+            this.setLane(role, {
+              role, phase: 'unavailable', summary: page, loadingMore: false, moreError: false,
+            });
+            return;
+          }
+          this.setLane(role, {
+            role,
+            phase: 'ready',
+            loadingMore: false,
+            moreError: false,
+            summary: {
+              ...page,
+              items: appendItems(current.summary.items, page.items),
+              nextCursor: page.nextCursor,
+            },
+          });
+        } catch (error: unknown) {
+          if (!alive()) return;
+          if (this.state.publicPlayerId !== publicPlayerId) return;
+          const current = this.state[this.laneKey(role)];
+          if (!current.summary || current.summary.roleHandle !== handle) return;
+          if (error instanceof PublicApiError && error.kind === 'unavailable') {
+            this.setLane(role, {
+              role, phase: 'unavailable', summary: null, loadingMore: false, moreError: false,
+            });
+            return;
+          }
+          this.setLane(role, {
+            ...current,
+            phase: 'ready',
+            loadingMore: false,
+            moreError: true,
+          });
+        }
+      })();
+      return;
+    }
+
+    const gameId = this.state.gameId;
+    if (!gameId) return;
     // Fulfilment throws (e.g. wrong-role page) must not escape .then(success, error) —
     // that path is unhandled and would leave loadingMore stuck true.
     void (async () => {
@@ -477,12 +602,41 @@ export class RoleReputationCoordinator {
   };
 
   private async loadRole(role: RoleKind) {
-    const gameId = this.state.gameId;
-    if (!gameId || !this.state.expanded) return;
+    if (!this.state.expanded) return;
     if (role === 'training' && !this.state.wantTraining) return;
     const key = `load:${role}`;
     const { signal, alive } = this.ticket(key);
     this.setLane(role, { role, phase: 'loading', summary: null, loadingMore: false, moreError: false });
+
+    if (this.state.publicPlayerId) {
+      const publicPlayerId = this.state.publicPlayerId;
+      const playerRole = this.ports.playerRole;
+      if (!playerRole) {
+        this.setLane(role, { role, phase: 'error', summary: null, loadingMore: false, moreError: false });
+        return;
+      }
+      try {
+        const summary = await playerRole(publicPlayerId, role, { limit: 3 }, signal);
+        if (!alive() || this.state.publicPlayerId !== publicPlayerId || !this.state.expanded) return;
+        if (summary.role !== role) throw new PublicApiError('invalid');
+        if (summary.availability !== 'available') {
+          this.setLane(role, { role, phase: 'unavailable', summary, loadingMore: false, moreError: false });
+          return;
+        }
+        this.setLane(role, { role, phase: 'ready', summary, loadingMore: false, moreError: false });
+      } catch (error) {
+        if (!alive() || this.state.publicPlayerId !== publicPlayerId || !this.state.expanded) return;
+        if (error instanceof PublicApiError && error.kind === 'unavailable') {
+          this.setLane(role, { role, phase: 'unavailable', summary: null, loadingMore: false, moreError: false });
+          return;
+        }
+        this.setLane(role, { role, phase: 'error', summary: null, loadingMore: false, moreError: false });
+      }
+      return;
+    }
+
+    const gameId = this.state.gameId;
+    if (!gameId) return;
     try {
       const summary = await this.ports.gameRole(gameId, role, signal);
       if (!alive() || this.state.gameId !== gameId || !this.state.expanded) return;

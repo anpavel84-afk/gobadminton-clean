@@ -9,6 +9,7 @@ import {
   gameRoleReputationPath,
   heldHistoryLabel,
   parseRoleReputationSummary,
+  playerRoleReputationPath,
   publishedReviewsLabel,
   roleReputationPath,
 } from '../src/role-reputation.ts';
@@ -16,6 +17,7 @@ import type { RoleReputationSummary } from '../src/role-reputation.ts';
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const gameId = '11111111-1111-4111-8111-111111111111';
+const peerId = 'public-peer-a';
 const orgHandle = 'a'.repeat(32);
 const trainHandle = 'b'.repeat(32);
 
@@ -118,6 +120,18 @@ test('credential-free PublicApi routes stay fixed-origin and omit credentials', 
         nextCursor: null,
       }));
     }
+    if (path.includes(`/players/${peerId}/role-reputations/organization`)) {
+      return Response.json(summary({
+        role: 'organization',
+        roleHandle: orgHandle,
+        publishedReviewCount: 1,
+        items: [review('f'.repeat(32), 'organization', 'Профиль')],
+        nextCursor: 'peer-cur',
+      }));
+    }
+    if (path.includes(`/players/${peerId}/role-reputations/training`)) {
+      return new Response(null, { status: 404 });
+    }
     return new Response(null, { status: 404 });
   });
 
@@ -126,14 +140,27 @@ test('credential-free PublicApi routes stay fixed-origin and omit credentials', 
     roleReputationPath(orgHandle, { gameId, cursor: 'cur', limit: 20 }),
     `/role-reputations/${orgHandle}?gameId=${gameId}&cursor=cur&limit=20`,
   );
+  assert.equal(
+    playerRoleReputationPath(peerId, 'organization', { limit: 3 }),
+    `/players/${peerId}/role-reputations/organization?limit=3`,
+  );
+  assert.equal(
+    playerRoleReputationPath(peerId, 'organization', { cursor: 'peer-cur', limit: 20 }),
+    `/players/${peerId}/role-reputations/organization?cursor=peer-cur&limit=20`,
+  );
+  assert.throws(() => playerRoleReputationPath('bad id', 'organization'), PublicApiError);
+  assert.throws(() => roleReputationPath(orgHandle, { gameId: undefined as unknown as string }), PublicApiError);
 
   const first = await api.gameRoleReputation(gameId, 'organization');
   assert.equal(first.roleHandle, orgHandle);
   assert.equal(first.items.length, 1);
   const page = await api.roleReputation(orgHandle, { gameId, cursor: 'cur', limit: 20 });
   assert.equal(page.items[0]?.text, 'Ещё');
+  const profile = await api.playerRoleReputation(peerId, 'organization', { limit: 3 });
+  assert.equal(profile.items[0]?.text, 'Профиль');
+  assert.equal(profile.nextCursor, 'peer-cur');
 
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   for (const call of calls) {
     assert.ok(call.url.startsWith(`${API_ORIGIN}/v1/`));
     assert.equal(call.init.method, 'GET');
@@ -142,8 +169,10 @@ test('credential-free PublicApi routes stay fixed-origin and omit credentials', 
     assert.equal((call.init.headers as Record<string, string>).Authorization, undefined);
     assert.equal((call.init.headers as Record<string, string>).Cookie, undefined);
   }
+  assert.ok(calls[2]?.url.includes(`/players/${peerId}/role-reputations/organization?limit=3`));
 
   await assert.rejects(api.gameRoleReputation(gameId, 'training'), (e: unknown) => e instanceof PublicApiError && e.kind === 'unavailable');
+  await assert.rejects(api.playerRoleReputation(peerId, 'training'), (e: unknown) => e instanceof PublicApiError && e.kind === 'unavailable');
   assert.throws(() => gameRoleReputationPath('not-uuid', 'organization'), PublicApiError);
   assert.throws(() => roleReputationPath('short', { gameId }), PublicApiError);
 });
@@ -491,9 +520,133 @@ test('#522 loadMore authoritative unavailable retires public material', async ()
   assert.equal(after.loadingMore, false);
 });
 
-test('#522 native role-history source wiring, composition slot, APK24 counter', () => {
+test('#522 profile bindPlayer loads both lanes, paginates on player path, fences peer change', async () => {
+  const peerB = 'public-peer-b';
+  let orgLoads = 0;
+  let trainLoads = 0;
+  let moreLoads = 0;
+  const calls: Array<{ id: string; role: string; cursor?: string }> = [];
+  let releaseMore: () => void = () => {};
+  const coordinator = new RoleReputationCoordinator({
+    gameRole: async () => {
+      throw new Error('game path must stay unused');
+    },
+    byHandle: async () => {
+      throw new Error('game handle path must stay unused');
+    },
+    playerRole: async (id, role, query) => {
+      calls.push({ id, role, cursor: query?.cursor });
+      if (role === 'training') {
+        trainLoads += 1;
+        return summary({ role: 'training', roleHandle: trainHandle, publishedReviewCount: 0, heldGamesCount: null });
+      }
+      if (query?.cursor) {
+        moreLoads += 1;
+        await new Promise<void>(resolve => { releaseMore = resolve; });
+        return summary({
+          role: 'organization',
+          roleHandle: orgHandle,
+          publishedReviewCount: 2,
+          items: [
+            review('1'.repeat(32), 'organization', 'Первый'),
+            review('2'.repeat(32), 'organization', 'Второй'),
+          ],
+          nextCursor: null,
+        });
+      }
+      orgLoads += 1;
+      return summary({
+        role: 'organization',
+        roleHandle: orgHandle,
+        publishedReviewCount: 2,
+        items: [review('1'.repeat(32), 'organization', 'Первый')],
+        nextCursor: 'cursor-profile',
+      });
+    },
+  });
+
+  coordinator.bindPlayer(peerId);
+  await flush();
+  assert.equal(coordinator.getSnapshot().publicPlayerId, peerId);
+  assert.equal(coordinator.getSnapshot().gameId, null);
+  assert.equal(coordinator.getSnapshot().expanded, true);
+  assert.equal(coordinator.getSnapshot().organization.phase, 'ready');
+  assert.equal(coordinator.getSnapshot().training.phase, 'ready');
+  assert.equal(orgLoads, 1);
+  assert.equal(trainLoads, 1);
+  assert.ok(calls.every(c => c.id === peerId));
+  assert.ok(calls.some(c => c.role === 'organization' && c.cursor === undefined));
+  assert.ok(calls.some(c => c.role === 'training'));
+
+  coordinator.loadMore('organization');
+  assert.equal(coordinator.getSnapshot().organization.loadingMore, true);
+  assert.equal(moreLoads, 1);
+  releaseMore();
+  await flush();
+  assert.equal(coordinator.getSnapshot().organization.summary?.items.map(i => i.text).join('|'), 'Первый|Второй');
+  assert.equal(calls.filter(c => c.cursor === 'cursor-profile').length, 1);
+
+  // Peer A→B clears immediately; late page for A must not paint.
+  let releaseLate: () => void = () => {};
+  const late = new RoleReputationCoordinator({
+    gameRole: async () => { throw new Error('unused'); },
+    byHandle: async () => { throw new Error('unused'); },
+    playerRole: async (id, role, query) => {
+      if (id === peerId && query?.cursor) {
+        await new Promise<void>(resolve => { releaseLate = resolve; });
+        return summary({
+          role: 'organization',
+          roleHandle: orgHandle,
+          publishedReviewCount: 1,
+          items: [review('9'.repeat(32), 'organization', 'Поздний')],
+        });
+      }
+      if (id === peerB) {
+        return summary({
+          role,
+          roleHandle: role === 'organization' ? orgHandle : trainHandle,
+          heldGamesCount: role === 'organization' ? 0 : null,
+          publishedReviewCount: 0,
+        });
+      }
+      return summary({
+        role: 'organization',
+        roleHandle: orgHandle,
+        publishedReviewCount: 1,
+        items: [review('8'.repeat(32), 'organization', 'Старт')],
+        nextCursor: 'late-cur',
+      });
+    },
+  });
+  late.bindPlayer(peerId);
+  await flush();
+  late.loadMore('organization');
+  late.bindPlayer(peerB);
+  releaseLate();
+  await flush();
+  assert.equal(late.getSnapshot().publicPlayerId, peerB);
+  assert.equal(late.getSnapshot().organization.summary?.items.length ?? 0, 0);
+  assert.doesNotMatch(JSON.stringify(late.getSnapshot().organization.summary), /Поздний/);
+
+  // Null/unavailable is not zero events.
+  const hidden = new RoleReputationCoordinator({
+    gameRole: async () => { throw new Error('unused'); },
+    byHandle: async () => { throw new Error('unused'); },
+    playerRole: async () => { throw new PublicApiError('unavailable', 404); },
+  });
+  hidden.bindPlayer(peerId);
+  await flush();
+  assert.equal(hidden.getSnapshot().organization.phase, 'unavailable');
+  assert.equal(hidden.getSnapshot().organization.summary, null);
+  assert.equal(hidden.getSnapshot().training.phase, 'unavailable');
+});
+
+test('#522 native role-history source wiring, composition slot, APK25 counter', () => {
   const card = read('../src/components/game-card.tsx');
   const disclosure = read('../src/components/game-role-reputation.tsx');
+  const profile = read('../src/components/player-role-reputation.tsx');
+  const detail = read('../app/players/[publicPlayerId].tsx');
+  const nav = read('../src/components/main-navigation.tsx');
   const api = read('../src/public-api.ts');
   const module = read('../src/role-reputation.ts');
   assert.match(card, /GameRoleReputationDisclosure/);
@@ -505,6 +658,7 @@ test('#522 native role-history source wiring, composition slot, APK24 counter', 
   assert.match(disclosure, /actions\?: ReactNode/);
   // Toggle, then actions slot, then expanded details region (not actions after body).
   assert.match(disclosure, /<\/Pressable>\s*\{actions\}\s*\{expanded \? <View style=\{styles\.details\}/);
+  assert.match(disclosure, /export function RoleLaneView/);
   assert.match(disclosure, /Не удалось загрузить следующие отзывы/);
   assert.match(disclosure, /Отзывы и история/);
   assert.match(disclosure, /basis_under_review/);
@@ -518,13 +672,29 @@ test('#522 native role-history source wiring, composition slot, APK24 counter', 
   assert.match(disclosure, /rotate:\s*'180deg'/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
   assert.doesNotMatch(disclosure, /Поделиться опытом|Сообщить о нарушении|canReply|canReport/);
+  assert.match(profile, /PlayerRoleReputation/);
+  assert.match(profile, /bindPlayer/);
+  assert.match(profile, /playerRoleReputation/);
+  assert.doesNotMatch(profile, /gameId|Отзывы и история|Поделиться опытом|canReply|canReport/);
+  assert.match(detail, /PlayerRoleReputation/);
+  assert.match(detail, /NativeContactAction[\s\S]*PlayerRoleReputation[\s\S]*NativeSafety/);
   assert.match(api, /gameRoleReputation/);
   assert.match(api, /roleReputation/);
+  assert.match(api, /playerRoleReputation/);
   assert.match(api, /credentials: 'omit'/);
-  assert.match(api, /gameRoleReputationPath|roleReputationPath|parseRoleReputationSummary/);
+  assert.match(api, /playerRoleReputationPath/);
   assert.match(module, /RoleReputationCoordinator/);
+  assert.match(module, /bindPlayer/);
+  assert.match(module, /playerRoleReputationPath/);
   assert.match(module, /moreError/);
   assert.match(module, /gameId/);
+  assert.match(module, /publicPlayerId/);
   assert.match(module, /phase: 'error'/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 24);
+  // Game handle path still requires gameId — profile path is separate.
+  assert.match(module, /if \(!isVenueId\(query\.gameId\)\) throw new PublicApiError\('invalid'\)/);
+  assert.match(nav, /mainNavCompactCells/);
+  assert.match(nav, /flexBasis: 'auto'/);
+  assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
+  assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 25);
 });

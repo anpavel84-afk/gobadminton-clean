@@ -70,7 +70,8 @@ export function GameRoleReputationDisclosure({
   </View>;
 }
 
-function RoleLaneView({
+/** Shared read-only role lane body — game disclosure and profile surface reuse the same rows/labels. */
+export function RoleLaneView({
   lane,
   onRetry,
   onMore,

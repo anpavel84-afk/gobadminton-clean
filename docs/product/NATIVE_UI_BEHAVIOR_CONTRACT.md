@@ -116,6 +116,30 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `contact-policy.test.ts` / profile·auth; optional API `native-players.foundation` bearer policy case; source APK counter 24 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 contactPolicy native parity source; not VERIFIED_SOURCE / not device PASS |
 
+## R-02 · Public player profile role history (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `PublicPlayerProfile` dual `RoleReputationPanel` + PUBLIC `GET /players/:publicPlayerId/role-reputations/:role`; native profile gate then direct lanes |
+| Entry | Native `/players/[publicPlayerId]` after `PlayerProfile` + contact, before safety — only when peer detail already loaded |
+| Trigger | Mount on authorized loaded peer; peer/scope change clears prior reviews immediately |
+| Expected | Separate organization then training lanes; confirmed-history / published-review wording unchanged; null/unavailable ≠ 0; player-scoped cursor pagination with role/roleHandle binding; preserve safe list on paging failure; clear on privacy/unavailable/peer change; no write/reply/report CTA; no fake gameId |
+| Non-scope | Role-review authoring; game-card disclosure redesign; auth/backend/contracts; PROD |
+| Evidence | Mobile unit `role-reputation.test.ts` / `public-api` / players composition; source APK counter 25 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL profile read parity; not VERIFIED_SOURCE / not device PASS |
+
+## N-01 · Compact bottom navigation large-text captions (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Astra compact-nav recommendation on accepted native `MainNavigation`; four WEB-parity labels |
+| Entry | Shared bottom tab row on ordinary main routes |
+| Trigger | Window width + horizontal safe-area + fontScale → equal-cell content width vs ~70×fontScale |
+| Expected | Baseline equal `flex:1` cells; compact intrinsic `flexBasis:auto`/`grow`/`shrink` so «Сообщения» fits single-line at 360dp/font 1.3; min 48×64 tap; wrap only when larger font genuinely cannot fit; no ellipsis/font cap/rename; Messages spoken name includes meaningful unread count |
+| Non-scope | Tab rename; redesign; fontScale disable; test-only geometry framework; PROD |
+| Evidence | Mobile unit `compact-layout.test.ts` / nav source; source APK counter 25 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — source layout contract; device/emulator proof still required |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.
