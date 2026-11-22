@@ -14,8 +14,9 @@ import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
 import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
 import type { ContactPacket } from './contact.ts';
-import { ProfileError, parseCoverReceipt, parseOwnAvatar, parseOwnProfile, profileWireBody } from './profile.ts';
-import type { AvatarReceipt, CoverReceipt, ProfilePacket } from './profile.ts';
+import { ProfileError, parseCoverReceipt, parseLookingIntent, parseOwnAvatar, parseOwnProfile, profileWireBody } from './profile.ts';
+import type { AvatarReceipt, CoverReceipt, LookingPacket, ProfileMutationPacket } from './profile.ts';
+import { lookingDeleteWire, lookingPutWire } from './looking-for-game.ts';
 import type { AvatarPacket } from './profile-avatar.ts';
 import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
@@ -368,8 +369,17 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       })() : {}),
     }, access, packet.key, false, false, true), packet.body.targetPublicPlayerId),
     ownProfile: async (access: string) => parseOwnProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, false, false, false, true)),
-    saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH',
+    saveOwnProfile: async (access: string, packet: ProfileMutationPacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH',
       profileWireBody(packet.body), access, packet.key, false, false, false, true)),
+    /** Closed looking PUT/DELETE — explicit 60|180 TTL on PUT; empty {} on DELETE; never GPS/consent fields. */
+    mutateOwnLooking: async (access: string, packet: LookingPacket) => {
+      if (packet.kind === 'lookingPut') {
+        return parseLookingIntent(await request('/me/looking-for-game', 'PUT',
+          lookingPutWire(packet.body), access, packet.key, false, false, false, true));
+      }
+      return parseLookingIntent(await request('/me/looking-for-game', 'DELETE',
+        lookingDeleteWire(), access, packet.key, false, false, false, true));
+    },
     /** Closed RAW BINARY avatar port — PUT/DELETE /me/avatar only; never JSON.stringify binary/multipart/base64. */
     mutateOwnAvatar: async (access: string, packet: AvatarPacket): Promise<AvatarReceipt> => {
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);

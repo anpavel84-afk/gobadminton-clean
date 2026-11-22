@@ -35,6 +35,7 @@ function ackFrom(packet: ProfilePacket, base: OwnProfile = emptyProfile): OwnPro
       contactPolicy: packet.body.contactPolicy,
     };
   }
+  if (packet.kind !== 'profile') throw new Error('expected profile packet');
   return {
     ...base,
     version: packet.body.expectedVersion + 1,
@@ -102,9 +103,9 @@ test('frozen name/city-only save uses returned versions on repeated edits and le
   const before = { ...stored };
   const s = setup({ read: () => api.ownProfile('private-access'), send: p => api.saveOwnProfile('private-access', p) });
   await edit(s.owner); await s.owner.save(); s.owner.update({ displayName: 'Следующее' }); await s.owner.save();
-  assert.deepEqual(s.sent.map(s => {
-    assert.equal(s.packet.kind, 'profile');
-    return { expectedVersion: s.packet.body.expectedVersion, displayName: s.packet.body.displayName, cityId: s.packet.body.cityId };
+  assert.deepEqual(s.sent.map(entry => {
+    if (entry.packet.kind !== 'profile') throw new Error('expected profile packet');
+    return { expectedVersion: entry.packet.body.expectedVersion, displayName: entry.packet.body.displayName, cityId: entry.packet.body.cityId };
   }),
     [{ expectedVersion: 7, displayName: 'Игрок', cityId: city.id }, { expectedVersion: 8, displayName: 'Следующее', cityId: city.id }]);
   assert.equal(s.owner.getSnapshot().profile?.version, 9);
@@ -121,8 +122,11 @@ test('double tap sends one immutable packet; cancel restores values and does not
   s.owner.cancel(); assertDraft(s.owner.getSnapshot().draft, emptyDraft); assert.equal(s.sent.length, 0);
   s.owner.update({ displayName: 'Игрок', cityId: city.id });
   const a = s.owner.save(), b = s.owner.save(); s.owner.cancel(); s.owner.update({ displayName: 'Changed' });
-  assert.equal(s.sent.length, 1); assert.ok(Object.isFrozen(s.sent[0]?.packet.body)); assert.ok(Object.isFrozen(s.sent[0]?.packet.actor));
-  gate.resolve(ackFrom(s.sent[0]!.packet)); await Promise.all([a,b]);
+  assert.equal(s.sent.length, 1);
+  const frozen = s.sent[0]!.packet;
+  if (frozen.kind !== 'profile') throw new Error('expected profile packet');
+  assert.ok(Object.isFrozen(frozen.body)); assert.ok(Object.isFrozen(frozen.actor));
+  gate.resolve(ackFrom(frozen)); await Promise.all([a,b]);
   assert.equal(s.owner.getSnapshot().profile?.displayName, 'Игрок');
 });
 test('UNKNOWN survives navigation/read and same-actor reauth: only explicit reconciliation sends same packet under new authority', async () => {
@@ -175,9 +179,11 @@ test('stale409 blocks editing/new save until explicit authoritative reread and d
   await s.owner.load(); assert.equal(s.sent.length, 1); assert.equal(s.owner.getSnapshot().draft.displayName, dto.displayName);
   assert.equal(s.owner.getSnapshot().readIntent, null);
   conflict = false; s.owner.update({ displayName: 'Проверенное' }); await s.owner.save();
-  assert.equal(s.sent[1]?.packet.kind, 'profile');
-  assert.equal(s.sent[1]?.packet.body.expectedVersion, 10);
-  assert.notEqual(s.sent[0]?.packet.key, s.sent[1]?.packet.key);
+  const saved = s.sent[1]?.packet;
+  if (!saved || saved.kind !== 'profile') throw new Error('expected profile packet');
+  assert.equal(saved.kind, 'profile');
+  assert.equal(saved.body.expectedVersion, 10);
+  assert.notEqual(s.sent[0]?.packet.key, saved.key);
 });
 test('controlled moderation errors retain editable form; 5xx, malformed receipt and in-progress keep UNKNOWN', async () => {
   for (const code of [...moderationCodes,'COMMAND_IN_PROGRESS','UNKNOWN','malformed']) {
@@ -214,6 +220,7 @@ for (const [status, code] of [[503, 'MODERATION_TEMPORARILY_UNAVAILABLE'], [503,
     } });
     await edit(s.owner); await s.owner.save();
     const original = s.sent[0]!.packet, wire = calls[0]!.body;
+    if (original.kind !== 'profile') throw new Error('expected profile packet');
     assert.ok(errors[0] instanceof ProfileError);
     assert.equal(errors[0].kind, 'network'); assert.equal(errors[0].status, status); assert.equal(errors[0].code, code);
     assert.equal(wire, JSON.stringify({ expectedVersion: 7, displayName: 'Игрок', cityId: city.id }));
@@ -398,6 +405,7 @@ test('save freezes cloned Level identity; caller/profile/draft aliases cannot mu
   assert.equal(draftLevel.kind, 'keep');
   await s.owner.save();
   const original = s.sent[0]!.packet;
+  if (original.kind !== 'profile') throw new Error('expected profile packet');
   assert.equal(original.kind, 'profile');
   const bodyLevel = original.body.level!;
   const wireBefore = JSON.stringify(profileWireBody(original.body));
@@ -423,9 +431,9 @@ test('save freezes cloned Level identity; caller/profile/draft aliases cannot mu
   await s.owner.reconcile();
   assert.strictEqual(s.sent[1]!.packet, original);
   assert.equal(s.sent[1]!.packet.key, keyBefore);
-  assert.equal(JSON.stringify(profileWireBody(s.sent[1]!.packet.body)), wireBefore);
-  assert.equal(s.sent[1]!.packet.kind, 'profile');
-  assert.deepEqual(s.sent[1]!.packet.body.level, {
+  assert.equal(JSON.stringify(profileWireBody(original.body)), wireBefore);
+  assert.equal(original.kind, 'profile');
+  assert.deepEqual(original.body.level, {
     scaleId: 'future-scale', scaleVersion: 9, levelId: 'opaque-level', provenance: 'self_declared',
   });
 });
@@ -437,6 +445,7 @@ test('explicit ntrp save freezes new Level; retained selection aliases cannot re
   const choice = s.owner.getSnapshot().draft.levelChoice;
   await s.owner.save();
   const packet = s.sent[0]!.packet;
+  if (packet.kind !== 'profile') throw new Error('expected profile packet');
   assert.equal(packet.kind, 'profile');
   const level = packet.body.level!;
   const wire = JSON.stringify(profileWireBody(packet.body));

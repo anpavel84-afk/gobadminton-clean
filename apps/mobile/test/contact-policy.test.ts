@@ -97,8 +97,10 @@ test('version0 cannot fake policy; ready version>=1 toggles; same value is no-op
   assert.equal(ready.sent.length, 0);
   await ready.owner.setContactPolicy('requests');
   assert.equal(ready.sent.length, 1);
-  assert.equal(ready.sent[0]!.packet.kind, 'contactPolicy');
-  assert.deepEqual(ready.sent[0]!.packet.body, { expectedVersion: 2, contactPolicy: 'requests' });
+  const policyPacket = ready.sent[0]!.packet;
+  if (policyPacket.kind !== 'contactPolicy') throw new Error('expected contactPolicy packet');
+  assert.equal(policyPacket.kind, 'contactPolicy');
+  assert.deepEqual(policyPacket.body, { expectedVersion: 2, contactPolicy: 'requests' });
 });
 
 test('shared writer locks: peer busy and pending profile save block policy; policy blocks profile save', async () => {
@@ -130,6 +132,7 @@ test('shared writer locks: peer busy and pending profile save block policy; poli
     send: async (packet, authority): Promise<OwnProfile> => {
       sent.push({ packet, authority });
       if (packet.kind === 'contactPolicy') return gate2.promise;
+      if (packet.kind !== 'profile') throw new Error('expected profile packet');
       return {
         ...base, version: packet.body.expectedVersion + 1, displayName: packet.body.displayName, cityId: packet.body.cityId,
         areaKey: packet.body.areaKey, bio: packet.body.bio, level: packet.body.level,
@@ -175,6 +178,7 @@ test('policy 409/401/network UNKNOWN with exact packet retry; late actor ACK ign
   unknown.owner.update({ displayName: 'Локальное' });
   await unknown.owner.setContactPolicy('closed');
   const original = unknown.sent[0]!.packet;
+  if (original.kind !== 'contactPolicy') throw new Error('expected contactPolicy packet');
   assert.equal(original.kind, 'contactPolicy');
   assert.equal(unknown.owner.getSnapshot().command?.status, 'unknown');
   assert.equal(unknown.owner.getSnapshot().draft.displayName, 'Локальное');
@@ -445,6 +449,7 @@ test('unknown policy → same-actor reauth null profile → own-profile retry in
   await s.owner.load();
   await s.owner.setContactPolicy('closed');
   const original = s.sent[0]!.packet;
+  if (original.kind !== 'contactPolicy') throw new Error('expected contactPolicy packet');
   const originalKey = original.key;
   assert.equal(original.kind, 'contactPolicy');
   assert.equal(s.owner.getSnapshot().command?.status, 'unknown');

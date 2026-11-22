@@ -1,21 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { Pressable, Switch, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
+import { lookingIntentActive } from '../looking-for-game.ts';
 import type { PublicPlayer } from '../players.ts';
 import { playerLevelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
 import { CoverEditor } from './cover-editor.tsx';
+import { LookingForGameCard } from './looking-for-game.tsx';
 import { PlayerProfileHero } from './player-hero.tsx';
 import { Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
-
-function lookingActive(intent: { state: string; expiresAt: string | null } | null): boolean {
-  if (!intent || intent.state !== 'active') return false;
-  if (intent.expiresAt) {
-    const expires = Date.parse(intent.expiresAt);
-    if (!Number.isNaN(expires) && expires <= Date.now()) return false;
-  }
-  return true;
-}
 
 export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
   onEdit: () => void; onSettings: () => void; settingsOpen: boolean;
@@ -38,22 +31,33 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     level: profile.level,
     bio: profile.bio,
     trainer: profile.trainer,
-    lookingForGame: lookingActive(profile.lookingForGame),
+    lookingForGame: lookingIntentActive(profile.lookingForGame),
     avatar: { uploadedUrl: profile.avatar.uploadedUrl, providerUrl: null },
     cover: profile.cover ?? { uploadedUrl: null },
   } : null;
   const peerBusy = auth.avatar.blocksEdits() || auth.cover.blocksEdits();
   const coverLocked = !!state.command || state.status !== 'ready' || peerBusy;
   const policyLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile || profile.version < 1;
+  const lookingLocked = !!state.command || state.status !== 'ready' || peerBusy || !profile;
   const policyPending = state.command?.packet.kind === 'contactPolicy';
+  const lookingPending = state.command?.packet.kind === 'lookingPut' || state.command?.packet.kind === 'lookingDelete';
   // Reachable when same-actor reauth restores command with profile still null (load refuses).
-  // With profile present, same fragment stays inside the messaging card only — no duplicate.
+  // With profile present, same fragment stays inside the owning card only — no duplicate.
   const pendingPolicyStatus = <>
-    {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+    {state.noticeOwner === 'contactPolicy' && state.notice &&
+      <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
     {policyPending && state.command?.status === 'sending' &&
       <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем настройку…</Label>}
     {policyPending && state.command?.status === 'unknown' &&
       <PrimaryButton title="Повторить прежнюю настройку личных сообщений" onPress={() => void owner.reconcile()} />}
+  </>;
+  const pendingLookingStatus = <>
+    {state.noticeOwner === 'looking' && state.notice &&
+      <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+    {lookingPending && state.command?.status === 'sending' &&
+      <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Сохраняем статус «Ищу игру»…</Label>}
+    {lookingPending && state.command?.status === 'unknown' &&
+      <PrimaryButton title="Повторить прежний статус «Ищу игру»" onPress={() => void owner.reconcile()} />}
   </>;
   return <View style={{ gap: 12 }}>
     {state.status === 'loading' && <Loading title="Загружаем профиль и города…" />}
@@ -62,6 +66,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     {state.status === 'stale' &&
       <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
     {!profile && policyPending && pendingPolicyStatus}
+    {!profile && lookingPending && pendingLookingStatus}
     {profile && player && <>
       <PlayerProfileHero
         player={player}
@@ -105,6 +110,15 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
         <Label>Район / метро: {profile.areaKey || 'Не указан'}</Label>
         <Label>О себе: {profile.bio || 'Не заполнено'}</Label>
       </View>
+      <LookingForGameCard
+        owner={owner}
+        profile={profile}
+        locked={lookingLocked}
+        cityName={cityName}
+        notice={state.noticeOwner === 'looking' ? state.notice : null}
+        pendingLooking={lookingPending}
+        pendingStatus={lookingPending ? state.command?.status : undefined}
+      />
       <View style={styles.card}>
         <Label style={{ color: colors.secondary, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>Настройки сообщений</Label>
         <Label accessibilityRole="header" style={styles.subtitle}>Личные сообщения</Label>

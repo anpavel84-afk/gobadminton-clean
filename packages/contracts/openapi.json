@@ -2625,11 +2625,20 @@
     },
     "/me/looking-for-game": {
       "put": {
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "putMyLookingForGame",
         "tags": [
           "Profiles"
         ],
         "summary": "Set looking-for-game intent with TTL (area intent, no GPS)",
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -2702,11 +2711,20 @@
         }
       },
       "delete": {
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "deleteMyLookingForGame",
         "tags": [
           "Profiles"
         ],
         "summary": "Stop looking-for-game intent",
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "parameters": [
           {
             "name": "Idempotency-Key",

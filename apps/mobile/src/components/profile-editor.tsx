@@ -49,12 +49,20 @@ export function ProfileEditor() {
     {state.command ? <>
       {state.command.packet.kind === 'contactPolicy'
         ? <Label>Сохранение настройки личных сообщений ({state.command.packet.body.contactPolicy === 'requests' ? 'разрешить' : 'выключить'})…</Label>
+        : state.command.packet.kind === 'lookingPut'
+        ? <Label>Сохранение статуса «Ищу игру» ({state.command.packet.body.ttlMinutes === 60 ? '1 час' : '3 часа'})…</Label>
+        : state.command.packet.kind === 'lookingDelete'
+        ? <Label>Выключение статуса «Ищу игру»…</Label>
         : <Label>Сохранение: {state.command.packet.body.displayName} · {state.command.packet.cityName}</Label>}
       {state.command.status === 'sending' ? <Label accessibilityState={{ busy: true }}>
-        {state.command.packet.kind === 'contactPolicy' ? 'Сохраняем настройку…' : 'Сохраняем…'}
+        {state.command.packet.kind === 'contactPolicy' ? 'Сохраняем настройку…'
+          : state.command.packet.kind === 'lookingPut' || state.command.packet.kind === 'lookingDelete' ? 'Сохраняем статус «Ищу игру»…'
+          : 'Сохраняем…'}
       </Label>
         : <PrimaryButton title={state.command.packet.kind === 'contactPolicy'
           ? 'Повторить прежнюю настройку личных сообщений'
+          : state.command.packet.kind === 'lookingPut' || state.command.packet.kind === 'lookingDelete'
+          ? 'Повторить прежний статус «Ищу игру»'
           : 'Повторить прежнее сохранение с теми же данными'} onPress={() => void owner.reconcile()} />}
       <Label>Можно уйти со страницы. Результат останется неизвестным до явной проверки; новое сохранение пока недоступно.</Label>
     </> : <>

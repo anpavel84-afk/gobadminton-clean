@@ -641,7 +641,7 @@ test('#522 profile bindPlayer loads both lanes, paginates on player path, fences
   assert.equal(hidden.getSnapshot().training.phase, 'unavailable');
 });
 
-test('#522 native role-history source wiring, composition slot, APK25 counter', () => {
+test('#522 native role-history source wiring, composition slot, APK26 counter', () => {
   const card = read('../src/components/game-card.tsx');
   const disclosure = read('../src/components/game-role-reputation.tsx');
   const profile = read('../src/components/player-role-reputation.tsx');
@@ -696,5 +696,5 @@ test('#522 native role-history source wiring, composition slot, APK25 counter', 
   assert.match(nav, /flexBasis: 'auto'/);
   assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
   assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 25);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 26);
 });
