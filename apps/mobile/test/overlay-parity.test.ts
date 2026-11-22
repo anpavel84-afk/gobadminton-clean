@@ -50,7 +50,9 @@ test('#600 games list «На карте» floating when !emptySettled; inline in
   assert.match(emptyBlock, /mapEntry\('inline'\)/);
 });
 
-test('#601 players floating «На карте» only when Radar is active; Свайп always', () => {
+test('#601 players floating «На карте» only when Radar is active; Свайп floats after inline scrolls away', () => {
+  // #660: obsolete #601 expectation that floating «Свайп» is always mounted — now scroll-gated.
+  // #660 r3: inline «Свайп» stays mounted (opacity/a11y hidden) so layout never collapses under fontScale.
   const players = read('../app/players/index.tsx');
   assert.match(players, /pointerEvents="box-none"/);
   assert.match(players, /floatingEntryHeight\+insets\.bottom\+48/);
@@ -58,4 +60,7 @@ test('#601 players floating «На карте» only when Radar is active; Св�
   assert.match(players, /radarState\.activation\?\.state === 'active' && <Pressable/);
   assert.match(players, />На карте</);
   assert.match(players, />Свайп</);
+  assert.match(players, /showFloatingSwipe && <Pressable/);
+  assert.match(players, /opacity:showFloatingSwipe \? 0 : 1/);
+  assert.doesNotMatch(players, /!showFloatingSwipe && <Pressable/);
 });

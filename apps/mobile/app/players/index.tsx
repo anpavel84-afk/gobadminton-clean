@@ -88,6 +88,8 @@ export default function Players() {
   const personTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [sheetMeasurement,setSheetMeasurement] = useState<SheetMeasurement | null>(null);
   const [controlsBottom,setControlsBottom] = useState<number | null>(null), [floatingEntryHeight,setFloatingEntryHeight] = useState(48);
+  const [scrollOffset,setScrollOffset] = useState(0), [inlineSwipeBottom,setInlineSwipeBottom] = useState(0);
+  const showFloatingSwipe = scrollOffset > inlineSwipeBottom;
   const [now,setNow] = useState(Date.now());
   const [inspectionAttempt,setInspectionAttempt] = useState(0);
   const [inspection,setInspection] = useState<{row:UnifiedRow;context:RadarContactContext;preview:UnifiedPreview | null;failed:boolean} | null>(null);
@@ -207,6 +209,7 @@ export default function Players() {
     } catch { if (focusedRef.current && view === contactView.current && context.valid()) selectPerson(row); }
   };
   const list = snapshot.list.key === key && snapshot.scope && validName ? snapshot.list : null;
+  const openSwipeBrowse = () => { browse.stage(filters, list?.data ?? null); router.push('/players/browse'); };
   const retry = () => { void coordinator.loadList(filters); };
   const more = () => { const cursor = list?.data?.nextCursor; if (cursor) void coordinator.loadList(filters, cursor); };
   const reset = () => {
@@ -286,6 +289,7 @@ export default function Players() {
     <DiscoverySheet visible={!mapOpen && !!person} title="Игрок Radar" onClose={() => setSelectedPerson(null)} returnFocusRef={personTrigger}>{personContent}</DiscoverySheet>
     <FlatList data={merged.ordinary} keyExtractor={p => p.publicPlayerId}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
+      onScroll={event => setScrollOffset(event.nativeEvent.contentOffset.y)} scrollEventThrottle={100}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: Platform.OS === 'ios' ? floatingEntryHeight+48 : floatingEntryHeight+insets.bottom+48, gap: 16 }}
       ListHeaderComponent={<View style={{ gap: 16 }}>
         <Label accessibilityRole="header" style={[styles.title, { fontSize: 32, lineHeight: Platform.OS === 'ios' ? 39 : 35 }]}>Игроки</Label>
@@ -325,6 +329,14 @@ export default function Players() {
           <DiscoveryChip title="Ищу игру" selected={looking} onPress={() => setLooking(v => !v)} />
           <DiscoveryChip title="Тренер" selected={trainer} onPress={() => setTrainer(v => !v)} />
         </View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
+          accessibilityElementsHidden={showFloatingSwipe} importantForAccessibility={showFloatingSwipe ? 'no-hide-descendants' : 'yes'}
+          disabled={showFloatingSwipe} pointerEvents={showFloatingSwipe ? 'none' : 'auto'}
+          onPress={openSwipeBrowse}
+          onLayout={event => setInlineSwipeBottom(22 + event.nativeEvent.layout.y + event.nativeEvent.layout.height)}
+          style={{alignSelf:'center',width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center',opacity:showFloatingSwipe ? 0 : 1}}>
+          <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
+        </Pressable>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
           <View style={{ flexShrink: 1 }}><Label style={{ color: colors.purple, fontSize: 11, lineHeight: 16, letterSpacing: 0.8, textTransform: 'uppercase' }}>Игровое сообщество</Label>
             <Label accessibilityRole="header" style={[styles.subtitle, { fontSize: 24, lineHeight: 30 }]}>Все игроки</Label></View>
@@ -365,11 +377,11 @@ export default function Players() {
       </View>} />
     <View pointerEvents="box-none" onLayout={event => setFloatingEntryHeight(event.nativeEvent.layout.height)}
       style={{position:'absolute',bottom:Platform.OS === 'ios' ? 16 : insets.bottom+16,left:0,right:0,alignItems:'center',paddingHorizontal:16,gap:8}}>
-    <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
-      onPress={() => { browse.stage(filters,list?.data ?? null); router.push('/players/browse'); }}
+    {showFloatingSwipe && <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
+      onPress={openSwipeBrowse}
       style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
       <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
-    </Pressable>
+    </Pressable>}
     {radarState.activation?.state === 'active' && <Pressable accessibilityRole="button" accessibilityLabel="Показать игроков и площадки на карте"
       onPress={() => {setSelectedPerson(null);setExpanded(false);router.setParams({view:'map',cityId:cityId ?? '',name:filters.name,areaKey:filters.areaKey ?? '',looking:looking?'1':'0',trainer:trainer?'1':'0'});}}
       style={{width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
