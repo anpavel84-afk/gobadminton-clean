@@ -371,11 +371,18 @@ run("bounded native public Players principal opt-in", () => {
       payload: { directoryVisible: false, expectedVersion: neighborOwn.json().version, consentPolicyVersion: "directory-mvp-v1" },
     });
     expect([401, 403, 404]).toContain(visibility.statusCode);
+    // Native trainer create is admitted; management fixture owns full lifecycle/credential matrix.
     const trainer = await app.inject({
       method: "PUT", url: "/v1/me/trainer-profile", headers: bearer(neighbor),
       payload: { selfDeclared: true, displayName: "Nope" },
     });
-    expect([401, 403, 404]).toContain(trainer.statusCode);
+    expect([200, 201]).toContain(trainer.statusCode);
+    expect(trainer.json()).toMatchObject({
+      status: "active",
+      displayName: "Nope",
+      declarationSource: "self_declared",
+    });
+    expect(trainer.json().version).toBeGreaterThanOrEqual(1);
     const cookiePut = await disabledApp.inject({
       method: "PUT", url: lookingUrl, headers: browser(a),
       payload: { cityId: MOSCOW_CITY_ID, areaKey: "cookie", ttlMinutes: 60 },
