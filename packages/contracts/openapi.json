@@ -4860,7 +4860,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie session retained. All other invitation create/revoke/organizer-list routes remain cookie-only."
       }
     },
     "/invitations/{invitationId}": {

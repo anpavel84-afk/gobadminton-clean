@@ -72,7 +72,8 @@ export class InvitationsController {
     @Query("cursor") cursor?: string,
     @Query("limit") limitRaw?: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    // Explicit NativeBearer opt-in on this list only; cookie session preserved via requirePrincipal.
+    const consumer = await this.auth.requirePrincipal(request);
     const limit =
       limitRaw === undefined || limitRaw === ""
         ? undefined
