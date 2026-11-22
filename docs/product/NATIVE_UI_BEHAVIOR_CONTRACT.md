@@ -116,6 +116,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `contact-policy.test.ts` / profile·auth; optional API `native-players.foundation` bearer policy case; source APK counter 24 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 contactPolicy native parity source; not VERIFIED_SOURCE / not device PASS |
 
+## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `ProfilePage.tsx` changeLooking + `PUT/DELETE /v1/me/looking-for-game`; native `profile.ts` / `looking-for-game` / `own-profile` LookingForGameCard; narrow NativeBearer on those two ops only |
+| Entry | Authenticated `/profile` own-profile card — «Игровое намерение / Ищу игру» after public data, before messaging |
+| Trigger | Explicit Изменить/Включить/Выключить only; form area draft from looking\|profile area; TTL chips 60\|180 (default 180); no auto enable/renew on mount/login/foreground/expiry |
+| Expected | Profile city mandatory (no catalog city/GPS); PUT always sends ttlMinutes 60\|180; looking version CAS separate from SocialProfile version; DELETE empty `{}` / inactive version0 valid; receipt updates nested lookingForGame only; dirty name/level/area/bio preserved; serialize with profile/avatar/cover/policy; UNKNOWN exact packet/key retry; 409 → fresh GET + reconfirm; genuine expiry from server expiresAt + local clock/foreground display |
+| Accessibility | Status + CTA group; sheet form; busy/unknown pending copy; large-text row layout |
+| Non-scope | Radar/GPS; catalog visibility; socialEligible repair; trainer; formatKeys UI; PROD; APK26 binary |
+| Evidence | Mobile unit `looking-for-game.test.ts` / profile·auth; API `native-players.foundation` bearer looking cases; source APK counter 26 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 looking-for-game native parity source; not VERIFIED_SOURCE / not device PASS |
+
 ## R-02 · Public player profile role history (#522 PARTIAL)
 
 | Field | Content |

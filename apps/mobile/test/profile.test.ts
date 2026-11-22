@@ -7,7 +7,7 @@ import {
   resolveProfileLevelForSave, levelGuideChoiceFromProfile, ntrpHalfstepIds, ntrpSelfDeclaredLevel,
   pilotSocialLevel, shouldOfferPreservedLevel,
 } from '../src/profile.ts';
-import type { OwnProfile, ProfileBody, ProfileDraft, ProfilePacket, ProfilePort } from '../src/profile.ts';
+import type { OwnProfile, ProfileBody, ProfileDraft, ProfileMutationPacket, ProfilePacket, ProfilePort } from '../src/profile.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { createPublicApi } from '../src/public-api.ts';
 import type { Actor } from '../src/participation.ts';
@@ -27,7 +27,7 @@ function assertDraft(actual: ProfileDraft, expected: ProfileDraft) {
 const actor = { actorId: 'A', sessionId: 'session-A', generation: 1 };
 const city = { id: 'catalog-city', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' };
 const deferred = <T>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
-function ackFrom(packet: ProfilePacket, base: OwnProfile = emptyProfile): OwnProfile {
+function ackFrom(packet: ProfileMutationPacket, base: OwnProfile = emptyProfile): OwnProfile {
   if (packet.kind === 'contactPolicy') {
     return {
       ...base,

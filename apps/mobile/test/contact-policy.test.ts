@@ -5,7 +5,7 @@ import { URL } from 'node:url';
 import {
   ProfileCoordinator, ProfileError, profileWireBody, createProfileDraft,
 } from '../src/profile.ts';
-import type { OwnProfile, ProfilePacket, ProfilePort } from '../src/profile.ts';
+import type { OwnProfile, ProfileMutationPacket, ProfilePacket, ProfilePort } from '../src/profile.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import type { Actor } from '../src/participation.ts';
 
@@ -19,7 +19,7 @@ const actor = { actorId: 'A', sessionId: 'session-A', generation: 1 };
 const city = { id: 'catalog-city', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' };
 const deferred = <T>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 
-function ackPolicy(packet: ProfilePacket, base: OwnProfile): OwnProfile {
+function ackPolicy(packet: ProfileMutationPacket, base: OwnProfile): OwnProfile {
   if (packet.kind !== 'contactPolicy') throw new Error('expected contactPolicy packet');
   return { ...base, version: packet.body.expectedVersion + 1, contactPolicy: packet.body.contactPolicy };
 }
@@ -130,6 +130,7 @@ test('shared writer locks: peer busy and pending profile save block policy; poli
     send: async (packet, authority): Promise<OwnProfile> => {
       sent.push({ packet, authority });
       if (packet.kind === 'contactPolicy') return gate2.promise;
+      if (packet.kind !== 'profile') throw new Error('expected profile packet');
       return {
         ...base, version: packet.body.expectedVersion + 1, displayName: packet.body.displayName, cityId: packet.body.cityId,
         areaKey: packet.body.areaKey, bio: packet.body.bio, level: packet.body.level,

@@ -97,6 +97,7 @@ export class AuthCoordinator {
       read: () => this.participationRead(access => deps.api.ownProfile(access)),
       cities: () => publicApi.cities(),
       send: (packet, authority) => this.participationRead(access => deps.api.saveOwnProfile(access, packet), authority),
+      looking: (packet, authority) => this.participationRead(access => deps.api.mutateOwnLooking(access, packet), authority),
     }, deps.random, () => this.avatar.blocksEdits() || this.cover.blocksEdits());
     // avatar ↔ cover busy fences are closed over `this` and resolve after both fields exist.
     this.messages = new MessagesCoordinator({

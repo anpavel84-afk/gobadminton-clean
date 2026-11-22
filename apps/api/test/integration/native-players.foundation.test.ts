@@ -282,4 +282,155 @@ run("bounded native public Players principal opt-in", () => {
     expect(browserRead.json()).toEqual(cookieSave.json());
   });
 
+  it("native bearer looking PUT update DELETE GET readback; cookie CSRF/Origin; replay TTL; conflicts; closed neighbors", async () => {
+    const a = await actor(), inactive = await actor();
+    await profile(a, "Looking Owner");
+    const lookingUrl = "/v1/me/looking-for-game";
+    const socialUrl = "/v1/me/social-profile";
+    const readSocial = async () => {
+      const response = await app.inject({ url: socialUrl, headers: bearer(a) });
+      expect(response.statusCode).toBe(200);
+      return response.json();
+    };
+    const before = await readSocial();
+    expect(before.lookingForGame).toBeNull();
+    const putKey = randomUUID();
+    const putBody = { cityId: MOSCOW_CITY_ID, areaKey: "sokol", ttlMinutes: 60 };
+    const created = await app.inject({ method: "PUT", url: lookingUrl, headers: bearer(a, putKey), payload: putBody });
+    expect([200, 201]).toContain(created.statusCode);
+    const createdBody = created.json();
+    expect(createdBody.state).toBe("active");
+    expect(createdBody.version).toBe(1);
+    expect(createdBody.cityId).toBe(MOSCOW_CITY_ID);
+    expect(createdBody.areaKey).toBe("sokol");
+    expect(createdBody.expiresAt).toEqual(expect.any(String));
+    const afterCreate = await readSocial();
+    expect(afterCreate.version).toBe(before.version);
+    expect(afterCreate.lookingForGame).toEqual(createdBody);
+    const replay = await app.inject({ method: "PUT", url: lookingUrl, headers: bearer(a, putKey), payload: putBody });
+    expect(replay.statusCode).toBe(created.statusCode);
+    expect(replay.json()).toEqual(createdBody);
+    expect(replay.json().expiresAt).toBe(createdBody.expiresAt);
+    const updateKey = randomUUID();
+    const updated = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(a, updateKey),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: "north", ttlMinutes: 180, expectedVersion: createdBody.version },
+    });
+    expect(updated.statusCode).toBe(200);
+    const updatedBody = updated.json();
+    expect(updatedBody.version).toBe(createdBody.version + 1);
+    expect(updatedBody.areaKey).toBe("north");
+    expect(updatedBody.state).toBe("active");
+    const changedKey = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(a),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: "other", ttlMinutes: 60, expectedVersion: createdBody.version },
+    });
+    expect(changedKey.statusCode).toBe(409);
+    expect(changedKey.json().code).toBe("VERSION_CONFLICT");
+    const stale = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(a),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: "stale", ttlMinutes: 60, expectedVersion: createdBody.version },
+    });
+    expect(stale.statusCode).toBe(409);
+    const gps = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(a),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: null, ttlMinutes: 60, expectedVersion: updatedBody.version, latitude: 55.75 },
+    });
+    expect(gps.statusCode).toBe(422);
+    expect(gps.json().code).toBe("RAW_LOCATION_NOT_ACCEPTED");
+    const stopKey = randomUUID();
+    const stopped = await app.inject({ method: "DELETE", url: lookingUrl, headers: bearer(a, stopKey), payload: {} });
+    expect(stopped.statusCode).toBe(200);
+    expect(stopped.json().state).toBe("inactive");
+    expect(stopped.json().version).toBe(updatedBody.version + 1);
+    expect((await readSocial()).lookingForGame).toEqual(stopped.json());
+    const stopReplay = await app.inject({ method: "DELETE", url: lookingUrl, headers: bearer(a, stopKey), payload: {} });
+    expect(stopReplay.statusCode).toBe(200);
+    expect(stopReplay.json()).toEqual(stopped.json());
+    const emptyStop = await app.inject({ method: "DELETE", url: lookingUrl, headers: bearer(a), payload: {} });
+    expect(emptyStop.statusCode).toBe(200);
+    expect(emptyStop.json().state).toBe("inactive");
+    for (const authorization of ["", "Basic invalid", "Bearer invalid", `Bearer ${"x".repeat(43)}`]) {
+      expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { authorization, "idempotency-key": randomUUID() }, payload: putBody })).statusCode).toBe(401);
+    }
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { Authorization: [`Bearer ${a.accessToken}`, `Bearer ${a.accessToken}`], "idempotency-key": randomUUID() }, payload: putBody })).statusCode).toBe(401);
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { ...bearer(a), cookie: a.cookie }, payload: putBody })).statusCode).toBe(403);
+    expect((await app.inject({ method: "DELETE", url: lookingUrl, headers: { "idempotency-key": randomUUID() }, payload: {} })).statusCode).toBe(403);
+    expect((await disabledApp.inject({ method: "PUT", url: lookingUrl, headers: bearer(a), payload: putBody })).statusCode).toBe(404);
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { ...browser(a), origin: "https://outside.example.test" }, payload: putBody })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { origin, cookie: a.cookie, "idempotency-key": randomUUID() }, payload: putBody })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: { ...browser(a), "x-csrf-token": "invalid" }, payload: putBody })).statusCode).toBe(403);
+    const neighbor = await actor();
+    await profile(neighbor, "Closed Neighbor");
+    const neighborOwn = await app.inject({ url: socialUrl, headers: bearer(neighbor) });
+    expect(neighborOwn.statusCode).toBe(200);
+    const visibility = await app.inject({
+      method: "PUT", url: "/v1/me/social-profile/visibility",
+      headers: bearer(neighbor),
+      payload: { directoryVisible: false, expectedVersion: neighborOwn.json().version, consentPolicyVersion: "directory-mvp-v1" },
+    });
+    expect([401, 403, 404]).toContain(visibility.statusCode);
+    const trainer = await app.inject({
+      method: "PUT", url: "/v1/me/trainer-profile", headers: bearer(neighbor),
+      payload: { selfDeclared: true, displayName: "Nope" },
+    });
+    expect([401, 403, 404]).toContain(trainer.statusCode);
+    const cookiePut = await disabledApp.inject({
+      method: "PUT", url: lookingUrl, headers: browser(a),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: "cookie", ttlMinutes: 60 },
+    });
+    expect([200, 201]).toContain(cookiePut.statusCode);
+    await app.get(SessionService).revokeSession(a.sessionId);
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: bearer(a), payload: putBody })).statusCode).toBe(401);
+    await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [inactive.id]);
+    expect((await app.inject({ method: "PUT", url: lookingUrl, headers: bearer(inactive), payload: putBody })).statusCode).toBe(401);
+  });
+
+  it("looking PUT rejects no-profile/ineligible/invalid city without inventing eligibility", async () => {
+    const bare = await actor();
+    const lookingUrl = "/v1/me/looking-for-game";
+    const missing = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(bare),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: null, ttlMinutes: 60 },
+    });
+    expect(missing.statusCode).toBe(422);
+    expect(missing.json().code).toBe("SOCIAL_PROFILE_REQUIRED");
+    const eligible = await actor();
+    await profile(eligible, "Eligible Looking");
+    const own = await app.inject({ url: "/v1/me/social-profile", headers: bearer(eligible) });
+    expect(own.statusCode).toBe(200);
+    const close = await app.inject({
+      method: "PATCH", url: "/v1/me/social-profile", headers: bearer(eligible),
+      payload: { expectedVersion: own.json().version, socialEligible: false },
+    });
+    expect(close.statusCode).toBe(200);
+    expect(close.json().socialEligible).toBe(false);
+    const refused = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(eligible),
+      payload: { cityId: MOSCOW_CITY_ID, areaKey: null, ttlMinutes: 180 },
+    });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().code).toBe("SOCIAL_INELIGIBLE");
+    const after = await app.inject({ url: "/v1/me/social-profile", headers: bearer(eligible) });
+    expect(after.json().socialEligible).toBe(false);
+    expect(after.json().lookingForGame).toBeNull();
+    const badCity = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(eligible),
+      payload: { cityId: randomUUID(), areaKey: null, ttlMinutes: 60 },
+    });
+    // Ineligible fails first when socialEligible false; restore eligible for city check.
+    const reopen = await app.inject({
+      method: "PATCH", url: "/v1/me/social-profile", headers: bearer(eligible),
+      payload: { expectedVersion: after.json().version, socialEligible: true },
+    });
+    expect(reopen.statusCode).toBe(200);
+    const invalidCity = await app.inject({
+      method: "PUT", url: lookingUrl, headers: bearer(eligible),
+      payload: { cityId: randomUUID(), areaKey: null, ttlMinutes: 60 },
+    });
+    expect(invalidCity.statusCode).toBe(422);
+    expect(invalidCity.json().code).toBe("CITY_ID_INVALID");
+    expect(badCity.statusCode).toBe(422);
+  });
+
 });

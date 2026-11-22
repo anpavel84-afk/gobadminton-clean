@@ -145,7 +145,7 @@ export default function Profile() {
       </>}
       {busy && <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Подождите…</Label>}
       {intent && <TextButton title="Вернуться к игре" onPress={() => void act(returnToGame)} />}
-      <Label>Вход не подаёт заявку и не создаёт игру. Игровые действия требуют отдельного native-допуска сервера.</Label>
+      <Label>Вход не подаёт заявку и не создаёт игру.</Label>
     </ProfileScroll>
   </Page>;
 }

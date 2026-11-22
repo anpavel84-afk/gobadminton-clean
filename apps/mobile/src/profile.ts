@@ -1,6 +1,8 @@
 import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import type { City } from './public-api.ts';
+import type { LookingPutBody, LookingTtlMinutes } from './looking-for-game.ts';
+import { isLookingTtlMinutes } from './looking-for-game.ts';
 
 export class ProfileError extends Error {
   readonly kind: 'network' | 'invalid' | 'authority' | 'business';
@@ -42,8 +44,20 @@ export function parseOwnAvatar(value: unknown): OwnAvatar {
   return { uploadedUrl: a.uploadedUrl, providerUrl: null };
 }
 export type Level = { scaleId: string; scaleVersion: number; levelId: string; provenance: 'self_declared' };
-type Looking = { version: number; state: 'active' | 'inactive'; cityId: string | null; areaKey: string | null;
+export type Looking = { version: number; state: 'active' | 'inactive'; cityId: string | null; areaKey: string | null;
   startsAt: string | null; endsAt: string | null; expiresAt: string | null; formatKeys: string[] };
+export function parseLookingIntent(value: unknown): Looking {
+  const l = row(value);
+  if (!version(l.version) || !text(l.state) || !['active', 'inactive'].includes(l.state) || !nullable(l.cityId) || !nullable(l.areaKey) ||
+      !date(l.startsAt) || !date(l.endsAt) || !date(l.expiresAt) || !Array.isArray(l.formatKeys) || !l.formatKeys.every(text)) {
+    throw new ProfileError('invalid');
+  }
+  return {
+    version: l.version as number, state: l.state as Looking['state'], cityId: l.cityId as string | null, areaKey: l.areaKey as string | null,
+    startsAt: l.startsAt as string | null, endsAt: l.endsAt as string | null, expiresAt: l.expiresAt as string | null,
+    formatKeys: [...l.formatKeys as string[]],
+  };
+}
 export type OwnProfile = { publicPlayerId: string | null; version: number; displayName: string; cityId: string | null;
   areaKey: string | null; level: Level | null; bio: string | null; directoryVisible: boolean; contactPolicy: 'requests' | 'closed';
   consentPolicyVersion: string | null; optedInAt: string | null; radarConsented: boolean; radarConsentPolicyVersion: string | null;
@@ -73,13 +87,7 @@ export function parseOwnProfile(value: unknown): OwnProfile {
     // Unknown scale identities stay intact until an explicit level change.
     level = { scaleId: l.scaleId, scaleVersion: l.scaleVersion, levelId: l.levelId, provenance: 'self_declared' };
   }
-  if (r.lookingForGame !== null) {
-    const l = row(r.lookingForGame);
-    if (!version(l.version) || !text(l.state) || !['active','inactive'].includes(l.state) || !nullable(l.cityId) || !nullable(l.areaKey) ||
-        !date(l.startsAt) || !date(l.endsAt) || !date(l.expiresAt) || !Array.isArray(l.formatKeys) || !l.formatKeys.every(text)) throw new ProfileError('invalid');
-    lookingForGame = { version: l.version, state: l.state as Looking['state'], cityId: l.cityId, areaKey: l.areaKey,
-      startsAt: l.startsAt as string | null, endsAt: l.endsAt as string | null, expiresAt: l.expiresAt as string | null, formatKeys: [...l.formatKeys] };
-  }
+  if (r.lookingForGame !== null) lookingForGame = parseLookingIntent(r.lookingForGame);
   const profile: OwnProfile = { publicPlayerId: r.publicPlayerId as string | null, version: r.version, displayName: r.displayName, cityId: r.cityId as string | null,
     areaKey: r.areaKey as string | null, level, bio: r.bio as string | null, directoryVisible: r.directoryVisible as boolean,
     contactPolicy: r.contactPolicy as OwnProfile['contactPolicy'], consentPolicyVersion: r.consentPolicyVersion as string | null,
@@ -267,17 +275,24 @@ export type ProfileBody = Readonly<{
 }>;
 /** Policy-only command — wire is exactly {expectedVersion,contactPolicy}; never carries name/city/bio. */
 export type ContactPolicyBody = Readonly<{ expectedVersion: number; contactPolicy: 'requests' | 'closed' }>;
-export type ProfilePacket =
+export type LookingPacket =
+  | Readonly<{ kind: 'lookingPut'; actor: Readonly<Actor>; key: string; body: LookingPutBody }>
+  | Readonly<{ kind: 'lookingDelete'; actor: Readonly<Actor>; key: string }>;
+export type ProfileMutationPacket =
   | Readonly<{ kind: 'profile'; actor: Readonly<Actor>; key: string; body: ProfileBody; cityName: string }>
   | Readonly<{ kind: 'contactPolicy'; actor: Readonly<Actor>; key: string; body: ContactPolicyBody }>;
+export type ProfilePacket = ProfileMutationPacket | LookingPacket;
 export type ProfilePort = { read: () => Promise<OwnProfile>; cities: () => Promise<City[]>;
-  send: (packet: ProfilePacket, authority: Actor) => Promise<OwnProfile> };
+  send: (packet: ProfileMutationPacket, authority: Actor) => Promise<OwnProfile>;
+  /** Optional until a looking mutation is admitted; missing port refuses looking writes. */
+  looking?: (packet: LookingPacket, authority: Actor) => Promise<Looking> };
 export type ProfileDraft = { displayName: string; cityId: string; areaKey: string; bio: string; levelChoice: LevelGuideChoice };
 /** Typed read routing — never inferred from localized notice text. */
 export type ProfileReadIntent = null | 'rebase';
+export type ProfileNoticeOwner = null | 'profile' | 'contactPolicy' | 'looking';
 type Snapshot = { actor: Actor | null; profile: OwnProfile | null; cities: City[]; draft: ProfileDraft;
   status: 'idle' | 'loading' | 'ready' | 'error' | 'stale'; command?: { packet: ProfilePacket; status: 'sending' | 'unknown' };
-  notice: string | null; readIntent: ProfileReadIntent };
+  notice: string | null; noticeOwner: ProfileNoticeOwner; readIntent: ProfileReadIntent };
 /** Ordinary enumerable draft — displayName/cityId/areaKey/bio/levelChoice copy and spread without dropped fields. */
 export function createProfileDraft(displayName: string, cityId: string, areaKey = '', bio = '', levelChoice: LevelGuideChoice = { kind: 'none' }): ProfileDraft {
   return { displayName, cityId, areaKey, bio, levelChoice };
@@ -290,8 +305,13 @@ function copyFrozenLevel(level: Level | null): Level | null {
   });
 }
 const initial = (): Snapshot => ({
-  actor: null, profile: null, cities: [], draft: createProfileDraft('', ''), status: 'idle', notice: null, readIntent: null,
+  actor: null, profile: null, cities: [], draft: createProfileDraft('', ''), status: 'idle', notice: null, noticeOwner: null, readIntent: null,
 });
+function noticeOwnerOf(packet: ProfilePacket): ProfileNoticeOwner {
+  if (packet.kind === 'contactPolicy') return 'contactPolicy';
+  if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') return 'looking';
+  return 'profile';
+}
 const form = (p: OwnProfile): ProfileDraft => createProfileDraft(
   p.displayName, p.cityId ?? '', p.areaKey ?? '', p.bio ?? '', levelGuideChoiceFromProfile(p.level),
 );
@@ -333,8 +353,11 @@ export class ProfileCoordinator {
     this.serial++; this.state = initial();
     this.show({ actor: actor ? Object.freeze({ ...actor }) : null, ...(packet ? { command: { packet, status: 'unknown' as const },
       draft: packet.kind === 'profile' ? draftFromPacket(packet.body) : createProfileDraft('', ''),
+      noticeOwner: noticeOwnerOf(packet),
       notice: packet.kind === 'contactPolicy'
         ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+        : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete'
+        ? 'Результат статуса «Ищу игру» неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и данными.'
         : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
   }
   forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
@@ -399,16 +422,17 @@ export class ProfileCoordinator {
     const actor = this.state.actor;
     if (!actor || this.state.command || this.state.status === 'loading' || this.isPeerBusy()) return;
     const serial = ++this.serial;
-    this.show({ status: 'loading', notice: null });
+    this.show({ status: 'loading', notice: null, noticeOwner: null });
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
       this.show({
         profile, cities, draft: form(profile), status: 'ready', readIntent: null,
         notice: profile.displayName.trim() && profile.cityId ? null : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+        noticeOwner: profile.displayName.trim() && profile.cityId ? null : 'profile',
       });
     } catch {
-      if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.' });
+      if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.', noticeOwner: 'profile' });
     }
   };
   /**
@@ -424,7 +448,7 @@ export class ProfileCoordinator {
       || (this.state.status === 'error' && this.state.readIntent === 'rebase');
     if (!actor || !this.state.profile || this.state.command || !canRebase || this.isPeerBusy()) return;
     const serial = ++this.serial;
-    this.show({ status: 'loading', notice: null });
+    this.show({ status: 'loading', notice: null, noticeOwner: null });
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
@@ -435,6 +459,7 @@ export class ProfileCoordinator {
         this.show({
           status: 'stale',
           notice: 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.',
+          noticeOwner: 'profile',
         });
         return;
       }
@@ -445,10 +470,11 @@ export class ProfileCoordinator {
         notice: adopted.displayName.trim() && adopted.cityId
           ? null
           : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+        noticeOwner: adopted.displayName.trim() && adopted.cityId ? null : 'profile',
       });
     } catch {
       if (this.current(actor) && serial === this.serial) {
-        this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.' });
+        this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.', noticeOwner: 'profile' });
       }
     }
   };
@@ -472,12 +498,12 @@ export class ProfileCoordinator {
         patch.bio !== undefined ? patch.bio : d.bio,
         patch.levelChoice !== undefined ? patch.levelChoice : d.levelChoice,
       ),
-      notice: null,
+      notice: null, noticeOwner: null,
     });
   };
   cancel = () => {
     if (this.state.command || this.state.status !== 'ready' || !this.state.profile || this.isPeerBusy()) return;
-    this.show({ draft: form(this.state.profile), notice: 'Изменения отменены.' });
+    this.show({ draft: form(this.state.profile), notice: 'Изменения отменены.', noticeOwner: 'profile' });
   };
   save = async () => {
     const { actor, profile, draft, cities, status, command } = this.state;
@@ -485,15 +511,15 @@ export class ProfileCoordinator {
     const displayName = draft.displayName.trim();
     const city = cities.find(c => c.id === draft.cityId);
     if (!displayName || displayName.length > 80 || !city) {
-      this.show({ notice: 'Введите имя от 1 до 80 символов и выберите город из каталога.' }); return;
+      this.show({ notice: 'Введите имя от 1 до 80 символов и выберите город из каталога.', noticeOwner: 'profile' }); return;
     }
     const areaKey = draft.areaKey.trim() || null;
     if (areaKey !== null && areaKey.length > 64) {
-      this.show({ notice: 'Район / метро — до 64 символов.' }); return;
+      this.show({ notice: 'Район / метро — до 64 символов.', noticeOwner: 'profile' }); return;
     }
     const bio = draft.bio.trim() || null;
     if (bio !== null && bio.length > 500) {
-      this.show({ notice: 'О себе — до 500 символов.' }); return;
+      this.show({ notice: 'О себе — до 500 символов.', noticeOwner: 'profile' }); return;
     }
     const level = copyFrozenLevel(resolveProfileLevelForSave(draft.levelChoice, profile.level));
     const packet = Object.freeze({ kind: 'profile' as const, actor: Object.freeze({ ...actor }), key: this.random(), cityName: city.nameRu,
@@ -515,7 +541,7 @@ export class ProfileCoordinator {
     const { actor, profile, status, command } = this.state;
     if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
     if (profile.version < 1) {
-      this.show({ notice: 'Сначала сохраните игровой профиль.' });
+      this.show({ notice: 'Сначала сохраните игровой профиль.', noticeOwner: 'contactPolicy' });
       return;
     }
     if (profile.contactPolicy === desired) return;
@@ -527,15 +553,125 @@ export class ProfileCoordinator {
     });
     await this.dispatch(packet, actor);
   };
+  /**
+   * Explicit «Ищу игру» enable/update. Own profile city required; TTL must be 60 or 180.
+   * Never auto-runs on mount/login/foreground/expiry; preserves dirty profile draft.
+   */
+  enableLooking = async (areaKeyRaw: string, ttlMinutes: LookingTtlMinutes) => {
+    const { actor, profile, status, command } = this.state;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
+    if (!profile.cityId) {
+      this.show({ notice: 'Сначала укажите город в игровом профиле.', noticeOwner: 'looking' });
+      return;
+    }
+    if (!isLookingTtlMinutes(ttlMinutes)) {
+      this.show({ notice: 'Выберите 1 час или 3 часа.', noticeOwner: 'looking' });
+      return;
+    }
+    const areaKey = areaKeyRaw.trim() || null;
+    if (areaKey !== null && areaKey.length > 64) {
+      this.show({ notice: 'Район / метро — до 64 символов.', noticeOwner: 'looking' });
+      return;
+    }
+    const body: LookingPutBody = Object.freeze({
+      cityId: profile.cityId,
+      areaKey,
+      ttlMinutes,
+      ...(profile.lookingForGame ? { expectedVersion: profile.lookingForGame.version } : {}),
+    });
+    const packet = Object.freeze({
+      kind: 'lookingPut' as const,
+      actor: Object.freeze({ ...actor }),
+      key: this.random(),
+      body,
+    });
+    await this.dispatch(packet, actor);
+  };
+  /** Explicit stop — empty DELETE body, no invented CAS; inactive version 0 is valid. */
+  stopLooking = async () => {
+    const { actor, profile, status, command } = this.state;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
+    const packet = Object.freeze({
+      kind: 'lookingDelete' as const,
+      actor: Object.freeze({ ...actor }),
+      key: this.random(),
+    });
+    await this.dispatch(packet, actor);
+  };
   reconcile = async () => {
     const { actor, command } = this.state;
     if (actor && command?.status === 'unknown' && command.packet.actor.actorId === actor.actorId) await this.dispatch(command.packet, actor);
   };
+  private lookingNotice(packet: LookingPacket, phase: 'unknown' | 'fail' | 'ok', looking?: Looking): string {
+    if (phase === 'ok') {
+      return packet.kind === 'lookingDelete' || looking?.state === 'inactive'
+        ? '«Ищу игру» выключено.'
+        : '«Ищу игру» включено.';
+    }
+    if (phase === 'fail') {
+      return 'Статус «Ищу игру» не сохранён. Проверьте соединение или повторите.';
+    }
+    return packet.kind === 'lookingDelete'
+      ? 'Результат выключения «Ищу игру» неизвестен. Проверка повторит только эту отправку с прежним ключом. Новые изменения пока недоступны.'
+      : 'Результат статуса «Ищу игру» неизвестен. Проверка повторит только эту отправку с прежними данными и ключом. Новые изменения пока недоступны.';
+  }
+  private applyLooking(looking: Looking, packet: LookingPacket): OwnProfile {
+    const profile = this.state.profile;
+    if (!profile) throw new ProfileError('invalid');
+    const current = profile.lookingForGame;
+    if (current && looking.version < current.version) throw new ProfileError('invalid');
+    if (packet.kind === 'lookingPut') {
+      if (looking.state !== 'active') throw new ProfileError('invalid');
+      if (looking.cityId !== packet.body.cityId) throw new ProfileError('invalid');
+      if ((looking.areaKey ?? null) !== (packet.body.areaKey ?? null)) throw new ProfileError('invalid');
+      if (packet.body.expectedVersion !== undefined && looking.version <= packet.body.expectedVersion) throw new ProfileError('invalid');
+      if (packet.body.expectedVersion === undefined && looking.version < 1) throw new ProfileError('invalid');
+    } else if (looking.state !== 'inactive') {
+      throw new ProfileError('invalid');
+    }
+    return { ...profile, lookingForGame: looking };
+  }
   private async dispatch(packet: ProfilePacket, authority: Actor) {
     // Synchronous guard precedes the first await; each call owns a frozen original packet.
-    this.serial++; this.show({ command: { packet, status: 'sending' }, notice: null });
+    this.serial++; this.show({ command: { packet, status: 'sending' }, notice: null, noticeOwner: null });
     const valid = () => this.current(authority) && this.state.command?.packet === packet && this.state.command.status === 'sending';
     try {
+      if (packet.kind === 'lookingPut' || packet.kind === 'lookingDelete') {
+        if (!this.port.looking) throw new ProfileError('network');
+        const looking = await this.port.looking(packet, authority);
+        if (!valid()) return;
+        // Same-actor reauth may restore UNKNOWN with profile=null (load refuses). Looking ACK is
+        // LookingIntent-only — adopt via authoritative own-profile read; never invent SocialProfile fields.
+        if (!this.state.profile) {
+          const fresh = await this.port.read();
+          if (!valid()) return;
+          const nested = fresh.lookingForGame;
+          if (!nested || nested.version !== looking.version || nested.state !== looking.state) throw new ProfileError('invalid');
+          if (packet.kind === 'lookingPut' && nested.state !== 'active') throw new ProfileError('invalid');
+          if (packet.kind === 'lookingDelete' && nested.state !== 'inactive') throw new ProfileError('invalid');
+          this.show({
+            profile: fresh,
+            draft: form(fresh),
+            command: undefined,
+            status: this.state.cities.length ? 'ready' : 'idle',
+            readIntent: null,
+            notice: this.lookingNotice(packet, 'ok', looking),
+            noticeOwner: 'looking',
+          });
+          return;
+        }
+        const profile = this.applyLooking(looking, packet);
+        this.show({
+          profile,
+          command: undefined,
+          status: 'ready',
+          readIntent: null,
+          notice: this.lookingNotice(packet, 'ok', looking),
+          noticeOwner: 'looking',
+        });
+        if (!this.state.cities.length) this.show({ status: 'idle' });
+        return;
+      }
       const profile = await this.port.send(packet, authority);
       if (!valid()) return;
       if (packet.kind === 'contactPolicy') {
@@ -550,6 +686,7 @@ export class ProfileCoordinator {
           notice: profile.contactPolicy === 'requests'
             ? 'Личные сообщения разрешены.'
             : 'Личные сообщения выключены. Новые входящие не принимаются; история переписок сохраняется.',
+          noticeOwner: 'contactPolicy',
         });
         if (!this.state.cities.length) this.show({ status: 'idle' });
         return;
@@ -557,7 +694,7 @@ export class ProfileCoordinator {
       const { body } = packet;
       if (profile.version <= body.expectedVersion || profile.displayName !== body.displayName || profile.cityId !== body.cityId
           || profile.areaKey !== body.areaKey || profile.bio !== body.bio || !sameStoredLevel(profile.level, body.level)) throw new ProfileError('invalid');
-      this.show({ profile, draft: form(profile), command: undefined, status: 'ready', readIntent: null, notice: 'Профиль сохранён.' });
+      this.show({ profile, draft: form(profile), command: undefined, status: 'ready', readIntent: null, notice: 'Профиль сохранён.', noticeOwner: 'profile' });
       // A restored UNKNOWN has no catalog yet. Read only on the next explicit editor load.
       if (!this.state.cities.length) this.show({ status: 'idle' });
     } catch (error) {
@@ -568,14 +705,17 @@ export class ProfileCoordinator {
           command: undefined,
           status: stale ? 'stale' : 'ready',
           readIntent: stale ? 'rebase' : this.state.readIntent,
+          noticeOwner: stale ? 'profile' : noticeOwnerOf(packet),
           notice: stale
             ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'
             : packet.kind === 'contactPolicy' ? 'Настройка личных сообщений не сохранена. Проверьте соединение или повторите.'
+            : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete' ? this.lookingNotice(packet, 'fail')
             : moderationCodes.includes(error.code) ? 'Изменения не сохранены. Проверьте публичный текст или повторите позже. Введённые данные сохранены в форме.'
             : 'Изменения не сохранены. Проверьте поля и повторите.',
         });
-      } else this.show({ command: { packet, status: 'unknown' }, notice: packet.kind === 'contactPolicy'
+      } else this.show({ command: { packet, status: 'unknown' }, noticeOwner: noticeOwnerOf(packet), notice: packet.kind === 'contactPolicy'
         ? 'Результат настройки личных сообщений неизвестен. Проверка повторит только эту отправку с прежним значением и ключом. Новые изменения пока недоступны.'
+        : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete' ? this.lookingNotice(packet, 'unknown')
         : 'Результат сохранения неизвестен. Проверка повторит только это сохранение с прежними данными и ключом. Новое сохранение пока недоступно.' });
     }
   }
