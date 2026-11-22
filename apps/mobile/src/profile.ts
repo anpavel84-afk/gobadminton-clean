@@ -353,10 +353,39 @@ export function profileWireBody(body: ProfileBody | ContactPolicyBody): Record<s
   return wire;
 }
 export const moderationCodes = ['PUBLIC_TEXT_CONTENT_REJECTED','MODERATION_TEMPORARILY_UNAVAILABLE','MODERATION_POLICY_MISMATCH','MODERATION_RATE_LIMITED'];
+type DraftQuarantine = {
+  actorId: string;
+  packet: ProfilePacket | null;
+  draft: ProfileDraft;
+  /** Authoritative profile at quarantine time — dirty-field baseline after same-account restore. */
+  baseline: OwnProfile | null;
+};
+const sameLevelChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'none' && b.kind === 'none') return true;
+  if (a.kind === 'ntrp' && b.kind === 'ntrp') return a.levelId === b.levelId;
+  if (a.kind === 'pilot' && b.kind === 'pilot') return a.levelId === b.levelId;
+  if (a.kind === 'keep' && b.kind === 'keep') return sameFullLevelIdentity(a.level, b.level);
+  return false;
+};
+/** Merge locally dirty draft fields over a fresh authoritative form using a known baseline. */
+function mergeDirtyDraft(draft: ProfileDraft, baseline: OwnProfile, fresh: OwnProfile): ProfileDraft {
+  const baseForm = form(baseline);
+  const next = form(fresh);
+  return createProfileDraft(
+    draft.displayName === baseForm.displayName ? next.displayName : draft.displayName,
+    draft.cityId === baseForm.cityId ? next.cityId : draft.cityId,
+    draft.areaKey === baseForm.areaKey ? next.areaKey : draft.areaKey,
+    draft.bio === baseForm.bio ? next.bio : draft.bio,
+    sameLevelChoice(draft.levelChoice, baseForm.levelChoice) ? next.levelChoice : draft.levelChoice,
+  );
+}
 /** Root lifetime owner. No disk persistence, generic mutation framework or automatic writes. */
 export class ProfileCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private serial = 0;
-  private quarantined: ProfilePacket | null = null;
+  private quarantined: DraftQuarantine | null = null;
+  /** Baseline kept after same-account restore until the next authoritative adopt/load. */
+  private restoredBaseline: OwnProfile | null = null;
   private readonly port: ProfilePort; private readonly random: () => string;
   private readonly isPeerBusy: () => boolean;
   constructor(port: ProfilePort, random: () => string, isPeerBusy: () => boolean = () => false) {
@@ -368,23 +397,52 @@ export class ProfileCoordinator {
   private current(actor: Actor) { return sameActor(actor, this.state.actor); }
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || !actor && !this.state.actor) return;
-    if (this.state.command) this.quarantined = this.state.command.packet;
-    if (actor && this.quarantined?.actor.actorId !== actor.actorId) this.quarantined = null;
-    const packet = actor ? this.quarantined : null;
+    if (this.state.actor) {
+      const d = this.state.draft;
+      this.quarantined = {
+        actorId: this.state.actor.actorId,
+        packet: this.state.command?.packet ?? null,
+        draft: createProfileDraft(d.displayName, d.cityId, d.areaKey, d.bio, d.levelChoice),
+        // Keep prior restored baseline across same-account actor-null gaps / reauth chains.
+        baseline: this.state.profile ?? this.restoredBaseline,
+      };
+    }
+    if (actor && this.quarantined?.actorId !== actor.actorId) this.quarantined = null;
+    const saved = actor ? this.quarantined : null;
     if (actor) this.quarantined = null;
     this.serial++; this.state = initial();
-    this.show({ actor: actor ? Object.freeze({ ...actor }) : null, ...(packet ? { command: { packet, status: 'unknown' as const },
-      draft: packet.kind === 'profile' ? draftFromPacket(packet.body) : createProfileDraft('', ''),
-      noticeOwner: noticeOwnerOf(packet),
-      notice: packet.kind === 'contactPolicy'
-        ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
-        : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete'
-        ? 'Результат статуса «Ищу игру» неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и данными.'
-        : packet.kind === 'visibility'
-        ? 'Пока не удалось подтвердить изменение видимости. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
-        : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
+    this.restoredBaseline = null;
+    if (!actor) {
+      this.show({ actor: null });
+      return;
+    }
+    if (!saved) {
+      this.show({ actor: Object.freeze({ ...actor }) });
+      return;
+    }
+    this.restoredBaseline = saved.baseline;
+    const packet = saved.packet;
+    this.show({
+      actor: Object.freeze({ ...actor }),
+      // Profile UNKNOWN restores from immutable packet body; other kinds keep quarantined form draft.
+      draft: packet?.kind === 'profile' ? draftFromPacket(packet.body) : saved.draft,
+      ...(packet ? {
+        command: { packet, status: 'unknown' as const },
+        noticeOwner: noticeOwnerOf(packet),
+        notice: packet.kind === 'contactPolicy'
+          ? 'Результат настройки личных сообщений неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+          : packet.kind === 'lookingPut' || packet.kind === 'lookingDelete'
+          ? 'Результат статуса «Ищу игру» неизвестен. Можно явно повторить только прежнюю отправку с тем же ключом и данными.'
+          : packet.kind === 'visibility'
+          ? 'Пока не удалось подтвердить изменение видимости. Можно явно повторить только прежнюю отправку с тем же ключом и значением.'
+          : 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.',
+      } : {}),
+    });
   }
-  forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
+  forget = () => {
+    this.quarantined = null; this.restoredBaseline = null;
+    this.serial++; this.state = initial(); this.show({});
+  };
   /** Authoritative avatar/version only — never replaces unsaved name/level/area/bio draft. Delayed older receipts cannot overwrite newer state. */
   applyAvatarReceipt = (receipt: AvatarReceipt) => {
     const profile = this.state.profile;
@@ -415,29 +473,12 @@ export class ProfileCoordinator {
     const profile = this.state.profile;
     if (!profile || this.state.command) return false;
     if (fresh.version < profile.version) return false;
-    const draft = this.state.draft;
-    const baseline = form(profile);
-    const next = form(fresh);
-    const sameChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
-      if (a.kind !== b.kind) return false;
-      if (a.kind === 'none' && b.kind === 'none') return true;
-      if (a.kind === 'ntrp' && b.kind === 'ntrp') return a.levelId === b.levelId;
-      if (a.kind === 'pilot' && b.kind === 'pilot') return a.levelId === b.levelId;
-      if (a.kind === 'keep' && b.kind === 'keep') return sameFullLevelIdentity(a.level, b.level);
-      return false;
-    };
     this.show({
       profile: {
         ...fresh,
         avatar: { uploadedUrl: fresh.avatar.uploadedUrl, providerUrl: null },
       },
-      draft: createProfileDraft(
-        draft.displayName === baseline.displayName ? next.displayName : draft.displayName,
-        draft.cityId === baseline.cityId ? next.cityId : draft.cityId,
-        draft.areaKey === baseline.areaKey ? next.areaKey : draft.areaKey,
-        draft.bio === baseline.bio ? next.bio : draft.bio,
-        sameChoice(draft.levelChoice, baseline.levelChoice) ? next.levelChoice : draft.levelChoice,
-      ),
+      draft: mergeDirtyDraft(this.state.draft, profile, fresh),
       status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
     });
     return true;
@@ -450,6 +491,7 @@ export class ProfileCoordinator {
     try {
       const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
       if (!this.current(actor) || serial !== this.serial) return;
+      this.restoredBaseline = null;
       this.show({
         profile, cities, draft: form(profile), status: 'ready', readIntent: null,
         notice: profile.displayName.trim() && profile.cityId ? null : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
@@ -819,9 +861,15 @@ export class ProfileCoordinator {
         const existing = this.state.profile;
         const adopted = this.resolveVisibilityAfterAck(ack, fresh, existing);
         if (!existing) {
+          // Same-account reauth: profile was cleared but dirty draft + baseline may be restored.
+          const baseline = this.restoredBaseline;
+          this.restoredBaseline = null;
+          const draft = baseline
+            ? mergeDirtyDraft(this.state.draft, baseline, adopted)
+            : this.state.draft;
           this.show({
             profile: adopted,
-            draft: form(adopted),
+            draft,
             command: undefined,
             status: this.state.cities.length ? 'ready' : 'idle',
             readIntent: null,
@@ -831,6 +879,7 @@ export class ProfileCoordinator {
           return;
         }
         // Authoritative own profile only — never wipe unsaved name/city/area/bio/level draft.
+        this.restoredBaseline = null;
         this.show({
           profile: adopted,
           command: undefined,

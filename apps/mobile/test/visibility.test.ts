@@ -36,16 +36,14 @@ function setup(base: OwnProfile, overrides: Partial<ProfilePort> = {}, peerBusy:
   let keys = 0;
   let stored: OwnProfile = { ...base };
   const owner = new ProfileCoordinator({
-    read: async () => ({ ...stored }),
-    cities: async () => [city],
+    // Default read follows stored visibility ACKs; overrides.read still replaces independently.
+    read: overrides.read ?? (async () => ({ ...stored })),
+    cities: overrides.cities ?? (async () => [city]),
     send: async (packet, authority) => {
       sent.push({ packet, authority });
       if (overrides.send) return overrides.send(packet, authority);
       throw new Error('unexpected profile/contactPolicy send');
     },
-    ...overrides,
-    // Default read follows stored visibility ACKs; historical tests override read independently.
-    read: overrides.read ?? (async () => ({ ...stored })),
     visibility: async (packet, authority) => {
       sent.push({ packet, authority });
       const profile = overrides.visibility
@@ -395,12 +393,14 @@ test('#522: historical visibility ACK yields to post-ACK current GET; read429 ke
   assert.equal(failGet.owner.getSnapshot().command?.status, 'unknown');
 
   // Stale session/actor fence: mid-flight actor replacement retires sending without adopting ACK.
+  // Seed hidden baseline so setDirectoryVisible(true) is not a no-op against historicalOn.
   const fenceGate = deferred<OwnProfile>();
   const fenced = setup(base, {
     visibility: async () => fenceGate.promise,
-    read: async () => ({ ...historicalOn }),
+    read: async () => ({ ...base }),
   });
   await fenced.owner.load();
+  assert.equal(fenced.owner.getSnapshot().profile?.directoryVisible, false);
   const work = fenced.owner.setDirectoryVisible(true);
   assert.equal(fenced.sent.length, 1);
   fenced.owner.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
@@ -421,6 +421,100 @@ test('#522: historical visibility ACK yields to post-ACK current GET; read429 ke
   assert.equal(logout.owner.getSnapshot().command, undefined);
   assert.equal(logout.owner.getSnapshot().actor, null);
   assert.equal(logout.owner.getSnapshot().profile, null);
+});
+
+test('#522: same-account draft survives actor-null reauth; different actor/logout retire', async () => {
+  const serverV1: OwnProfile = {
+    ...emptyProfile, version: 1, displayName: 'Server', cityId: city.id, areaKey: 'server-area',
+    bio: 'Server bio', directoryVisible: false, consentPolicyVersion: 'directory-mvp-v1',
+  };
+  let authoritative: OwnProfile = { ...serverV1 };
+  let phase: 'lost' | 'ack' = 'lost';
+  const s = setup(serverV1, {
+    visibility: async (packet) => {
+      if (phase === 'lost') throw new ProfileError('network');
+      return ackVisibility(packet, authoritative);
+    },
+    read: async () => ({ ...authoritative }),
+  });
+  await s.owner.load();
+  s.owner.update({
+    displayName: 'Unsaved local name',
+    bio: 'Unsaved local bio',
+    areaKey: 'local-metro',
+    cityId: city.id,
+    levelChoice: { kind: 'none' },
+  });
+  await s.owner.setDirectoryVisible(true);
+  const original = s.sent[0]!.packet as VisibilityPacket;
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsaved local name');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsaved local bio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'local-metro');
+
+  // sameActor → null → sameActor: draft + original key survive; no autowrite.
+  s.owner.setActor(null);
+  assert.equal(s.owner.getSnapshot().actor, null);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().draft.displayName, '');
+  const returned = { ...actor, sessionId: 'reauth-session', generation: 3 };
+  s.owner.setActor(returned);
+  assert.equal(s.owner.getSnapshot().profile, null);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsaved local name');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsaved local bio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'local-metro');
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.sent.length, 1);
+
+  // Explicit original-key retry after fresh current read: dirty fields kept, pristine follow server.
+  phase = 'ack';
+  authoritative = {
+    ...serverV1, version: 2, directoryVisible: true, displayName: 'Server',
+    bio: 'Server bio', areaKey: 'fresh-area',
+  };
+  await s.owner.reconcile();
+  assert.equal(s.sent.length, 2);
+  assert.strictEqual(s.sent[1]!.packet, original);
+  assert.equal(s.sent[1]!.authority.sessionId, 'reauth-session');
+  assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().profile?.directoryVisible, true);
+  assert.equal(s.owner.getSnapshot().profile?.displayName, 'Server');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsaved local name');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsaved local bio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'local-metro');
+  assert.match(s.owner.getSnapshot().notice!, /видим в каталоге/);
+
+  // Different actor retires quarantined draft + packet.
+  const other = setup(serverV1, {
+    visibility: async () => { throw new ProfileError('network'); },
+  });
+  await other.owner.load();
+  other.owner.update({ displayName: 'Keep local', bio: 'x' });
+  await other.owner.setDirectoryVisible(true);
+  assert.equal(other.owner.getSnapshot().draft.displayName, 'Keep local');
+  other.owner.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
+  assert.equal(other.owner.getSnapshot().command, undefined);
+  assert.equal(other.owner.getSnapshot().draft.displayName, '');
+  other.owner.setActor({ ...actor, sessionId: 'back-A', generation: 2 });
+  assert.equal(other.owner.getSnapshot().command, undefined);
+  assert.equal(other.owner.getSnapshot().draft.displayName, '');
+
+  // Explicit logout/forget retires quarantine — same-account return has no draft/packet.
+  const loggedOut = setup(serverV1, {
+    visibility: async () => { throw new ProfileError('network'); },
+  });
+  await loggedOut.owner.load();
+  loggedOut.owner.update({ displayName: 'Gone on logout', bio: 'y' });
+  await loggedOut.owner.setDirectoryVisible(true);
+  loggedOut.owner.setActor(null);
+  loggedOut.owner.forget();
+  loggedOut.owner.setActor({ ...actor, sessionId: 'after-forget', generation: 5 });
+  assert.equal(loggedOut.owner.getSnapshot().command, undefined);
+  assert.equal(loggedOut.owner.getSnapshot().draft.displayName, '');
+  assert.equal(loggedOut.owner.getSnapshot().profile, null);
 });
 
 test('own-profile visibility card after Looking before Messages; Switch + pending copy; no city helper', () => {
