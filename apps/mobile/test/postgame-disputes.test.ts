@@ -66,7 +66,7 @@ function setup(overrides: Partial<AttendanceDispute> = {}) {
     own: async () => ({ items: [], nextCursor: null }),
     reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
     invitations: async () => ({ items: [], nextCursor: null }),
-    results: async (_a: Actor, id: string) => ({
+    results: async (_a: Actor, id: string): Promise<Results> => ({
       ...structuredClone(result), gameId: id,
       attendance: {
         ...result.attendance!,
