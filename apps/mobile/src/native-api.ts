@@ -1,5 +1,9 @@
 import { CommunityError, communityWire, commentsPath, id as communityId } from './venue-community.ts';
 import type { Packet as CommunityPacket, Query as CommunityQuery } from './venue-community.ts';
+import {
+  COMMENT_PHOTO_MAX_BYTES, PHOTO_RIGHTS, isCommentPhotoMime, isPhotoReceipt,
+} from './venue-comment-photos.ts';
+import type { VenueCommentPhotoReceipt } from './venue-comment-photos.ts';
 import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders } from './postgame.ts';
 import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
@@ -163,6 +167,151 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     communityOwn: (access: string, venueId: string) => communityRequest(`/venues/${communityId(venueId)}/community-rating/me`, access),
     communityComments: (access: string, query: CommunityQuery) => communityRequest(commentsPath(query), access),
     communityMutation: (access: string, packet: CommunityPacket) => { const wire = communityWire(packet); return communityRequest(wire.path, access, packet); },
+    /** Closed RAW BINARY comment-photo upload — image bytes only; never CSRF or cookie auth. */
+    uploadCommentPhoto: async (
+      access: string,
+      input: Readonly<{ venueId: string; key: string; mime: string; bytes: Uint8Array }>,
+    ): Promise<VenueCommentPhotoReceipt> => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const venueId = communityId(input.venueId);
+        communityId(input.key);
+        if (!isCommentPhotoMime(input.mime) || !input.bytes.byteLength || input.bytes.byteLength > COMMENT_PHOTO_MAX_BYTES) {
+          throw new CommunityError('invalid');
+        }
+        const body = new Uint8Array(input.bytes.byteLength);
+        body.set(input.bytes);
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/venues/${encodeURIComponent(venueId)}/comment-photos`, {
+          method: 'POST',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${access}`,
+            'Content-Type': input.mime,
+            'Idempotency-Key': input.key,
+            'X-Photo-Rights': PHOTO_RIGHTS,
+          },
+          body,
+        });
+        if (response.status === 401) throw new NativeAuthError('authority');
+        if (!response.ok) {
+          let code = '';
+          try {
+            const problem = await response.json();
+            if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code;
+          } catch { /* No raw text retained. */ }
+          throw new CommunityError(
+            [403, 404].includes(response.status) ? 'private'
+              : code !== 'COMMAND_IN_PROGRESS' && [400, 409, 413, 415, 422, 429].includes(response.status) ? 'refused'
+                : 'network',
+            response.status,
+            code,
+          );
+        }
+        if (response.status !== 201) throw new CommunityError('invalid');
+        const raw = await response.json();
+        if (!isPhotoReceipt(raw, venueId, 'ready')) throw new CommunityError('invalid');
+        return raw;
+      } catch (error) {
+        if (error instanceof CommunityError || error instanceof NativeAuthError) throw error;
+        throw new CommunityError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    commentPhotoStatus: async (
+      access: string,
+      input: Readonly<{ id: string; venueId: string }>,
+    ): Promise<VenueCommentPhotoReceipt> => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const photoId = communityId(input.id);
+        const venueId = communityId(input.venueId);
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/venue-photo-submissions/${encodeURIComponent(photoId)}`, {
+          method: 'GET',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${access}`,
+          },
+        });
+        if (response.status === 401) throw new NativeAuthError('authority');
+        if (!response.ok) {
+          let code = '';
+          try {
+            const problem = await response.json();
+            if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code;
+          } catch { /* No raw text retained. */ }
+          throw new CommunityError(
+            [403, 404].includes(response.status) ? 'private'
+              : code !== 'COMMAND_IN_PROGRESS' && [400, 409, 422, 429].includes(response.status) ? 'refused'
+                : 'network',
+            response.status,
+            code,
+          );
+        }
+        const raw = await response.json();
+        if (!isPhotoReceipt(raw, venueId, 'ready', photoId)) throw new CommunityError('invalid');
+        return raw;
+      } catch (error) {
+        if (error instanceof CommunityError || error instanceof NativeAuthError) throw error;
+        throw new CommunityError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    withdrawCommentPhoto: async (
+      access: string,
+      input: Readonly<{ id: string; key: string; venueId: string }>,
+    ): Promise<VenueCommentPhotoReceipt> => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const photoId = communityId(input.id);
+        const venueId = communityId(input.venueId);
+        communityId(input.key);
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/venue-photo-submissions/${encodeURIComponent(photoId)}`, {
+          method: 'DELETE',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${access}`,
+            'Content-Type': 'application/json',
+            'Idempotency-Key': input.key,
+            'X-Photo-Version': '1',
+          },
+          body: JSON.stringify({ expectedVersion: 1 }),
+        });
+        if (response.status === 401) throw new NativeAuthError('authority');
+        if (!response.ok) {
+          let code = '';
+          try {
+            const problem = await response.json();
+            if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code;
+          } catch { /* No raw text retained. */ }
+          throw new CommunityError(
+            [403, 404].includes(response.status) ? 'private'
+              : code !== 'COMMAND_IN_PROGRESS' && [400, 409, 422, 429].includes(response.status) ? 'refused'
+                : 'network',
+            response.status,
+            code,
+          );
+        }
+        const raw = await response.json();
+        if (!isPhotoReceipt(raw, venueId, 'withdrawn', photoId)) throw new CommunityError('invalid');
+        return raw;
+      } catch (error) {
+        if (error instanceof CommunityError || error instanceof NativeAuthError) throw error;
+        throw new CommunityError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
     postgameOwn: async (access: string, cursor?: string) => parseOwnResults(await postgameRequest(`/me/game-results?limit=20${cursor ? `&cursor=${encodeURIComponent(postgameCursor(cursor))}` : ''}`,access)),
     postgameResults: async (access: string, gameId: string, query?: ResultsQuery) => parseResults(await postgameRequest(`/games/${postgameId(gameId)}/results${resultsQuery(query)}`,access)),
     postgameReminders: async (access: string) => parseReminders(await postgameRequest('/me/postgame-reminders?limit=20',access)),

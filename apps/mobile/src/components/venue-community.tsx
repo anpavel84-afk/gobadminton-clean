@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentRef, ReactNode, RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Image, Modal, Pressable, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -6,11 +6,22 @@ import { useVenueCommunity } from '../venue-community-runtime.tsx';
 import type { VenueCommunityCoordinator, Thread, Operation } from '../venue-community-coordinator.ts';
 import type { Comment, Action, CreateVenueCommunityReportRequest, Packet } from '../venue-community.ts';
 import { commentText } from '../venue-community.ts';
+import {
+  applyPublishOperationUpdates,
+  evaluateCommentCreateAtPress,
+  notePendingPublish,
+  type PendingPublishMap,
+} from '../venue-comment-photos.ts';
 import { API_ORIGIN } from '../public-api.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryChip, DiscoverySheet, iosModalOrientations, Label, Loading, Page, PrimaryButton, styles } from './ui.tsx';
 import { VenueReviewsSection } from './venue-reviews.tsx';
 import { VenueCommunityPhotosSection } from './venue-photos.tsx';
+import {
+  VenueCommentPhotoComposer,
+  useVenueCommentPhotoComposer,
+  type VenueCommentPhotoComposerModel,
+} from './venue-comment-photo-composer.tsx';
 type Trigger = ComponentRef<typeof Pressable>;
 const reasons = [ ['harassment','Оскорбления / давление'], ['spam','Спам'], ['fake_profile','Поддельный профиль'], ['inappropriate','Неприемлемый контент'], ['other','Другое'] ] as const;
 const orderOptions = [ ['asc','Сначала старые'], ['desc','Сначала новые'] ] as const;
@@ -88,6 +99,23 @@ function CommunityPanel({name}:{name:string}) {
   const [orderOpen,setOrderOpen] = useState(false);
   const origin = useRef<RefObject<Trigger | null>>(aggregateReportTrigger);
   const locked = owner.busy(), own = s.own?.own;
+  // Photo drafts + create→photoIds association live on CommunityPanel (same owner lifetime).
+  // RootCommentComposer unmounts when canCreate flips false; association must outlive it.
+  const photos = useVenueCommentPhotoComposer(s.scope?.canonicalVenueId ?? null, s.actor, locked);
+  const pendingPublish = useRef<PendingPublishMap>(new Map());
+  const rememberPublish = useCallback((packetKey: string, photoIds: readonly string[]) => {
+    pendingPublish.current = notePendingPublish(pendingPublish.current, packetKey, photoIds);
+  }, []);
+  useEffect(() => {
+    const { pending, retireIds, refusedWithPhotos } = applyPublishOperationUpdates(
+      pendingPublish.current,
+      s.operations,
+    );
+    pendingPublish.current = pending;
+    if (retireIds.length) photos.retirePublished(retireIds);
+    // photoUnavailable / TTL: drafts stay, but expired receipts must not stay Send-eligible.
+    if (refusedWithPhotos) photos.recheckExpiry();
+  }, [s.operations, photos]);
   const orderLabel = orderOptions.find(([value]) => value === s.order)?.[1] ?? orderOptions[0][1];
   const login = () => router.push({pathname:'/profile',params:{returnTo:`/venues/${s.venueId}`}});
   const commit = (action:Action) => { const packet = owner.review(action); if (packet) void owner.commit(packet.key); };
@@ -95,6 +123,7 @@ function CommunityPanel({name}:{name:string}) {
   const close = () => { if (confirmation) owner.cancelReview(confirmation.packet.key); setConfirmation(null); setReport(null); setReason(null); setDetail(''); };
   const reportSubject = (subject:ReportSubject, source: RefObject<Trigger | null>) => { if (!s.actor) {login();return;} origin.current=source;setReport(subject);setReason(null);setDetail(''); };
   const aggregate = s.summary;
+  const canCreate = s.roots.pages[0]?.page.canCreate;
   return <>
     <UnresolvedActions owner={owner} />
     <View style={styles.card}>
@@ -144,10 +173,10 @@ function CommunityPanel({name}:{name:string}) {
       <DiscoverySheet visible={orderOpen} title="Порядок" onClose={() => setOrderOpen(false)} returnFocusRef={orderTrigger}>
         {orderOptions.map(([value,label]) => <DiscoveryChip key={value} title={label} selected={s.order === value} onPress={() => { owner.setOrder(value); setOrderOpen(false); }} />)}
       </DiscoverySheet>
-      {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} /> : s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate ? <>
-        <Field label="Ваш комментарий" value={s.drafts.root ?? ''} disabled={locked} onChange={text => owner.setDraft('root',text)} />
-        <PrimaryButton title="Отправить" disabled={locked || !validText(s.drafts.root ?? '')} onPress={() => commit({kind:'create',text:s.drafts.root!,parentCommentId:null,parentEntityId:s.scope!.canonicalVenueId})} />
-      </> : s.roots.phase === 'ready' && <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>}
+      {!s.actor ? <ActionButton title="Войти, чтобы написать комментарий" onPress={login} />
+        : canCreate ? <RootCommentComposer locked={locked} photos={photos} onPublish={rememberPublish} />
+          : s.roots.phase === 'ready' ? <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>
+            : null}
       <Outcomes owner={owner} match={o => o.packet.action.kind === 'create' && !o.packet.action.parentCommentId} />
       <ThreadNotice thread={s.roots} reload={() => void owner.loadThread(null)} />
       {s.roots.phase === 'ready' && !s.roots.pages.flatMap(p => p.page.items).length && <Label>Пока нет комментариев. Начните разговор.</Label>}
@@ -178,6 +207,62 @@ function CommunityPanel({name}:{name:string}) {
       <PrimaryButton title={confirmation.packet.action.kind === 'delete' ? 'Удалить комментарий' : confirmation.packet.action.kind === 'withdraw' ? 'Убрать мою оценку' : 'Отправить жалобу'} disabled={s.operations.find(o => o.packet.key === confirmation.packet.key)?.status !== 'review'}
         onPress={() => { void owner.commit(confirmation.packet.key); setConfirmation(null);setReport(null);setDetail('');setReason(null); }} />
     </Dialog>}
+  </>;
+}
+function RootCommentComposer({
+  locked,
+  photos,
+  onPublish,
+}: {
+  locked: boolean;
+  photos: VenueCommentPhotoComposerModel;
+  onPublish: (packetKey: string, photoIds: readonly string[]) => void;
+}) {
+  const { owner, state: s } = useVenueCommunity();
+  const draft = s.drafts.root ?? '';
+  // No create→photoIds association state here — this composer unmounts when canCreate is false;
+  // CommunityPanel owns that association next to drafts so reconcile can still retire them.
+  const textValid = !draft.trim() || validText(draft);
+  // Button gate must match press-time evaluateCommentCreateAtPress (r7c / r8): after expiry
+  // timer marks drafts expired, valid text-only Send stays enabled (expired photoIds excluded).
+  // photos.canSend still blocks checking / rejected / retryable / pending reads.
+  const sendEnabled = !locked
+    && photos.canSend(draft)
+    && textValid
+    && evaluateCommentCreateAtPress(draft, photos.items, {
+      textValid,
+      checking: photos.checking,
+    }).submit;
+  return <>
+    <Field label="Ваш комментарий" value={draft} disabled={locked} onChange={text => owner.setDraft('root', text)} />
+    <VenueCommentPhotoComposer model={photos} disabled={locked} />
+    <PrimaryButton
+      title="Отправить"
+      disabled={!sendEnabled}
+      onPress={() => {
+        // Press-time recheck (web onSubmit): ids from current items ref, not render readyIds.
+        const now = Date.now();
+        if (photos.checking) return;
+        const photoIds = photos.takeReadyIds(now);
+        const trimmed = draft.trim();
+        if (trimmed) {
+          if (!validText(draft)) return;
+        } else if (photoIds.length === 0) {
+          photos.recheckExpiry(now);
+          return;
+        }
+        const packet = owner.review({
+          kind: 'create',
+          text: draft,
+          parentCommentId: null,
+          parentEntityId: s.scope!.canonicalVenueId,
+          ...(photoIds.length ? { photoIds } : {}),
+        });
+        if (!packet) return;
+        if (photoIds.length) onPublish(packet.key, photoIds);
+        void owner.commit(packet.key);
+      }}
+    />
   </>;
 }
 function ThreadNotice({thread,reload}:{thread:Thread;reload:()=>void}) {
