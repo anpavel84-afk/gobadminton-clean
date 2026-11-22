@@ -1731,6 +1731,7 @@
           "Games"
         ],
         "summary": "Atomically cancel game and all active participations",
+        "description": "NativeBearer opt-in while enabled; mixed credentials rejected. Cookie Origin/CSRF unchanged. GamesService.cancel authority/idempotency/CAS/session rules remain source of truth.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -1768,7 +1769,15 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/games/{gameId}/results": {

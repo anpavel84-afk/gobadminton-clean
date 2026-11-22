@@ -20,12 +20,13 @@ export function ManagedTerms({ game }: { game: Game }) {
     {!!game.trainingDescription && <Label>{game.trainingDescription}</Label>}
   </View>;
 }
+const commandLabels = { create:'Создание игры',publish:'Публикация игры',cancel:'Отмена игры',confirm:'Подтверждение заявки',reject:'Отклонение заявки',remove:'Снятие участия' } as const;
 export function ManagementCommand() {
   const owner = useAuth().gameManagement, state = useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot);
   return <>{state.command?.status === 'sending' && <Loading title="Выполняем команду…" />}
     {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
     {state.command?.status === 'unknown' && <>
-      <Label>{({create:'Создание игры',publish:'Публикация игры',confirm:'Подтверждение заявки',reject:'Отклонение заявки',remove:'Снятие участия'})[state.command.packet.kind]} · {state.command.packet.kind === 'create' ? state.command.packet.body.title || 'Игра' : state.command.packet.gameId}</Label>
+      <Label>{commandLabels[state.command.packet.kind]} · {state.command.packet.kind === 'create' ? state.command.packet.body.title || 'Игра' : state.command.packet.gameId}</Label>
       <PrimaryButton title="Проверить ту же команду" onPress={() => void owner.reconcile()} />
     </>}</>;
 }
@@ -33,10 +34,16 @@ export function GameManagement({ id }: { id: string }) {
   const auth = useAuth(), owner = auth.gameManagement, router = useRouter();
   const state = useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot), d = state.details[id];
   const [reason,setReason] = useState('');
-  useEffect(() => { setReason(''); if (auth.status === 'authenticated') void owner.loadDetail(id); }, [owner,id,auth.status,state.actor?.actorId,state.actor?.sessionId,state.actor?.generation]);
+  const [cancelReason,setCancelReason] = useState('');
+  const [confirmingCancel,setConfirmingCancel] = useState(false);
+  useEffect(() => {
+    setReason(''); setCancelReason(''); setConfirmingCancel(false);
+    if (auth.status === 'authenticated') void owner.loadDetail(id);
+  }, [owner,id,auth.status,state.actor?.actorId,state.actor?.sessionId,state.actor?.generation]);
   const current = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
   const locked = ['sending','unknown'].includes(state.command?.status ?? '');
   const mutable = d?.status === 'ready' && d.roster === 'ready' && d.game?.status === 'published' && Date.parse(d.game.startsAt) > Date.now() && !locked;
+  const cancellable = d?.status === 'ready' && !!d.management && !!d.game && (d.game.status === 'draft' || d.game.status === 'published') && !locked;
   return <Page keyboard header={<Header />}><BackLink title="← Мои игры" onPress={() => router.replace('/my-games')} /><Label style={styles.title}>Управление игрой</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <><Label>Сводка доступна создателю или менеджеру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(`/games/manage/${id}`)} /></>
       : !d || d.status === 'loading' ? <Loading title="Загружаем сводку…" />
@@ -47,7 +54,21 @@ export function GameManagement({ id }: { id: string }) {
         <Label>{d.management?.role === 'owner' ? 'Создаю и управляю' : 'Управляю'}</Label>
         <ManagementCommand />
         {d.game.status === 'draft' && <PrimaryButton title="Опубликовать черновик" disabled={locked} onPress={() => void owner.publishDraft(id)} />}
-        <Label>Изменение вместимости и отмена игры пока недоступны.</Label>
+        <Label>Изменение вместимости пока недоступно.</Label>
+        {confirmingCancel && cancellable ? <>
+          <Label style={styles.subtitle}>Подтверждение отмены</Label>
+          <Label>После подтверждения игра будет отменена. Новые заявки и изменения состава станут недоступны; автоматический возврат средств платформой не выполняется.</Label>
+          <ManagedTerms game={d.game} />
+          <Label>Причина отмены</Label>
+          <TextInput accessibilityLabel="Причина отмены" value={cancelReason} onChangeText={setCancelReason} maxLength={1000} multiline allowFontScaling
+            autoCorrect={Platform.OS === 'ios' ? false : undefined}
+            returnKeyType={Platform.OS === 'ios' ? 'done' : undefined}
+            style={{ minHeight: 48, padding: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 12, fontFamily: typography.fontFamily, fontSize: 16, color: colors.ink }} />
+          <PrimaryButton title="Подтвердить отмену" disabled={locked || cancelReason.trim().length < 1}
+            onPress={() => { void owner.cancel(id, cancelReason); setConfirmingCancel(false); }} />
+          <TextButton title="Не отменять" onPress={() => setConfirmingCancel(false)} />
+        </> : cancellable ? <TextButton title="Отменить игру" onPress={() => setConfirmingCancel(true)} /> : null}
+        {d.game.status === 'cancelled' && <Label>Игра отменена. Новые заявки и изменения состава недоступны.</Label>}
         <Label style={styles.subtitle}>Заявки и состав</Label><Label>Заявки ждут вашего ответа. Место занято после подтверждения.</Label>
         {d.roster === 'loading' && <Loading title="Загружаем заявки…" />}
         {d.roster === 'error' && <Label>Не удалось загрузить заявки. Без актуального списка действия недоступны.</Label>}

@@ -79,9 +79,22 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Scenario P2; mobile unit `profile-avatar.test.ts`; API `native-avatar.foundation.test.ts` (DB harness) |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — ADDRESS1 source repair against Astra/Root findings; genuine lock/native modules/binary/device remain Root/QA; iOS original-container fallback and native white-flatten are bounded blockers, not parity claims; not VERIFIED_SOURCE |
 
+## GM-Cancel · Organizer native game cancellation (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Existing `GamesService.cancel` + web cookie cancel admission; native confirmation on manage screen; capacity remains out of scope |
+| Entry | Authenticated `/games/manage/:id` for current managed draft\|published game only |
+| Trigger | Explicit «Отменить игру» → confirmation with current ManagedTerms + reason (1…1000) → «Подтвердить отмену»; Back / «Не отменять» / auth return do not dispatch |
+| Expected | Immutable cancel packet (`expectedVersion`, reason, Idempotency-Key); UNKNOWN retains exact packet/key/body/actor; reconcile only; logout/account switch retires private state; reject/remove draft text preserved separately |
+| Accessibility | Existing Page keyboard/safe-area/Back; labelled cancel reason field; confirmation copy before submit |
+| Evidence | Mobile units `game-management` / auth cancel; API fixture `native-game-cancel.foundation.test.ts` (DB harness, author NOT_RUN) |
+| Status | **SOURCE_PENDING_INDEPENDENT_QA_BUILD_DEVICE** — #522 PARTIAL; not VERIFIED_SOURCE; no device/QA/DEV PASS |
+
 ## Explicit non-claims
 
 - Candidate APK URL/SHA remain NULL until Root binds a future build — unit/export success is not UI PASS.
 - Emulator success is not Xiaomi success; Owner Xiaomi FAIL stays separate.
 - This scope does not close full native parity for the rest of #522.
 - code14 is planned source `versionCode` only — new native modules require a fresh code14 binary; code13 cannot gain modules through OTA/export; no build/device/iOS/OTA acceptance claim.
+- Native organizer cancel source above is #522 PARTIAL pending independent QA/build/device; capacity editing remains unfinished.

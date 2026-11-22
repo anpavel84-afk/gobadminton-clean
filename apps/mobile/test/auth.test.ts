@@ -899,6 +899,57 @@ test('root controlled direct private404 after safety hides private DTOs while pr
   assert.equal(s.auth.messages.getSnapshot().pending['direct:thread'], undefined);
 });
 
+test('UNKNOWN cancel uses closed /cancel transport; same-owner recovery restores packet; logout retires private cancel state', async () => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate();
+  const owner = s.auth.gameManagement, published = { ...fixture, status: 'published' as const, version: 8 };
+  let phase: 'unknown' | 'lost' | 'return' | 'reconcile' = 'unknown';
+  const verified = deferred<unknown>();
+  s.setHandler(async path => {
+    if (path === '/me') return phase === 'return' ? verified.promise : me;
+    if (path === '/me/games' || path.startsWith('/me/games?')) return { items: [{ ...published, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    if (path === `/games/${fixture.id}`) return published;
+    if (path.startsWith(`/games/${fixture.id}/participations`)) return { items: [], nextCursor: null };
+    if (path.endsWith('/cancel')) {
+      if (phase !== 'reconcile') throw new Error('UNKNOWN cancel');
+      return { ...published, status: 'cancelled', version: 9 };
+    }
+    if (path === '/auth/native/refresh' && phase === 'lost') throw new Error('lost session');
+    if (path === '/auth/methods') return { items: [{ method: 'vk', type: 'oauth', available: true }] };
+    if (path === '/auth/native/transactions') return { transactionId: token('t'), expiresAt: new Date(now + 600000).toISOString(), browserStartUrl: `https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}` };
+    if (path === '/auth/native/exchange') return { ...credentials, sessionId: 'cancel-return-session' };
+    return { ok: true };
+  });
+  await owner.loadDetail(fixture.id); await owner.cancel(fixture.id, 'Auth cancel reason');
+  const original = owner.getSnapshot().command!.packet;
+  assert.equal(original.kind, 'cancel'); assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.deepEqual(original.body, { expectedVersion: 8, reason: 'Auth cancel reason' });
+  assert.equal(s.calls.filter(c => c.path.endsWith('/cancel')).length, 1);
+  phase = 'lost'; await s.auth.refresh();
+  assert.equal(s.auth.getSnapshot().status, 'unverifiable'); assert.equal(owner.getSnapshot().command, undefined);
+  await owner.reconcile(); assert.equal(s.calls.filter(c => c.path.endsWith('/cancel')).length, 1);
+  await s.auth.beginLogin(`/games/manage/${fixture.id}`);
+  const login = JSON.parse(s.stored()!).pending as PendingLogin;
+  phase = 'return';
+  const work = s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  await new Promise(resolve => setImmediate(resolve));
+  verified.resolve({ ...me, session: { ...me.session, id: 'cancel-return-session' } });
+  assert.equal(await work, `/games/manage/${fixture.id}`);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command!.packet.key, original.key);
+  assert.strictEqual(owner.getSnapshot().command!.packet.body, original.body);
+  assert.equal(s.calls.filter(c => c.path.endsWith('/cancel')).length, 1);
+  phase = 'reconcile'; await owner.reconcile();
+  const cancels = s.calls.filter(c => c.path.endsWith('/cancel'));
+  assert.equal(cancels.length, 2); assert.equal(cancels[1]!.init.body, cancels[0]!.init.body);
+  assert.equal((cancels[1]!.init.headers as Record<string, string>)['Idempotency-Key'], original.key);
+  assert.equal(owner.getSnapshot().notice, 'Игра отменена.');
+  phase = 'unknown'; await owner.loadDetail(fixture.id); await owner.cancel(fixture.id, 'Second cancel');
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.deepEqual(owner.getSnapshot().details, {});
+});
+
 test('venue-create auth intent accepts only exact typed UUID route and survives secure return parsing', async () => {
   const route = '/games/create/venue/11111111-1111-4111-8111-111111111111';
   assert.equal(canonicalReturnPath(route),route);

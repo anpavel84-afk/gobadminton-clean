@@ -1,8 +1,20 @@
+## #522 PARTIAL — native organizer game cancellation (source only)
+
+Source candidate for organizer/manager cancel on `/games/manage/:id` using accepted backend `POST /games/{gameId}/cancel` semantics (expectedVersion + bounded reason + Idempotency-Key; draft|published; GamesService.cancel authority/CAS/idempotency unchanged). Native confirmation shows current ManagedTerms, requires explicit «Подтвердить отмену», and does not cancel on Back/auth return. Capacity editing remains deferred. Existing GameManagementCoordinator packet/UNKNOWN/reconcile/actor fences extended with `cancel` only.
+
+API: existing cancel route gains `requirePrincipalMutation` + OpenAPI NativeBearer beside cookieSession; cookie Origin/CSRF preserved; mixed credentials rejected. New isolated `native-game-cancel.foundation.test.ts` (env `NATIVE_GAME_CANCEL_TEST_DATABASE_URL`) verifies native cancel + cookie/mixed/unauthorized fences; author did **not** run DB.
+
+**#522 PARTIAL / SOURCE_PENDING independent QA, Product CI, build, device, DEV smoke.** No device/QA/DEV PASS claim. Outside-allowlist stale cancel→403 expectations in older native foundation suites and db-ci wiring for the new cancel env remain Root follow-ups. Capacity and remaining #522 parity unfinished. No package installs, lock/SDK/versionCode changes, secrets, PR/merge/deploy or PROD.
+
+Author offline checks (no install; `node_modules` absent): stripTypeScriptTypes OK for `game-management.ts`, `native-api.ts`, `game-management.test.ts`, `auth.test.ts`, `native-game-cancel.foundation.test.ts`; OpenAPI cancel security structurally includes cookieSession+NativeBearer. Unit `test:unit` and DB fixture **NOT_RUN** (missing deps / no live DB). Controller/tsx strip limitations unchanged vs prior exports.
+
+---
+
 ## #522 P-02 — Own profile avatar change/remove (source only)
 
 Implements change/remove of the own avatar inside the existing native profile editor (web `AvatarEditor` composition authority). Manifest pins only: `expo-image-picker@58.0.10`, `expo-image-manipulator@58.0.16`, `expo-file-system@58.0.13`. **Do not treat this source as ready for native-module tests/build** until the trusted parent generates a genuine lock/deps child (isolated store, ignore-scripts, unrelated importers frozen). Author did not install/fetch/hand-edit `pnpm-lock.yaml`, run package scripts/network, or upgrade Expo/RN/React.
 
-Android `versionCode` source counter **21** (no 21→22); verified picker plugin `photosPermission/cameraPermission/microphonePermission: false`; existing `blockedPermissions` preserved. Closed raw-binary native port PUT/DELETE `/me/avatar`; AvatarController uses `requirePrincipalMutation`; OpenAPI NativeBearer on those two operations only (API **0.44.0**, schema inventory **72**, wholeNative **74** + selected **32** inherited). Behavior/parity rows are **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**, not VERIFIED_SOURCE.
+Android `versionCode` source counter **22** (no 22→23); verified picker plugin `photosPermission/cameraPermission/microphonePermission: false`; existing `blockedPermissions` preserved. Closed raw-binary native port PUT/DELETE `/me/avatar`; AvatarController uses `requirePrincipalMutation`; OpenAPI NativeBearer on those two operations only (API **0.44.0**, schema inventory **72**, wholeNative **74** + selected **32** inherited). Behavior/parity rows are **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**, not VERIFIED_SOURCE.
 
 ADDRESS1 (Root-review prep): AuthContext projects `avatar` coordinator; UNKNOWN Retry reachable via `!busy` while `blocksEdits` fences replacement/text; oriented crop uses EXIF-normalized size (device/Glide gap preserved); derivative oversize stays inside compression ladder; local deadline retires ownership and cleans late app-owned outputs; authoritative GET rebase preserves dirty draft fields; live runtime uses `typeof import` SDK types; plain Russian transparency guidance; API unit mock uses `requirePrincipalMutation`.
 
