@@ -402,6 +402,33 @@ export class ProfileCoordinator {
       if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.' });
     }
   };
+  /**
+   * Stale UI refresh only (status==='stale'): authoritative GET + rebaseFromAuthoritative.
+   * Preserves dirty name/city/area/bio/level; adopts fresh version/policy/pristine fields.
+   * No auto write / policy resend. Does not infer cause from notice text.
+   */
+  refreshAuthoritative = async () => {
+    const actor = this.state.actor;
+    if (!actor || !this.state.profile || this.state.command || this.state.status !== 'stale' || this.isPeerBusy()) return;
+    const serial = ++this.serial;
+    this.show({ status: 'loading', notice: null });
+    try {
+      const [profile, cities] = await Promise.all([this.port.read(), this.port.cities()]);
+      if (!this.current(actor) || serial !== this.serial) return;
+      this.show({ cities });
+      this.rebaseFromAuthoritative(profile);
+      if (!this.current(actor) || serial !== this.serial) return;
+      const adopted = this.state.profile;
+      this.show({
+        status: 'ready',
+        notice: adopted.displayName.trim() && adopted.cityId
+          ? null
+          : 'Укажите публичное имя и выберите город. Имя аккаунта не подставляется.',
+      });
+    } catch {
+      if (this.current(actor) && serial === this.serial) this.show({ status: 'error', notice: 'Не удалось проверить профиль и каталог городов. Повторите загрузку.' });
+    }
+  };
   update = (patch: Partial<ProfileDraft>) => {
     if (!this.state.actor || this.state.command || this.state.status !== 'ready' || this.isPeerBusy()) return;
     if (patch.cityId !== undefined && !this.state.cities.some(c => c.id === patch.cityId)) return;

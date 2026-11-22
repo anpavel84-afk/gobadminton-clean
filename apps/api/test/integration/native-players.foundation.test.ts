@@ -218,7 +218,7 @@ run("bounded native public Players principal opt-in", () => {
       expect(response.statusCode).toBe(200);
       return response.json();
     };
-    let before = await read();
+    const before = await read();
     const closeKey = randomUUID();
     const close = await app.inject({
       method: "PATCH", url, headers: bearer(a, closeKey),

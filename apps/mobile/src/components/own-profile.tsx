@@ -51,7 +51,7 @@ export function OwnProfileCard({ onEdit, onSettings, settingsOpen }: {
     {(state.status === 'error' || state.status === 'idle') &&
       <TextButton title="Повторить загрузку профиля и городов" onPress={() => void owner.load()} />}
     {state.status === 'stale' &&
-      <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.load()} />}
+      <PrimaryButton title="Загрузить актуальный профиль для проверки" onPress={() => void owner.refreshAuthoritative()} />}
     {profile && player && <>
       <PlayerProfileHero
         player={player}

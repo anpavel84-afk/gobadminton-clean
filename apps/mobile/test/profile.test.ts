@@ -134,7 +134,8 @@ test('UNKNOWN survives navigation/read and same-actor reauth: only explicit reco
   assertDraft(s.owner.getSnapshot().draft, emptyDraft); await s.owner.reconcile(); assert.equal(s.sent.length, 1);
   const returned = { ...actor, sessionId: 'new-session', generation: 2 }; s.owner.setActor(returned);
   assert.equal(s.owner.getSnapshot().command?.packet.kind, 'profile');
-  assert.equal(s.owner.getSnapshot().command?.packet.kind === 'profile' ? s.owner.getSnapshot().command?.packet.cityName : undefined, city.nameRu);
+  const pendingPacket = s.owner.getSnapshot().command?.packet;
+  assert.equal(pendingPacket?.kind === 'profile' ? pendingPacket.cityName : undefined, city.nameRu);
   await s.owner.load(); await s.owner.save(); assert.equal(s.sent.length, 1); recovered = true;
   await s.owner.reconcile(); assert.strictEqual(s.sent[1]?.packet, original); assert.deepEqual(s.sent[1]?.authority, returned);
   assert.equal(s.owner.getSnapshot().profile?.version, 1);

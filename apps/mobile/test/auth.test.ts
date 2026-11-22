@@ -504,8 +504,8 @@ test('root profile owner never copies email-looking auth name; UNKNOWN reauth re
   s.setHandler(async () => { throw new Error('unknown again'); }); await s.auth.profile.save();
   assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
   assert.equal(s.auth.profile.getSnapshot().command?.packet.kind,'profile');
-  assert.equal(s.auth.profile.getSnapshot().command?.packet.kind === 'profile'
-    ? s.auth.profile.getSnapshot().command?.packet.body.areaKey : undefined,'метро');
+  const pendingPacket = s.auth.profile.getSnapshot().command?.packet;
+  assert.equal(pendingPacket?.kind === 'profile' ? pendingPacket.body.areaKey : undefined,'метро');
   await s.auth.logout(); assert.equal(s.auth.profile.getSnapshot().command,undefined); assert.equal(s.auth.profile.getSnapshot().profile,null);
   assert.deepEqual(s.auth.profile.getSnapshot().draft,emptyFive);
 });

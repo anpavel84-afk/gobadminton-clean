@@ -20,7 +20,7 @@ const city = { id: 'catalog-city', nameRu: 'Казань', nameEn: 'Kazan', coun
 const deferred = <T>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 
 function ackPolicy(packet: ProfilePacket, base: OwnProfile): OwnProfile {
-  assert.equal(packet.kind, 'contactPolicy');
+  if (packet.kind !== 'contactPolicy') throw new Error('expected contactPolicy packet');
   return { ...base, version: packet.body.expectedVersion + 1, contactPolicy: packet.body.contactPolicy };
 }
 
@@ -103,7 +103,7 @@ test('version0 cannot fake policy; ready version>=1 toggles; same value is no-op
 
 test('shared writer locks: peer busy and pending profile save block policy; policy blocks profile save', async () => {
   let busy = false;
-  const base = { ...emptyProfile, version: 5, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests' };
+  const base: OwnProfile = { ...emptyProfile, version: 5, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests' };
   const gate = deferred<OwnProfile>();
   const s = setup(base, { send: () => gate.promise }, () => busy);
   await s.owner.load();
@@ -127,7 +127,7 @@ test('shared writer locks: peer busy and pending profile save block policy; poli
   const owner = new ProfileCoordinator({
     read: async () => ({ ...base }),
     cities: async () => [city],
-    send: async (packet, authority) => {
+    send: async (packet, authority): Promise<OwnProfile> => {
       sent.push({ packet, authority });
       if (packet.kind === 'contactPolicy') return gate2.promise;
       return {
@@ -152,7 +152,7 @@ test('shared writer locks: peer busy and pending profile save block policy; poli
 });
 
 test('policy 409/401/network UNKNOWN with exact packet retry; late actor ACK ignored', async () => {
-  const base = { ...emptyProfile, version: 4, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests' };
+  const base: OwnProfile = { ...emptyProfile, version: 4, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests' };
   const conflict = setup(base, {
     send: async () => { throw new ProfileError('business', 409, 'VERSION_CONFLICT'); },
   });
@@ -201,7 +201,7 @@ test('policy 409/401/network UNKNOWN with exact packet retry; late actor ACK ign
 });
 
 test('same-actor reauth restores policy UNKNOWN; account B and logout wipe; no auto re-toggle', async () => {
-  const base = { ...emptyProfile, version: 6, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests' };
+  const base: OwnProfile = { ...emptyProfile, version: 6, displayName: 'Игрок', cityId: city.id, contactPolicy: 'requests' };
   let recovered = false;
   const s = setup(base, {
     send: async (p) => {
@@ -234,12 +234,75 @@ test('same-actor reauth restores policy UNKNOWN; account B and logout wipe; no a
   assert.equal(wipe.owner.getSnapshot().command, undefined);
 });
 
+test('stale policy conflict then refreshAuthoritative rebases: dirty draft kept, fresh policy/version, no auto write, late GET fenced', async () => {
+  const serverV2: OwnProfile = {
+    ...emptyProfile, version: 2, displayName: 'Servername', cityId: city.id, bio: 'Serverbio', contactPolicy: 'requests',
+  };
+  let server: OwnProfile = { ...serverV2 };
+  let writes = 0;
+  const readGate = deferred<OwnProfile>();
+  let holdRead = false;
+  const s = setup(serverV2, {
+    read: async () => {
+      if (holdRead) return readGate.promise;
+      return { ...server };
+    },
+    send: async () => {
+      writes += 1;
+      throw new ProfileError('business', 409, 'VERSION_CONFLICT');
+    },
+  });
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().profile?.version, 2);
+  s.owner.update({ displayName: 'Unsavedname', bio: 'Unsavedbio', areaKey: 'метро', cityId: city.id });
+  await s.owner.setContactPolicy('closed');
+  assert.equal(s.owner.getSnapshot().status, 'stale');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsavedname');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsavedbio');
+  assert.equal(s.owner.getSnapshot().profile?.contactPolicy, 'requests');
+  assert.equal(writes, 1);
+
+  // Concurrent authoritative v3 with policy closed and pristine server fields.
+  server = {
+    ...serverV2, version: 3, displayName: 'Servername', bio: 'Serverbio', areaKey: null, contactPolicy: 'closed',
+  };
+  // Exact OwnProfileCard stale refresh path: refreshAuthoritative (not load wipe).
+  await s.owner.refreshAuthoritative();
+  assert.equal(writes, 1);
+  assert.equal(s.owner.getSnapshot().status, 'ready');
+  assert.equal(s.owner.getSnapshot().profile?.version, 3);
+  assert.equal(s.owner.getSnapshot().profile?.contactPolicy, 'closed');
+  assert.equal(s.owner.getSnapshot().profile?.displayName, 'Servername');
+  assert.equal(s.owner.getSnapshot().profile?.bio, 'Serverbio');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsavedname');
+  assert.equal(s.owner.getSnapshot().draft.bio, 'Unsavedbio');
+  assert.equal(s.owner.getSnapshot().draft.areaKey, 'метро');
+  assert.equal(s.owner.getSnapshot().draft.cityId, city.id);
+
+  // Late actor GET after generation change cannot repaint the refresh.
+  holdRead = true;
+  server = { ...server, version: 4, displayName: 'LateServer', bio: 'LateBio', contactPolicy: 'requests' };
+  // Re-enter stale via policy 409 so the same UI method is exercised under a late fence.
+  await s.owner.setContactPolicy('requests');
+  assert.equal(s.owner.getSnapshot().status, 'stale');
+  assert.equal(s.owner.getSnapshot().draft.displayName, 'Unsavedname');
+  const late = s.owner.refreshAuthoritative();
+  s.owner.setActor({ ...actor, generation: 9 });
+  readGate.resolve({ ...server });
+  await late;
+  assert.equal(s.owner.getSnapshot().profile, null);
+  assert.notEqual(s.owner.getSnapshot().draft.displayName, 'LateServer');
+  assert.equal(writes, 2);
+});
+
 test('own-profile Switch and profile-editor pending copy reference contactPolicy command', () => {
   const own = readFileSync(new URL('../src/components/own-profile.tsx', import.meta.url), 'utf8');
   assert.match(own, /Разрешать личные сообщения/);
   assert.match(own, /setContactPolicy/);
   assert.match(own, /accessibilityRole="switch"/);
   assert.match(own, /profile\.version < 1/);
+  assert.match(own, /status === 'stale'[\s\S]*refreshAuthoritative/);
+  assert.doesNotMatch(own, /status === 'stale'[\s\S]*owner\.load\(\)/);
   const policyBlock = own.slice(own.indexOf('Настройки сообщений'));
   assert.doesNotMatch(policyBlock, /directoryVisible|setDirectory|radarConsent/);
   assert.match(policyBlock, /setContactPolicy\(allow \? 'requests' : 'closed'\)/);
