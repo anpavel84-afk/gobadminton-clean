@@ -19,7 +19,6 @@ test('#660 inline «Свайп» CTA sits in the list header before «Все и�
   assert.ok(swipeIdx < allPlayersIdx, 'inline Свайп CTA before Все игроки');
   assert.match(header, /!showFloatingSwipe && <Pressable/);
   assert.match(header, /onPress=\{openSwipeBrowse\}/);
-  assert.match(header, /onLayout=\{event => setInlineSwipeBottom\(event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
   assert.match(header, />Свайп</);
 });
 
@@ -38,4 +37,35 @@ test('#660 floating «Свайп» is scroll-gated; shared handler; Radar pill s
   assert.doesNotMatch(floating, /pointerEvents="box-none"[^>]*>\s*<Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"/);
   assert.equal((players.match(/onPress=\{openSwipeBrowse\}/g) ?? []).length, 2);
   assert.doesNotMatch(players, /browse\.stage\(filters,list\?\.data \?\? null\); router\.push\('\/players\/browse'\)/);
+});
+
+test('#660 r2: floating threshold includes list content paddingTop origin (Codex finding 1)', () => {
+  const players = read('../app/players/index.tsx');
+  const headerStart = players.indexOf('ListHeaderComponent=');
+  const headerEnd = players.indexOf('renderItem=', headerStart);
+  const header = players.slice(headerStart, headerEnd);
+  assert.match(players, /contentContainerStyle=\{\{ paddingHorizontal: 16, paddingTop: 22,/);
+  // Threshold must add the 22px content-coordinate origin; header-relative y alone is the bug.
+  assert.match(header, /onLayout=\{event => setInlineSwipeBottom\(22 \+ event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
+  // NEGATIVE / regression: bare header-relative bottom without content padding origin
+  assert.doesNotMatch(header, /setInlineSwipeBottom\(event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)/);
+});
+
+test('#660 r2: measurable layout slot preserved; exactly one button (Codex finding 2)', () => {
+  const players = read('../app/players/index.tsx');
+  const headerStart = players.indexOf('ListHeaderComponent=');
+  const headerEnd = players.indexOf('renderItem=', headerStart);
+  const header = players.slice(headerStart, headerEnd);
+  const slotStart = header.indexOf('setInlineSwipeBottom');
+  assert.ok(slotStart >= 0, 'inline swipe measurement present');
+  const slotBlock = header.slice(header.lastIndexOf('<View', slotStart), header.indexOf('Все игроки'));
+  // Slot View owns onLayout and minHeight so space + measurement survive floating mode.
+  assert.match(slotBlock, /<View onLayout=\{event => setInlineSwipeBottom\(22 \+ event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
+  assert.match(slotBlock, /minHeight:48/);
+  assert.match(slotBlock, /!showFloatingSwipe && <Pressable/);
+  // Exactly one inline button instance in header; floating is the other (outside header).
+  assert.equal((header.match(/accessibilityLabel="Свайп — просмотр игроков карточками"/g) ?? []).length, 1);
+  assert.equal((players.match(/accessibilityLabel="Свайп — просмотр игроков карточками"/g) ?? []).length, 2);
+  // NEGATIVE / regression: unmounting the Pressable must not remove the only onLayout (old bug).
+  assert.doesNotMatch(header, /!showFloatingSwipe && <Pressable[^>]*onLayout=\{event => setInlineSwipeBottom/);
 });
