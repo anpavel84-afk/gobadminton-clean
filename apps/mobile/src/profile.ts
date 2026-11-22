@@ -604,7 +604,9 @@ export class ProfileCoordinator {
   };
   private lookingNotice(packet: LookingPacket, phase: 'unknown' | 'fail' | 'ok', looking?: Looking | null): string {
     if (phase === 'ok') {
-      if (packet.kind === 'lookingDelete' || !looking || looking.state === 'inactive') {
+      // Success copy follows the fresh adopted Looking only — never the historical packet.kind.
+      // A verified DELETE ACK may still yield to a newer active GET (external enable); claim that state.
+      if (!looking || looking.state === 'inactive') {
         return '«Ищу игру» выключено.';
       }
       // Historical PUT replay may return the original active ACK after TTL end — never claim «включено».

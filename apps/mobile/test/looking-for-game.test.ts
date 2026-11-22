@@ -421,7 +421,14 @@ test('address2: historical ACK yields to newer GET; no-record stop; expired noti
   newer.owner.update({ displayName: 'Черновик', bio: 'dirty' });
   await newer.owner.enableLooking('a', LOOKING_TTL_1H);
   failOnce = false;
-  live = { ...prior, lookingForGame: activeLooking(2, { areaKey: 'other-body' }) };
+  // Explicit future expiry vs current clock — default helper TTL is a fixed past wall time after Root run.
+  live = {
+    ...prior,
+    lookingForGame: activeLooking(2, {
+      areaKey: 'other-body',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    }),
+  };
   await newer.owner.reconcile();
   assert.equal(newer.owner.getSnapshot().command, undefined);
   assert.equal(newer.owner.getSnapshot().profile?.lookingForGame?.version, 2);
@@ -487,4 +494,93 @@ test('address2: historical ACK yields to newer GET; no-record stop; expired noti
   await staleNested.owner.load();
   await staleNested.owner.enableLooking('zone', LOOKING_TTL_1H);
   assert.equal(staleNested.owner.getSnapshot().command?.status, 'unknown');
+});
+
+test('address3: DELETE inactive ACK yields to newer active GET; expired newer honest notice', async (t) => {
+  // Scoped clock so helper TTL and expired fixture stay deterministic without weakening production expiry.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-22T12:00:00.000Z') });
+  try {
+    const inactiveAckV1: Looking = {
+      version: 1, state: 'inactive', cityId: city.id, areaKey: 'sokol',
+      startsAt: '2026-11-22T10:00:00.000Z', endsAt: '2026-11-22T13:00:00.000Z',
+      expiresAt: '2026-11-22T13:00:00.000Z', formatKeys: [],
+    };
+
+    // Cached stop UNKNOWN: verified inactive ACK v1 + fresh active v2 from external enable → honest «включено».
+    const base: OwnProfile = {
+      ...emptyProfile, version: 8, displayName: 'Игрок', cityId: city.id,
+      lookingForGame: activeLooking(3),
+    };
+    let phase: 'net' | 'ack' = 'net';
+    let authoritative: OwnProfile = { ...base };
+    const s = setup(base, {
+      looking: async () => {
+        if (phase === 'net') throw new ProfileError('network');
+        return inactiveAckV1;
+      },
+      read: async () => ({ ...authoritative }),
+    });
+    await s.owner.load();
+    await s.owner.stopLooking();
+    const original = s.lookingSent[0]!.packet;
+    assert.equal(original.kind, 'lookingDelete');
+    assert.equal(s.keyCount, 1);
+    assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+    phase = 'ack';
+    authoritative = {
+      ...base,
+      lookingForGame: activeLooking(2, {
+        areaKey: 'external',
+        expiresAt: '2026-11-22T13:00:00.000Z',
+      }),
+    };
+    await s.owner.reconcile();
+    assert.strictEqual(s.lookingSent[1]!.packet, original);
+    assert.equal(s.lookingSent.length, 2);
+    assert.equal(s.keyCount, 1);
+    assert.equal(s.owner.getSnapshot().command, undefined);
+    assert.equal(s.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
+    assert.equal(s.owner.getSnapshot().profile?.lookingForGame?.version, 2);
+    assert.equal(s.owner.getSnapshot().profile?.lookingForGame?.areaKey, 'external');
+    assert.equal(s.owner.getSnapshot().profile?.version, 8);
+    assert.match(s.owner.getSnapshot().notice!, /включено/);
+    assert.doesNotMatch(s.owner.getSnapshot().notice!, /выключено/);
+
+    // Same DELETE path: newer GET still active-shaped but past TTL → honest «истёк», not packet.kind «выключено».
+    const expiredBase: OwnProfile = {
+      ...emptyProfile, version: 5, displayName: 'Игрок', cityId: city.id,
+      lookingForGame: activeLooking(4),
+    };
+    let expPhase: 'net' | 'ack' = 'net';
+    let expAuth: OwnProfile = { ...expiredBase };
+    const exp = setup(expiredBase, {
+      looking: async () => {
+        if (expPhase === 'net') throw new ProfileError('network');
+        return inactiveAckV1;
+      },
+      read: async () => ({ ...expAuth }),
+    });
+    await exp.owner.load();
+    await exp.owner.stopLooking();
+    const expOriginal = exp.lookingSent[0]!.packet;
+    assert.equal(expOriginal.kind, 'lookingDelete');
+    assert.equal(exp.keyCount, 1);
+    expPhase = 'ack';
+    expAuth = {
+      ...expiredBase,
+      lookingForGame: activeLooking(2, { expiresAt: '2026-11-22T11:00:00.000Z' }),
+    };
+    await exp.owner.reconcile();
+    assert.strictEqual(exp.lookingSent[1]!.packet, expOriginal);
+    assert.equal(exp.lookingSent.length, 2);
+    assert.equal(exp.keyCount, 1);
+    assert.equal(exp.owner.getSnapshot().command, undefined);
+    assert.equal(exp.owner.getSnapshot().profile?.lookingForGame?.state, 'active');
+    assert.equal(exp.owner.getSnapshot().profile?.lookingForGame?.version, 2);
+    assert.match(exp.owner.getSnapshot().notice!, /истёк/);
+    assert.doesNotMatch(exp.owner.getSnapshot().notice!, /включено/);
+    assert.doesNotMatch(exp.owner.getSnapshot().notice!, /выключено/);
+  } finally {
+    t.mock.timers.reset();
+  }
 });
