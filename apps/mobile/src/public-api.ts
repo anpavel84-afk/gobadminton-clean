@@ -9,6 +9,12 @@ import { futureItems } from './upcoming.ts';
 import { isVenueId, parseVenue, parseMapVenue, venueScheduleQuery } from './venues.ts';
 import type { PublicVenue } from './venues.ts';
 import { parseVenueReviewsSummary } from './venue-reviews.ts';
+import {
+  gameRoleReputationPath,
+  parseRoleReputationSummary,
+  roleReputationPath,
+} from './role-reputation.ts';
+import type { RoleKind, RoleReputationSummary } from './role-reputation.ts';
 
 // Type-only subpath: contracts' root index uses node:fs and must never enter Metro.
 export type PublicGame = Pick<Game, 'id' | 'title' | 'status' | 'visibility' | 'venue' |
@@ -202,6 +208,24 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
       const value = await get(`/venues/${venueId}/community-photos${qs}`, signal);
       if (!isCommunityPhotoPage(value)) throw new PublicApiError('invalid');
       return value;
+    },
+    /** PUBLIC READ game-role reputation — credential omit; null/404 stay unavailable. */
+    async gameRoleReputation(gameId: string, role: RoleKind, signal?: AbortSignal): Promise<RoleReputationSummary> {
+      return parseRoleReputationSummary(
+        await get(gameRoleReputationPath(gameId, role), signal),
+        { role },
+      );
+    },
+    /** PUBLIC READ paginated role reputation by opaque handle — requires gameId provenance. */
+    async roleReputation(
+      roleHandle: string,
+      query: { gameId: string; cursor?: string; limit?: number },
+      signal?: AbortSignal,
+    ): Promise<RoleReputationSummary> {
+      return parseRoleReputationSummary(
+        await get(roleReputationPath(roleHandle, query), signal),
+        { roleHandle },
+      );
     },
   };
 }
