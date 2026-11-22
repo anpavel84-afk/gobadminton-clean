@@ -26,6 +26,12 @@ test('iOS floating map/swipe CTAs sit at bottom 16; tab bar already owns the hom
   const players = read('../app/players/index.tsx');
   assert.match(players, /bottom:Platform\.OS === 'ios' \? 16 : insets\.bottom\+16/);
   assert.match(players, /Platform\.OS === 'ios' \? floatingEntryHeight\+48 : floatingEntryHeight\+insets\.bottom\+48/);
+  // #660 r3: no fixed minHeight:48 layout slot for inline Свайп (fontScale-safe; keep Pressable mounted).
+  const headerStart = players.indexOf('ListHeaderComponent=');
+  const headerEnd = players.indexOf('renderItem=', headerStart);
+  const header = players.slice(headerStart, headerEnd);
+  assert.doesNotMatch(header, /!showFloatingSwipe && <Pressable/);
+  assert.doesNotMatch(header, /<View onLayout=\{event => setInlineSwipeBottom[\s\S]*minHeight:48/);
 });
 
 test('players city/area search chrome is iOS-only; name field I4 wiring unchanged', () => {

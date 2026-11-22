@@ -329,14 +329,14 @@ export default function Players() {
           <DiscoveryChip title="Ищу игру" selected={looking} onPress={() => setLooking(v => !v)} />
           <DiscoveryChip title="Тренер" selected={trainer} onPress={() => setTrainer(v => !v)} />
         </View>
-        <View onLayout={event => setInlineSwipeBottom(22 + event.nativeEvent.layout.y + event.nativeEvent.layout.height)}
-          style={{alignSelf:'center',width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48}}>
-          {!showFloatingSwipe && <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
-            onPress={openSwipeBrowse}
-            style={{width:'100%',minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
-            <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
-          </Pressable>}
-        </View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
+          accessibilityElementsHidden={showFloatingSwipe} importantForAccessibility={showFloatingSwipe ? 'no-hide-descendants' : 'yes'}
+          disabled={showFloatingSwipe} pointerEvents={showFloatingSwipe ? 'none' : 'auto'}
+          onPress={openSwipeBrowse}
+          onLayout={event => setInlineSwipeBottom(22 + event.nativeEvent.layout.y + event.nativeEvent.layout.height)}
+          style={{alignSelf:'center',width:Math.min(280,window.width-insets.left-insets.right-32),minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center',opacity:showFloatingSwipe ? 0 : 1}}>
+          <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
+        </Pressable>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
           <View style={{ flexShrink: 1 }}><Label style={{ color: colors.purple, fontSize: 11, lineHeight: 16, letterSpacing: 0.8, textTransform: 'uppercase' }}>Игровое сообщество</Label>
             <Label accessibilityRole="header" style={[styles.subtitle, { fontSize: 24, lineHeight: 30 }]}>Все игроки</Label></View>

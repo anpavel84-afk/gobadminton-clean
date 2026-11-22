@@ -17,7 +17,6 @@ test('#660 inline «Свайп» CTA sits in the list header before «Все и�
   assert.ok(swipeIdx >= 0, 'inline Свайп a11y label in ListHeaderComponent');
   assert.ok(allPlayersIdx >= 0, 'Все игроки heading in ListHeaderComponent');
   assert.ok(swipeIdx < allPlayersIdx, 'inline Свайп CTA before Все игроки');
-  assert.match(header, /!showFloatingSwipe && <Pressable/);
   assert.match(header, /onPress=\{openSwipeBrowse\}/);
   assert.match(header, />Свайп</);
 });
@@ -51,21 +50,41 @@ test('#660 r2: floating threshold includes list content paddingTop origin (Codex
   assert.doesNotMatch(header, /setInlineSwipeBottom\(event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)/);
 });
 
-test('#660 r2: measurable layout slot preserved; exactly one button (Codex finding 2)', () => {
+test('#660 r3: inline «Свайп» stays mounted (hidden) while floating (Codex r2 finding 1)', () => {
   const players = read('../app/players/index.tsx');
   const headerStart = players.indexOf('ListHeaderComponent=');
   const headerEnd = players.indexOf('renderItem=', headerStart);
   const header = players.slice(headerStart, headerEnd);
-  const slotStart = header.indexOf('setInlineSwipeBottom');
-  assert.ok(slotStart >= 0, 'inline swipe measurement present');
-  const slotBlock = header.slice(header.lastIndexOf('<View', slotStart), header.indexOf('Все игроки'));
-  // Slot View owns onLayout and minHeight so space + measurement survive floating mode.
-  assert.match(slotBlock, /<View onLayout=\{event => setInlineSwipeBottom\(22 \+ event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
-  assert.match(slotBlock, /minHeight:48/);
-  assert.match(slotBlock, /!showFloatingSwipe && <Pressable/);
-  // Exactly one inline button instance in header; floating is the other (outside header).
+  const swipeStart = header.indexOf('accessibilityLabel="Свайп — просмотр игроков карточками"');
+  assert.ok(swipeStart >= 0, 'inline Свайп in header');
+  const pressableStart = header.lastIndexOf('<Pressable', swipeStart);
+  const pressableEnd = header.indexOf('</Pressable>', swipeStart) + '</Pressable>'.length;
+  const inline = header.slice(pressableStart, pressableEnd);
+  // Always mounted: hide visually/a11y/touch when floating — do not unmount.
+  assert.match(inline, /accessibilityElementsHidden=\{showFloatingSwipe\}/);
+  assert.match(inline, /importantForAccessibility=\{showFloatingSwipe \? 'no-hide-descendants' : 'yes'\}/);
+  assert.match(inline, /disabled=\{showFloatingSwipe\}/);
+  assert.match(inline, /pointerEvents=\{showFloatingSwipe \? 'none' : 'auto'\}/);
+  assert.match(inline, /opacity:showFloatingSwipe \? 0 : 1/);
+  assert.match(inline, /onLayout=\{event => setInlineSwipeBottom\(22 \+ event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
   assert.equal((header.match(/accessibilityLabel="Свайп — просмотр игроков карточками"/g) ?? []).length, 1);
   assert.equal((players.match(/accessibilityLabel="Свайп — просмотр игроков карточками"/g) ?? []).length, 2);
-  // NEGATIVE / regression: unmounting the Pressable must not remove the only onLayout (old bug).
-  assert.doesNotMatch(header, /!showFloatingSwipe && <Pressable[^>]*onLayout=\{event => setInlineSwipeBottom/);
+  // NEGATIVE / regression: conditional unmount of the inline Pressable
+  assert.doesNotMatch(header, /!showFloatingSwipe && <Pressable/);
+});
+
+test('#660 r3: no fixed-height placeholder slot — font scaling safe (Codex r2 finding 1)', () => {
+  const players = read('../app/players/index.tsx');
+  const headerStart = players.indexOf('ListHeaderComponent=');
+  const headerEnd = players.indexOf('renderItem=', headerStart);
+  const header = players.slice(headerStart, headerEnd);
+  const swipeStart = header.indexOf('accessibilityLabel="Свайп — просмотр игроков карточками"');
+  const pressableStart = header.lastIndexOf('<Pressable', swipeStart);
+  const beforeSwipe = header.slice(0, pressableStart);
+  // NEGATIVE / regression: r2 slot View with minHeight:48 collapsed from ~72px (fontScale=2) to 48px when button unmounted.
+  assert.doesNotMatch(beforeSwipe, /<View onLayout=\{event => setInlineSwipeBottom/);
+  assert.doesNotMatch(header, /setInlineSwipeBottom[^;]+;\s*style=\{\{[^}]*minHeight:48/);
+  assert.doesNotMatch(header, /minHeight:48\}\>\s*\{!showFloatingSwipe/);
+  // onLayout lives on the always-mounted Pressable (actual scaled height), not a fixed slot.
+  assert.match(header.slice(pressableStart), /onLayout=\{event => setInlineSwipeBottom\(22 \+ event\.nativeEvent\.layout\.y \+ event\.nativeEvent\.layout\.height\)\}/);
 });
