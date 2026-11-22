@@ -1006,11 +1006,20 @@
         ]
       },
       "put": {
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "upsertMyTrainerProfile",
         "tags": [
           "Trainers"
         ],
         "summary": "Create/update/reactivate own self-declared TrainerProfile",
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404. Create/update/reactivate own self-declared TrainerProfile Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -1051,17 +1060,25 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        },
-        "description": "Create/update/reactivate own self-declared TrainerProfile Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores."
+        }
       }
     },
     "/me/trainer-profile/deactivate": {
       "post": {
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "deactivateMyTrainerProfile",
         "tags": [
           "Trainers"
         ],
         "summary": "Deactivate own TrainerProfile; does not revoke Game authority",
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"

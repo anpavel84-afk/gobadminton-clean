@@ -21,6 +21,10 @@ import type { AvatarPacket } from './profile-avatar.ts';
 import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
+import {
+  parseTrainerProfile, trainerDeactivateWire, trainerUpsertWire,
+} from './trainer-profile.ts';
+import type { TrainerPacket } from './trainer-profile.ts';
 import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseInvitationPage, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
 import type { InboxFilter, MessageResource, MessageAction, MessageBody } from './messages.ts';
 import { PlayersError, parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
@@ -493,6 +497,23 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),
+    /** Full own TrainerProfile DTO for editor CAS — genuine 404 → null; other failures stay errors. */
+    ownTrainerProfile: async (access: string) => {
+      try {
+        return parseTrainerProfile(await request('/me/trainer-profile', 'GET', undefined, access, undefined, false, false, false, true));
+      } catch (error) {
+        if (error instanceof ProfileError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    mutateOwnTrainer: async (access: string, packet: TrainerPacket) => {
+      if (packet.kind === 'upsert') {
+        return parseTrainerProfile(await request('/me/trainer-profile', 'PUT',
+          trainerUpsertWire(packet.body), access, packet.key, false, false, false, true));
+      }
+      return parseTrainerProfile(await request('/me/trainer-profile/deactivate', 'POST',
+        trainerDeactivateWire(packet.body.expectedVersion), access, packet.key, false, false, false, true));
+    },
     gameParticipants: async (access: string, id: string, cursor?: string) => parseCursorPage(await request(`/games/${encodeURIComponent(id)}/participations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseParticipation),
     managementMutation: async (access: string, packet: ManagementPacket) => {
       const path = packet.kind === 'create' ? '/games' : packet.kind === 'publish' ? `/games/${encodeURIComponent(packet.gameId)}/publish`

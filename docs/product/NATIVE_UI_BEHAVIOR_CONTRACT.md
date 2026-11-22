@@ -142,6 +142,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `looking-for-game.test.ts` / profile·auth; API `native-players.foundation` bearer looking cases; source APK counter 26 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 looking-for-game native parity source; not VERIFIED_SOURCE / not device PASS |
 
+## P-05 · Own trainer profile create/edit/deactivate/reactivate (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `ProfilePage.tsx` «Я тренер» + `TrainerProfileEditPage`; `PUT /me/trainer-profile` + `POST /me/trainer-profile/deactivate`; native `trainer-profile.ts` / `own-profile` card + `/profile/trainer` editor; narrow NativeBearer on those two ops only (GET already admitted) |
+| Entry | Authenticated `/profile` own-profile card — «Тренерский профиль» immediately after «Личные сообщения» |
+| Trigger | Explicit Switch (off→editor; on→deactivate), «Редактировать» / editor Save / «Отключить»; no auto write on mount/refresh/reauth |
+| Expected | Full TrainerProfile DTO for CAS (not thin OwnTrainer); create omits expectedVersion; edit/reactivate/deactivate use trainer version; `selfDeclared:true` only on user save; name≤80 / bio≤1000; disclosure «Информация заполнена пользователем»; saving activates; deactivate leaves existing game management/history; after ACK refresh social.trainer + invalidate game-create ownTrainer; UNKNOWN exact packet/key retry; 409 keeps draft + requires authoritative refresh; genuine 404 = absent; competing mutations disabled while command/stale |
+| Accessibility | Named Switch + helper; card/editor error+retry; busy/unknown pending copy with reconcile CTA; system live region |
+| Non-scope | Certification; private contact; catalog-consent expansion; gameplay/role history changes; PROD; APK27 binary |
+| Evidence | Mobile unit `trainer-profile.test.ts` / own-profile·game-management; API `native-game-management.foundation` native create/edit/off/reactivate + ten LOCAL fixture routes; source APK counter 28 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 trainer-profile native parity source; not VERIFIED_SOURCE / not device PASS |
+
 ## R-02 · Public player profile role history (#522 PARTIAL)
 
 | Field | Content |

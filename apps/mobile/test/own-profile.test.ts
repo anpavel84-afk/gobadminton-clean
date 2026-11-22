@@ -54,6 +54,15 @@ test('#605 own-profile.tsx identity card copy and cover editor', () => {
   assert.match(source, /coverImageSource/);
 });
 
+test('#522 own-profile trainer card after personal messages', () => {
+  const source = read('../src/components/own-profile.tsx');
+  assert.match(source, /Опциональная информация игрока/);
+  assert.match(source, /Я тренер/);
+  assert.match(source, /Профиль тренера выключен/);
+  assert.match(source, /nativeAuth\.trainer/);
+  assert.ok(source.indexOf('Личные сообщения') < source.indexOf('Тренерский профиль'));
+});
+
 test('#605 player-card.tsx exports PlayerCover; PlayerProfile uses shared hero', () => {
   const source = read('../src/components/player-card.tsx');
   assert.match(source, /export function PlayerCover\(/);

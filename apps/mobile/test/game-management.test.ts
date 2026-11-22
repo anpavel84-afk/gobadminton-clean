@@ -35,6 +35,19 @@ function setup(override: Partial<ManagementPort> = {}) {
   return { owner, sent, trainerReads: () => trainerReads };
 }
 async function preview(owner: GameManagementCoordinator) { await owner.loadContext('city-1'); owner.update(form); owner.preview(); assert.ok(owner.getSnapshot().preview); }
+test('refreshOwnTrainerContext re-reads creator trainer eligibility without inventing it', async () => {
+  const active = setup({
+    profile: async () => ({ ...profile, trainer: true }),
+  });
+  await active.owner.loadContext('city-1');
+  assert.equal(active.trainerReads(), 1);
+  assert.equal(active.owner.getSnapshot().trainer?.status, 'active');
+  await active.owner.refreshOwnTrainerContext();
+  assert.equal(active.trainerReads(), 2);
+  const source = readFileSync(new URL('../src/game-management.ts', import.meta.url), 'utf8');
+  assert.match(source, /refreshOwnTrainerContext/);
+});
+
 test('actual creator context, zero preference version, manual city and venue timezone govern strict calendar/DST/future fields', async () => {
   assert.deepEqual(parsePreferences(preferences), preferences);
   assert.throws(() => parseCreatorProfile({ id: 'thin-me', roles: ['trainer'] }));
