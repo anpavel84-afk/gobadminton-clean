@@ -28,7 +28,10 @@ function collectNotes(gameId: string, data: Results | undefined, notes: Record<s
   for (const ref of Object.values(known)) {
     if (ref.gameId !== gameId) continue;
     const source = notes[`${ref.gameId}:${ref.contextId}`];
-    if (source?.status === 'ready' && source.data) byContext.set(source.data.contextId, source.data);
+    // Ready is authoritative; loading/error may retain private text for display only (no write grant).
+    if (source?.data && (source.status === 'ready' || source.status === 'loading' || source.status === 'error')) {
+      byContext.set(source.data.contextId, source.data);
+    }
   }
   return [...byContext.values()];
 }
@@ -37,35 +40,43 @@ function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote
   const { owner, s } = useOwner();
   const blocked = useBlocked();
   const key = `${gameId}:${note.contextId}`;
+  const direct = s.notes[key];
+  // New edit/delete require ready typed authority — not retained loading/error rights.
+  const typedReady = direct?.status === 'ready' && !!direct.data;
+  const canMutate = writes && typedReady;
   const draft = s.noteDrafts[key] ?? {};
-  const editing = draft.editText !== undefined && note.allowedActions.canEdit;
+  const editing = draft.editText !== undefined && note.allowedActions.canEdit && typedReady;
   const editText = draft.editText ?? note.text;
   const trimmed = normalizeFormReason(editText);
   const needsRefresh = !!(s.notice && /Обновите заметку/i.test(s.notice));
+  const showRefresh = needsRefresh || direct?.status === 'error';
   return <View style={styles.card} accessibilityLabel={`Заметка · ${note.subjectDisplay}`}>
     <Label style={{ fontWeight: '700' }}>{note.subjectDisplay}</Label>
     {editing ? <>
       <Label>Текст заметки</Label>
-      <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
+      <TextInput editable={!blocked && canMutate} multiline scrollEnabled textAlignVertical="top"
         accessibilityLabel={`Текст заметки · ${note.subjectDisplay}`}
         value={editText} onChangeText={text => owner.setNoteDraft(gameId, note.contextId, { editText: text })}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 100, maxHeight: 180 }]} />
-      {needsRefresh ? <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, note.contextId)} /> : null}
+      {showRefresh ? <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, note.contextId)} /> : null}
       <ReviewButton title={`Сохранить изменения · ${note.subjectDisplay}`} onPress={() => {
-        if (!trimmed) return;
+        if (!trimmed || !typedReady) return;
         owner.review({ kind: 'note-upsert', gameId, contextId: note.contextId, body: { expectedVersion: note.version, text: trimmed } });
       }} />
       <TextButton title="Отмена" onPress={() => owner.setNoteDraft(gameId, note.contextId, { editText: undefined })} />
     </> : <Label>{note.text}</Label>}
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {writes && note.allowedActions.canEdit && !editing ? (
+      {canMutate && note.allowedActions.canEdit && !editing ? (
         <ReviewButton title={`Изменить · ${note.subjectDisplay}`} onPress={() => owner.setNoteDraft(gameId, note.contextId, { editText: note.text })} />
       ) : null}
-      {writes && note.allowedActions.canDelete ? (
+      {canMutate && note.allowedActions.canDelete ? (
         <ReviewButton title={`Удалить · ${note.subjectDisplay}`} onPress={() => owner.review({
           kind: 'note-delete', gameId, contextId: note.contextId, body: { expectedVersion: note.version },
         })} />
+      ) : null}
+      {!typedReady && direct?.status === 'error' ? (
+        <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, note.contextId)} />
       ) : null}
     </View>
   </View>;

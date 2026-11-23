@@ -104,6 +104,10 @@ export class PostgameCoordinator {
   private noteTombs = new Map<string, number>();
   /** Last applied read generation per note key — fences late results vs newer direct GET. */
   private noteAppliedGen = new Map<string, number>();
+  /** Monotonic version floor per note key — survives loading/error so transient Source cannot forget newer. */
+  private noteVersionFloor = new Map<string, number>();
+  /** After confirmed upsert: only typed direct GET may reestablish ready rights (not historical myNotes). */
+  private noteAwaitingTyped = new Set<string>();
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -125,7 +129,7 @@ export class PostgameCoordinator {
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
-    this.noteTombs.clear(); this.noteAppliedGen.clear();
+    this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear();
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
@@ -142,7 +146,7 @@ export class PostgameCoordinator {
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -169,18 +173,23 @@ export class PostgameCoordinator {
     if (changed) this.show({drafts});
   }
   /** Monotonic note projection: never regress version; same-version rights may refresh under newer gens; tombs block resurrection. */
-  private rememberOwnedNotes(notes: PersonalNote[], gen: number) {
+  private rememberOwnedNotes(notes: PersonalNote[], gen: number, fromDirect = false) {
     const known = {...this.snapshot.knownNoteRefs};
     const sources = {...this.snapshot.notes};
     let changed = false;
     for (const note of notes) {
       const key = noteKey(note.gameId, note.contextId);
       if (this.noteTombs.has(key)) continue;
-      const prior = sources[key]?.status === 'ready' ? sources[key]?.data : this.snapshot.notes[key]?.status === 'ready' ? this.snapshot.notes[key]?.data : undefined;
+      // Post-upsert: results/myNotes must not regrant ready rights before typed GET.
+      if (!fromDirect && this.noteAwaitingTyped.has(key)) continue;
+      const floor = this.noteVersionFloor.get(key) ?? 0;
       const applied = this.noteAppliedGen.get(key) ?? 0;
-      if (prior && note.version < prior.version) continue;
-      if (prior && note.version === prior.version && gen < applied) continue;
+      // Floor survives loading/error — do not rely on ready Source.data alone.
+      if (note.version < floor) continue;
+      if (note.version === floor && gen < applied) continue;
+      this.noteVersionFloor.set(key, note.version);
       this.noteAppliedGen.set(key, gen);
+      if (fromDirect) this.noteAwaitingTyped.delete(key);
       known[key] = { gameId: note.gameId, contextId: note.contextId };
       sources[key] = { status: 'ready', data: note };
       changed = true;
@@ -194,6 +203,8 @@ export class PostgameCoordinator {
     // Invalidate in-flight direct GETs so late replies cannot reinstall private text.
     this.reads.set(`note:${key}`, ++this.serial);
     this.noteAppliedGen.delete(key);
+    this.noteVersionFloor.delete(key);
+    this.noteAwaitingTyped.delete(key);
     const known = {...this.snapshot.knownNoteRefs}; delete known[key];
     // Keep definitive unavailable so stale feedback.myNotes cannot render/resurrect the row.
     const notes = {...this.snapshot.notes, [key]: { status: 'unavailable' as const }};
@@ -206,9 +217,15 @@ export class PostgameCoordinator {
   }
   private shadowKnownNoteAbsence(gameId: string, contextId: string) {
     const key = noteKey(gameId, contextId);
-    const priorVersion = this.snapshot.notes[key]?.data?.version ?? this.noteTombs.get(key) ?? 0;
+    const priorVersion = Math.max(
+      this.noteVersionFloor.get(key) ?? 0,
+      this.snapshot.notes[key]?.data?.version ?? 0,
+      this.noteTombs.get(key) ?? 0,
+    );
     this.noteTombs.set(key, Math.max(this.noteTombs.get(key) ?? 0, priorVersion));
     this.noteAppliedGen.delete(key);
+    this.noteVersionFloor.delete(key);
+    this.noteAwaitingTyped.delete(key);
     const known = {...this.snapshot.knownNoteRefs}; delete known[key];
     this.show({ knownNoteRefs: known });
   }
@@ -358,25 +375,35 @@ export class PostgameCoordinator {
       const data = await this.port.note(actor, gameId, contextId); if (!valid()) return;
       if (data.gameId !== gameId || data.contextId !== contextId) throw new PostgameError('invalid');
       if (this.noteTombs.has(key)) return;
-      put({ status: 'ready', data });
-      this.rememberOwnedNotes([data], noteGen);
-      // Dirty-draft-safe prefill after selected direct GET — never overwrite typed text.
-      const createDraft = this.snapshot.noteDrafts[gameId];
-      if (createDraft?.selectedContextId === contextId && !createDraft.createText) {
-        this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [gameId]: { ...createDraft, createText: data.text } } });
+      // Monotonic apply first — never put ready before floor/gen comparison (reverse race).
+      this.rememberOwnedNotes([data], noteGen, true);
+      const cur = this.snapshot.notes[key];
+      if (cur?.status === 'ready' && this.noteAppliedGen.get(key) === noteGen) {
+        // Dirty-draft-safe prefill after selected direct GET — never overwrite typed text.
+        const createDraft = this.snapshot.noteDrafts[gameId];
+        if (createDraft?.selectedContextId === contextId && !createDraft.createText) {
+          this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [gameId]: { ...createDraft, createText: data.text } } });
+        }
+        return;
+      }
+      // Stale/rejected reply: reinstate retained newer ready projection if still loading.
+      if (cur?.status === 'loading') {
+        const retained = cur.data ?? old.data;
+        if (retained) put({ status: 'ready', data: retained });
       }
     } catch (error) {
       if (!valid()) return;
       const denied = error instanceof PostgameError && error.kind === 'private';
-      const known = !!this.snapshot.knownNoteRefs[key] || this.noteTombs.has(key) || !!old.data;
+      const current = this.snapshot.notes[key] ?? old;
+      const known = !!this.snapshot.knownNoteRefs[key] || this.noteTombs.has(key) || !!current.data || !!old.data;
       if (denied && known) {
         // Definitive private 404 of a known/tombstoned own note: shadow stale myNotes; never turn into create.
         this.shadowKnownNoteAbsence(gameId, contextId);
         put({ status: 'unavailable' });
         return;
       }
-      // Transient errors keep permitted draft via prior data but do not grant write authority (see currentNote).
-      put(this.failure(error, old));
+      // Transient errors keep retained text via current/prior data but do not grant write authority (see currentNote).
+      put(this.failure(error, current.data || old.data ? current : old));
     }
   };
   setNoteDraft = (gameId: string, contextId: string | null, patch: NoteDraft) => {
@@ -454,12 +481,13 @@ export class PostgameCoordinator {
     const direct = this.snapshot.notes[key];
     // Definitive unavailable shadows stale feedback.myNotes — never resurrect create/edit from the list.
     if (direct?.status === 'unavailable') return null;
+    // Only ready typed authority grants review/confirm — retained loading/error data is display-only.
     if (direct?.status === 'ready' && direct.data && direct.data.gameId === gameId && direct.data.contextId === contextId) {
       return direct.data;
     }
-    // Transient loading/error: keep prior typed data for in-flight refresh, but do not grant authority from myNotes.
+    // Transient loading/error: no write authority (blocks historical myNotes fallback after PUT+GET failure too).
     if (direct?.status === 'loading' || direct?.status === 'error') {
-      return direct.data && direct.data.gameId === gameId && direct.data.contextId === contextId ? direct.data : null;
+      return null;
     }
     const feedback = this.snapshot.games[gameId]?.data?.feedback;
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
@@ -572,6 +600,11 @@ export class PostgameCoordinator {
         // Historical ACK settles the original packet only — do not repaint receipt as current or unlock writes.
         const noteKeyId = noteKey(packet.gameId, packet.contextId);
         this.reads.set(`note:${noteKeyId}`, ++this.serial);
+        this.noteAwaitingTyped.add(noteKeyId);
+        // Raise floor from receipt version so older myNotes cannot win before typed GET; receipt stays non-current.
+        if (typeof receipt.version === 'number') {
+          this.noteVersionFloor.set(noteKeyId, Math.max(this.noteVersionFloor.get(noteKeyId) ?? 0, receipt.version));
+        }
         const known = { ...this.snapshot.knownNoteRefs, [noteKeyId]: { gameId: packet.gameId, contextId: packet.contextId } };
         const notes = { ...this.snapshot.notes, [noteKeyId]: { status: 'loading' as const } };
         const createKey = packet.gameId;

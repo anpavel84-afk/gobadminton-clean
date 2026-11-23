@@ -417,3 +417,216 @@ test('private 404 of known own note shadows myNotes and does not unlock create; 
   await write.coordinator.loadNote(game.id, contextB);
   assert.equal(write.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.data?.version, 1);
 });
+
+test('reverse race: pending direct v2 must not overwrite newer results v3 (version/text/rights)', async () => {
+  let releaseResults!: (value: Results) => void;
+  let releaseNote!: (value: PersonalNote) => void;
+  const resultsGate = new Promise<Results>((resolve) => { releaseResults = resolve; });
+  const noteGate = new Promise<PersonalNote>((resolve) => { releaseNote = resolve; });
+  const sent: Packet[] = [];
+  const port = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async () => resultsGate,
+    note: async () => noteGate,
+    send: async (p: Packet): Promise<unknown> => { sent.push(p); throw new PostgameError('invalid'); },
+  };
+  const c = new PostgameCoordinator(port, () => `key-${sent.length}`);
+  c.setActor(actor);
+
+  // Opposite of late-results test: direct starts first, results wins with v3, stale direct v2 must not regress.
+  const loadNoteP = c.loadNote(game.id, contextA);
+  const loadResultsP = c.loadResults(game.id);
+  releaseResults({
+    ...result,
+    feedback: {
+      ...feedbackReady,
+      myNotes: [{
+        ...note, version: 3, text: 'results-v3',
+        allowedActions: { canEdit: true, canDelete: false },
+      }],
+    },
+  });
+  await loadResultsP;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'results-v3');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.allowedActions.canDelete, false);
+
+  releaseNote({
+    ...note, version: 2, text: 'stale-direct-v2',
+    allowedActions: { canEdit: true, canDelete: true },
+  });
+  await loadNoteP;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'results-v3');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.allowedActions.canDelete, false,
+    'stale same-key earlier read must not regrant rights');
+});
+
+test('pending refresh/error blocks edit/delete; explicit retry restores current rights', async () => {
+  let settleNote!: (value: PersonalNote) => void;
+  let failNote!: (error: PostgameError) => void;
+  let noteGate = new Promise<PersonalNote>((resolve, reject) => {
+    settleNote = resolve;
+    failNote = reject;
+  });
+  const sent: Packet[] = [];
+  const port = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async (_a: Actor, id: string) => ({ ...structuredClone(result), gameId: id }),
+    note: async () => noteGate,
+    send: async (p: Packet): Promise<unknown> => {
+      sent.push(p);
+      if (p.kind === 'note-upsert') {
+        return {
+          gameId: p.gameId, contextId: p.contextId, subjectDisplay: 'Анна',
+          text: p.body.text, version: p.body.expectedVersion + 1, updatedAt: date,
+          allowedActions: { canEdit: true, canDelete: true },
+        };
+      }
+      throw new PostgameError('invalid');
+    },
+  };
+  const c = new PostgameCoordinator(port, () => `key-${sent.length}`);
+  c.setActor(actor);
+  await c.loadResults(game.id);
+
+  const firstGet = c.loadNote(game.id, contextA);
+  settleNote({ ...note, version: 1, text: 'ready-v1', allowedActions: { canEdit: true, canDelete: true } });
+  await firstGet;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+
+  noteGate = new Promise<PersonalNote>((resolve, reject) => {
+    settleNote = resolve;
+    failNote = reject;
+  });
+  port.note = async () => noteGate;
+  const pending = c.loadNote(game.id, contextA);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'loading');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'ready-v1');
+  c.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'during load' } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'edit rejected while direct loading');
+  c.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'delete rejected while direct loading');
+
+  failNote(new PostgameError('network', 503));
+  await pending;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'error');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'ready-v1');
+  c.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'during error' } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'edit rejected while direct error');
+  c.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'delete rejected while direct error');
+
+  noteGate = new Promise<PersonalNote>((resolve, reject) => {
+    settleNote = resolve;
+    failNote = reject;
+  });
+  port.note = async () => noteGate;
+  const retry = c.loadNote(game.id, contextA);
+  settleNote({
+    ...note, version: 1, text: 'ready-v1',
+    allowedActions: { canEdit: true, canDelete: true },
+  });
+  await retry;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+  c.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'after retry' } });
+  await c.confirm();
+  assert.equal(sent.length, 1);
+  assert.equal((sent[0]!.body as { text: string }).text, 'after retry');
+});
+
+test('after confirmed PUT and typed GET failure historical results cannot regrant write authority', async () => {
+  const s = setup();
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
+
+  let failGet!: (error: PostgameError) => void;
+  const getGate = new Promise<PersonalNote>((_, reject) => { failGet = reject; });
+  s.port.note = async () => getGate;
+
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'saved' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'loading');
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data, undefined);
+
+  // While awaiting typed GET, no write from receipt/loading.
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 2, text: 'too soon' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'ACK receipt must not unlock writes before typed GET');
+
+  const getFailed = getGate.then(() => {}, () => {});
+  failGet(new PostgameError('network', 503));
+  await getFailed;
+  await Promise.resolve();
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'error');
+
+  // Historical myNotes (still v1 in fixture results) must not become ready write authority.
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'error');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 2, text: 'no fallback' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'no write from historical result fallback after PUT+GET failure');
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 2 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'delete also blocked without typed ready authority');
+});
+
+test('same-version rights refresh only under newer read gen; stale earlier read cannot regrant', async () => {
+  let releaseEarly!: (value: PersonalNote) => void;
+  let releaseLate!: (value: PersonalNote) => void;
+  const earlyGate = new Promise<PersonalNote>((resolve) => { releaseEarly = resolve; });
+  const lateGate = new Promise<PersonalNote>((resolve) => { releaseLate = resolve; });
+  let noteCalls = 0;
+  const sent: Packet[] = [];
+  const port = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async (_a: Actor, id: string) => ({
+      ...structuredClone(result),
+      gameId: id,
+      feedback: { ...feedbackReady, myNotes: [] },
+    }),
+    note: async () => {
+      noteCalls += 1;
+      return noteCalls === 1 ? earlyGate : lateGate;
+    },
+    send: async (p: Packet): Promise<unknown> => { sent.push(p); throw new PostgameError('invalid'); },
+  };
+  const c = new PostgameCoordinator(port, () => `key-${sent.length}`);
+  c.setActor(actor);
+  await c.loadResults(game.id);
+
+  const early = c.loadNote(game.id, contextA);
+  const late = c.loadNote(game.id, contextA);
+  // Newer gen settles first with canDelete revoked.
+  releaseLate({
+    ...note, version: 4, text: 'v4-no-delete',
+    allowedActions: { canEdit: true, canDelete: false },
+  });
+  await late;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.allowedActions.canDelete, false);
+
+  // Stale earlier gen same version tries to regrant canDelete — must remain false.
+  releaseEarly({
+    ...note, version: 4, text: 'v4-stale-regrant',
+    allowedActions: { canEdit: true, canDelete: true },
+  });
+  await early;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 4);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'v4-no-delete');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.allowedActions.canDelete, false);
+  c.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 4 } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'stale earlier read must not regrant delete');
+});
