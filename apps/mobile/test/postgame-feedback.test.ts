@@ -972,9 +972,12 @@ test('reverse parent/reply floor: both orders keep parent v2 and reply v2; conse
   });
   await s.coordinator.loadResults(game.id);
   await s.coordinator.loadReviews('received');
+  // Actual UI two-step: open known revision unchecked, then explicit checkbox grant.
   s.coordinator.setFeedbackDraft(game.id, {
-    reportReviewId: 'recv-reverse', reportConsent: true, reportConsentVersion: 2, reportDetail: 'keep',
+    reportReviewId: 'recv-reverse', reportConsent: false, reportConsentVersion: 2, reportDetail: 'keep',
   });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, false);
+  s.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 2 });
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 2);
 
