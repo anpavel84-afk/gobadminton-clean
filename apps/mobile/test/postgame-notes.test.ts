@@ -185,7 +185,11 @@ test('create requires selected direct GET absence; list gap is not create grant;
   manager.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'create' } });
   await manager.coordinator.confirm();
   assert.equal(manager.sent.length, 1);
-  assert.equal(manager.sent[0]!.body.expectedVersion, 0);
+  {
+    const packet = manager.sent[0]!;
+    assert.ok(packet.kind === 'note-upsert');
+    assert.equal(packet.body.expectedVersion, 0);
+  }
 
   // Off-list existing note (bounded myNotes empty) becomes editable after selected GET — not create0.
   const offList: PersonalNote = { ...note, contextId: contextB, version: 7, text: 'off-list v7', subjectDisplay: 'Илья' };
@@ -201,7 +205,11 @@ test('create requires selected direct GET absence; list gap is not create grant;
   edit.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 7, text: 'edit off-list' } });
   await edit.coordinator.confirm();
   assert.equal(edit.sent.length, 1);
-  assert.equal(edit.sent[0]!.body.expectedVersion, 7);
+  {
+    const packet = edit.sent[0]!;
+    assert.ok(packet.kind === 'note-upsert');
+    assert.equal(packet.body.expectedVersion, 7);
+  }
 });
 
 test('UNKNOWN retains exact packet; conflict keeps draft; logout wipes private note drafts', async () => {
