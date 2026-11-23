@@ -1316,32 +1316,50 @@ run("#394 role reputation — disposable", () => {
     expect(absent.json().code).toBe("RESOURCE_UNAVAILABLE");
 
     // Self-marked attendance is not independently confirmed present → deny self_mark.
+    // Isolated disposable participant/game (#522): coherent v1→v2 tip + revision; no rewind on orgSeed.
+    const selfMarkedAuthor = await actor(`native-selfmark-${randomUUID()}`);
+    const selfMarkSeed = await seedHeldGame({
+      organizerId: org.userId,
+      participantId: selfMarkedAuthor.userId,
+      endsAt: past,
+      outcome: "held",
+    });
     await pool.query(
       `UPDATE game_attendance SET value='present', source='self_attested', actor_user_id=$2, version=version+1
        WHERE game_id=$1 AND user_id=$2`,
-      [orgSeed.gameId, author.userId],
+      [selfMarkSeed.gameId, selfMarkedAuthor.userId],
+    );
+    await pool.query(
+      `INSERT INTO game_attendance_revisions
+         (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+          recorded_at, before_value, after_value, before_late, after_late,
+          before_correction_reason, after_correction_reason, reason)
+       VALUES ($1,$2,$3,2,$3,'self_attested',clock_timestamp(),
+               'present','present',false,false,NULL,NULL,'fixture_self_mark')`,
+      [selfMarkSeed.participationId, selfMarkSeed.gameId, selfMarkedAuthor.userId],
     );
     const selfMarkElig = await app.inject({
       method: "GET",
       url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
-      headers: await nativeBearer(author.userId),
+      headers: await nativeBearer(selfMarkedAuthor.userId),
     });
     expect(selfMarkElig.statusCode).toBe(200);
     const selfMarkBasis = selfMarkElig
       .json()
-      .bases.find((b: { gameId: string }) => b.gameId === orgSeed.gameId);
+      .bases.find((b: { gameId: string }) => b.gameId === selfMarkSeed.gameId);
     expect(selfMarkBasis.admission).toBe("deny");
     expect(selfMarkBasis.reason).toBe("self_mark");
-    await pool.query(
-      `UPDATE game_attendance SET value='present', source='manager_explicit', actor_user_id=$2, version=1
-       WHERE game_id=$1 AND user_id=$3`,
-      [orgSeed.gameId, org.userId, author.userId],
-    );
 
-    // Open role dispute holds basis — not may_submit.
+    // Open role dispute holds basis — not may_submit. Isolated game; positive orgSeed untouched.
+    const disputeSeed = await seedHeldGame({
+      organizerId: org.userId,
+      participantId: author.userId,
+      endsAt: past,
+      outcome: "held",
+    });
     await pool.query(
       `UPDATE game_role_proofs SET open_dispute=true, phase='disputed' WHERE game_id=$1 AND role='organization'`,
-      [orgSeed.gameId],
+      [disputeSeed.gameId],
     );
     const disputedElig = await app.inject({
       method: "GET",
@@ -1351,13 +1369,9 @@ run("#394 role reputation — disposable", () => {
     expect(disputedElig.statusCode).toBe(200);
     const disputedBasis = disputedElig
       .json()
-      .bases.find((b: { gameId: string }) => b.gameId === orgSeed.gameId);
+      .bases.find((b: { gameId: string }) => b.gameId === disputeSeed.gameId);
     expect(disputedBasis.admission).toBe("hold");
     expect(disputedBasis.reason).toBe("held_or_role_dispute");
-    await pool.query(
-      `UPDATE game_role_proofs SET open_dispute=false, phase='performed' WHERE game_id=$1 AND role='organization'`,
-      [orgSeed.gameId],
-    );
 
     const multiline = "Нативный отзыв\nс переносом строки";
     const preview = await app.inject({
