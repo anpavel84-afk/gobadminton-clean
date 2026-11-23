@@ -776,7 +776,7 @@ test('#522 address7 P3: stale submit eligibility cannot overwrite newer load or 
   await tick();
   const v2 = venueExperienceBasisAuthority(versioned.getSnapshot().venueEligibility.data!, gameId);
   assert.ok(v2);
-  assert.match(v2, /\u00012\u00013\u0001/);
+  assert.deepEqual(v2.split('\u0001').slice(2, 4), ['2', '3']);
   releaseVersionSubmit();
   await versionPending;
   await tick();
