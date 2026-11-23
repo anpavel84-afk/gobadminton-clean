@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
-import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View, type ScrollView } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
@@ -309,11 +309,13 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
   const auth = useAuth(), owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const heading = useRef<ComponentRef<typeof Text>>(null);
-  const pageScrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  const pageScrollRef = useRef<ScrollView>(null);
   const reportHeadingRef = useRef<ComponentRef<typeof Text>>(null);
   const reportFormRef = useRef<ComponentRef<typeof View>>(null);
   const reportTriggerRefs = useRef(new Map<string, FocusTarget | null>());
+  const reportRowRefs = useRef(new Map<string, ComponentRef<typeof View> | null>());
   const reportRevealedKey = useRef<string | null>(null);
+  const prevReportRowKey = useRef<string | null>(null);
   const reader = s.publicSurface?.mode === 'reader' ? s.publicSurface.reader : null;
   const surfaceGen = s.publicSurface?.mode === 'reader' ? s.publicSurface.gen : 0;
   const command = s.command;
@@ -328,6 +330,28 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (!reportRowKey) reportRevealedKey.current = null;
   }, [reportRowKey]);
+  // Auto-retire (permission/revision loss): focus visible row or reader heading.
+  // Explicit Cancel keeps its own trigger focus when that button is still mounted.
+  useEffect(() => {
+    const prev = prevReportRowKey.current;
+    prevReportRowKey.current = reportRowKey;
+    if (!prev || reportRowKey) return;
+    const expectedGen = surfaceGen;
+    const retiredHandle = prev.slice(0, prev.lastIndexOf(':'));
+    const frame = requestAnimationFrame(() => {
+      const surface = owner.getSnapshot().publicSurface;
+      if (!surface || surface.mode !== 'reader' || surface.gen !== expectedGen) return;
+      if (owner.getSnapshot().publicReportDraft) return;
+      const trigger = reportTriggerRefs.current.get(prev);
+      if (trigger) return;
+      const row = reportRowRefs.current.get(retiredHandle);
+      const target = row ?? heading.current;
+      if (!target) return;
+      const node = findNodeHandle(target);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reportRowKey, surfaceGen, owner]);
   const revealSelectedReport = () => {
     if (!reportRowKey || reportRevealedKey.current === reportRowKey) return;
     const expectedSurfaceGen = surfaceGen;
@@ -417,9 +441,18 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
             const itemReportKey = `${item.reviewHandle}:${item.publishedRevision}`;
             const showReport = !!report
               && report.reviewHandle === item.reviewHandle
-              && report.publishedRevision === item.publishedRevision;
+              && report.publishedRevision === item.publishedRevision
+              && item.allowedActions.canReport;
             const reportDisabled = threadBusy || reportAckHandle === item.reviewHandle;
-            return <View key={item.reviewHandle} style={styles.card} accessibilityLabel={item.authorLabel}>
+            return <View
+              key={item.reviewHandle}
+              ref={node => {
+                if (node) reportRowRefs.current.set(item.reviewHandle, node);
+                else reportRowRefs.current.delete(item.reviewHandle);
+              }}
+              style={styles.card}
+              accessibilityLabel={item.authorLabel}
+            >
               <Label style={{ fontWeight: '700' }}>{item.authorLabel}</Label>
               <Label>✓ Участие подтверждено</Label>
               {item.experienceState === 'basis_under_review' ? <Label>Основание на проверке</Label> : null}

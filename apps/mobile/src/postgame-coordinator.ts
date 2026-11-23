@@ -1463,6 +1463,14 @@ export class PostgameCoordinator {
       );
       const paintedReport = this.snapshot.publicReportReceipt;
       const keepReplyNotice = preserveNotice && priorNotice === 'Ответ принят.';
+      // Open report editor follows live row permission/revision — not an already-dispatched journal.
+      const openReport = this.snapshot.publicReportDraft;
+      const retireOpenReport = !!openReport && (() => {
+        const liveRow = items.find(i => i.reviewHandle === openReport.reviewHandle);
+        return !liveRow
+          || !liveRow.allowedActions.canReport
+          || liveRow.publishedRevision !== openReport.publishedRevision;
+      })();
       // Page authority must not regress: later ACK cannot repaint over newer typed GET.
       this.show({
         publicReader: {
@@ -1481,6 +1489,7 @@ export class PostgameCoordinator {
           publicConsentHash: null,
         } : {}),
         ...(retireReplyReceipt ? { publicReplyReceipt: null } : {}),
+        ...(retireOpenReport ? { publicReportDraft: null } : {}),
         // Report receipt stays scoped to its handle; typed refresh does not invent auto-hide.
         ...(paintedReport && !items.some(i => i.reviewHandle === paintedReport.reviewHandle)
           ? { publicReportReceipt: null }
@@ -1583,6 +1592,8 @@ export class PostgameCoordinator {
     const draft = this.snapshot.publicReportDraft;
     if (!draft) return;
     if (this.snapshot.publicReportReceipt?.reviewHandle === draft.reviewHandle) return;
+    const live = this.currentReaderItem(draft.reviewHandle);
+    if (!live?.allowedActions.canReport || live.publishedRevision !== draft.publishedRevision) return;
     this.show({ publicReportDraft: { ...draft, ...patch } });
   };
   cancelPublicReport = () => {
