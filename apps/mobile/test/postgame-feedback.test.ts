@@ -20,7 +20,7 @@ import {
   roleDiscrepancyDecisionFromError,
   roleDiscrepancyRequiredBlocksCreate,
 } from '../src/postgame-feedback.ts';
-import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
+import type { Attendance, Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import { game as publicGame } from './fixtures.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
@@ -1854,10 +1854,10 @@ test('#522 Astra address3: REQUIRED empty discrepancy blocks create; readonly or
 });
 
 test('#522 address7: UNEXPECTED present→fresh absent/contested/not_held; kind fallback; REQUIRED same-context recover', async () => {
-  const presentRow = {
-    contextId: 'me', value: 'present' as const, version: 1, late: false,
-    assertion: { actorDisplay: null as string | null, source: 'self_attested' as const, at: date },
-    acknowledgedVersion: null as number | null, dispute: null as { id: string; version: number; challengedVersion: number; status: string } | null,
+  const presentRow: Attendance = {
+    contextId: 'me', value: 'present', version: 1, late: false,
+    assertion: { actorDisplay: null, source: 'self_attested', at: date },
+    acknowledgedVersion: null, dispute: null,
     displayName: 'Я',
     allowedActions: {
       canSetAttendance: false, canAcknowledge: false, canDispute: false,
@@ -1984,9 +1984,18 @@ test('#522 address7: UNEXPECTED present→fresh absent/contested/not_held; kind 
       myAttendance: presentRow,
     },
   };
+  const stalePresentResults: Results = {
+    ...result,
+    attendance: {
+      installed: true, writesEnabled: true,
+      myAttendance: presentRow,
+      roster: null, rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  };
   const stalePresentUnexpected = roleDiscrepancyDecisionFromError(
     'organization', 'FEEDBACK_DISCREPANCY_UNEXPECTED',
-    { ...result, attendance: { installed: true, myAttendance: presentRow, roster: null, rosterNextCursor: null, summary: null, allowedActions: { canRecordAttendance: false, canBulkPresent: false } } },
+    stalePresentResults,
   );
   assert.equal(boundRoleDiscrepancyFieldError(stalePresentUnexpected, 'organization', contested), null);
   assert.equal(boundRoleDiscrepancyFieldError(stalePresentUnexpected, 'organization', notHeld), null);
