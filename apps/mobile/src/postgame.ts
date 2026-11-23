@@ -46,6 +46,18 @@ export type AttendanceHistoryItem = {
 };
 export type AttendanceHistoryPage = { items: AttendanceHistoryItem[] };
 export type Revision = { version: number; before: { value: 'held' | 'not_held'; reason: string | null } | null; after: { value: 'held' | 'not_held'; reason: string | null }; reason: string | null; source: 'manager_explicit'; recordedAt: string };
+/** Own personal note — notes projection only; never public review/report fields. */
+export type PersonalNote = {
+  gameId: string; contextId: string; subjectDisplay: string; text: string; version: number; updatedAt: string;
+  allowedActions: { canEdit: boolean; canDelete: boolean };
+};
+export type NoteDeleteReceipt = { gameId: string; contextId: string; version: number; deleted: true };
+/** Narrow feedback slice consumed by native notes — not full private review surface. */
+export type FeedbackNotes = {
+  installed: boolean; writesEnabled: boolean;
+  capabilities: { canCreateNote: boolean; peerSubjects: { contextId: string; displayName: string }[] };
+  myNotes: PersonalNote[];
+};
 export type Results = {
   gameId: string;
   outcome: { value: 'unknown' | 'held' | 'not_held'; version: number; reason: string | null; provenance: { source: 'manager_explicit'; recordedAt: string; createdAt: string } | null };
@@ -53,6 +65,7 @@ export type Results = {
   attendance?: { installed: boolean; writesEnabled: boolean; myAttendance: Attendance | null; roster: Attendance[] | null; rosterNextCursor: string | null;
     summary: { rosterCount: number; marked: number; unknown: number; underClarification: number; agreed: number } | null;
     allowedActions: { canRecordAttendance: boolean; canBulkPresent: boolean } };
+  feedback?: FeedbackNotes;
   allowedActions: { canRecordOutcome: boolean; canRecordAttendance?: boolean; canBulkPresent?: boolean };
 };
 export type OwnResult = { gameId: string; contextId: string; gameTitle: string | null; endsAt: string | null; attendance: Attendance;
@@ -71,11 +84,13 @@ export type Intent =
   | { kind: 'withdraw'; gameId: string; disputeId: string; body: { expectedVersion: number; reason?: string } }
   | { kind: 'respond'; gameId: string; disputeId: string; body: { expectedVersion: number; explanation: string; correction?: DisputeCorrection } }
   | { kind: 'help'; gameId: string; disputeId: string; body: { expectedVersion: number; explanation: string } }
-  | { kind: 'later'; gameId: string; reminderId: string; body: { command: 'later'; expectedVersion: number } };
-export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST'; path: string }>;
+  | { kind: 'later'; gameId: string; reminderId: string; body: { command: 'later'; expectedVersion: number } }
+  | { kind: 'note-upsert'; gameId: string; contextId: string; body: { expectedVersion: number; text: string } }
+  | { kind: 'note-delete'; gameId: string; contextId: string; body: { expectedVersion: number } };
+export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
-export type Receipt = Results | AckReceipt | AttendanceDispute | { items: Attendance[] } | Reminders;
+export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | { items: Attendance[] } | Reminders;
 const invalid = (): never => { throw new PostgameError('invalid'); };
 export function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function str(v: unknown): string { return typeof v === 'string' ? v : invalid(); }
@@ -180,6 +195,39 @@ export function parseAttendanceHistory(v: unknown): AttendanceHistoryPage {
   }) };
 }
 function outcomeFact(v: unknown) { const r = object(v); return { value: choice(r.value, ['held','not_held'] as const), reason: nullable(r.reason, str) }; }
+export function parsePersonalNote(v: unknown): PersonalNote {
+  const r = object(v), rights = object(r.allowedActions);
+  const note: PersonalNote = {
+    gameId: postgameId(r.gameId), contextId: postgameId(r.contextId), subjectDisplay: str(r.subjectDisplay),
+    text: str(r.text), version: num(r.version, 1), updatedAt: time(r.updatedAt),
+    allowedActions: { canEdit: bool(rights.canEdit), canDelete: bool(rights.canDelete) },
+  };
+  if (!note.subjectDisplay.trim() || note.subjectDisplay.length > 80) invalid();
+  if (!note.text.trim() || note.text.length > 500 || hasControl(note.text)) invalid();
+  return note;
+}
+export function parseNoteDeleteReceipt(v: unknown): NoteDeleteReceipt {
+  const r = object(v);
+  if (r.deleted !== true) invalid();
+  return { gameId: postgameId(r.gameId), contextId: postgameId(r.contextId), version: num(r.version, 1), deleted: true };
+}
+function parseFeedbackNotes(v: unknown): FeedbackNotes {
+  const r = object(v), caps = object(r.capabilities);
+  // Consume only notes caps/projection — ignore unimplemented review/report fields.
+  return {
+    installed: bool(r.installed), writesEnabled: bool(r.writesEnabled),
+    capabilities: {
+      canCreateNote: bool(caps.canCreateNote),
+      peerSubjects: array(caps.peerSubjects ?? [], item => {
+        const s = object(item);
+        const displayName = str(s.displayName);
+        if (!displayName.trim() || displayName.length > 80) invalid();
+        return { contextId: postgameId(s.contextId), displayName };
+      }),
+    },
+    myNotes: array(r.myNotes ?? [], parsePersonalNote),
+  };
+}
 export function parseResults(v: unknown): Results {
   const r = object(v), o = object(r.outcome), a = object(r.allowedActions), p = o.provenance === null ? null : object(o.provenance);
   const result: Results = { gameId: postgameId(r.gameId), outcome: { value: choice(o.value, ['held','not_held','unknown']), version: num(o.version), reason: nullable(o.reason, str), provenance: p ? { source: choice(p.source, ['manager_explicit']), recordedAt: time(p.recordedAt), createdAt: time(p.createdAt) } : null },
@@ -193,7 +241,8 @@ export function parseResults(v: unknown): Results {
       summary: s ? { rosterCount: num(s.rosterCount), marked: num(s.marked), unknown: num(s.unknown), underClarification: num(s.underClarification), agreed: num(s.agreed) } : null,
       allowedActions: { canRecordAttendance: bool(rights.canRecordAttendance), canBulkPresent: bool(rights.canBulkPresent) } };
   }
-  // Feedback is a separate owner and is deliberately not retained by this core.
+  // Older servers may omit feedback; absent/installed=false disables Notes honestly.
+  if (r.feedback !== undefined) result.feedback = parseFeedbackNotes(r.feedback);
   return result;
 }
 export function parseOwnResults(v: unknown): OwnResults {
@@ -215,7 +264,20 @@ export function parseReminders(v: unknown): Reminders {
 }
 function exact(r: Record<string,unknown>, keys: string[]) { if (Object.keys(r).some(k => !keys.includes(k))) invalid(); }
 function reason(v: unknown): string { const s = str(v); return s === s.trim() && s.length > 0 && s.length <= 500 && !hasControl(s) ? s : invalid(); }
-export function wire(packet: Intent): { method: 'PUT' | 'POST'; path: string; body: Intent['body'] } {
+export function noteText(v: unknown): string {
+  const s = str(v);
+  return s === s.trim() && s.length > 0 && s.length <= 500 && !hasControl(s) ? s : invalid();
+}
+export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path: string; body: Intent['body'] } {
+  if (packet.kind === 'note-upsert' || packet.kind === 'note-delete') {
+    const gameId = postgameId(packet.gameId), contextId = postgameId(packet.contextId), body = object(packet.body);
+    if (packet.kind === 'note-upsert') {
+      exact(body, ['expectedVersion', 'text']); num(body.expectedVersion); noteText(body.text);
+      return { method: 'PUT', path: `/games/${gameId}/notes/${contextId}`, body: packet.body };
+    }
+    exact(body, ['expectedVersion']); num(body.expectedVersion, 1);
+    return { method: 'DELETE', path: `/games/${gameId}/notes/${contextId}`, body: packet.body };
+  }
   if (packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help') {
     const disputeId = postgameId(packet.disputeId), body = object(packet.body);
     if (packet.kind === 'withdraw') {
@@ -327,7 +389,39 @@ export function attendanceHistoryLanes(
       : null,
   };
 }
+/**
+ * Notes section: installed=false shows honest disable; canCreateNote or own notes
+ * (results list or known direct GET) show the lane. Absent feedback stays hidden.
+ */
+export function notesSectionVisible(
+  gameId: string,
+  data: Results | undefined,
+  notes: Record<string, { status: string; data?: PersonalNote }>,
+  known: Record<string, { gameId: string; contextId: string }>,
+): boolean {
+  const feedback = data?.feedback;
+  if (feedback?.installed === false) return true;
+  if (feedback?.capabilities.canCreateNote) return true;
+  if ((feedback?.myNotes.length ?? 0) > 0) return true;
+  for (const ref of Object.values(known)) {
+    if (ref.gameId !== gameId) continue;
+    const source = notes[`${ref.gameId}:${ref.contextId}`];
+    if (source?.status === 'ready' && source.data) return true;
+    if (source?.status === 'loading' || source?.status === 'error') return true;
+  }
+  return false;
+}
 export function validateReceipt(raw: unknown, p: Packet): Receipt {
+  if (p.kind === 'note-upsert') {
+    const r = parsePersonalNote(raw);
+    if (r.gameId !== p.gameId || r.contextId !== p.contextId || r.version !== p.body.expectedVersion + 1 || r.text !== p.body.text) invalid();
+    return r;
+  }
+  if (p.kind === 'note-delete') {
+    const r = parseNoteDeleteReceipt(raw);
+    if (r.gameId !== p.gameId || r.contextId !== p.contextId || r.deleted !== true || r.version !== p.body.expectedVersion + 1) invalid();
+    return r;
+  }
   if (p.kind === 'outcome') { const r = parseResults(raw); if (r.gameId !== p.gameId || r.outcome.version !== p.body.expectedVersion + 1 || r.outcome.value !== p.body.outcome || r.outcome.reason !== (p.body.reason ?? null)) invalid(); return r; }
   if (p.kind === 'later') { const r = parseReminders(raw); const target = r.items.find(r => r.id === p.reminderId); if (target) invalid(); return r; }
   if (p.kind === 'bulk') {

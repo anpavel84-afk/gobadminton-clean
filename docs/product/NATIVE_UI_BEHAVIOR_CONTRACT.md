@@ -155,6 +155,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `postgame.test.ts` / `postgame-disputes.test.ts`; API `game-attendance-disputes.disposable` cookie + native bearer; source APK counter 30 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native PG-2 disputes source; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-05 · Postgame private personal notes (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameFeedbackPanel` notes + Astra High review; existing `PUT/GET/DELETE /games/{id}/notes/{context}`; native same root `PostgameCoordinator` |
+| Entry | Authenticated `/my-games/[gameId]/results` section «Заметки» after attendance/clarification when `canCreateNote` or own notes exist (incl. known direct GET after results denial) |
+| Trigger | Explicit create/edit/delete only; participant select «Выберите»; irreversible tombstone confirm; no auto-write on mount/reauth |
+| Expected | Text max 500 trimmed nonempty; expectedVersion 0 create / current edit / positive DELETE; `note.allowedActions` after manager revoke independent of roster/create; UNKNOWN exact packet/key; conflict keeps draft + «Обновить заметку»; logout/different actor wipe private drafts/text; same-account reauth restores known refs without autowrite; absent/`installed=false` feedback disables Notes honestly; cold start without retained own-note refs cannot discover notes (existing unfinished product limit) |
+| Accessibility | Named participant/actions; keyboard-safe scroll; busy/UNKNOWN announced; large font / safe areas via existing Page |
+| Non-scope | Public review/report/reply/Cases/trainer/rating/media; listing `/me/notes`; results ACL widening; PROD; APK31 binary/device claim |
+| Evidence | Mobile unit `postgame-notes.test.ts` / postgame; API `game-feedback.disposable` native notes lifecycle (nonplaying secondary manager); source APK counter 31 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private notes source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
 | Field | Content |

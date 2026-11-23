@@ -7,6 +7,7 @@ import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
@@ -17,7 +18,8 @@ import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
+const nativeClientId = "pg3-native-notes-fixture";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
@@ -79,13 +81,18 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       NODE_ENV: "test",
       APP_ENV: "local",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      ALLOWED_WEB_ORIGINS: origin,
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "pg3-synthetic-fixture-pepper-only!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "pg3-synthetic-fingerprint-fixture!!",
       POST_GAME_INTERNAL_ENABLED: "1",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([
+        { clientId: nativeClientId, redirectUris: ["https://app.example.test/auth/callback"] },
+      ]),
     });
     const ref = await Test.createTestingModule({
       imports: [buildTestCoreModule(env, pool), GamesModule, VenuesModule, ProfilesModule],
@@ -134,6 +141,7 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
 
   beforeEach(async () => {
     env.POST_GAME_INTERNAL_ENABLED = true;
+    env.NATIVE_AUTH_ENABLED = true;
     manager = await actor("PG3 manager");
     anna = await actor("PG3 Anna");
     ilya = await actor("PG3 Ilya");
@@ -196,6 +204,40 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       url,
       payload: payload as object,
       headers: headers(who, idem),
+    }) as Promise<Response>;
+  }
+
+  async function nativeHeaders(who: Actor, idem = key()) {
+    const native = app.get(NativeSessionService);
+    const issued = await native.transaction(async (client) => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, nativeClientId);
+    });
+    return {
+      credentials: issued,
+      headers: { authorization: `Bearer ${issued.accessToken}`, "idempotency-key": idem },
+    };
+  }
+  async function nativeGet(who: Actor, url: string): Promise<Response> {
+    const n = await nativeHeaders(who);
+    return app.inject({ method: "GET", url, headers: n.headers }) as Promise<Response>;
+  }
+  async function nativePut(who: Actor, url: string, payload: unknown, idem = key()): Promise<Response> {
+    const n = await nativeHeaders(who, idem);
+    return app.inject({
+      method: "PUT",
+      url,
+      payload: payload as object,
+      headers: n.headers,
+    }) as Promise<Response>;
+  }
+  async function nativeDel(who: Actor, url: string, payload: unknown, idem = key()): Promise<Response> {
+    const n = await nativeHeaders(who, idem);
+    return app.inject({
+      method: "DELETE",
+      url,
+      payload: payload as object,
+      headers: n.headers,
     }) as Promise<Response>;
   }
 
@@ -933,5 +975,206 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     expect(v2Report.statusCode).toBe(201);
     expect(v2Report.json().version).toBe(version1 + 1);
     expect(v2Report.json().reportId).not.toBe(reported.json().reportId);
+  });
+
+  it("native bearer personal notes: CRUD/CAS/replay, nonparticipating manager revoke, cookie-only neighbors", async () => {
+    const { gameId, annaContext, ilyaContext } = await createEndedGameWithPlayers();
+    // Nonparticipating secondary manager — never gains own participation (revocation proof case).
+    const secondary = await actor("PG3 native nonplaying manager");
+    await pool.query(
+      `INSERT INTO game_managers (game_id, user_id, role, status) VALUES ($1, $2, 'manager', 'active')`,
+      [gameId, secondary.userId],
+    );
+
+    const createKey = key();
+    const created = await nativePut(
+      secondary,
+      `/v1/games/${gameId}/notes/${annaContext}`,
+      { expectedVersion: 0, text: "Native note before revoke" },
+      createKey,
+    );
+    expect([200, 201]).toContain(created.statusCode);
+    expect(created.json().text).toBe("Native note before revoke");
+    expect(created.json().version).toBe(1);
+    const noteVersion = created.json().version as number;
+
+    const replay = await nativePut(
+      secondary,
+      `/v1/games/${gameId}/notes/${annaContext}`,
+      { expectedVersion: 0, text: "Native note before revoke" },
+      createKey,
+    );
+    expect(replay.statusCode).toBe(created.statusCode);
+    expect(replay.json().version).toBe(noteVersion);
+    expect(replay.json().text).toBe("Native note before revoke");
+    expect(replay.json().contextId).toBe(annaContext);
+
+    const ownGet = await nativeGet(secondary, `/v1/games/${gameId}/notes/${annaContext}`);
+    expect(ownGet.statusCode).toBe(200);
+    expect(ownGet.json().text).toBe("Native note before revoke");
+
+    expect((await nativeGet(anna, `/v1/games/${gameId}/notes/${annaContext}`)).statusCode).toBe(404);
+    expect((await nativeGet(outsider, `/v1/games/${gameId}/notes/${annaContext}`)).statusCode).toBe(404);
+    expect(
+      (
+        await nativePut(anna, `/v1/games/${gameId}/notes/${ilyaContext}`, {
+          expectedVersion: 0,
+          text: "participant cannot create",
+        })
+      ).statusCode,
+    ).toBeGreaterThanOrEqual(400); // fixture-derived; Root verifies exact statuses
+    expect(
+      (
+        await nativePut(outsider, `/v1/games/${gameId}/notes/${annaContext}`, {
+          expectedVersion: 0,
+          text: "outsider cannot create",
+        })
+      ).statusCode,
+    ).toBeGreaterThanOrEqual(400);
+
+    const edited = await nativePut(secondary, `/v1/games/${gameId}/notes/${annaContext}`, {
+      expectedVersion: noteVersion,
+      text: "Native note edited",
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().text).toBe("Native note edited");
+    expect(edited.json().version).toBe(noteVersion + 1);
+
+    const stale = await nativePut(secondary, `/v1/games/${gameId}/notes/${annaContext}`, {
+      expectedVersion: noteVersion,
+      text: "stale write",
+    });
+    expect(stale.statusCode).toBe(409);
+
+    // Revoke without own participation — results denied; direct owned-note rights retained.
+    await pool.query(
+      `UPDATE game_managers SET status = 'revoked', revoked_at = clock_timestamp(), updated_at = clock_timestamp()
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, secondary.userId],
+    );
+    const deniedResults = await nativeGet(secondary, `/v1/games/${gameId}/results`);
+    expect([403, 404]).toContain(deniedResults.statusCode);
+
+    const afterRevokeGet = await nativeGet(secondary, `/v1/games/${gameId}/notes/${annaContext}`);
+    expect(afterRevokeGet.statusCode).toBe(200);
+    expect(afterRevokeGet.json().text).toBe("Native note edited");
+    const liveVersion = afterRevokeGet.json().version as number;
+
+    const afterRevokeEdit = await nativePut(secondary, `/v1/games/${gameId}/notes/${annaContext}`, {
+      expectedVersion: liveVersion,
+      text: "Native note after revoke",
+    });
+    expect(afterRevokeEdit.statusCode).toBe(200);
+    expect(afterRevokeEdit.json().text).toBe("Native note after revoke");
+
+    expect(
+      (
+        await nativePut(secondary, `/v1/games/${gameId}/notes/${ilyaContext}`, {
+          expectedVersion: 0,
+          text: "new create denied after revoke",
+        })
+      ).statusCode,
+    ).toBeGreaterThanOrEqual(400);
+
+    const deleteKey = key();
+    const deleted = await nativeDel(
+      secondary,
+      `/v1/games/${gameId}/notes/${annaContext}`,
+      { expectedVersion: afterRevokeEdit.json().version },
+      deleteKey,
+    );
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({
+      gameId,
+      contextId: annaContext,
+      version: afterRevokeEdit.json().version + 1,
+      deleted: true,
+    });
+    const deleteReplay = await nativeDel(
+      secondary,
+      `/v1/games/${gameId}/notes/${annaContext}`,
+      { expectedVersion: afterRevokeEdit.json().version },
+      deleteKey,
+    );
+    expect(deleteReplay.statusCode).toBe(200);
+    expect(deleteReplay.json()).toEqual(deleted.json());
+    expect((await nativeGet(secondary, `/v1/games/${gameId}/notes/${annaContext}`)).statusCode).toBe(404);
+    expect(
+      (
+        await nativePut(secondary, `/v1/games/${gameId}/notes/${annaContext}`, {
+          expectedVersion: 0,
+          text: "no resurrection",
+        })
+      ).statusCode,
+    ).toBeGreaterThanOrEqual(400);
+
+    const publicResults = await get(anna, `/v1/games/${gameId}/results`);
+    expect(publicResults.statusCode).toBe(200);
+    expect(JSON.stringify(publicResults.json())).not.toContain("Native note");
+
+    // Negative channels: mixed bearer+cookie, CSRF, disabled native, revoked session, writes off.
+    const n = await nativeHeaders(secondary);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/v1/games/${gameId}/notes/${annaContext}`,
+          headers: { ...n.headers, cookie: secondary.cookie },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: `/v1/games/${gameId}/notes/${ilyaContext}`,
+          payload: { expectedVersion: 0, text: "no csrf" },
+          headers: { cookie: manager.cookie, origin },
+        })
+      ).statusCode,
+    ).toBe(403);
+    env.NATIVE_AUTH_ENABLED = false;
+    try {
+      expect((await nativeGet(manager, `/v1/games/${gameId}/notes/${annaContext}`)).statusCode).toBe(404);
+    } finally {
+      env.NATIVE_AUTH_ENABLED = true;
+    }
+    env.POST_GAME_INTERNAL_ENABLED = false;
+    try {
+      expect(
+        (
+          await nativePut(manager, `/v1/games/${gameId}/notes/${ilyaContext}`, {
+            expectedVersion: 0,
+            text: "writes off",
+          })
+        ).statusCode,
+      ).toBe(503);
+    } finally {
+      env.POST_GAME_INTERNAL_ENABLED = true;
+    }
+    await sessions.revokeSession(n.credentials.sessionId);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/v1/games/${gameId}/notes/${annaContext}`,
+          headers: n.headers,
+        })
+      ).statusCode,
+    ).toBe(401);
+
+    // Neighbor private review create stays cookie-only — native bearer must not succeed.
+    const nativeReview = await app.inject({
+      method: "POST",
+      url: `/v1/games/${gameId}/reviews`,
+      payload: {
+        kind: "peer",
+        subjectContextId: ilyaContext,
+        peerRating: "neutral",
+        experienceAssertion: "i_experienced_this_game",
+      },
+      headers: (await nativeHeaders(anna)).headers,
+    });
+    expect(nativeReview.statusCode).toBeGreaterThanOrEqual(400);
   });
 });

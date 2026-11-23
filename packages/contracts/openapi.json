@@ -19931,10 +19931,13 @@
           "Games"
         ],
         "summary": "Read own personal note for a participation context",
-        "description": "PG-3. Author only. Private 404 for foreign/missing/tombstoned. Survives manager revoke for existing author. No staff read. No-store.",
+        "description": "PG-3. Author only. Private 404 for foreign/missing/tombstoned. Survives manager revoke for existing author. No staff read. No-store. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -20039,10 +20042,13 @@
           "Games"
         ],
         "summary": "Create or edit own personal note on a context",
-        "description": "PG-3. Current manager creates; existing author retains edit after revoke without roster access. Server derives author/subject. expectedVersion 0 creates. Client cannot set visibility/actor/staff fields. Text 1–500. Tombstoned notes cannot resurrect. actorMutationBudgetPerGame=80. No-store.",
+        "description": "PG-3. Current manager creates; existing author retains edit after revoke without roster access. Server derives author/subject. expectedVersion 0 creates. Client cannot set visibility/actor/staff fields. Text 1–500. Tombstoned notes cannot resurrect. actorMutationBudgetPerGame=80. No-store. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -20197,10 +20203,13 @@
           "Games"
         ],
         "summary": "Tombstone own personal note with expectedVersion",
-        "description": "PG-3. Own note only. Versioned tombstone/history; old key cannot resurrect. Frozen unknown retries same body/key. No-store.",
+        "description": "PG-3. Own note only. Versioned tombstone/history; old key cannot resurrect. Frozen unknown retries same body/key. No-store. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [

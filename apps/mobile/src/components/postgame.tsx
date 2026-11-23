@@ -116,6 +116,14 @@ export function CommandReview({gameId}: {gameId?:string}) {
             {selected.kind === 'respond' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Ответить / исправить · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label>{selected.body.correction && <Label>{attendanceLabel(selected.body.correction.value)}{selected.body.correction.late ? ' · Опоздание' : ''} · {selected.body.correction.correctionReason}</Label>}<Label>Уточнение останется открытым</Label></>}
             {selected.kind === 'help' && <><Label>{lockedPerson?.displayName || 'Выбранный участник'}</Label><Label>Помощь по уточнению · версия уточнения {selected.body.expectedVersion}</Label>{lockedDetail && <Label>Текущая отметка: {attendanceLabel(lockedDetail.currentAssertion.value)} · версия {lockedDetail.currentAssertion.version}</Label>}<Label>{selected.body.explanation}</Label></>}
             {selected.kind === 'later' && <Label>Отложить это напоминание?</Label>}
+            {selected.kind === 'note-upsert' && <><Label>{person(selected.contextId)?.displayName
+              || s.notes[`${selected.gameId}:${selected.contextId}`]?.data?.subjectDisplay
+              || data?.feedback?.myNotes.find(n => n.contextId === selected.contextId)?.subjectDisplay
+              || 'Выбранный участник'}</Label><Label>{selected.body.expectedVersion === 0 ? 'Сохранить заметку' : 'Сохранить изменения'}</Label><Label>{selected.body.text}</Label></>}
+            {selected.kind === 'note-delete' && <><Label>{person(selected.contextId)?.displayName
+              || s.notes[`${selected.gameId}:${selected.contextId}`]?.data?.subjectDisplay
+              || data?.feedback?.myNotes.find(n => n.contextId === selected.contextId)?.subjectDisplay
+              || 'Выбранный участник'}</Label><Label>Удалить заметку</Label><Label>После удаления создать заметку об этом участнике в этой игре заново не получится</Label></>}
           </>}
           {command?.status === 'sending' && <Loading title="Отправляем выбранное действие…" />}
           {command?.status === 'unknown' && <><Label>Результат пока неизвестен. Новые изменения недоступны до проверки исходного действия.</Label></>}
