@@ -23,6 +23,7 @@ import {
   TAG_OPTIONS,
 } from '../postgame.ts';
 import type { PrivateReview, Results } from '../postgame.ts';
+import { roleDiscrepancyRequiredBlocksCreate } from '../postgame-feedback.ts';
 import { Choice, ReviewButton } from './postgame.tsx';
 import { Label, Loading, TextButton, styles } from './ui.tsx';
 
@@ -219,6 +220,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const trainingDiscrepancy = draft.trainingDiscrepancy ?? '';
   const discrepancyError = draft.discrepancyFieldError;
   const discrepancyUi = roleDiscrepancyPresentation(data, discrepancyError);
+  const orgDiscrepancyNormalized = normalizeFormReason(orgDiscrepancy);
+  const trainingDiscrepancyNormalized = normalizeFormReason(trainingDiscrepancy);
+  const orgRequiredBlocks = roleDiscrepancyRequiredBlocksCreate(
+    discrepancyError, orgDiscrepancyNormalized,
+  );
+  const trainingRequiredBlocks = roleDiscrepancyRequiredBlocksCreate(
+    discrepancyError, trainingDiscrepancyNormalized,
+  );
   const received = s.reviewHistory.received;
   const sent = s.reviewHistory.sent;
   const visible = feedbackSectionVisible(gameId, feedback, { received, sent });
@@ -267,6 +276,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
 
   const submitOrganization = () => {
     if (!canCreateOrganization) return;
+    if (roleDiscrepancyRequiredBlocksCreate(discrepancyError, normalizeFormReason(orgDiscrepancy))) return;
     const trimmed = normalizeFormReason(orgComment);
     if (orgScore == null && !trimmed) return;
     const discrepancy = normalizeFormReason(orgDiscrepancy);
@@ -284,6 +294,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
 
   const submitTraining = () => {
     if (!canCreateTraining) return;
+    if (roleDiscrepancyRequiredBlocksCreate(discrepancyError, normalizeFormReason(trainingDiscrepancy))) return;
     const trimmed = normalizeFormReason(trainingComment);
     if (!trimmed) return;
     const discrepancy = normalizeFormReason(trainingDiscrepancy);
@@ -393,12 +404,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       <Label>Оценка организации (1–5, необязательно если есть комментарий)</Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <Choice title="Без оценки" selected={orgScore == null}
+          disabled={!canCreateOrganization}
           onPress={() => {
             if (!canCreateOrganization) return;
             owner.setFeedbackDraft(gameId, { organizationScore: null });
           }} />
         {([1, 2, 3, 4, 5] as const).map(n => (
           <Choice key={n} title={String(n)} selected={orgScore === n}
+            disabled={!canCreateOrganization}
             onPress={() => {
               if (!canCreateOrganization) return;
               owner.setFeedbackDraft(gameId, { organizationScore: n });
@@ -422,7 +435,8 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       ) : null}
       <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
       <ReviewButton title="Отправить организатору лично"
-        disabled={!canCreateOrganization || (orgScore == null && !normalizeFormReason(orgComment))}
+        disabled={!canCreateOrganization || orgRequiredBlocks
+          || (orgScore == null && !normalizeFormReason(orgComment))}
         onPress={submitOrganization} />
     </View> : null}
 
@@ -442,7 +456,8 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       ) : null}
       <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
       <ReviewButton title="Отправить"
-        disabled={!canCreateTraining || !normalizeFormReason(trainingComment)}
+        disabled={!canCreateTraining || trainingRequiredBlocks
+          || !normalizeFormReason(trainingComment)}
         onPress={submitTraining} />
     </View> : null}
 

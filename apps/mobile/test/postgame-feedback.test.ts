@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseResults, parsePrivateReview, parseMeReviewsPage, parseReviewReportReceipt,
@@ -9,7 +10,9 @@ import {
   feedbackDiscrepancyDraftPatch, DISCREPANCY_REQUIRED_MESSAGE, DISCREPANCY_UNEXPECTED_MESSAGE,
   DISCREPANCY_OMIT_HINT, feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore,
   reviewCommandsOpen, displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
+  normalizeFormReason,
 } from '../src/postgame.ts';
+import { roleDiscrepancyRequiredBlocksCreate } from '../src/postgame-feedback.ts';
 import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import { game as publicGame } from './fixtures.ts';
@@ -1777,5 +1780,40 @@ test('#522 Root A/B: default-kind discrepancy patch, ambiguous null attendance, 
   assert.equal(orgAmbigSent.body.discrepancyExplanation, 'нужно пояснение');
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.comment, 'peer-keep');
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.trainingDiscrepancy, 'трен пояснение');
+});
+
+test('#522 Astra address3: REQUIRED empty discrepancy blocks create; readonly org score Choice disabled', () => {
+  // Explicit REQUIRED + empty/whitespace-normalized current-role text blocks; filled text does not.
+  assert.equal(roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, ''), true);
+  assert.equal(
+    roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, normalizeFormReason('   \n\t  ')),
+    true,
+  );
+  assert.equal(
+    roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, normalizeFormReason('пояснение')),
+    false,
+  );
+  // First ambiguous open / non-REQUIRED must not require discrepancy before submit.
+  assert.equal(roleDiscrepancyRequiredBlocksCreate(null, ''), false);
+  assert.equal(roleDiscrepancyRequiredBlocksCreate(undefined, ''), false);
+  assert.equal(roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_UNEXPECTED_MESSAGE, ''), false);
+  assert.equal(roleDiscrepancyRequiredBlocksCreate('other field copy', ''), false);
+
+  const ui = readFileSync(new URL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
+  // Readonly organization score affordance: existing Choice gets disabled={!canCreateOrganization}.
+  assert.match(ui, /title="Без оценки"[\s\S]*?disabled=\{!canCreateOrganization\}/);
+  assert.match(ui, /title=\{String\(n\)\}[\s\S]*?disabled=\{!canCreateOrganization\}/);
+  // CTA + handler gate on the same helper for current-role discrepancy after REQUIRED.
+  assert.match(ui, /roleDiscrepancyRequiredBlocksCreate/);
+  assert.match(ui, /disabled=\{!canCreateOrganization \|\| orgRequiredBlocks/);
+  assert.match(ui, /disabled=\{!canCreateTraining \|\| trainingRequiredBlocks/);
+  assert.match(
+    ui,
+    /if \(roleDiscrepancyRequiredBlocksCreate\(discrepancyError, normalizeFormReason\(orgDiscrepancy\)\)\) return;/,
+  );
+  assert.match(
+    ui,
+    /if \(roleDiscrepancyRequiredBlocksCreate\(discrepancyError, normalizeFormReason\(trainingDiscrepancy\)\)\) return;/,
+  );
 });
 

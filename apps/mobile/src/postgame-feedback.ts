@@ -351,6 +351,18 @@ export function roleDiscrepancyPresentation(
   return { visible: true, editable: true, omitFromWire: false, hint: null };
 }
 
+/**
+ * After explicit server FEEDBACK_DISCREPANCY_REQUIRED, empty normalized current-role
+ * discrepancy blocks create CTA and handler. First ambiguous open (no REQUIRED) does not.
+ * Callers pass normalizeFormReason(...) for the currently rendered role field.
+ */
+export function roleDiscrepancyRequiredBlocksCreate(
+  fieldError: string | null | undefined,
+  normalizedDiscrepancy: string,
+): boolean {
+  return fieldError === DISCREPANCY_REQUIRED_MESSAGE && !normalizedDiscrepancy;
+}
+
 export type FeedbackUiMode = 'peer' | 'organization' | 'training' | 'received' | 'sent';
 
 /**
