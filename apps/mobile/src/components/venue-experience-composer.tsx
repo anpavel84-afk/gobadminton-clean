@@ -142,12 +142,14 @@ export function VenueExperienceComposer({
           {!s.venueReceipt && !unknown ? (
             <Label>
               {editing
-                ? 'Публичное согласие нужно подтвердить заново. По умолчанию текст только вам.'
+                ? (draft.audience === 'self_draft'
+                  ? 'Эти изменения увидите только вы.'
+                  : 'Чтобы отправить изменения на публикацию, подтвердите согласие ещё раз.')
                 : 'По умолчанию текст только вам. Публичный отзыв — без профиля, игры и состава.'}
             </Label>
           ) : null}
           {!unknown && !s.venueReceipt && s.venueEligibility.status === 'loading'
-            ? <Loading title={editing ? 'Перечитываем выбранный отзыв…' : 'Проверяем допуск по этой игре…'} />
+            ? <Loading title={editing ? 'Загружаем отзыв…' : 'Проверяем допуск по этой игре…'} />
             : null}
           {!unknown && !s.venueReceipt && (s.venueEligibility.status === 'error' || s.venueEligibility.status === 'unavailable')
             ? <Label accessibilityRole="alert">{s.venueNotice ?? 'Не удалось проверить допуск.'}</Label>
@@ -164,7 +166,7 @@ export function VenueExperienceComposer({
               </Label>
               <Label>
                 {editing
-                  ? 'Редакция использует сохранённое основание выбранной версии. Новый выбор игры недоступен.'
+                  ? 'Отзыв относится к той же игре.'
                   : 'Отзыв относится только к этой игре. В публичном отзыве не будет названия игры, состава и точного времени.'}
               </Label>
               {help ? <Label accessibilityRole="status">{help}</Label> : null}

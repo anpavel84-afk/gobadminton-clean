@@ -113,7 +113,7 @@ export default function Profile() {
           <OwnProfileCard onEdit={() => setEditing(true)} onSettings={toggleSettings} settingsOpen={settingsOpen} />
           <View style={{ gap: 8 }}>
             <Label accessibilityRole="header" style={styles.subtitle}>Отзывы о площадках</Label>
-            <Label>Только вам. История и отзыв площадки без публичной ленты профиля.</Label>
+            <Label>Этот список видите только вы.</Label>
             <OwnVenueReviewsEntry onOpen={() => auth.postgame.openOwnVenueHistory()} />
           </View>
           <OwnVenueReviewsHost />

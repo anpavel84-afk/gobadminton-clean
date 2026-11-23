@@ -784,7 +784,13 @@ export function mayEditOwnVenue(item: SelectedOwnVenueReview): boolean {
 
 export function ownVenueStatusLabel(item: OwnVenueReview): string {
   if (item.status === 'withdrawn') return 'Отозван';
-  if (item.pendingRevision !== null || item.receiptToken) return 'Ожидает обработки';
+  if (item.pendingRevision !== null || item.receiptToken) {
+    // Private pending (incl. self_draft revision_waiting) is saved-only-you — never “moderation”.
+    const privatePending = item.audience === 'self_draft'
+      || item.status === 'self_draft'
+      || (item.receiptToken === null && item.audience !== 'public_venue');
+    return privatePending ? 'Личный черновик' : 'На проверке';
+  }
   if (item.publicVisible) return 'Опубликован';
   return 'Не опубликован';
 }

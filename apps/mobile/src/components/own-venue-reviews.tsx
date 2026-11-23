@@ -42,7 +42,7 @@ export function OwnVenueReviewsEntry({ onOpen }: { onOpen: () => void }) {
         paddingVertical: 12,
       }]}
     >
-      <Label style={{ fontWeight: '700', textAlign: 'left' }}>Отзывы о площадках</Label>
+      <Label style={{ fontWeight: '700', textAlign: 'left' }}>Открыть отзывы</Label>
     </Pressable>
   );
 }
@@ -96,7 +96,15 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
       <Page keyboard header={<View style={{ gap: 8 }}>
         <TextButton title={editOpen ? 'К списку' : 'Закрыть'} onPress={close} />
         {ownerUnknown && !retentionBlocked ? (
-          <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcileVenueExperience()} />
+          <TextButton
+            title={
+              venueOwnerBusy && isVenueExperienceCommandPacket(venueOwnerBusy.packet)
+                && venueOwnerBusy.packet.body.action === 'withdraw'
+                ? 'Повторить запрос на снятие'
+                : 'Повторить сохранение'
+            }
+            onPress={() => void owner.reconcileVenueExperience()}
+          />
         ) : null}
       </View>}>
         <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
@@ -113,7 +121,7 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
           {ownerSending ? <Loading title="Отправляем…" /> : null}
           {ownerUnknown && !retentionBlocked ? (
             <Label accessibilityRole="status">
-              Результат отправки не подтверждён. Новые операции заблокированы; обновление списка не подтвердит эту отправку.
+              Результат пока неизвестен. Обновление списка его не подтвердит. Пока этот запрос не завершён, новые изменения недоступны.
             </Label>
           ) : null}
           {s.ownVenueReadRequired ? (
@@ -210,20 +218,19 @@ function OwnVenueReviewCard({
         <Label>Публикация снята. Повторная отправка этого отзыва недоступна.</Label>
       ) : (
         <>
-          <Label style={{ fontWeight: '700' }}>
-            {row.pendingRevision !== null || row.receiptToken
-              ? 'Ваш текст · ожидает обработки'
-              : 'Ваш текст'}
-          </Label>
+          <Label style={{ fontWeight: '700' }}>Ваш текст</Label>
           <Label>{row.text ?? 'Текст не возвращён.'}</Label>
           <Label>
-            Это ваш текст из личного списка, а не подтверждённая публичная цитата. Обработка может задержать публикацию.
+            {row.audience === 'self_draft' || row.status === 'self_draft'
+              || (row.receiptToken === null && row.audience !== 'public_venue')
+              ? 'Эту версию видите только вы.'
+              : 'Это ваш текст из личного списка, а не подтверждённая публичная цитата.'}
           </Label>
           {row.publicVisible
             ? <PublicQuotation own={row} />
             : <Label>Публичная видимость не подтверждена.</Label>}
           <Label>
-            Для редактирования перечитаем выбранный отзыв и проверим сохранённое основание. Отозвать отзыв можно независимо от срока редактирования.
+            Отозвать отзыв можно и после окончания срока редактирования.
           </Label>
           <OutlineButton title="Изменить отзыв" disabled={locked} onPress={onEdit} />
           {showReread ? (
@@ -351,13 +358,13 @@ function WithdrawConfirm({
           {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
           {pending && !busy && !retentionBlocked ? (
             <Label>
-              Исходный запрос сохранён в этой сессии. Повтор отправит тот же запрос с тем же ключом; скрытие окна не отменяет операцию.
+              Пока неизвестно, снят ли отзыв. Можно закрыть окно и вернуться к этому запросу позже.
             </Label>
           ) : null}
           <View style={{ gap: 8 }}>
             <OutlineButton title={hideWindow ? 'Скрыть окно' : 'Отмена'} onPress={onCancel} />
             {pending && !retentionBlocked ? (
-              <PrimaryButton title="Повторить исходный запрос" disabled={busy} onPress={onRetry} />
+              <PrimaryButton title="Повторить запрос на снятие" disabled={busy} onPress={onRetry} />
             ) : (
               <PrimaryButton
                 title="Да, отозвать"
