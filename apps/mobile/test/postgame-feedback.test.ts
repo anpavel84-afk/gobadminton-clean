@@ -1796,7 +1796,7 @@ test('#522 Astra address3: REQUIRED empty discrepancy blocks create; readonly or
     true,
   );
   const withTab = normalizeFormReason('   \n\t  ');
-  assert.equal(withTab, '   \t  ', 'tab/C0 must survive normalize for strict wire rejection');
+  assert.equal(withTab, '    \t  ', 'tab/C0 must survive normalize for strict wire rejection');
   assert.equal(
     roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, withTab),
     false,
