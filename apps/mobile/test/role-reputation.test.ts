@@ -671,7 +671,10 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(disclosure, /paddingVertical:\s*8/);
   assert.match(disclosure, /rotate:\s*'180deg'/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
-  assert.doesNotMatch(disclosure, /Поделиться опытом|Сообщить о нарушении|canReply|canReport/);
+  // Author entry now wired on game disclosure; recipient reply/report remain unimplemented.
+  assert.match(disclosure, /Поделиться опытом/);
+  assert.match(disclosure, /openPublicComposer|beginPublicAuthorEntry|rememberPendingPublicAuthor/);
+  assert.doesNotMatch(disclosure, /Сообщить о нарушении|canReply|canReport/);
   assert.match(profile, /PlayerRoleReputation/);
   assert.match(profile, /bindPlayer/);
   assert.match(profile, /playerRoleReputation/);
@@ -696,5 +699,5 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(nav, /flexBasis: 'auto'/);
   assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
   assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 33);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 34);
 });

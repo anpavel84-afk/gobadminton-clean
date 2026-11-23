@@ -411,3 +411,15 @@ test('clock-expired pending and zero-seat decision invariants; decline disables 
   assert.match(card, /invite\.status === 'pending'/);
   assert.match(card, /clockExpired \? 'Обновить приглашение'/);
 });
+
+test('#522 MyGames compact Отзывы section after refresh; same own-history sheet; four filters preserved', () => {
+  const screen = read('../app/my-games.tsx');
+  assert.match(screen, /\{ value: 'all', label: 'Все' \}/);
+  assert.match(screen, /\{ value: 'manage', label: 'Создаю и управляю' \}/);
+  assert.match(screen, /\{ value: 'participate', label: 'Заявки и участие' \}/);
+  assert.match(screen, /\{ value: 'invites', label: 'Приглашения' \}/);
+  assert.doesNotMatch(screen, /value: 'reviews'/);
+  assert.match(screen, /Обновить мои игры[\s\S]*Отзывы[\s\S]*Мои публичные отзывы о ролях/);
+  assert.match(screen, /openOwnPublicHistory/);
+  assert.match(screen, /upcoming[\s\S]*draft[\s\S]*past[\s\S]*terminal[\s\S]*unknown/);
+});

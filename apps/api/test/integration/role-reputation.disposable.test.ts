@@ -10,6 +10,7 @@ import { AdminModule } from "../../src/admin/admin.module";
 import { ADMIN_COOKIE, type AdminRole } from "../../src/admin/rbac";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { hashSecret, sealSecret } from "../../src/auth/crypto";
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
@@ -20,12 +21,15 @@ import { VenuesModule } from "../../src/venues/venues.module";
 import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
 
+const nativeClientId = "role-rep-native-fixture";
+const nativeRedirect = "https://app.example.test/auth/callback";
+
 /**
  * Bounded #394 role-reputation HTTP checks. Skipped unless RUN_DB_INTEGRATION=1
  * against dedicated disposable DB. Never creates live sessions/credentials.
  */
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 const adminOrigin = "http://localhost:18995";
 const pepper = "role-rep-consumer-admin-pepper-32chars!!";
 
@@ -67,6 +71,7 @@ run("#394 role reputation — disposable", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
+  let native: NativeSessionService;
   let organizer: Actor;
   let participant: Actor;
   let outsider: Actor;
@@ -109,9 +114,10 @@ run("#394 role reputation — disposable", () => {
       NODE_ENV: "test",
       APP_ENV: "local",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      ALLOWED_WEB_ORIGINS: origin,
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "role-rep-synthetic-fixture-pepper!!!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "role-rep-synthetic-fingerprint!!!!!",
@@ -121,6 +127,10 @@ run("#394 role reputation — disposable", () => {
       CASES_INTERNAL_ENABLED: "1",
       ADMIN_ORIGIN: adminOrigin,
       ADMIN_AUTH_PEPPER: pepper,
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([
+        { clientId: nativeClientId, redirectUris: [nativeRedirect] },
+      ]),
     });
     const ref = await Test.createTestingModule({
       imports: [
@@ -138,6 +148,7 @@ run("#394 role reputation — disposable", () => {
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     sessions = ref.get(SessionService);
+    native = ref.get(NativeSessionService);
     organizer = await actor("org");
     participant = await actor("part");
     outsider = await actor("out");
@@ -353,6 +364,165 @@ run("#394 role reputation — disposable", () => {
     ).rows[0]!;
     void subject;
     return { gameId, participationId, roleHandle: handle.public_handle };
+  }
+
+  /** Trainer-led held game with training role proof — for native author loop eligibility. */
+  async function seedHeldTrainerLed(opts: {
+    organizerId: string;
+    trainerId: string;
+    participantId: string;
+    endsAt: Date;
+  }) {
+    const venue = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO venues(
+           city_id, name, address, timezone, location, created_by_user_id,
+           lifecycle_state, normalized_name, normalized_address
+         ) VALUES (
+           $1, 'RoleRep Train Court', 'Synthetic train address', 'Europe/Moscow',
+           ST_SetSRID(ST_MakePoint(37.62, 55.75), 4326)::geography, $2,
+           'unverified', 'rolerep train court', 'synthetic train address'
+         ) RETURNING id`,
+        [MOSCOW_CITY_ID, opts.organizerId],
+      )
+    ).rows[0]!;
+    const trainerProfile = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO trainer_profiles(user_id, display_name, status)
+         VALUES ($1, 'Synthetic trainer', 'active')
+         ON CONFLICT (user_id) DO UPDATE SET display_name=EXCLUDED.display_name
+         RETURNING id`,
+        [opts.trainerId],
+      )
+    ).rows[0]!;
+    const gameId = randomUUID();
+    const starts = new Date(opts.endsAt.getTime() - 3600_000);
+    const deadline = new Date(starts.getTime() - 3600_000);
+    await pool.query(
+      `INSERT INTO games (
+         id, version, title, status, visibility, activity_kind, venue_id,
+         starts_at, ends_at, timezone, application_deadline_at,
+         capacity, external_reserved_count,
+         format_key, level_scale_id, level_scale_version, allowed_level_ids,
+         settlement_mode, settlement_purpose, settlement_terms, price_status,
+         trainer_profile_id, trainer_display_name_snapshot,
+         created_by_user_id, host_display_name, host_public_contact,
+         published_at
+       ) VALUES (
+         $1, 1, 'Training', 'completed', 'public', 'trainer_led', $2,
+         $3, $4, 'Europe/Moscow', $5,
+         4, 0,
+         'doubles', 'ntrp', 1, '["3.0","3.5"]'::jsonb,
+         'external', 'trainer_fee', 'Synthetic trainer fee terms', 'by_agreement',
+         $6, 'Synthetic trainer',
+         $7, 'Host', 'host@example.test',
+         clock_timestamp()
+       )`,
+      [
+        gameId,
+        venue.id,
+        starts.toISOString(),
+        opts.endsAt.toISOString(),
+        deadline.toISOString(),
+        trainerProfile.id,
+        opts.organizerId,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO game_managers (game_id, user_id, role, status)
+       VALUES ($1, $2, 'owner', 'active')`,
+      [gameId, opts.organizerId],
+    );
+    const participationId = randomUUID();
+    await pool.query(
+      `INSERT INTO participations (id, game_id, user_id, status, confirmed_at)
+       VALUES ($1, $2, $3, 'confirmed', $4)`,
+      [participationId, gameId, opts.participantId, starts.toISOString()],
+    );
+    await pool.query(
+      `INSERT INTO participation_transitions
+         (id, participation_id, from_status, to_status, actor_id, reason_code,
+          aggregate_version, game_version, at)
+       VALUES ($1, $2, NULL, 'confirmed', $3, 'test_confirm', 1, 1, $4)`,
+      [randomUUID(), participationId, opts.participantId, starts.toISOString()],
+    );
+    await pool.query(
+      `INSERT INTO game_outcomes
+         (game_id, value, version, reason, source, actor_user_id)
+       VALUES ($1, 'held', 1, NULL, 'manager_explicit', $2)`,
+      [gameId, opts.organizerId],
+    );
+    await pool.query(
+      `INSERT INTO game_attendance
+         (participation_id, game_id, user_id, value, late, source, actor_user_id, version)
+       VALUES ($1, $2, $3, 'present', false, 'manager_explicit', $4, 1)`,
+      [participationId, gameId, opts.participantId, opts.organizerId],
+    );
+    await pool.query(
+      `INSERT INTO game_attendance_revisions
+         (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+          recorded_at, before_value, after_value, before_late, after_late,
+          before_correction_reason, after_correction_reason)
+       VALUES ($1,$2,$3,1,$4,'manager_explicit',$5,NULL,'present',NULL,false,NULL,NULL)`,
+      [participationId, gameId, opts.participantId, opts.organizerId, starts.toISOString()],
+    );
+    const rev1 = randomUUID();
+    await pool.query(
+      `INSERT INTO game_role_proof_revisions
+         (id, game_id, role, resource_version, subject_user_id, phase, binding_kind,
+          provenance_source, accepted_for_count, actor_user_id)
+       VALUES ($1,$2,'training',1,$3,'planned','publish_freeze','publish_manager',false,$4)`,
+      [rev1, gameId, opts.trainerId, opts.organizerId],
+    );
+    await pool.query(
+      `INSERT INTO game_role_proofs
+         (game_id, role, version, subject_user_id, phase, accepted_for_count,
+          open_dispute, latest_revision_id)
+       VALUES ($1,'training',1,$2,'planned',false,false,$3)`,
+      [gameId, opts.trainerId, rev1],
+    );
+    const rev2 = randomUUID();
+    await pool.query(
+      `INSERT INTO game_role_proof_revisions
+         (id, game_id, role, resource_version, subject_user_id, phase, binding_kind,
+          provenance_source, accepted_for_count, actor_user_id, outcome_version)
+       VALUES ($1,$2,'training',2,$3,'performed','held_confirm','manager_explicit',true,$4,1)`,
+      [rev2, gameId, opts.trainerId, opts.organizerId],
+    );
+    await pool.query(
+      `UPDATE game_role_proofs
+       SET version=2, phase='performed', accepted_for_count=true, latest_revision_id=$2
+       WHERE game_id=$1 AND role='training'`,
+      [gameId, rev2],
+    );
+    await pool.query(
+      `INSERT INTO role_reputation_subjects
+         (subject_user_id, role, public_handle, version)
+       VALUES ($1,'training',$2,1)
+       ON CONFLICT (subject_user_id, role) DO UPDATE SET updated_at=clock_timestamp()`,
+      [opts.trainerId, randomUUID().replaceAll("-", "")],
+    );
+    const handle = (
+      await pool.query<{ public_handle: string }>(
+        `SELECT public_handle FROM role_reputation_subjects
+         WHERE subject_user_id=$1 AND role='training'`,
+        [opts.trainerId],
+      )
+    ).rows[0]!;
+    return { gameId, participationId, roleHandle: handle.public_handle, trainerProfileId: trainerProfile.id };
+  }
+
+  async function nativeBearer(userId: string, idem?: string) {
+    const issued = await native.transaction(async (client) => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [userId]);
+      return native.issue(client, userId, nativeClientId);
+    });
+    return {
+      authorization: `Bearer ${issued.accessToken}`,
+      accessToken: issued.accessToken,
+      sessionId: issued.sessionId,
+      ...(idem ? { "idempotency-key": idem } : {}),
+    };
   }
 
   async function humanApprovePending(pendingIntakeId: string, expectedIntakeVersion = 1) {
@@ -1072,5 +1242,425 @@ run("#394 role reputation — disposable", () => {
     });
     expect(publishedV2Reply.json().items[0].reply?.text).toBe(replyV2Text);
     expect(publishedV2Reply.json().items[0].subjectOwnReply?.status).toBe("published");
+  });
+
+  it("native bearer public author loop: eligibility/create/pending/own/withdraw + negatives", async () => {
+    const org = await actor(`native-org-${randomUUID()}`);
+    const trainer = await actor(`native-trainer-${randomUUID()}`);
+    const author = await actor(`native-author-${randomUUID()}`);
+    const foreign = await actor(`native-foreign-${randomUUID()}`);
+    const past = new Date("2026-09-15T18:00:00.000Z");
+    const orgSeed = await seedHeldGame({
+      organizerId: org.userId,
+      participantId: author.userId,
+      endsAt: past,
+      outcome: "held",
+    });
+    const trainSeed = await seedHeldTrainerLed({
+      organizerId: org.userId,
+      trainerId: trainer.userId,
+      participantId: author.userId,
+      endsAt: past,
+    });
+
+    const bearer = await nativeBearer(author.userId);
+    const eligOrg = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: bearer,
+    });
+    expect(eligOrg.statusCode).toBe(200);
+    expect(eligOrg.headers["cache-control"]).toBe("no-store");
+    const orgBases = eligOrg.json().bases.filter((b: { admission: string }) => b.admission === "may_submit");
+    expect(orgBases.length).toBeGreaterThanOrEqual(1);
+    expect(orgBases.some((b: { gameId: string }) => b.gameId === orgSeed.gameId)).toBe(true);
+
+    const eligTrain = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${trainSeed.roleHandle}`,
+      headers: bearer,
+    });
+    expect(eligTrain.statusCode).toBe(200);
+    expect(
+      eligTrain.json().bases.some(
+        (b: { gameId: string; admission: string }) =>
+          b.gameId === trainSeed.gameId && b.admission === "may_submit",
+      ),
+    ).toBe(true);
+
+    // Self / foreign / absent handle negatives.
+    const selfElig = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: await nativeBearer(org.userId),
+    });
+    expect(selfElig.statusCode).toBe(200);
+    expect(selfElig.json().bases.every((b: { admission: string }) => b.admission !== "may_submit")).toBe(
+      true,
+    );
+    const foreignElig = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: await nativeBearer(foreign.userId),
+    });
+    expect(foreignElig.statusCode).toBe(200);
+    expect(
+      foreignElig.json().bases.every((b: { admission: string }) => b.admission !== "may_submit"),
+    ).toBe(true);
+    const absent = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${"f".repeat(32)}`,
+      headers: bearer,
+    });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json().code).toBe("RESOURCE_UNAVAILABLE");
+
+    // Self-marked attendance is not independently confirmed present → deny self_mark.
+    // Isolated disposable participant/game (#522): coherent v1→v2 tip + revision; no rewind on orgSeed.
+    const selfMarkedAuthor = await actor(`native-selfmark-${randomUUID()}`);
+    const selfMarkSeed = await seedHeldGame({
+      organizerId: org.userId,
+      participantId: selfMarkedAuthor.userId,
+      endsAt: past,
+      outcome: "held",
+    });
+    await pool.query(
+      `UPDATE game_attendance SET value='present', source='self_attested', actor_user_id=$2, version=version+1
+       WHERE game_id=$1 AND user_id=$2`,
+      [selfMarkSeed.gameId, selfMarkedAuthor.userId],
+    );
+    await pool.query(
+      `INSERT INTO game_attendance_revisions
+         (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+          recorded_at, before_value, after_value, before_late, after_late,
+          before_correction_reason, after_correction_reason, reason)
+       VALUES ($1,$2,$3,2,$3,'self_attested',clock_timestamp(),
+               'present','present',false,false,NULL,NULL,'fixture_self_mark')`,
+      [selfMarkSeed.participationId, selfMarkSeed.gameId, selfMarkedAuthor.userId],
+    );
+    const selfMarkElig = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: await nativeBearer(selfMarkedAuthor.userId),
+    });
+    expect(selfMarkElig.statusCode).toBe(200);
+    const selfMarkBasis = selfMarkElig
+      .json()
+      .bases.find((b: { gameId: string }) => b.gameId === selfMarkSeed.gameId);
+    expect(selfMarkBasis.admission).toBe("deny");
+    expect(selfMarkBasis.reason).toBe("self_mark");
+
+    // Open role dispute holds basis — not may_submit. Isolated game; positive orgSeed untouched.
+    const disputeSeed = await seedHeldGame({
+      organizerId: org.userId,
+      participantId: author.userId,
+      endsAt: past,
+      outcome: "held",
+    });
+    await pool.query(
+      `UPDATE game_role_proofs SET open_dispute=true, phase='disputed' WHERE game_id=$1 AND role='organization'`,
+      [disputeSeed.gameId],
+    );
+    const disputedElig = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: await nativeBearer(author.userId),
+    });
+    expect(disputedElig.statusCode).toBe(200);
+    const disputedBasis = disputedElig
+      .json()
+      .bases.find((b: { gameId: string }) => b.gameId === disputeSeed.gameId);
+    expect(disputedBasis.admission).toBe("hold");
+    expect(disputedBasis.reason).toBe("held_or_role_dispute");
+
+    const multiline = "Нативный отзыв\nс переносом строки";
+    const preview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: { ...bearer, "content-type": "application/json" },
+      payload: {
+        role: "organization",
+        subjectRoleHandle: orgSeed.roleHandle,
+        text: multiline,
+        topics: ["agreements"],
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    const hash = preview.json().consentProjectionHash as string;
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // Role-specific topics mismatch on consent-preview.
+    const badTopics = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: { ...bearer, "content-type": "application/json" },
+      payload: {
+        role: "organization",
+        subjectRoleHandle: orgSeed.roleHandle,
+        text: multiline,
+        topics: ["explanations"],
+      },
+    });
+    expect(badTopics.statusCode).toBe(422);
+    expect(badTopics.json().code).toBe("ROLE_TOPICS_INVALID");
+
+    const createKey = randomUUID();
+    const create = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: { ...bearer, "idempotency-key": createKey, "content-type": "application/json" },
+      payload: {
+        gameId: orgSeed.gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: multiline,
+        topics: ["agreements"],
+        consentProjectionHash: hash,
+      },
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json().pendingIntakeStatus).toBe("waiting_intake");
+    expect(create.json().receiptToken).toBeTruthy();
+    const slotId = create.json().id as string;
+
+    // Pending is not anonymous publication.
+    const anon = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${orgSeed.roleHandle}`,
+    });
+    expect(anon.statusCode).toBe(200);
+    expect(anon.json().publishedReviewCount).toBe(0);
+    expect(JSON.stringify(anon.json())).not.toContain(multiline);
+
+    // Same-key replay under current authority.
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: { ...bearer, "idempotency-key": createKey, "content-type": "application/json" },
+      payload: {
+        gameId: orgSeed.gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: multiline,
+        topics: ["agreements"],
+        consentProjectionHash: hash,
+      },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(create.json());
+
+    const staleBasis = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: {
+        ...(await nativeBearer(author.userId, randomUUID())),
+        "content-type": "application/json",
+      },
+      payload: {
+        gameId: orgSeed.gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 1,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: multiline,
+        topics: ["agreements"],
+        consentProjectionHash: hash,
+      },
+    });
+    expect(staleBasis.statusCode).toBe(409);
+    expect(staleBasis.json().code).toBe("VERSION_CONFLICT");
+
+    const consentMismatch = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: {
+        ...(await nativeBearer(author.userId, randomUUID())),
+        "content-type": "application/json",
+      },
+      payload: {
+        gameId: orgSeed.gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: multiline,
+        topics: ["agreements"],
+        consentProjectionHash: "0".repeat(64),
+      },
+    });
+    expect(consentMismatch.statusCode).toBe(422);
+    expect(consentMismatch.json().code).toBe("ROLE_CONSENT_MISMATCH");
+
+    const mine = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: bearer,
+    });
+    expect(mine.statusCode).toBe(200);
+    const own = mine.json().items.find((i: { id: string }) => i.id === slotId);
+    expect(own.status).toMatch(/submitted|revision_waiting/);
+    expect(own.pendingIntakeStatus).toBe("waiting_intake");
+
+    const withdrawKey = randomUUID();
+    const withdraw = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${slotId}/commands`,
+      headers: { ...bearer, "idempotency-key": withdrawKey, "content-type": "application/json" },
+      payload: { action: "withdraw", expectedVersion: own.version },
+    });
+    expect(withdraw.statusCode).toBe(200);
+    expect(withdraw.json().status).toBe("withdrawn");
+    // Receipt may still carry waiting_intake — status fence wins for clients.
+    expect(withdraw.json().receiptToken).toBeTruthy();
+
+    const afterWithdraw = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: bearer,
+    });
+    const withdrawn = afterWithdraw.json().items.find((i: { id: string }) => i.id === slotId);
+    expect(withdrawn.status).toBe("withdrawn");
+    expect(withdrawn.text).toBeNull();
+    expect(withdrawn.pendingIntakeStatus).toBe("none");
+
+    // Training author loop: eligibility → create → own → withdraw (not eligibility-only).
+    const trainText = "Тренировка\nбыла понятной";
+    const trainPreview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: { ...bearer, "content-type": "application/json" },
+      payload: {
+        role: "training",
+        subjectRoleHandle: trainSeed.roleHandle,
+        text: trainText,
+        topics: ["explanations"],
+      },
+    });
+    expect(trainPreview.statusCode).toBe(200);
+    const trainHash = trainPreview.json().consentProjectionHash as string;
+    const trainCreate = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: { ...bearer, "idempotency-key": randomUUID(), "content-type": "application/json" },
+      payload: {
+        gameId: trainSeed.gameId,
+        role: "training",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: trainText,
+        topics: ["explanations"],
+        consentProjectionHash: trainHash,
+      },
+    });
+    expect(trainCreate.statusCode).toBe(200);
+    expect(trainCreate.json().pendingIntakeStatus).toBe("waiting_intake");
+    const trainSlotId = trainCreate.json().id as string;
+    const trainMine = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: bearer,
+    });
+    expect(trainMine.statusCode).toBe(200);
+    const trainOwn = trainMine.json().items.find((i: { id: string }) => i.id === trainSlotId);
+    expect(trainOwn.status).toMatch(/submitted|revision_waiting/);
+    const trainWithdraw = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${trainSlotId}/commands`,
+      headers: { ...bearer, "idempotency-key": randomUUID(), "content-type": "application/json" },
+      payload: { action: "withdraw", expectedVersion: trainOwn.version },
+    });
+    expect(trainWithdraw.statusCode).toBe(200);
+    expect(trainWithdraw.json().status).toBe("withdrawn");
+
+    // Mixed cookie+bearer rejected; malformed/revoked/disabled; cookie CSRF still required on cookie path.
+    const mixed = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { ...bearer, cookie: author.cookie },
+    });
+    expect(mixed.statusCode).toBe(403);
+    expect(mixed.json().code).toBe("CREDENTIALS_CONFLICT");
+    const malformed = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { authorization: `Bearer ${"x".repeat(43)}` },
+    });
+    expect(malformed.statusCode).toBe(401);
+
+    const revokedCreds = await nativeBearer(author.userId);
+    await sessions.revokeSession(revokedCreds.sessionId);
+    const revoked = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { authorization: revokedCreds.authorization },
+    });
+    expect(revoked.statusCode).toBe(401);
+
+    const disabledUser = await actor("disabled-native");
+    const disabledCreds = await nativeBearer(disabledUser.userId);
+    await pool.query(`UPDATE users SET status='disabled' WHERE id=$1`, [disabledUser.userId]);
+    const disabled = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { authorization: disabledCreds.authorization },
+    });
+    expect(disabled.statusCode).toBe(401);
+
+    const cookieNoCsrf = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: {
+        cookie: author.cookie,
+        origin,
+        "content-type": "application/json",
+      },
+      payload: {
+        role: "organization",
+        subjectRoleHandle: orgSeed.roleHandle,
+        text: "cookie",
+        topics: [],
+      },
+    });
+    expect(cookieNoCsrf.statusCode).toBe(403);
+    expect(cookieNoCsrf.json().code).toBe("CSRF_REQUIRED");
+
+    // Recipient reply/report remain cookie-only — native bearer denied.
+    const replyDenied = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${"c".repeat(32)}/reply-commands`,
+      headers: { ...(await nativeBearer(org.userId, randomUUID())), "content-type": "application/json" },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: 0,
+        expectedReviewRevision: 1,
+        text: "denied",
+        consentProjectionHash: "0".repeat(64),
+      },
+    });
+    expect(replyDenied.statusCode).toBe(403);
+    expect(replyDenied.json().code).toBe("CREDENTIALS_CONFLICT");
+    const reportDenied = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${"c".repeat(32)}/reports`,
+      headers: { ...(await nativeBearer(author.userId, randomUUID())), "content-type": "application/json" },
+      payload: { reasonCode: "harassment", detail: null },
+    });
+    expect(reportDenied.statusCode).toBe(403);
+    expect(reportDenied.json().code).toBe("CREDENTIALS_CONFLICT");
   });
 });

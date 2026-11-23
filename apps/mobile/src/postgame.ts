@@ -17,6 +17,14 @@ import {
   type ReviewReportReason,
   type ReviewReportReceipt,
 } from './postgame-feedback.ts';
+import {
+  parsePublicRoleMutationReceipt,
+  publicRoleReviewText,
+  publicRoleTopics,
+  type PublicCommandBody,
+  type PublicCreateBody,
+  type PublicRoleMutationReceipt,
+} from './public-role-reviews.ts';
 export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage, ReviewKind } from './postgame-feedback.ts';
 export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
@@ -32,6 +40,7 @@ export {
   parseReviewReportReceipt, reviewsQuery, reviewComment, reviewReplyText, reportDetailText,
 } from './postgame-feedback.ts';
 export type { PeerSubjectOption, FeedbackUiMode, RoleDiscrepancyPresentation } from './postgame-feedback.ts';
+export type { PublicCommandBody, PublicCreateBody, PublicRoleMutationReceipt } from './public-role-reviews.ts';
 
 export class PostgameError extends Error {
   readonly kind: 'invalid' | 'network' | 'business' | 'private' | 'stale';
@@ -144,11 +153,14 @@ export type Intent =
   | { kind: 'peer-report'; gameId: string; reviewId: string; body: {
       expectedVersion: number; reasonCode: ReviewReportReason; detail: string | null;
       shareReviewWithSupport: true; gameId: string;
-    } };
+    } }
+  /** Public role-review author loop — mutations owned by PostgameCoordinator; UI sheet confirms (no private CommandReview). */
+  | { kind: 'public-role-create'; gameId: string; roleHandle: string; body: PublicCreateBody }
+  | { kind: 'public-role-command'; gameId: string; reviewId: string; body: PublicCommandBody };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
-export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | { items: Attendance[] } | Reminders;
+export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | PublicRoleMutationReceipt | { items: Attendance[] } | Reminders;
 const invalid = (): never => { throw new PostgameError('invalid'); };
 export function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function str(v: unknown): string { return typeof v === 'string' ? v : invalid(); }
@@ -361,6 +373,53 @@ export function noteText(v: unknown): string {
   return s === s.trim() && s.length > 0 && s.length <= 500 && !hasControl(s) ? s : invalid();
 }
 export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path: string; body: Intent['body'] } {
+  if (packet.kind === 'public-role-create') {
+    const gameId = postgameId(packet.gameId), body = object(packet.body);
+    exact(body, ['gameId', 'role', 'expectedBasisVersions', 'text', 'topics', 'consentProjectionHash']);
+    if (postgameId(body.gameId) !== gameId) invalid();
+    choice(body.role, ['organization', 'training'] as const);
+    const versions = object(body.expectedBasisVersions);
+    exact(versions, ['proofVersion', 'outcomeVersion', 'attendanceVersion']);
+    num(versions.proofVersion, 1); num(versions.outcomeVersion); num(versions.attendanceVersion);
+    publicRoleReviewText(str(body.text));
+    const createTopicList = array(body.topics, str);
+    publicRoleTopics(body.role as 'organization' | 'training', createTopicList);
+    const hash = str(body.consentProjectionHash);
+    if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
+    return { method: 'POST', path: '/me/role-reviews', body: packet.body };
+  }
+  if (packet.kind === 'public-role-command') {
+    const reviewId = postgameId(packet.reviewId), body = object(packet.body);
+    postgameId(packet.gameId);
+    const action = str(body.action);
+    if (action === 'withdraw') {
+      exact(body, ['action', 'expectedVersion']);
+      num(body.expectedVersion, 1);
+      return { method: 'POST', path: `/me/role-reviews/${reviewId}/commands`, body: packet.body };
+    }
+    if (action === 'appeal') {
+      exact(body, ['action', 'expectedVersion', 'explanation']);
+      num(body.expectedVersion, 1);
+      publicRoleReviewText(str(body.explanation));
+      return { method: 'POST', path: `/me/role-reviews/${reviewId}/commands`, body: packet.body };
+    }
+    if (action === 'submit_revision' || action === 'resubmit') {
+      exact(body, ['action', 'expectedVersion', 'gameId', 'expectedBasisVersions', 'text', 'topics', 'consentProjectionHash']);
+      num(body.expectedVersion, 1);
+      postgameId(body.gameId);
+      const versions = object(body.expectedBasisVersions);
+      exact(versions, ['proofVersion', 'outcomeVersion', 'attendanceVersion']);
+      num(versions.proofVersion, 1); num(versions.outcomeVersion); num(versions.attendanceVersion);
+      publicRoleReviewText(str(body.text));
+      const commandTopics = array(body.topics, str);
+      if (commandTopics.length > 2) return invalid();
+      // Transport admits all server-authorized command variants; role-specific topics rechecked server-side.
+      const hash = str(body.consentProjectionHash);
+      if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
+      return { method: 'POST', path: `/me/role-reviews/${reviewId}/commands`, body: packet.body };
+    }
+    return invalid();
+  }
   if (packet.kind === 'peer-create') {
     const gameId = postgameId(packet.gameId), body = object(packet.body);
     exact(body, ['kind', 'subjectContextId', 'peerRating', 'experienceAssertion', 'comment', 'tags']);
@@ -639,6 +698,22 @@ export function collectNotes(
   return [...byContext.values()];
 }
 export function validateReceipt(raw: unknown, p: Packet): Receipt {
+  if (p.kind === 'public-role-create' || p.kind === 'public-role-command') {
+    const r = parsePublicRoleMutationReceipt(raw);
+    if (p.kind === 'public-role-create') {
+      if (r.status !== 'submitted' && r.status !== 'revision_waiting' && r.pendingIntakeStatus !== 'waiting_intake') {
+        // Accept any authoritative server receipt fields; pending is not publication.
+      }
+      return r;
+    }
+    if (p.body.action === 'withdraw') {
+      // Status/version terminal fence wins — do not treat leftover waiting_intake as publication wait.
+      if (r.id !== p.reviewId) invalid();
+      return r;
+    }
+    if (r.id !== p.reviewId) invalid();
+    return r;
+  }
   if (p.kind === 'peer-create') {
     const r = parsePrivateReview(raw);
     if (r.gameId !== p.gameId || r.kind !== 'peer' || r.direction !== 'sent') invalid();

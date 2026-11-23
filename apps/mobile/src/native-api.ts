@@ -6,6 +6,8 @@ import {
 import type { VenueCommentPhotoReceipt } from './venue-comment-photos.ts';
 import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, historyQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders, parseAttendanceDispute, parseAttendanceHistory, parsePersonalNote, parseMeReviewsPage, reviewsQuery } from './postgame.ts';
 import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
+import { parseConsentPreview, parseOwnEligibility, parseOwnPublicRoleReviewsPage } from './public-role-reviews.ts';
+import type { ConsentPreview } from './public-role-reviews.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
 import { RadarError, RADAR_WIRE, resultProof } from './radar.ts';
@@ -325,6 +327,49 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     postgameNote: async (access: string, gameId: string, contextId: string) => parsePersonalNote(await postgameRequest(`/games/${postgameId(gameId)}/notes/${postgameId(contextId)}`, access)),
     postgameReviews: async (access: string, direction: 'sent' | 'received', cursor?: string) => parseMeReviewsPage(await postgameRequest(`/me/reviews${reviewsQuery({ direction, limit: 20, ...(cursor ? { cursor } : {}) })}`, access)),
     postgameMutation: (access: string, packet: PostgamePacket) => postgameRequest(postgameWire(packet).path,access,packet),
+    publicRoleEligibility: async (access: string, roleHandle: string) => {
+      if (!/^[0-9a-f]{32}$/i.test(roleHandle)) throw new PostgameError('invalid');
+      const handle = roleHandle.toLowerCase();
+      return parseOwnEligibility(
+        await postgameRequest(`/me/role-reviews/eligibility?roleHandle=${encodeURIComponent(handle)}`, access),
+        handle,
+      );
+    },
+    publicRoleOwn: async (access: string) => parseOwnPublicRoleReviewsPage(await postgameRequest('/me/role-reviews', access)),
+    publicRoleConsentPreview: async (access: string, body: {
+      role: 'organization' | 'training'; subjectRoleHandle: string; text: string; topics: string[];
+    }): Promise<ConsentPreview> => {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/role-reviews/consent-preview`, {
+          method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+          headers: {
+            Accept: 'application/json', Authorization: `Bearer ${access}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        if (response.status === 401) throw new NativeAuthError('authority');
+        if (!response.ok) {
+          let code = '';
+          try {
+            const row = await response.json();
+            if (typeof row?.code === 'string' && /^[A-Z_]{1,80}$/.test(row.code)) code = row.code;
+          } catch { /* No private response text retained. */ }
+          throw new PostgameError(
+            response.status >= 500 || code === 'COMMAND_IN_PROGRESS' ? 'network'
+              : [403, 404].includes(response.status) ? 'private'
+                : [400, 409, 422, 429].includes(response.status) ? 'business' : 'network',
+            response.status,
+            code,
+          );
+        }
+        return parseConsentPreview(await response.json());
+      } catch (error) {
+        if (error instanceof NativeAuthError || error instanceof PostgameError) throw error;
+        throw new PostgameError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally { clearTimeout(timer); }
+    },
     playInterestStates: (access: string, ids: readonly string[]) => interestRequest(statesPath([...ids]), access),
     playInterestMutation: async (access: string, packet: PlayInterestPacket) => {
       const wire = interestWire(packet);

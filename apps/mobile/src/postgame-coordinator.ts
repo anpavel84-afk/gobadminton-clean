@@ -13,6 +13,34 @@ import {
   type RoleDiscrepancyContext,
   type RoleDiscrepancyDecision,
 } from './postgame-feedback.ts';
+import {
+  applyOwnPublicAckToItem,
+  buildPublicCreateBody,
+  buildPublicWithdrawBody,
+  consentPreviewBody,
+  draftEditorKey,
+  eligibleBases,
+  emptyPublicRoleDraft,
+  isPublicRolePacketKind,
+  mayPaintOwnPublicReceipt,
+  mayWithdrawOwnPublic,
+  mergeOwnPublicReviewItem,
+  parseConsentPreview,
+  parseOwnEligibility,
+  parseOwnPublicRoleReviewsPage,
+  parsePublicRoleMutationReceipt,
+  pickPreferredGameId,
+  publicReadGenerationKey,
+  publicRoleBusinessNotice,
+  publicRoleReviewText,
+  retireOwnPublicReviewText,
+  type OwnEligibility,
+  type OwnPublicRoleReview,
+  type OwnPublicRoleReviewsPage,
+  type PublicRoleAuthorTarget,
+  type PublicRoleDraft,
+  type PublicRoleMutationReceipt,
+} from './public-role-reviews.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -93,6 +121,16 @@ type Snapshot = {
   selection: DisputeSelection | null; drafts: Record<string,DisputeDraft>; noteDrafts: Record<string,NoteDraft>;
   feedbackDrafts: Record<string, FeedbackDraft>;
   review: Intent | null; command: Command | null; notice: string | null;
+  /** Public role-review author surface — separate from private CommandReview. */
+  publicSurface: null | { mode: 'composer' | 'history'; target: PublicRoleAuthorTarget | null; gen: number };
+  publicEligibility: Source<OwnEligibility>;
+  publicOwn: Source<OwnPublicRoleReviewsPage>;
+  publicDraft: PublicRoleDraft | null;
+  publicConsentHash: string | null;
+  publicReceipt: PublicRoleMutationReceipt | null;
+  publicNotice: string | null;
+  /** Guest auth return: bounded role/game only; never consent/text. */
+  pendingPublicAuthor: PublicRoleAuthorTarget | null;
 };
 type Port = {
   own: (actor: Actor, cursor?: string) => Promise<OwnResults>;
@@ -106,6 +144,10 @@ type Port = {
   note?: (actor: Actor, gameId: string, contextId: string) => Promise<PersonalNote>;
   /** Own directional private reviews — exists independently of results access. */
   reviews?: (actor: Actor, direction: ReviewDirection, cursor?: string) => Promise<MeReviewsPage>;
+  /** Raw JSON — always re-parsed by coordinator (mocks may return wire bodies). */
+  publicEligibility?: (actor: Actor, roleHandle: string) => Promise<unknown>;
+  publicConsentPreview?: (actor: Actor, body: ReturnType<typeof consentPreviewBody>) => Promise<unknown>;
+  publicOwnReviews?: (actor: Actor) => Promise<unknown>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
 const empty = (actor: Actor | null): Snapshot => ({
@@ -115,6 +157,9 @@ const empty = (actor: Actor | null): Snapshot => ({
   reviewsById: {},
   selection: null, drafts: {}, noteDrafts: {}, feedbackDrafts: {},
   review:null, command:null, notice:null,
+  publicSurface: null, publicEligibility: { status: 'idle' }, publicOwn: { status: 'idle' },
+  publicDraft: null, publicConsentHash: null, publicReceipt: null, publicNotice: null,
+  pendingPublicAuthor: null,
 });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
 function draftKey(gameId: string, contextId: string, disputeId?: string | null) {
@@ -140,10 +185,23 @@ function freezeIntent(intent: Intent): Intent {
     case 'training-create': copy={...intent,body:{...intent.body}}; break;
     case 'peer-reply': copy={...intent,body:{...intent.body}}; break;
     case 'peer-report': copy={...intent,body:{...intent.body}}; break;
+    case 'public-role-create': copy={...intent,body:{...intent.body,expectedBasisVersions:{...intent.body.expectedBasisVersions},topics:[...intent.body.topics]}}; break;
+    case 'public-role-command': {
+      if (intent.body.action === 'withdraw') copy={...intent,body:{...intent.body}};
+      else if (intent.body.action === 'appeal') copy={...intent,body:{...intent.body}};
+      else copy={...intent,body:{...intent.body,expectedBasisVersions:{...intent.body.expectedBasisVersions},topics:[...intent.body.topics]}};
+      break;
+    }
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
   if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
   if (copy.kind === 'peer-create' && copy.body.tags) Object.freeze(copy.body.tags);
+  if (copy.kind === 'public-role-create') {
+    Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
+  }
+  if (copy.kind === 'public-role-command' && (copy.body.action === 'submit_revision' || copy.body.action === 'resubmit')) {
+    Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
+  }
   Object.freeze(copy.body); return Object.freeze(copy);
 }
 export class PostgameCoordinator {
@@ -191,6 +249,30 @@ export class PostgameCoordinator {
   private reviewsFollowup: Record<ReviewDirection, boolean> = { sent: false, received: false };
   /** Generation that owns busy/followup per direction; stale finally must not clear a newer actor/read. */
   private reviewsBusyGen: Record<ReviewDirection, number> = { sent: 0, received: 0 };
+  /** Public eligibility/own/preview generation fences — late responses cannot overwrite changed selection/consent. */
+  private publicEligibilityGen = 0;
+  private publicOwnGen = 0;
+  private publicPreviewGen = 0;
+  /** Surface open/close/target generation — late create/withdraw receipts cannot paint the wrong sheet. */
+  private publicSurfaceGen = 0;
+  /** Captured at public mutate dispatch; journal still settles once even when UI gen no longer matches. */
+  private publicMutationBind: {
+    surfaceGen: number;
+    actorId: string;
+    sessionId: string;
+    roleHandle: string;
+    role: string;
+    gameId: string;
+    editor: string;
+    kind: 'public-role-create' | 'public-role-command';
+    reviewId?: string;
+  } | null = null;
+  /** Per-review monotonic version floor — stale GET cannot regress after newer ACK/GET. */
+  private publicOwnVersionFloor = new Map<string, number>();
+  /** After withdraw ACK: only typed own GET may reestablish non-terminal projection. */
+  private publicOwnAwaitingTyped = new Set<string>();
+  /** Hard-denied own public history — late ACK must not resurrect author private text. */
+  private publicOwnDenied = false;
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -199,6 +281,9 @@ export class PostgameCoordinator {
     if (!port.history) port.history = async () => ({ items: [] });
     if (!port.note) port.note = async () => { throw new PostgameError('private', 404); };
     if (!port.reviews) port.reviews = async () => ({ items: [], nextCursor: null });
+    if (!port.publicEligibility) port.publicEligibility = async () => { throw new PostgameError('private', 404); };
+    if (!port.publicConsentPreview) port.publicConsentPreview = async () => { throw new PostgameError('private', 404); };
+    if (!port.publicOwnReviews) port.publicOwnReviews = async () => ({ items: [] });
     this.port = port as Required<Port>;
     this.random = random;
   }
@@ -219,11 +304,25 @@ export class PostgameCoordinator {
     this.reviewDirectionDenied.clear();
     this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false};
     this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1};
+    this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
+    this.publicMutationBind=null; this.publicOwnDenied=false;
+    // Same-account reauth: keep actor-scoped version/awaiting fences so a deferred own GET
+    // cannot let an older ACK repaint over a floor already established this session.
+    // AuthCoordinator.refresh() hydrates via setActor(null) while quarantine retains UNKNOWN —
+    // park floors across that transient null; restore only when the matching account returns.
+    // Different actor still drops fences; write authority reestablishes via fresh GET only.
+    // Explicit forget() clears floors separately. Null alone must not wipe a parked floor.
+    if (actor && !saved) {
+      this.publicOwnVersionFloor.clear();
+      this.publicOwnAwaitingTyped.clear();
+    }
+    const pendingPublic = this.snapshot.pendingPublicAuthor;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
     // Known own-note refs restore for in-session recovery only — never auto-write / cold discovery.
     // Feedback drafts restore without auto-send; history must recheck authority via fresh GET.
+    // Pending public author target survives guest→auth for bounded role/game only (no consent/text).
     if (saved) this.show({
       filter:saved.filter,
       command:saved.command ? {
@@ -240,10 +339,62 @@ export class PostgameCoordinator {
       feedbackDrafts:saved.feedbackDrafts,
       knownNoteRefs:saved.knownNoteRefs,
       selection:saved.selection,
+      // Same-account reauth: restore public surface/draft without consent or autosend.
+      // Rebind surface gen to the bumped counter so captured withdraw callbacks cannot cross reauth.
+      publicSurface: saved.publicSurface
+        ? { ...saved.publicSurface, gen: this.publicSurfaceGen }
+        : null,
+      publicDraft: saved.publicDraft
+        ? { ...saved.publicDraft, consent: false }
+        : null,
+      publicConsentHash: null,
+      publicReceipt: saved.publicReceipt,
+      publicNotice: saved.command && isPublicRolePacketKind(saved.command.packet.kind)
+        ? unknownNotice
+        : saved.publicNotice,
+      pendingPublicAuthor: pendingPublic ?? saved.pendingPublicAuthor,
     });
-    else this.show({});
+    else this.show({ pendingPublicAuthor: pendingPublic });
+    // Same-actor reauth may retry original UNKNOWN packet — rebind UI generation to restored surface.
+    if (actor && saved?.command) {
+      const packet = saved.command.packet;
+      // Explicit discriminant narrow — type predicate on .kind alone does not narrow Packet.
+      if (packet.kind === 'public-role-create') {
+        this.publicMutationBind = {
+          surfaceGen: this.publicSurfaceGen,
+          actorId: actor.actorId,
+          sessionId: actor.sessionId,
+          roleHandle: packet.roleHandle,
+          role: packet.body.role,
+          gameId: packet.gameId,
+          editor: saved.publicDraft && saved.publicSurface?.target
+            ? draftEditorKey(
+              { ...saved.publicDraft, consent: false },
+              saved.publicSurface.target.roleHandle,
+              saved.publicSurface.target.role,
+            )
+            : '',
+          kind: 'public-role-create',
+        };
+      } else if (packet.kind === 'public-role-command') {
+        this.publicMutationBind = {
+          surfaceGen: this.publicSurfaceGen,
+          actorId: actor.actorId,
+          sessionId: actor.sessionId,
+          roleHandle: 'own',
+          role: saved.publicSurface?.target?.role ?? '',
+          gameId: packet.gameId,
+          editor: `withdraw:${packet.reviewId}`,
+          kind: 'public-role-command',
+          reviewId: packet.reviewId,
+        };
+      }
+    }
+    // Re-read eligibility/own history after same-account reauth — never autosend.
+    if (actor && saved?.publicSurface?.mode === 'composer') void this.loadPublicEligibility();
+    if (actor && saved?.publicSurface?.mode === 'history') void this.loadOwnPublicReviews();
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -917,7 +1068,445 @@ export class PostgameCoordinator {
     const feedback = this.snapshot.games[gameId]?.data?.feedback;
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
   }
+  /** Guest: remember bounded role/game only; consent/text never retained across auth. */
+  rememberPendingPublicAuthor = (target: PublicRoleAuthorTarget) => {
+    this.show({ pendingPublicAuthor: Object.freeze({ ...target }) });
+  };
+  consumePendingPublicAuthor = (): PublicRoleAuthorTarget | null => {
+    const pending = this.snapshot.pendingPublicAuthor;
+    if (!pending) return null;
+    this.show({ pendingPublicAuthor: null });
+    return pending;
+  };
+  /**
+   * Root host: consume pending once under a live actor and open composer with empty draft
+   * (consent false / text empty). No autosend. Logout / missing actor / empty pending are no-ops.
+   */
+  resumePendingPublicAuthor = (): boolean => {
+    if (!this.snapshot.actor) return false;
+    const pending = this.consumePendingPublicAuthor();
+    if (!pending) return false;
+    this.openPublicComposer(pending);
+    return true;
+  };
+  openPublicComposer = (target: PublicRoleAuthorTarget) => {
+    if (!this.snapshot.actor) return;
+    const draft = emptyPublicRoleDraft(target.gameId);
+    this.publicEligibilityGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
+    this.show({
+      publicSurface: { mode: 'composer', target: Object.freeze({ ...target }), gen: this.publicSurfaceGen },
+      publicEligibility: { status: 'idle' },
+      publicDraft: draft,
+      publicConsentHash: null,
+      publicReceipt: null,
+      publicNotice: null,
+    });
+    void this.loadPublicEligibility();
+  };
+  openOwnPublicHistory = () => {
+    if (!this.snapshot.actor) return;
+    this.publicOwnGen++; this.publicSurfaceGen++;
+    this.show({
+      publicSurface: { mode: 'history', target: null, gen: this.publicSurfaceGen },
+      publicOwn: { status: 'idle' },
+      publicReceipt: null,
+      publicNotice: null,
+    });
+    void this.loadOwnPublicReviews();
+  };
+  closePublicSurface = () => {
+    this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
+    this.show({
+      publicSurface: null,
+      publicEligibility: { status: 'idle' },
+      publicOwn: { status: 'idle' },
+      publicDraft: null,
+      publicConsentHash: null,
+      publicReceipt: null,
+      publicNotice: null,
+    });
+  };
+  patchPublicDraft = (patch: Partial<PublicRoleDraft>) => {
+    const surface = this.snapshot.publicSurface;
+    const prior = this.snapshot.publicDraft;
+    if (!surface || surface.mode !== 'composer' || !prior || this.snapshot.publicReceipt) return;
+    const next: PublicRoleDraft = { ...prior, ...patch };
+    if (patch.text !== undefined) next.textDirty = true;
+    // Consent resets on text/topics/audience/game/role/subject/session (session via setActor).
+    const consentSensitive =
+      patch.text !== undefined || patch.topics !== undefined || patch.audience !== undefined
+      || patch.gameId !== undefined;
+    if (consentSensitive) {
+      next.consent = false;
+      this.publicPreviewGen++;
+      this.show({ publicDraft: next, publicConsentHash: null, publicNotice: null });
+      return;
+    }
+    this.show({ publicDraft: next });
+  };
+  /**
+   * Retire in-flight consent preview / hash when eligibility authority is reread or lost.
+   * Preserves dirty text/topics/game intent; does not autosend or rebase.
+   */
+  private retirePublicConsentAuthority(patch: Partial<Snapshot> = {}) {
+    this.publicPreviewGen++;
+    const draft = patch.publicDraft !== undefined ? patch.publicDraft : this.snapshot.publicDraft;
+    this.show({
+      ...patch,
+      publicDraft: draft ? { ...draft, consent: false } : draft ?? null,
+      publicConsentHash: null,
+    });
+  }
+  /**
+   * @param opts.preserveNotice Keep actionable business rejection (e.g. after 422 reread/reconsent).
+   * Manual refresh omits this and may clear a stale notice on success.
+   */
+  loadPublicEligibility = async (opts?: { preserveNotice?: boolean }) => {
+    const actor = this.snapshot.actor;
+    const target = this.snapshot.publicSurface?.mode === 'composer' ? this.snapshot.publicSurface.target : null;
+    if (!actor || !target) return;
+    const preserveNotice = opts?.preserveNotice === true;
+    const priorNotice = this.snapshot.publicNotice;
+    const gen = ++this.publicEligibilityGen;
+    const preferred = this.snapshot.publicDraft?.gameId || target.gameId;
+    // Authoritative reread retires outstanding preview/consent immediately — failure must not
+    // leave a deferred preview able to create on a captured basis.
+    this.retirePublicConsentAuthority({
+      publicEligibility: { status: 'loading', data: this.snapshot.publicEligibility.data },
+    });
+    try {
+      const data = parseOwnEligibility(await this.port.publicEligibility(actor, target.roleHandle), target.roleHandle);
+      if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (this.snapshot.publicSurface?.target?.roleHandle !== target.roleHandle) return;
+      if (data.role !== target.role) {
+        this.retirePublicConsentAuthority({
+          publicEligibility: { status: 'error' },
+          publicNotice: preserveNotice && priorNotice
+            ? priorNotice
+            : 'Роль не совпала с карточкой. Обновите отзывы.',
+        });
+        return;
+      }
+      const gameId = pickPreferredGameId(data, preferred);
+      const draft = this.snapshot.publicDraft ?? emptyPublicRoleDraft(gameId);
+      const nextDraft: PublicRoleDraft = {
+        ...draft,
+        gameId: draft.textDirty || draft.audience !== 'personal' || draft.topics.length
+          ? (eligibleBases(data).some(b => b.gameId === draft.gameId) ? draft.gameId : gameId)
+          : gameId,
+        consent: false,
+      };
+      const empty = !eligibleBases(data).length;
+      this.retirePublicConsentAuthority({
+        publicEligibility: { status: 'ready', data },
+        publicDraft: nextDraft,
+        publicNotice: empty
+          ? (preserveNotice && priorNotice
+            ? priorNotice
+            : 'Нет подтверждённой встречи для публичного отзыва по этой роли.')
+          : (preserveNotice ? priorNotice : null),
+      });
+    } catch (error) {
+      if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
+      const denied = error instanceof PostgameError && error.kind === 'private';
+      const auth = error instanceof PostgameError && error.status === 401;
+      this.retirePublicConsentAuthority({
+        publicEligibility: denied || auth ? { status: 'unavailable' } : { status: 'error' },
+        publicNotice: preserveNotice && priorNotice
+          ? priorNotice
+          : (auth ? 'Войдите снова, чтобы продолжить.' : 'Не удалось загрузить список встреч.'),
+      });
+    }
+  };
+  /**
+   * @param opts.preserveNotice Keep actionable withdraw/command business rejection through its
+   * owning follow-up own-list GET (mirrors create eligibility preserveNotice). Manual refresh omits this.
+   */
+  loadOwnPublicReviews = async (opts?: { preserveNotice?: boolean }) => {
+    const actor = this.snapshot.actor;
+    if (!actor) return;
+    const preserveNotice = opts?.preserveNotice === true;
+    const priorNotice = this.snapshot.publicNotice;
+    const gen = ++this.publicOwnGen;
+    this.show({ publicOwn: { status: 'loading', data: this.snapshot.publicOwn.data } });
+    try {
+      const page = parseOwnPublicRoleReviewsPage(await this.port.publicOwnReviews(actor));
+      if (gen !== this.publicOwnGen || !sameActor(actor, this.snapshot.actor)) return;
+      this.publicOwnDenied = false;
+      const priorById = new Map((this.snapshot.publicOwn.data?.items ?? []).map(item => [item.id, item]));
+      const merged: OwnPublicRoleReview[] = [];
+      for (const incoming of page.items) {
+        const floor = this.publicOwnVersionFloor.get(incoming.id) ?? 0;
+        const prior = priorById.get(incoming.id);
+        const next = mergeOwnPublicReviewItem(prior, incoming, floor);
+        if (!next) {
+          if (prior && (prior.version >= floor)) merged.push(retireOwnPublicReviewText(prior));
+          continue;
+        }
+        this.publicOwnVersionFloor.set(next.id, Math.max(floor, next.version));
+        this.publicOwnAwaitingTyped.delete(next.id);
+        merged.push(next);
+      }
+      // Keep terminal local rows missing from a partial/stale page while awaiting typed catch-up.
+      for (const [id, prior] of priorById) {
+        if (merged.some(item => item.id === id)) continue;
+        if (this.publicOwnAwaitingTyped.has(id) && (prior.status === 'withdrawn' || prior.status === 'removed')) {
+          merged.push(retireOwnPublicReviewText(prior));
+        }
+      }
+      // Newer typed GET retires stale receipt + matching confirmation (no resurrection).
+      // Current withdraw/command confirmation survives ordinary/stale/same-version list refresh;
+      // owning follow-up after business rejection keeps that notice; unrelated manual refresh clears.
+      const painted = this.snapshot.publicReceipt;
+      const retireReceipt = !!painted && merged.some(
+        item => item.id === painted.id && item.version > painted.version,
+      );
+      const keepConfirm = !retireReceipt && !!painted && (
+        (painted.status === 'withdrawn' && priorNotice === 'Отзыв отозван.')
+        || (painted.status !== 'withdrawn' && priorNotice === 'Команда принята.')
+      );
+      const keepNotice = keepConfirm || (preserveNotice && !!priorNotice);
+      this.show({
+        publicOwn: { status: 'ready', data: { items: merged } },
+        publicNotice: keepNotice ? priorNotice : null,
+        ...(retireReceipt ? { publicReceipt: null } : {}),
+      });
+    } catch (error) {
+      if (gen !== this.publicOwnGen || !sameActor(actor, this.snapshot.actor)) return;
+      const denied = error instanceof PostgameError && error.kind === 'private';
+      const auth = error instanceof PostgameError && error.status === 401;
+      if (denied || (error instanceof PostgameError && (error.status === 403 || error.status === 404))) {
+        this.publicOwnDenied = true;
+        this.publicOwnAwaitingTyped.clear();
+      }
+      this.show({
+        publicOwn: denied || auth ? { status: 'unavailable' } : { status: 'error' },
+        publicNotice: preserveNotice && priorNotice
+          ? priorNotice
+          : (auth ? 'Войдите, чтобы увидеть свои отзывы о ролях.' : 'Не удалось загрузить.'),
+      });
+    }
+  };
+  /**
+   * Public create: consent-preview then mutate via the single command journal.
+   * Never autosends on login/session refresh; UNKNOWN repeats only original key/body.
+   */
+  submitPublicCreate = async () => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.publicSurface;
+    const draft = this.snapshot.publicDraft;
+    const eligibility = this.snapshot.publicEligibility.status === 'ready'
+      ? this.snapshot.publicEligibility.data ?? null
+      : null;
+    if (!actor || !surface || surface.mode !== 'composer' || !surface.target || !draft || !eligibility) return;
+    if (this.snapshot.command || this.inFlight || this.snapshot.publicReceipt) {
+      const cmd = this.snapshot.command;
+      if (cmd?.status === 'unknown' && cmd.packet.kind === 'public-role-create'
+        && cmd.packet.actor.actorId === actor.actorId) {
+        this.show({ publicNotice: 'Отзыв мог быть принят. Проверьте «Мои публичные отзывы о ролях».' });
+      }
+      return;
+    }
+    if (draft.audience !== 'public') {
+      this.show({ publicNotice: 'Личное сообщение организатору/тренеру остаётся в приватной обратной связи игры. Здесь публикуется только публичный отзыв о роли.' });
+      return;
+    }
+    if (!draft.consent) {
+      this.show({ publicNotice: 'Отметьте согласие с публичной публикацией.' });
+      return;
+    }
+    const basis = eligibleBases(eligibility).find(b => b.gameId === draft.gameId);
+    if (!basis) {
+      this.show({ publicNotice: 'Выберите свою подтверждённую встречу из списка допуска.' });
+      return;
+    }
+    let text: string;
+    try { text = publicRoleReviewText(draft.text); } catch {
+      this.show({ publicNotice: 'Проверьте текст отзыва.' });
+      return;
+    }
+    const editor = draftEditorKey(draft, surface.target.roleHandle, surface.target.role);
+    const previewGen = ++this.publicPreviewGen;
+    const surfaceGen = this.publicSurfaceGen;
+    const previewKey = publicReadGenerationKey({
+      actorId: actor.actorId, sessionId: actor.sessionId,
+      roleHandle: surface.target.roleHandle, role: surface.target.role,
+      gameId: draft.gameId, editor,
+    });
+    try {
+      const body = consentPreviewBody({
+        role: surface.target.role,
+        subjectRoleHandle: surface.target.roleHandle,
+        text,
+        topics: draft.topics,
+      });
+      const preview = parseConsentPreview(await this.port.publicConsentPreview(actor, body));
+      if (previewGen !== this.publicPreviewGen || surfaceGen !== this.publicSurfaceGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (this.snapshot.publicSurface?.target?.roleHandle !== surface.target.roleHandle) return;
+      if (draftEditorKey(this.snapshot.publicDraft ?? draft, surface.target.roleHandle, surface.target.role) !== editor) return;
+      void previewKey;
+      // Recheck CURRENT ready eligibility/target/basis versions/consent — never create on
+      // retired authority or silently rebase the captured packet onto a newer basis.
+      const liveSurface = this.snapshot.publicSurface;
+      const liveDraft = this.snapshot.publicDraft;
+      const liveElig = this.snapshot.publicEligibility.status === 'ready'
+        ? this.snapshot.publicEligibility.data ?? null
+        : null;
+      const liveTarget = liveSurface?.mode === 'composer' ? liveSurface.target : null;
+      const liveBasis = liveElig && liveDraft
+        ? eligibleBases(liveElig).find(b => b.gameId === liveDraft.gameId)
+        : undefined;
+      if (!liveDraft?.consent || !liveElig || !liveTarget || !liveBasis
+        || liveTarget.roleHandle !== surface.target.roleHandle
+        || liveTarget.role !== surface.target.role
+        || liveBasis.gameId !== basis.gameId
+        || liveBasis.role !== basis.role
+        || liveBasis.proofVersion !== basis.proofVersion
+        || liveBasis.outcomeVersion !== basis.outcomeVersion
+        || liveBasis.attendanceVersion !== basis.attendanceVersion) {
+        this.retirePublicConsentAuthority({
+          publicNotice: 'Проверьте выбранные данные и обновите допуск.',
+        });
+        return;
+      }
+      this.show({ publicConsentHash: preview.consentProjectionHash });
+      const createBody = buildPublicCreateBody({
+        basis: liveBasis, role: liveTarget.role, text, topics: liveDraft.topics,
+        consentProjectionHash: preview.consentProjectionHash,
+      });
+      const intent: Intent = {
+        kind: 'public-role-create',
+        gameId: liveBasis.gameId,
+        roleHandle: liveTarget.roleHandle,
+        body: createBody,
+      };
+      await this.submitPublicRole(intent, {
+        surfaceGen, editor, roleHandle: liveTarget.roleHandle, role: liveTarget.role, gameId: liveBasis.gameId,
+      });
+    } catch (error) {
+      if (previewGen !== this.publicPreviewGen || surfaceGen !== this.publicSurfaceGen || !sameActor(actor, this.snapshot.actor)) return;
+      const business = error instanceof PostgameError && error.kind === 'business';
+      this.show({
+        publicConsentHash: null,
+        publicNotice: business
+          ? publicRoleBusinessNotice(error instanceof PostgameError ? error.code : undefined, 'preview')
+          : 'Не удалось подготовить согласие.',
+      });
+    }
+  };
+  /**
+   * Withdraw from the CURRENT history surface + ready typed row.
+   * UI must pass the rendered actor/session and surface gen captured at press —
+   * never rebind a retired row onto a rotated account or closed/replaced surface.
+   */
+  withdrawOwnPublic = async (
+    item: OwnPublicRoleReview,
+    expectedActor: Actor | null,
+    expectedSurfaceGen: number,
+  ) => {
+    const actor = this.snapshot.actor;
+    if (!actor || !expectedActor || !sameActor(expectedActor, actor)) return;
+    if (this.snapshot.command || this.inFlight) return;
+    if (this.publicOwnDenied) return;
+    const surface = this.snapshot.publicSurface;
+    if (!surface || surface.mode !== 'history') return;
+    if (expectedSurfaceGen !== this.publicSurfaceGen || surface.gen !== expectedSurfaceGen) return;
+    if (this.snapshot.publicOwn.status !== 'ready') return;
+    const live = this.snapshot.publicOwn.data?.items.find(row => row.id === item.id);
+    if (!live) return;
+    if (live.version !== item.version || live.role !== item.role || live.roleHandle !== item.roleHandle) return;
+    if (!mayWithdrawOwnPublic(live)) return;
+    try {
+      const body = buildPublicWithdrawBody(live);
+      const intent: Intent = {
+        kind: 'public-role-command',
+        gameId: 'public-role-own',
+        reviewId: live.id,
+        body,
+      };
+      await this.submitPublicRole(intent, {
+        surfaceGen: expectedSurfaceGen,
+        editor: `withdraw:${live.id}:${live.version}`,
+        roleHandle: live.roleHandle || 'own',
+        role: live.role,
+        gameId: 'public-role-own',
+        reviewId: live.id,
+      });
+    } catch {
+      this.show({ publicNotice: 'Не удалось отозвать. Обновите список.' });
+    }
+  };
+  /** Direct mutate — public sheet owns confirm; never sets private review/CommandReview. */
+  submitPublicRole = async (
+    intent: Extract<Intent, { kind: 'public-role-create' | 'public-role-command' }>,
+    bind?: { surfaceGen: number; editor: string; roleHandle: string; role: string; gameId: string; reviewId?: string },
+  ) => {
+    const actor = this.snapshot.actor;
+    if (!actor || this.snapshot.command || this.inFlight) return;
+    try {
+      const transport = wire(intent);
+      const packet: Packet = Object.freeze({
+        ...freezeIntent(intent),
+        method: transport.method,
+        path: transport.path,
+        actor: Object.freeze({ ...actor }),
+        key: this.random(),
+      }) as Packet;
+      this.publicMutationBind = {
+        surfaceGen: bind?.surfaceGen ?? this.publicSurfaceGen,
+        actorId: actor.actorId,
+        sessionId: actor.sessionId,
+        roleHandle: bind?.roleHandle ?? (intent.kind === 'public-role-create' ? intent.roleHandle : 'own'),
+        role: bind?.role ?? '',
+        gameId: bind?.gameId ?? intent.gameId,
+        editor: bind?.editor ?? '',
+        kind: intent.kind,
+        ...(bind?.reviewId ? { reviewId: bind.reviewId } : intent.kind === 'public-role-command' ? { reviewId: intent.reviewId } : {}),
+      };
+      await this.dispatch(packet, actor, false);
+    } catch {
+      this.publicMutationBind = null;
+      this.show({ publicNotice: 'Проверьте выбранные данные и обновите допуск.' });
+    }
+  };
+  private publicMutationUiCurrent(packet: Packet): boolean {
+    const bind = this.publicMutationBind;
+    const actor = this.snapshot.actor;
+    if (!bind || !actor || bind.kind !== packet.kind) return false;
+    // Original packet actorId must match; session may rotate on same-actor reauth.
+    if (bind.actorId !== packet.actor.actorId || bind.actorId !== actor.actorId) return false;
+    if (bind.sessionId !== actor.sessionId) return false;
+    if (bind.surfaceGen !== this.publicSurfaceGen) return false;
+    const surface = this.snapshot.publicSurface;
+    if (!surface) return false;
+    if (packet.kind === 'public-role-create') {
+      if (surface.mode !== 'composer' || !surface.target) return false;
+      if (packet.roleHandle !== surface.target.roleHandle || packet.body.role !== surface.target.role) return false;
+      const draft = this.snapshot.publicDraft;
+      if (!draft || draft.audience !== 'public' || draft.gameId !== packet.body.gameId) return false;
+      try {
+        if (publicRoleReviewText(draft.text) !== packet.body.text) return false;
+      } catch {
+        return false;
+      }
+      if (draft.topics.length !== packet.body.topics.length) return false;
+      if (draft.topics.some((topic, index) => topic !== packet.body.topics[index])) return false;
+      return true;
+    }
+    return surface.mode === 'history';
+  }
+  reconcilePublic = async () => {
+    const { actor, command } = this.snapshot;
+    if (!actor || !command || command.status !== 'unknown' || this.inFlight) return;
+    if (!isPublicRolePacketKind(command.packet.kind)) return;
+    if (command.packet.actor.actorId !== actor.actorId) return;
+    await this.dispatch(command.packet, actor, true);
+  };
   private allowed(intent: Intent) {
+    if (intent.kind === 'public-role-create' || intent.kind === 'public-role-command') {
+      // Public mutations use submitPublicRole — never private CommandReview.allowed path.
+      return false;
+    }
     if (intent.kind === 'peer-create') {
       const results = this.snapshot.games[intent.gameId];
       const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
@@ -1138,6 +1727,63 @@ export class PostgameCoordinator {
         };
         this.show({ feedbackDrafts: drafts });
       }
+      if (packet.kind === 'public-role-create' && 'receiptToken' in receipt) {
+        const publicReceipt = parsePublicRoleMutationReceipt(receipt);
+        const paint = this.publicMutationUiCurrent(packet);
+        this.publicMutationBind = null;
+        // Journal settles once; only the matching surface/editor generation may render the receipt.
+        this.show({
+          command: null,
+          ...(paint ? {
+            publicReceipt,
+            publicConsentHash: null,
+            publicNotice: publicReceipt.pendingIntakeStatus === 'waiting_intake'
+              ? 'Отзыв отправлен. Ожидает разбора'
+              : 'Отзыв принят.',
+          } : {}),
+        });
+        // Pending create is not publication — do not refresh anonymous public projection or private results.
+        return;
+      }
+      if (packet.kind === 'public-role-command' && 'receiptToken' in receipt) {
+        const publicReceipt = parsePublicRoleMutationReceipt(receipt);
+        const paint = this.publicMutationUiCurrent(packet);
+        const reviewId = packet.kind === 'public-role-command' ? packet.reviewId : publicReceipt.id;
+        this.publicMutationBind = null;
+        // Raise floor from receipt; receipt never grants writes — retire text while awaiting typed GET.
+        // Monotonic ACK: settle packet/floor without replacing a newer typed projection with an older receipt.
+        const floorBefore = this.publicOwnVersionFloor.get(reviewId) ?? 0;
+        const priorItems = this.snapshot.publicOwn.data?.items ?? [];
+        const priorTyped = priorItems.find(item => item.id === reviewId);
+        this.publicOwnVersionFloor.set(
+          reviewId,
+          Math.max(floorBefore, publicReceipt.version),
+        );
+        if (!this.publicOwnDenied) {
+          this.publicOwnAwaitingTyped.add(reviewId);
+          const floor = this.publicOwnVersionFloor.get(reviewId) ?? 0;
+          const items = priorItems.map(item => {
+            if (item.id !== reviewId) return item;
+            return applyOwnPublicAckToItem(item, publicReceipt, floor);
+          });
+          if (this.snapshot.publicOwn.status === 'ready' || priorItems.length) {
+            this.show({ publicOwn: { status: 'ready', data: { items } } });
+          }
+        }
+        // Historical ACK settles the journal; do not present its status when newer typed row/floor already won.
+        const paintReceipt = paint && mayPaintOwnPublicReceipt(publicReceipt, priorTyped, floorBefore);
+        this.show({
+          command: null,
+          ...(paintReceipt ? {
+            publicReceipt,
+            publicNotice: publicReceipt.status === 'withdrawn'
+              ? 'Отзыв отозван.'
+              : 'Команда принята.',
+          } : {}),
+        });
+        if (!this.publicOwnDenied) void this.loadOwnPublicReviews();
+        return;
+      }
       if ((packet.kind === 'organization-create' || packet.kind === 'training-create')
         && 'kind' in receipt && 'direction' in receipt) {
         this.rememberReviews([receipt], ++this.serial, 'receipt');
@@ -1221,6 +1867,8 @@ export class PostgameCoordinator {
         packet.kind === 'peer-create' || packet.kind === 'organization-create' || packet.kind === 'training-create'
         || packet.kind === 'peer-reply' || packet.kind === 'peer-report'
       );
+      const publicUnknown = !definite && isPublicRolePacketKind(packet.kind);
+      const publicBusiness = definite && isPublicRolePacketKind(packet.kind);
       if (peerConflict && packet.kind === 'peer-report') {
         // Preserve detail draft; reset consent after revision change.
         const drafts = { ...this.snapshot.feedbackDrafts };
@@ -1257,24 +1905,54 @@ export class PostgameCoordinator {
               : 'Версия ответа изменилась. Обновите отзыв и сохраните снова.')
             : roleDiscrepancy
               ? 'Проверьте пояснение расхождения и подтвердите отправку снова.'
-              : 'Изменение отклонено. Обновите данные и проверьте условия.')
+              : publicBusiness
+                ? publicRoleBusinessNotice(
+                  error instanceof PostgameError ? error.code : undefined,
+                  packet.kind === 'public-role-command' ? 'command' : 'create',
+                )
+                : 'Изменение отклонено. Обновите данные и проверьте условия.')
         : (noteUnknown
           ? (packet.kind === 'note-delete'
             ? 'Пока не удалось подтвердить удаление. Проверьте исходное действие.'
             : 'Пока не удалось подтвердить сохранение. Проверьте исходное действие.')
           : peerUnknown
             ? 'Результат отправки пока неизвестен. Проверьте исходное действие.'
-            : unknownNotice);
+            : publicUnknown
+              ? 'Отзыв мог быть принят. Проверьте «Мои публичные отзывы о ролях».'
+              : unknownNotice);
       // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
       // Preserve original owned-packet discrepancy fingerprint across UNKNOWN for reconcile.
-      this.show({
-        command: definite ? null : {
-          packet,
-          status: 'unknown',
-          ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
-        },
-        notice,
-      });
+      // Public 409/422 retain draft and require reread/reconsent; private CommandReview notice stays unset for public kinds.
+      if (isPublicRolePacketKind(packet.kind)) {
+        this.publicPreviewGen++;
+        if (definite) this.publicMutationBind = null;
+        const paintNotice = definite || this.publicMutationUiCurrent(packet) || !this.snapshot.publicSurface
+          || (this.snapshot.command?.packet.key === packet.key);
+        this.show({
+          command: definite ? null : {
+            packet,
+            status: 'unknown',
+          },
+          notice: null,
+          publicConsentHash: definite ? null : this.snapshot.publicConsentHash,
+          publicNotice: paintNotice ? notice : this.snapshot.publicNotice,
+        });
+        if (publicBusiness && packet.kind === 'public-role-create') {
+          void this.loadPublicEligibility({ preserveNotice: true });
+        }
+        if (publicBusiness && packet.kind === 'public-role-command') {
+          void this.loadOwnPublicReviews({ preserveNotice: true });
+        }
+      } else {
+        this.show({
+          command: definite ? null : {
+            packet,
+            status: 'unknown',
+            ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+          },
+          notice,
+        });
+      }
     } finally { if(this.inFlight === packet) this.inFlight=null; }
   }
 }

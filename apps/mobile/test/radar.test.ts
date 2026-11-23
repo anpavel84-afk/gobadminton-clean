@@ -119,7 +119,7 @@ test('NativeApi closes selected transports: preview key, owning DELETE header an
   const app=JSON.parse(readFileSync(new NodeURL('../app.json',import.meta.url),'utf8')).expo;
   const plugin=app.plugins.find((p:unknown)=>Array.isArray(p)&&p[0]==='expo-location')[1];
   for(const key of ['locationAlwaysPermission','locationAlwaysAndWhenInUsePermission','motionUsagePermission','locationFullAccuracyPermission','isIosBackgroundLocationEnabled','isAndroidBackgroundLocationEnabled','isAndroidForegroundServiceEnabled','isAndroidMotionActivityEnabled'])assert.equal(plugin[key],false);
-  assert.equal(app.android.versionCode,33);
+  assert.equal(app.android.versionCode,34);
   assert.equal(JSON.parse(readFileSync(new NodeURL('../package.json',import.meta.url),'utf8')).dependencies['expo-location'],'58.0.22');
 });
 

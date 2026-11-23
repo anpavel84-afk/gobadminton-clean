@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { useAuth } from '../auth.tsx';
 import { publicApi } from '../public-api.ts';
 import type { PublicGame } from '../public-api.ts';
 import {
@@ -13,6 +14,11 @@ import {
   ROLE_TOPIC_LABEL,
 } from '../role-reputation.ts';
 import type { RoleKind, RoleLaneState } from '../role-reputation.ts';
+import { publicAuthorReturnPath } from '../public-role-reviews.ts';
+import {
+  beginPublicAuthorEntry,
+  PublicRoleAuthorEntryButton,
+} from './public-role-reviews.tsx';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
 import { Label, OutlineButton, TextButton } from './ui.tsx';
@@ -25,7 +31,7 @@ function createCardCoordinator() {
 }
 
 /**
- * Inline public role-history disclosure for discovery cards — read-only, expand-gated.
+ * Inline public role-history disclosure for discovery cards — expand-gated read + author entry.
  * Composition: toggle → optional actions slot → expanded body (canonical trainer card order).
  */
 export function GameRoleReputationDisclosure({
@@ -62,9 +68,9 @@ export function GameRoleReputationDisclosure({
     </Pressable>
     {actions}
     {expanded ? <View style={styles.details} accessibilityLiveRegion="polite">
-      {wantTraining ? <RoleLaneView lane={state.training} onRetry={() => coordinator.retry('training')}
+      {wantTraining ? <RoleLaneView lane={state.training} gameId={game.id} onRetry={() => coordinator.retry('training')}
         onMore={() => coordinator.loadMore('training')} /> : null}
-      <RoleLaneView lane={state.organization} onRetry={() => coordinator.retry('organization')}
+      <RoleLaneView lane={state.organization} gameId={game.id} onRetry={() => coordinator.retry('organization')}
         onMore={() => coordinator.loadMore('organization')} />
     </View> : null}
   </View>;
@@ -75,10 +81,13 @@ export function RoleLaneView({
   lane,
   onRetry,
   onMore,
+  gameId,
 }: {
   lane: RoleLaneState;
   onRetry: () => void;
   onMore: () => void;
+  /** When set, shows public author entry for this game+role handle. Profile read-only omits it. */
+  gameId?: string;
 }) {
   const role: RoleKind = lane.role;
   return <View style={styles.section} accessibilityLabel={roleSectionTitle(role)}>
@@ -93,19 +102,44 @@ export function RoleLaneView({
       Публичная история этой роли сейчас недоступна. Это не значит, что человек «никогда не проводил»
       встречи — подтверждённая история может отсутствовать.
     </Label> : null}
-    {lane.phase === 'ready' && lane.summary ? <ReadyRoleBody lane={lane} onMore={onMore} /> : null}
+    {lane.phase === 'ready' && lane.summary ? (
+      <ReadyRoleBody lane={lane} gameId={gameId} onMore={onMore} />
+    ) : null}
   </View>;
 }
 
-function ReadyRoleBody({ lane, onMore }: { lane: RoleLaneState; onMore: () => void }) {
+function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: () => void; gameId?: string }) {
   const summary = lane.summary!;
+  const auth = useAuth();
   const history = lane.role === 'organization'
     ? (compactHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete)
       ?? heldHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete))
     : null;
+  const canAuthor = !!gameId && !!summary.roleHandle;
   return <>
     {history ? <Label style={styles.history}>{history}</Label> : null}
     <Label style={styles.secondary}>{publishedReviewsLabel(summary.publishedReviewCount)}</Label>
+    {canAuthor ? (
+      <PublicRoleAuthorEntryButton
+        title="Поделиться опытом"
+        onPress={() => {
+          const target = {
+            roleHandle: summary.roleHandle,
+            role: lane.role,
+            gameId: gameId!,
+            subjectDisplayName: summary.subjectDisplayName,
+          };
+          beginPublicAuthorEntry({
+            authenticated: auth.status === 'authenticated',
+            target,
+            rememberPending: t => auth.postgame.rememberPendingPublicAuthor(t),
+            open: t => auth.postgame.openPublicComposer(t),
+            signIn: path => { void auth.signIn(path); },
+            returnPath: publicAuthorReturnPath(gameId!),
+          });
+        }}
+      />
+    ) : null}
     {summary.items.length === 0 ? (
       <Label style={styles.secondary}>Пока нет опубликованных отзывов.</Label>
     ) : summary.items.map(item => (

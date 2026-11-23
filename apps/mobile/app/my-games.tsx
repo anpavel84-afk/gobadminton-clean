@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/auth.tsx';
@@ -7,6 +7,11 @@ import { hubRows, hubView, hubBucket, sortHubRows, pendingInviteCount } from '..
 import type { HubRow } from '../src/my-games.ts';
 import { attendanceLabel, needsAttention } from '../src/postgame.ts';
 import { PublicApiError } from '../src/public-api.ts';
+import {
+  bindPublicRoleFocusRef,
+  rememberPublicRoleFocusTarget,
+  type PublicRoleFocusHandle,
+} from '../src/public-role-reviews.ts';
 import { colors } from '../src/theme.ts';
 import { GameCard } from '../src/components/game-card.tsx';
 import { MyGameInvitations } from '../src/components/my-game-invitation.tsx';
@@ -84,8 +89,30 @@ export default function MyGames() {
         void participation.loadOwn(); void participation.loadManaged();
         void owner.loadOwn(); void owner.loadReminders(); void owner.loadInvitations();
       }} />
+      <View style={{ gap: 8 }}>
+        <Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>Отзывы</Label>
+        <PublicOwnReviewsEntry onOpen={() => owner.openOwnPublicHistory()} />
+      </View>
     </>}
   </Page></PostgameSurface>;
+}
+/** Records initiator for public own-history sheet focus return (shared public-role focus target). */
+function PublicOwnReviewsEntry({ onOpen }: { onOpen: () => void }) {
+  const held = useRef<PublicRoleFocusHandle | null>(null);
+  const setRef = useRef((node: ComponentRef<typeof Pressable> | null) => {
+    bindPublicRoleFocusRef(held, node);
+  }).current;
+  return <Pressable
+    ref={setRef}
+    accessibilityRole="button"
+    onPress={() => {
+      rememberPublicRoleFocusTarget(held.current);
+      onOpen();
+    }}
+    style={styles.textButton}
+  >
+    <Label>Мои публичные отзывы о ролях</Label>
+  </Pressable>;
 }
 function OwnGame({ row, activeInvite, onActiveInvite }: {
   row: HubRow; activeInvite: string | null; onActiveInvite: (id: string | null) => void;

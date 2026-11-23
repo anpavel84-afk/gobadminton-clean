@@ -4,11 +4,13 @@ import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Platform, Pressable
 import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, reviewKindModeLabel, resolvingAckAssertion } from '../postgame.ts';
+import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
 type FocusTarget = ComponentRef<typeof Pressable>;
 export const FocusContext=createContext<RefObject<FocusTarget | null> | null>(null);
+/** Private CommandReview focus owner — public role sheets use shared rememberPublicRoleFocusTarget instead. */
 export function PostgameSurface({children}:PropsWithChildren) {
   const trigger=useRef<FocusTarget>(null);
   return <FocusContext.Provider value={trigger}>{children}</FocusContext.Provider>;
@@ -48,9 +50,11 @@ export function CommandReview({gameId}: {gameId?:string}) {
   const s=useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot);
   const p=useSyncExternalStore(participation.subscribe,participation.getSnapshot,participation.getSnapshot);
   const command=s.command, review=s.review, selected=review ?? command?.packet;
+  // Public role mutations own their sheet — never open private CommandReview for them.
+  const publicRole=!!selected && isPublicRolePacketKind(selected.kind);
   const active=path === (gameId ? `/my-games/${gameId}/results` : '/my-games');
   const [dismissed,setDismissed]=useState<typeof command>(null);
-  const visible=active && !!(review || command && command !== dismissed);
+  const visible=active && !publicRole && !!(review || command && command !== dismissed);
   const heading=useRef<ComponentRef<typeof Text>>(null), trigger=useContext(FocusContext), wasOpen=useRef(false);
   useEffect(()=>{
     if(!visible && wasOpen.current && active) {
