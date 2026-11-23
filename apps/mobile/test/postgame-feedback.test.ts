@@ -5,7 +5,7 @@ import {
   PostgameError, parseResults, parsePrivateReview, parseMeReviewsPage, parseReviewReportReceipt,
   wire, validateReceipt, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
   feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
-  displayOnlyReview,
+  displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
 } from '../src/postgame.ts';
 import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
@@ -637,6 +637,39 @@ test('deferred results/history same-version rights; older gen cannot restore; no
   );
   assert.equal(projected.find(r => r.id === 'recv-defer')?.allowedActions.canReply, true);
   assert.equal(displayOnlyReview(restored).allowedActions.canReply, false);
+});
+
+test('ROOT Astra UX: no silent recipient rebind; cursor empty is non-definitive; pending strips report UI rights', () => {
+  const a = { contextId: 'ctx-a', displayName: 'Анна' };
+  const b = { contextId: 'ctx-b', displayName: 'Борис' };
+  // Explicit pin stays; singular list never auto-selects without draft.
+  assert.deepEqual(resolvePeerDraftSubject([a], a.contextId), { selected: a, needsReselect: false });
+  assert.deepEqual(resolvePeerDraftSubject([a], undefined), { selected: undefined, needsReselect: false });
+  assert.deepEqual(resolvePeerDraftSubject([a], 'gone'), { selected: undefined, needsReselect: true });
+  // Prior choice left the list: keep draft fields elsewhere; never fall back to first remaining.
+  assert.deepEqual(resolvePeerDraftSubject([b], a.contextId), { selected: undefined, needsReselect: true });
+  assert.deepEqual(resolvePeerDraftSubject([a, b], a.contextId), { selected: a, needsReselect: false });
+  assert.deepEqual(resolvePeerDraftSubject([], a.contextId), { selected: undefined, needsReselect: false });
+
+  assert.equal(peerHistoryEmptyText('received', null), 'Пока нет полученных отзывов по этой игре.');
+  assert.equal(peerHistoryEmptyText('sent', null), 'Пока нет отправленных отзывов по этой игре.');
+  assert.equal(
+    peerHistoryEmptyText('received', 'cursor-more'),
+    'Среди загруженных отзывов по этой игре пока нет',
+  );
+  assert.equal(
+    peerHistoryEmptyText('sent', 'cursor-more'),
+    'Среди загруженных отзывов по этой игре пока нет',
+  );
+
+  const row = peerReview({
+    id: 'recv-ux', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  assert.equal(reviewCommandsOpen('loading'), false);
+  assert.equal(reviewCommandsOpen('error'), false);
+  assert.equal(displayOnlyReview(row).allowedActions.canReport, false);
+  assert.equal(displayOnlyReview(row).allowedActions.canReply, false);
 });
 
 test('actor switch clears private review projection and report draft', async () => {

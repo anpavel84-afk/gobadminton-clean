@@ -6,10 +6,12 @@ import {
   feedbackSectionVisible,
   normalizeFormReason,
   peerCreateReasonLabel,
+  peerHistoryEmptyText,
   peerRatingLabel,
   peerReviewsForGame,
   peerReviewsOnly,
   projectReviewsFromStore,
+  resolvePeerDraftSubject,
   reviewCommandsOpen,
   PEER_OPTIONS,
   REPORT_REASONS,
@@ -60,7 +62,7 @@ function ReviewCard({
         onChangeText={text => owner.setFeedbackDraft(draftGameId, { replyText: { [review.id]: text } })}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 80, maxHeight: 160 }]} />
-      <ReviewButton title={review.reply ? 'Обновить ответ' : 'Ответить'} onPress={() => {
+      <ReviewButton title={review.reply ? 'Обновить ответ' : 'Ответить'} disabled={!replyTrimmed} onPress={() => {
         if (!replyTrimmed) return;
         owner.review({
           kind: 'peer-reply', gameId: draftGameId, reviewId: review.id,
@@ -79,7 +81,8 @@ function ReviewCard({
         });
       }} />
     ) : null}
-    {reporting ? <ReportForm draftGameId={draftGameId} review={review} /> : null}
+    {/* Draft retained across pending/error; interactive form only under current canReport. */}
+    {reporting && canReport ? <ReportForm draftGameId={draftGameId} review={review} /> : null}
   </View>;
 }
 
@@ -117,7 +120,7 @@ function ReportForm({ draftGameId, review }: { draftGameId: string; review: Priv
         reportConsent: !(consent && versionOk),
         reportConsentVersion: review.version,
       })} />
-    <ReviewButton title="Отправить жалобу" onPress={() => {
+    <ReviewButton title="Отправить жалобу" disabled={!consent || !versionOk} onPress={() => {
       if (!consent || !versionOk) return;
       const trimmed = detail.trim();
       owner.review({
@@ -152,8 +155,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const subjects = caps?.peerSubjects ?? [];
   const draft = s.feedbackDrafts[gameId] ?? {};
   const mode = draft.mode ?? (canCreate || subjects.length || caps?.peerCreateReason ? 'peer' : 'received');
-  const selectedId = draft.subjectContextId ?? (subjects.length === 1 ? subjects[0]!.contextId : '');
-  const selected = subjects.find(s => s.contextId === selectedId) ?? subjects[0];
+  const { selected, needsReselect } = resolvePeerDraftSubject(subjects, draft.subjectContextId);
   const peerRating = draft.peerRating;
   const comment = draft.comment ?? '';
   const tags = draft.tags ?? [];
@@ -218,11 +220,13 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       {!caps?.canCreatePeer ? (
         <Label>{peerCreateReasonLabel(caps?.peerCreateReason) ?? 'Пока нет участников для отзыва'}</Label>
       ) : null}
+      {needsReselect ? <Label>Выберите получателя снова</Label> : null}
       {selected ? <>
         <Label style={{ fontWeight: '700' }}>{selected.displayName}</Label>
         <Label>Отзыв увидите только вы и {selected.displayName.split(' ')[0]}</Label>
-      </> : caps?.canCreatePeer ? <Label>Пока нет участников для отзыва</Label> : null}
-      {subjects.length > 1 ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      </> : null}
+      {subjects.length === 0 && caps?.canCreatePeer ? <Label>Пока нет участников для отзыва</Label> : null}
+      {subjects.length > 0 ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <Label>Кому</Label>
         {subjects.map(subject => (
           <Choice key={subject.contextId} title={subject.displayName}
@@ -257,7 +261,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         ))}
       </View>
       <Label>Отправляя отзыв, вы подтверждаете, что играли вместе</Label>
-      <ReviewButton title="Отправить игроку" onPress={() => {
+      <ReviewButton title="Отправить игроку" disabled={!canCreate || !peerRating || !selected} onPress={() => {
         if (!canCreate || !peerRating || !selected) return;
         const trimmed = normalizeFormReason(comment);
         owner.review({
@@ -278,7 +282,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       <SourceLane title="Полученные" status={received.status}
         retry={() => void owner.loadReviews('received')}
         empty={received.status === 'ready' && receivedPeer.length === 0}
-        emptyText="Пока нет полученных отзывов по этой игре." />
+        emptyText={peerHistoryEmptyText('received', received.data?.nextCursor)} />
       {receivedPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} />)}
       {received.status === 'ready' && received.data?.nextCursor ? (
         <TextButton title="Ещё полученные" onPress={() => void owner.loadReviews('received', true)} />
@@ -295,7 +299,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       <SourceLane title="Отправленные" status={sent.status}
         retry={() => void owner.loadReviews('sent')}
         empty={sent.status === 'ready' && sentPeer.length === 0}
-        emptyText="Пока нет отправленных отзывов по этой игре." />
+        emptyText={peerHistoryEmptyText('sent', sent.data?.nextCursor)} />
       {sentPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} />)}
       {sent.status === 'ready' && sent.data?.nextCursor ? (
         <TextButton title="Ещё отправленные" onPress={() => void owner.loadReviews('sent', true)} />

@@ -21,9 +21,11 @@ export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
   peerRatingLabel, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
   feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
-  displayOnlyReview, parsePrivateReview, parseMeReviewsPage,
+  displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
+  parsePrivateReview, parseMeReviewsPage,
   parseReviewReportReceipt, reviewsQuery, reviewComment, reviewReplyText, reportDetailText,
 } from './postgame-feedback.ts';
+export type { PeerSubjectOption } from './postgame-feedback.ts';
 
 export class PostgameError extends Error {
   readonly kind: 'invalid' | 'network' | 'business' | 'private' | 'stale';

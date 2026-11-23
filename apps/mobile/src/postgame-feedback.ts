@@ -354,3 +354,33 @@ export function displayOnlyReview(row: PrivateReview): PrivateReview {
     allowedActions: { canEdit: false, canReply: false, canReport: false },
   };
 }
+
+export type PeerSubjectOption = { contextId: string; displayName: string };
+
+/**
+ * Pin peer create to an explicit user-selected subject.
+ * Never silently rebind to first/singular when the prior choice leaves the list;
+ * draft rating/comment/tags stay in the store for the reselect path.
+ */
+export function resolvePeerDraftSubject(
+  subjects: readonly PeerSubjectOption[],
+  draftSubjectContextId: string | undefined,
+): { selected: PeerSubjectOption | undefined; needsReselect: boolean } {
+  if (draftSubjectContextId) {
+    const match = subjects.find(s => s.contextId === draftSubjectContextId);
+    if (match) return { selected: match, needsReselect: false };
+    return { selected: undefined, needsReselect: subjects.length > 0 };
+  }
+  return { selected: undefined, needsReselect: false };
+}
+
+/** Empty copy for same-game peer history; cursor means the page is not definitive. */
+export function peerHistoryEmptyText(
+  direction: 'received' | 'sent',
+  nextCursor: string | null | undefined,
+): string {
+  if (nextCursor) return 'Среди загруженных отзывов по этой игре пока нет';
+  return direction === 'received'
+    ? 'Пока нет полученных отзывов по этой игре.'
+    : 'Пока нет отправленных отзывов по этой игре.';
+}

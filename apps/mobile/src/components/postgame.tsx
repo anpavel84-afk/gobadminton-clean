@@ -18,14 +18,17 @@ function useBlocked() {
   return !!(s.command || s.review);
 }
 /** Retain the actual initiating control for focus return and visibly gate new intents. */
-export function ReviewButton({title,onPress}: {title:string;onPress:()=>void}) {
-  const trigger=useContext(FocusContext), ref=useRef<FocusTarget>(null), disabled=useBlocked();
+export function ReviewButton({title,onPress,disabled: disabledProp=false}: {title:string;onPress:()=>void;disabled?:boolean}) {
+  const trigger=useContext(FocusContext), ref=useRef<FocusTarget>(null), blocked=useBlocked();
+  const disabled=blocked || !!disabledProp;
   return <Pressable ref={ref} accessibilityRole="button" accessibilityState={{disabled}} disabled={disabled}
-    onPress={()=>{Keyboard.dismiss();if(trigger) trigger.current=ref.current;onPress();}} style={[styles.textButton,{opacity:disabled ? 0.45 : 1}]}><Label>{title}</Label></Pressable>;
+    onPress={()=>{if(disabled) return;Keyboard.dismiss();if(trigger) trigger.current=ref.current;onPress();}} style={[styles.textButton,{opacity:disabled ? 0.45 : 1}]}><Label>{title}</Label></Pressable>;
 }
-export function Choice({title,selected,onPress}: {title:string;selected:boolean;onPress:()=>void}) {
-  const disabled=useBlocked();
-  return <Pressable accessibilityRole="button" accessibilityState={{selected,disabled}} disabled={disabled} onPress={onPress}
+export function Choice({title,selected,onPress,disabled: disabledProp=false}: {title:string;selected:boolean;onPress:()=>void;disabled?:boolean}) {
+  const blocked=useBlocked();
+  const disabled=blocked || !!disabledProp;
+  return <Pressable accessibilityRole="button" accessibilityState={{selected,disabled}} disabled={disabled}
+    onPress={()=>{if(disabled) return;onPress();}}
     style={[styles.chip,{maxWidth:'100%',minWidth:0,opacity:disabled ? 0.45 : 1}]}><Label>{selected ? '✓ ' : ''}{title}</Label></Pressable>;
 }
 export function SourceNotice({title,status,retry}: {title:string;status:string;retry:()=>void}) {
