@@ -3184,9 +3184,8 @@ export class PostgameCoordinator {
           ...(paint ? {
             venueReceipt,
             venueConsentHash: null,
-            venueNotice: packet.body.audience === 'self_draft'
-              ? 'Сохранено только вам. Эти изменения видите только вы.'
-              : 'Новая публичная версия отправлена и ожидает проверки. Более ранняя опубликованная версия может оставаться видимой.',
+            // Receipt card owns success copy (private vs public) — avoid duplicate/contradictory notice.
+            venueNotice: null,
           } : {}),
         });
       }

@@ -14,7 +14,10 @@ import {
   parseOwnVenueEligibility,
   parseVenueConsentPreview,
   parseVenueReviewMutationReceipt,
+  venueEligibilityReasonCopy,
   venueExperienceIdempotencyExpired,
+  venueExperienceReceiptSummary,
+  venueReviewEligibilityHelp,
   postgameIdempotencyReplayBlocked,
 } from '../src/venue-reviews.ts';
 
@@ -405,6 +408,76 @@ test('deferred prepare ownership: one fresh POST; stale draft/consent invalidate
   assert.equal(stale.getSnapshot().command, null);
 });
 
+test('private vs public receipt summary + closed eligibility reason copy', () => {
+  const base = {
+    id: '55555555-5555-4555-8555-555555555555',
+    version: 2,
+    reviewHandle: 'd'.repeat(32),
+    publicVisible: false,
+    notBefore: null,
+  };
+  const privateRevision = venueExperienceReceiptSummary({
+    ...base,
+    status: 'revision_waiting',
+    receiptToken: null,
+  }, 'self_draft');
+  assert.match(privateRevision.primary, /только вам/i);
+  assert.match(privateRevision.visibility, /ранее опубликованная|только вам/i);
+  assert.doesNotMatch(privateRevision.primary, /проверк|модерац/i);
+  assert.doesNotMatch(privateRevision.visibility, /проверк|модерац|ожидает/i);
+
+  const publicRevision = venueExperienceReceiptSummary({
+    ...base,
+    status: 'revision_waiting',
+    receiptToken: 'intake-token',
+  }, 'public_venue');
+  assert.match(publicRevision.primary, /проверк/i);
+  assert.match(publicRevision.visibility, /Более ранняя опубликованная версия|не опубликована/i);
+
+  const publicNew = venueExperienceReceiptSummary({
+    ...base,
+    status: 'submitted_waiting',
+    receiptToken: 'intake-token',
+  }, 'public_venue');
+  assert.match(publicNew.primary, /отправлена и ожидает проверки/i);
+
+  assert.equal(isVenueExperienceCreateReceipt({
+    ...base, status: 'revision_waiting', receiptToken: null,
+  }, 'self_draft'), true);
+
+  assert.equal(venueEligibilityReasonCopy('venue_affiliation')?.includes('venue_affiliation'), false);
+  assert.match(venueEligibilityReasonCopy('venue_affiliation') ?? '', /организац/i);
+  assert.match(venueEligibilityReasonCopy('lifecycle') ?? '', /недоступна/i);
+  assert.match(venueEligibilityReasonCopy('outcome_unknown') ?? '', /исход/i);
+  assert.match(venueEligibilityReasonCopy('outcome_dispute') ?? '', /уточнен/i);
+  assert.equal(venueEligibilityReasonCopy('totally_unknown_code_xyz'), null);
+
+  const help = venueReviewEligibilityHelp({
+    gameId,
+    gameTitle: 'Practice',
+    admission: 'deny',
+    reason: 'venue_affiliation',
+    outcomeVersion: 1,
+    attendanceVersion: 1,
+    firstEligibleAt: null,
+    helpHint: null,
+  });
+  assert.match(help ?? '', /нельзя оставить отзыв/i);
+  assert.doesNotMatch(help ?? '', /venue_affiliation|Причина:/);
+  const unknownHelp = venueReviewEligibilityHelp({
+    gameId,
+    gameTitle: null,
+    admission: 'hold',
+    reason: 'weird_raw_code',
+    outcomeVersion: 0,
+    attendanceVersion: 0,
+    firstEligibleAt: null,
+    helpHint: null,
+  });
+  assert.equal(unknownHelp, 'Сейчас нельзя оставить отзыв по этой игре.');
+  assert.doesNotMatch(unknownHelp ?? '', /weird_raw_code/);
+});
+
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const results = read('../app/my-games/[gameId]/results.tsx');
   assert.match(results, /VenueExperienceEntry/);
@@ -415,10 +488,26 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(composer, /public_venue/);
   assert.match(composer, /ensureVenueConsentPreview/);
   assert.match(composer, /Оставить отзыв о площадке/);
+  assert.match(composer, /Посмотреть отправку/);
+  assert.match(composer, /Повторить исходную отправку/);
+  assert.match(composer, /Результат отправки неизвестен/);
+  assert.match(composer, /venueExperienceReceiptSummary/);
+  assert.match(composer, /recoveryVenueId|pendingCommand/);
+  assert.match(composer, /onAccessibilityEscape/);
+  assert.match(composer, /FocusContext/);
+  assert.doesNotMatch(composer, /Публичный отзыв не виден/);
 
   const postgameUi = read('../src/components/postgame.tsx');
   assert.match(postgameUi, /isVenueExperiencePacketKind/);
   assert.match(postgameUi, /venueExperience/);
+  assert.match(postgameUi, /showPrivatePendingCta|venuePendingOtherGame/);
+  assert.match(postgameUi, /Посмотреть отправку/);
+
+  const helpers = read('../src/venue-reviews.ts');
+  assert.match(helpers, /Ранее опубликованная версия может оставаться видимой|Более ранняя опубликованная версия может оставаться видимой/);
+  assert.match(helpers, /venueExperienceReceiptSummary/);
+  assert.match(helpers, /venueEligibilityReasonCopy/);
+  assert.doesNotMatch(helpers, /Причина: \$\{basis\.reason\}/);
 
   const coordinator = read('../src/postgame-coordinator.ts');
   assert.match(coordinator, /venue-experience-create/);
@@ -427,6 +516,7 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(coordinator, /postgameIdempotencyReplayBlocked|VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS|venueExperienceIdempotencyExpired/);
   assert.match(coordinator, /writePrepare|beginWritePrepare/);
   assert.match(coordinator, /mayDispatchRetention|dispatchPermit/);
+  assert.match(coordinator, /Receipt card owns success copy|venueNotice: null/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /venueExperienceEligibility/);
@@ -438,10 +528,6 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(auth, /venueExperienceEligibility/);
   assert.match(auth, /venueExperienceConsentPreview/);
   assert.match(auth, /mayDispatchRetention|dispatchPermit|POSTGAME_RETENTION_EXPIRED/);
-
-  const composerUi = read('../src/components/venue-experience-composer.tsx');
-  assert.match(composerUi, /Более ранняя опубликованная версия может оставаться видимой|Ранее опубликованная версия может оставаться видимой/);
-  assert.doesNotMatch(composerUi, /Публичный отзыв не виден/);
 
   const controller = read('../../api/src/venues/venue-reviews.controller.ts');
   assert.match(controller, /eligibility[\s\S]*requirePrincipal\(request\)/);

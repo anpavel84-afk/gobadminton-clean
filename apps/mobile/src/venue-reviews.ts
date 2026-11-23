@@ -307,6 +307,28 @@ export function emptyVenueExperienceDraft(): VenueExperienceDraft {
   return { audience: 'self_draft', text: '', topics: ['surface'], consent: false };
 }
 
+/**
+ * Closed Russian copy for known eligibility reasons — never echo raw server codes in product UI.
+ * Unknown/unmapped reasons fall back to a neutral sentence without the code.
+ */
+const VENUE_ELIGIBILITY_REASON_COPY: Record<string, string> = {
+  venue_affiliation: 'Площадка связана с вашей организацией, поэтому отзыв недоступен.',
+  lifecycle: 'Площадка сейчас недоступна для отзыва.',
+  outcome_unknown: 'Исход игры ещё не подтверждён.',
+  outcome_dispute: 'По исходу игры идёт уточнение.',
+  window_closed: 'Срок подачи отзыва по этой игре истёк.',
+  wrong_venue: 'Отзыв относится к другой площадке этой игры.',
+  venue_attribution_unavailable: 'Не удалось подтвердить историческую площадку этой игры.',
+  attendance_unmarked: 'Посещение ещё не отмечено.',
+  attendance_unknown: 'Посещение ещё не отмечено.',
+  attendance_dispute: 'По посещению идёт уточнение.',
+};
+
+export function venueEligibilityReasonCopy(reason: string | null | undefined): string | null {
+  if (!reason || typeof reason !== 'string') return null;
+  return VENUE_ELIGIBILITY_REASON_COPY[reason] ?? null;
+}
+
 export function venueReviewEligibilityHelp(basis: OwnVenueEligibilityBasis | undefined | null): string | null {
   if (!basis) return 'Не удалось подтвердить возможность отзыва по этой игре.';
   if (basis.helpHint === 'attendance_unmarked') {
@@ -322,9 +344,59 @@ export function venueReviewEligibilityHelp(basis: OwnVenueEligibilityBasis | und
     return 'Срок подачи отзыва по этой игре истёк.';
   }
   if (basis.admission !== 'may_submit') {
-    return `Сейчас нельзя оставить отзыв по этой игре.${basis.reason ? ` Причина: ${basis.reason}.` : ''}`;
+    const reasonCopy = venueEligibilityReasonCopy(basis.reason);
+    return reasonCopy
+      ? `Сейчас нельзя оставить отзыв по этой игре. ${reasonCopy}`
+      : 'Сейчас нельзя оставить отзыв по этой игре.';
   }
   return null;
+}
+
+export type VenueExperienceReceiptSummary = {
+  primary: string;
+  visibility: string;
+};
+
+/**
+ * One verified audience/token receipt summary.
+ * Private (incl. revision_waiting + null token): saved only for you; no moderation claim.
+ * Public pending: awaiting review; older published may remain.
+ */
+export function venueExperienceReceiptSummary(
+  receipt: VenueReviewMutationReceipt,
+  audience: VenueAudience,
+): VenueExperienceReceiptSummary {
+  if (receipt.publicVisible) {
+    return {
+      primary: 'Публичная версия отзыва доступна на странице площадки.',
+      visibility: 'Актуальный статус отзыва о площадке можно посмотреть на сайте.',
+    };
+  }
+  const privateNullToken = audience === 'self_draft'
+    || ((receipt.status === 'self_draft' || receipt.status === 'revision_waiting')
+      && receipt.receiptToken === null);
+  if (privateNullToken) {
+    return {
+      primary: 'Сохранено только вам. Эти изменения видите только вы.',
+      visibility: 'Ранее опубликованная версия может оставаться видимой. Только вам — без публикации этой версии на странице площадки.',
+    };
+  }
+  if (
+    receipt.status === 'submitted_waiting'
+    || receipt.status === 'submitted'
+    || receipt.status === 'revision_waiting'
+  ) {
+    return {
+      primary: receipt.status === 'revision_waiting'
+        ? 'Новая публичная версия ожидает проверки. Пока она не опубликована.'
+        : 'Новая публичная версия отправлена и ожидает проверки. Пока она не опубликована.',
+      visibility: 'Эта новая версия ещё не опубликована. Более ранняя опубликованная версия может оставаться видимой.',
+    };
+  }
+  return {
+    primary: 'Отправка принята. Актуальный статус смотрите на сайте.',
+    visibility: 'Актуальный статус отзыва о площадке можно посмотреть на сайте.',
+  };
 }
 
 export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experience-create' {

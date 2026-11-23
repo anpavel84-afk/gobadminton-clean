@@ -99,9 +99,14 @@ export function CommandReview({gameId}: {gameId?:string}) {
   const canConfirm=!resolvingAck || !!resolvingMatch;
   const retentionBlocked = command?.status === 'unknown'
     && postgameIdempotencyReplayBlocked(command.firstDispatchedAt);
+  // Venue/public own their sheets — never a dead private-modal reopen CTA.
+  const showPrivatePendingCta = !!command && !publicRole && !venueExperience;
+  const venuePendingOtherGame = !!command && venueExperience
+    && (!gameId || command.packet.gameId !== gameId);
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
-    {command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
+    {showPrivatePendingCta && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
+    {venuePendingOtherGame && <TextButton title={command.status === 'sending' ? 'Сохраняем… Открыть игру отправки' : 'Посмотреть отправку'} onPress={()=>router.push({pathname:'/my-games/[gameId]/results',params:{gameId:command.packet.gameId}})} />}
     <Modal visible={visible} animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}
       onShow={()=>{const node=findNodeHandle(heading.current);if(node) AccessibilityInfo.setAccessibilityFocus(node);}}>
       <Page keyboard header={<View style={{gap:8}}>
