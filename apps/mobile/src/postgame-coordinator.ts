@@ -4,7 +4,15 @@ import type { GameInvitation } from './messages.ts';
 import { MessagesError } from './messages.ts';
 import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention, noteText } from './postgame.ts';
 import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage, PersonalNote } from './postgame.ts';
-import { mergeReviewPages, type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason } from './postgame-feedback.ts';
+import {
+  mergeReviewPages,
+  roleDiscrepancyContextsEqual,
+  roleDiscrepancyContextFromResults,
+  roleDiscrepancyDecisionFromError,
+  type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason,
+  type RoleDiscrepancyContext,
+  type RoleDiscrepancyDecision,
+} from './postgame-feedback.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -28,13 +36,25 @@ export type NoteDraft = {
   createDirty?: boolean;
 };
 export type OwnNoteRef = { gameId: string; contextId: string };
-/** Actor-bound peer feedback drafts — wiped on logout / different actor. */
+/** Actor-bound private feedback drafts — wiped on logout / different actor; fields separated by kind. */
 export type FeedbackDraft = {
-  mode?: 'peer' | 'received' | 'sent';
+  mode?: 'peer' | 'organization' | 'training' | 'received' | 'sent';
   subjectContextId?: string;
   peerRating?: PeerRating;
+  /** Peer comment only — never shared into organization/training drafts. */
   comment?: string;
   tags?: PeerTag[];
+  /** Organization score 1–5; null/undefined means «Без оценки». */
+  organizationScore?: number | null;
+  organizationComment?: string;
+  organizationDiscrepancy?: string;
+  trainingComment?: string;
+  trainingDiscrepancy?: string;
+  /**
+   * Server FEEDBACK_DISCREPANCY_* bound to kind + attendance/outcome context.
+   * Cleared on mode switch / successful ACK / authoritative context change; drafts stay.
+   */
+  discrepancyDecision?: RoleDiscrepancyDecision | null;
   replyText?: Record<string, string>;
   reportReviewId?: string;
   reportReason?: ReviewReportReason;
@@ -44,7 +64,12 @@ export type FeedbackDraft = {
   reportConsentVersion?: number;
 };
 export type ReviewDirection = 'sent' | 'received';
-type Command = { packet: Packet; status: 'sending' | 'unknown' };
+type Command = {
+  packet: Packet;
+  status: 'sending' | 'unknown';
+  /** Attendance/outcome fingerprint at owned-packet send — never on the API wire. */
+  roleDiscrepancyContext?: RoleDiscrepancyContext;
+};
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
   if (row.gameId !== ack.gameId || row.contextId !== ack.contextId || row.attendance.version !== ack.version) return row;
@@ -111,6 +136,8 @@ function freezeIntent(intent: Intent): Intent {
     case 'note-upsert': copy={...intent,body:{...intent.body}}; break;
     case 'note-delete': copy={...intent,body:{...intent.body}}; break;
     case 'peer-create': copy={...intent,body:{...intent.body,...(intent.body.tags ? {tags:[...intent.body.tags]} : {})}}; break;
+    case 'organization-create': copy={...intent,body:{...intent.body}}; break;
+    case 'training-create': copy={...intent,body:{...intent.body}}; break;
     case 'peer-reply': copy={...intent,body:{...intent.body}}; break;
     case 'peer-report': copy={...intent,body:{...intent.body}}; break;
   }
@@ -199,7 +226,13 @@ export class PostgameCoordinator {
     // Feedback drafts restore without auto-send; history must recheck authority via fresh GET.
     if (saved) this.show({
       filter:saved.filter,
-      command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,
+      command:saved.command ? {
+        packet:saved.command.packet,
+        status:'unknown' as const,
+        ...(saved.command.roleDiscrepancyContext
+          ? { roleDiscrepancyContext: saved.command.roleDiscrepancyContext }
+          : {}),
+      } : null,
       notice:saved.command ? unknownNotice : null,
       review:saved.review,
       drafts:saved.drafts,
@@ -235,6 +268,20 @@ export class PostgameCoordinator {
       }
     }
     if (changed) this.show({drafts});
+  }
+  /** Authoritative attendance/outcome change retires obsolete REQUIRED/UNEXPECTED; draft texts stay. */
+  private retireStaleDiscrepancyDecision(gameId: string, results: Results) {
+    const draft = this.snapshot.feedbackDrafts[gameId];
+    const decision = draft?.discrepancyDecision;
+    if (!decision) return;
+    const current = roleDiscrepancyContextFromResults(results);
+    if (roleDiscrepancyContextsEqual(decision.context, current)) return;
+    this.show({
+      feedbackDrafts: {
+        ...this.snapshot.feedbackDrafts,
+        [gameId]: { ...draft, discrepancyDecision: null },
+      },
+    });
   }
   /**
    * Prefill/refresh only pristine selection — createDirty tracks explicit mutations
@@ -441,6 +488,7 @@ export class PostgameCoordinator {
       // A GET never acknowledges or settles a pending command. Roster pagination keeps selection.
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
+      this.retireStaleDiscrepancyDecision(gameId, data);
       if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
       if (data.feedback?.gameReviews?.length) this.rememberReviews(data.feedback.gameReviews, resultsGen, 'results');
       if (selection?.gameId === gameId) {
@@ -593,6 +641,8 @@ export class PostgameCoordinator {
     const prior = this.snapshot.feedbackDrafts[gameId] ?? {};
     const next: FeedbackDraft = { ...prior, ...patch };
     if (patch.replyText) next.replyText = { ...(prior.replyText ?? {}), ...patch.replyText };
+    // Mode switch clears bound discrepancy decision; kind-separated draft fields stay intact.
+    if (patch.mode !== undefined && patch.mode !== prior.mode) next.discrepancyDecision = null;
     // Opening/changing report target resets consent; keep known version from the open patch.
     if (patch.reportReviewId !== undefined && patch.reportReviewId !== prior.reportReviewId) {
       next.reportConsent = false;
@@ -875,6 +925,21 @@ export class PostgameCoordinator {
       if (intent.body.kind !== 'peer' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
       return feedback.capabilities.peerSubjects.some(s => s.contextId === intent.body.subjectContextId);
     }
+    if (intent.kind === 'organization-create') {
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreateOrganization) return false;
+      if (intent.body.kind !== 'organization' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
+      if (intent.body.organizationScore === undefined && intent.body.comment === undefined) return false;
+      return true;
+    }
+    if (intent.kind === 'training-create') {
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreateTraining) return false;
+      if (intent.body.kind !== 'training' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
+      return !!intent.body.comment;
+    }
     if (intent.kind === 'peer-reply') {
       const review = this.currentReviewForWrite(intent.reviewId);
       if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
@@ -891,7 +956,8 @@ export class PostgameCoordinator {
     if (intent.kind === 'peer-report') {
       const review = this.currentReviewForWrite(intent.reviewId);
       if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
-      if (review.direction !== 'received' || !review.allowedActions.canReport) return false;
+      // Exact-revision Support report remains received peer only — no org/training by analogy.
+      if (review.kind !== 'peer' || review.direction !== 'received' || !review.allowedActions.canReport) return false;
       // Report is independent of writesEnabled / create experience.
       if (review.version !== intent.body.expectedVersion) return false;
       if (intent.body.gameId !== intent.gameId || intent.body.shareReviewWithSupport !== true) return false;
@@ -987,7 +1053,24 @@ export class PostgameCoordinator {
     await this.dispatch(command.packet,actor,true);
   };
   private async dispatch(packet: Packet, authority: Actor, reconciling: boolean) {
-    this.inFlight=packet; this.show({command:{packet,status:'sending'},review:null,notice:null});
+    this.inFlight=packet;
+    // Capture role discrepancy fingerprint before send; UNKNOWN retry keeps the original binding.
+    const priorCommand = this.snapshot.command;
+    const roleDiscrepancyContext =
+      (packet.kind === 'organization-create' || packet.kind === 'training-create')
+        ? (reconciling && priorCommand?.packet === packet && priorCommand.roleDiscrepancyContext
+          ? priorCommand.roleDiscrepancyContext
+          : roleDiscrepancyContextFromResults(this.snapshot.games[packet.gameId]?.data))
+        : undefined;
+    this.show({
+      command: {
+        packet,
+        status: 'sending',
+        ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+      },
+      review: null,
+      notice: null,
+    });
     // Actor object identity also fences a switch away and back to identical
     // credentials. Explicit reconcile captures the new authority separately.
     const valid=()=>authority === this.snapshot.actor && this.snapshot.command?.packet === packet;
@@ -1055,6 +1138,27 @@ export class PostgameCoordinator {
         };
         this.show({ feedbackDrafts: drafts });
       }
+      if ((packet.kind === 'organization-create' || packet.kind === 'training-create')
+        && 'kind' in receipt && 'direction' in receipt) {
+        this.rememberReviews([receipt], ++this.serial, 'receipt');
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = packet.kind === 'organization-create'
+          ? {
+            ...prior,
+            organizationScore: null,
+            organizationComment: '',
+            organizationDiscrepancy: '',
+            discrepancyDecision: null,
+          }
+          : {
+            ...prior,
+            trainingComment: '',
+            trainingDiscrepancy: '',
+            discrepancyDecision: null,
+          };
+        this.show({ feedbackDrafts: drafts });
+      }
       if (packet.kind === 'peer-reply' && 'reply' in receipt && 'direction' in receipt) {
         // ACK display-only until typed received history refresh; do not grant another reply from receipt.
         this.rememberReviews([receipt], ++this.serial, 'receipt');
@@ -1099,7 +1203,9 @@ export class PostgameCoordinator {
       if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
       // After upsert ACK: typed GET reestablishes rights/version; GET failure is retryable READ, not write success.
       if (noteWrite && packet.kind === 'note-upsert') void this.loadNote(packet.gameId, packet.contextId);
-      if (packet.kind === 'peer-create') void this.loadReviews('sent');
+      if (packet.kind === 'peer-create' || packet.kind === 'organization-create' || packet.kind === 'training-create') {
+        void this.loadReviews('sent');
+      }
       if (packet.kind === 'peer-reply' || packet.kind === 'peer-report') void this.loadReviews('received');
     } catch(error) {
       if(!valid()) return;
@@ -1107,8 +1213,14 @@ export class PostgameCoordinator {
       const noteConflict = definite && packet.kind.startsWith('note-') && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
       const peerConflict = definite && (packet.kind === 'peer-reply' || packet.kind === 'peer-report')
         && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
+      const roleDiscrepancy = definite && (packet.kind === 'organization-create' || packet.kind === 'training-create')
+        && error instanceof PostgameError
+        && (error.code === 'FEEDBACK_DISCREPANCY_REQUIRED' || error.code === 'FEEDBACK_DISCREPANCY_UNEXPECTED');
       const noteUnknown = !definite && (packet.kind === 'note-upsert' || packet.kind === 'note-delete');
-      const peerUnknown = !definite && (packet.kind === 'peer-create' || packet.kind === 'peer-reply' || packet.kind === 'peer-report');
+      const peerUnknown = !definite && (
+        packet.kind === 'peer-create' || packet.kind === 'organization-create' || packet.kind === 'training-create'
+        || packet.kind === 'peer-reply' || packet.kind === 'peer-report'
+      );
       if (peerConflict && packet.kind === 'peer-report') {
         // Preserve detail draft; reset consent after revision change.
         const drafts = { ...this.snapshot.feedbackDrafts };
@@ -1121,6 +1233,21 @@ export class PostgameCoordinator {
         void this.loadReviews('received');
         void this.loadResults(packet.gameId);
       }
+      if (roleDiscrepancy && error instanceof PostgameError
+        && (error.code === 'FEEDBACK_DISCREPANCY_REQUIRED' || error.code === 'FEEDBACK_DISCREPANCY_UNEXPECTED')) {
+        // Bind to packet kind + context captured at owned-packet send — never transplant late current results.
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        const kind = packet.kind === 'organization-create' ? 'organization' : 'training';
+        const decisionContext = roleDiscrepancyContext
+          ?? roleDiscrepancyContextFromResults(this.snapshot.games[packet.gameId]?.data);
+        drafts[packet.gameId] = {
+          ...prior,
+          discrepancyDecision: roleDiscrepancyDecisionFromError(kind, error.code, decisionContext),
+        };
+        this.show({ feedbackDrafts: drafts });
+        void this.loadResults(packet.gameId);
+      }
       const notice = definite
         ? (noteConflict
           ? 'Версия заметки изменилась. Обновите заметку и сохраните снова.'
@@ -1128,7 +1255,9 @@ export class PostgameCoordinator {
             ? (packet.kind === 'peer-report'
               ? 'Версия отзыва изменилась. Проверьте новую редакцию и снова подтвердите согласие.'
               : 'Версия ответа изменилась. Обновите отзыв и сохраните снова.')
-            : 'Изменение отклонено. Обновите данные и проверьте условия.')
+            : roleDiscrepancy
+              ? 'Проверьте пояснение расхождения и подтвердите отправку снова.'
+              : 'Изменение отклонено. Обновите данные и проверьте условия.')
         : (noteUnknown
           ? (packet.kind === 'note-delete'
             ? 'Пока не удалось подтвердить удаление. Проверьте исходное действие.'
@@ -1137,7 +1266,15 @@ export class PostgameCoordinator {
             ? 'Результат отправки пока неизвестен. Проверьте исходное действие.'
             : unknownNotice);
       // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
-      this.show({command:definite ? null : {packet,status:'unknown'},notice});
+      // Preserve original owned-packet discrepancy fingerprint across UNKNOWN for reconcile.
+      this.show({
+        command: definite ? null : {
+          packet,
+          status: 'unknown',
+          ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+        },
+        notice,
+      });
     } finally { if(this.inFlight === packet) this.inFlight=null; }
   }
 }

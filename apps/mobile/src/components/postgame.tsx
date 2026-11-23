@@ -3,7 +3,7 @@ import type { ComponentRef, PropsWithChildren, RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Platform, Pressable, Text, View, TextInput, Switch } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
-import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, resolvingAckAssertion } from '../postgame.ts';
+import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, reviewKindModeLabel, resolvingAckAssertion } from '../postgame.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
@@ -129,6 +129,21 @@ export function CommandReview({gameId}: {gameId?:string}) {
               || 'Выбранный участник'}</Label><Label>Удалить заметку</Label><Label>После удаления создать заметку об этом участнике в этой игре заново не получится</Label></>}
             {selected.kind === 'peer-create' && <><Label>{data?.feedback?.capabilities.peerSubjects.find(p => p.contextId === selected.body.subjectContextId)?.displayName
               || 'Выбранный участник'}</Label><Label>Отзыв увидите только вы и адресат</Label><Label>{peerRatingLabel(selected.body.peerRating)}</Label>{selected.body.comment && <Label>{selected.body.comment}</Label>}<Label>Отправляя отзыв, вы подтверждаете, что играли вместе</Label></>}
+            {selected.kind === 'organization-create' && <><Label>{reviewKindModeLabel('organization')}</Label>
+              <Label>{data?.feedback?.capabilities.organizationRecipientDisplay
+                ? `Адресат · ${data.feedback.capabilities.organizationRecipientDisplay}`
+                : 'Адресат · организатор этой встречи'}</Label>
+              {selected.body.organizationScore !== undefined
+                ? <Label>Оценка организации: {selected.body.organizationScore} из 5</Label>
+                : <Label>Без оценки</Label>}
+              {selected.body.comment ? <Label>{selected.body.comment}</Label> : null}
+              {selected.body.discrepancyExplanation ? <Label>{selected.body.discrepancyExplanation}</Label> : null}
+              <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label></>}
+            {selected.kind === 'training-create' && <><Label>{reviewKindModeLabel('training')}</Label>
+              <Label>Адресат · тренер этой встречи</Label>
+              <Label>{selected.body.comment}</Label>
+              {selected.body.discrepancyExplanation ? <Label>{selected.body.discrepancyExplanation}</Label> : null}
+              <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label></>}
             {selected.kind === 'peer-reply' && <><Label>Ответ на отзыв</Label><Label>{selected.body.text}</Label></>}
             {selected.kind === 'peer-report' && <><Label>Пожаловаться на отзыв · версия {selected.body.expectedVersion}</Label><Label>Без публикации и без блокировки игрока</Label>{selected.body.detail && <Label>{selected.body.detail}</Label>}</>}
           </>}

@@ -162,7 +162,7 @@ function parseReply(v: unknown): PrivateReviewReply {
   };
 }
 
-/** Parse any private review kind; UI renders peer only. */
+/** Parse any private review kind (peer / organization / training). */
 export function parsePrivateReview(v: unknown): PrivateReview {
   const r = object(v);
   const rights = object(r.allowedActions);
@@ -262,9 +262,241 @@ export function peerReviewsForGame(items: readonly PrivateReview[], gameId: stri
   return peerReviewsOnly(items).filter(r => r.gameId === gameId);
 }
 
+/** All private kinds (peer / organization / training) for own history lanes. */
+export function privateReviewsOnly(items: readonly PrivateReview[]): PrivateReview[] {
+  return items.filter(r => r.kind === 'peer' || r.kind === 'organization' || r.kind === 'training');
+}
+
+export function privateReviewsForGame(items: readonly PrivateReview[], gameId: string): PrivateReview[] {
+  return privateReviewsOnly(items).filter(r => r.gameId === gameId);
+}
+
+export function reviewKindModeLabel(kind: ReviewKind): string {
+  switch (kind) {
+    case 'peer': return 'Игроку';
+    case 'organization': return 'Организатору лично';
+    case 'training': return 'Тренировка';
+  }
+}
+
+/**
+ * Distinct secondary card line only — never repeat the kind tab label.
+ * Org without score and training rely on reviewKindModeLabel alone.
+ */
+export function privateReviewHeadline(review: PrivateReview): string | null {
+  if (review.kind === 'peer') return peerRatingLabel(review.peerRating);
+  if (review.kind === 'organization') {
+    return review.organizationScore != null
+      ? `Оценка организации: ${review.organizationScore} из 5`
+      : null;
+  }
+  return null;
+}
+
+/** Russian field copy for FEEDBACK_DISCREPANCY_REQUIRED — also gates recover-on-wire. */
+export const DISCREPANCY_REQUIRED_MESSAGE = 'Поясните расхождение с отметкой или итогом игры';
+/** Russian field copy for FEEDBACK_DISCREPANCY_UNEXPECTED. */
+export const DISCREPANCY_UNEXPECTED_MESSAGE = 'Пояснение для этой встречи не требуется';
+/** Honest hint when client knows explanation will not be sent. */
+export const DISCREPANCY_OMIT_HINT = 'Пояснение сейчас не требуется и не будет отправлено';
+
+export type RoleDiscrepancyResults = {
+  outcome: { value: 'unknown' | 'held' | 'not_held' };
+  attendance?: {
+    installed: boolean;
+    myAttendance: { value: string; dispute: { status: string } | null } | null;
+  } | null;
+};
+
+/** Attendance/outcome fingerprint — server decision must not survive unrelated context. */
+export type RoleDiscrepancyContext = {
+  outcome: 'unknown' | 'held' | 'not_held';
+  attendance: 'present' | 'absent' | 'unknown' | 'null' | 'missing';
+  disputeOpen: boolean;
+};
+
+/** Server FEEDBACK_DISCREPANCY_* bound to the kind+context that produced it — not a translated-message key. */
+export type RoleDiscrepancyDecision = {
+  kind: 'organization' | 'training';
+  fieldError: typeof DISCREPANCY_REQUIRED_MESSAGE | typeof DISCREPANCY_UNEXPECTED_MESSAGE;
+  context: RoleDiscrepancyContext;
+};
+
+export function roleDiscrepancyContextFromResults(
+  results: RoleDiscrepancyResults | undefined,
+): RoleDiscrepancyContext {
+  if (!results) return { outcome: 'unknown', attendance: 'missing', disputeOpen: false };
+  const my = results.attendance?.installed ? results.attendance.myAttendance : undefined;
+  let attendance: RoleDiscrepancyContext['attendance'] = 'missing';
+  let disputeOpen = false;
+  if (results.attendance?.installed) {
+    if (my === null) attendance = 'null';
+    else if (my) {
+      attendance = my.value === 'present' || my.value === 'absent' || my.value === 'unknown'
+        ? my.value
+        : 'unknown';
+      disputeOpen = my.dispute?.status === 'open';
+    }
+  }
+  return { outcome: results.outcome.value, attendance, disputeOpen };
+}
+
+export function roleDiscrepancyContextsEqual(
+  a: RoleDiscrepancyContext,
+  b: RoleDiscrepancyContext,
+): boolean {
+  return a.outcome === b.outcome && a.attendance === b.attendance && a.disputeOpen === b.disputeOpen;
+}
+
+export function roleDiscrepancyDecisionFromError(
+  kind: 'organization' | 'training',
+  code: 'FEEDBACK_DISCREPANCY_REQUIRED' | 'FEEDBACK_DISCREPANCY_UNEXPECTED',
+  resultsOrContext: RoleDiscrepancyResults | RoleDiscrepancyContext | undefined,
+): RoleDiscrepancyDecision {
+  // Accept a pre-captured owned-packet fingerprint, or derive from results.
+  const context = resultsOrContext != null && typeof resultsOrContext.outcome === 'string'
+    ? resultsOrContext
+    : roleDiscrepancyContextFromResults(resultsOrContext);
+  return {
+    kind,
+    fieldError: code === 'FEEDBACK_DISCREPANCY_REQUIRED'
+      ? DISCREPANCY_REQUIRED_MESSAGE
+      : DISCREPANCY_UNEXPECTED_MESSAGE,
+    context,
+  };
+}
+
+/** Decision applies only to matching kind + current attendance/outcome context. */
+export function roleDiscrepancyActiveDecision(
+  decision: RoleDiscrepancyDecision | null | undefined,
+  kind: 'organization' | 'training',
+  results: RoleDiscrepancyResults | undefined,
+): RoleDiscrepancyDecision | null {
+  if (!decision || decision.kind !== kind) return null;
+  if (!roleDiscrepancyContextsEqual(decision.context, roleDiscrepancyContextFromResults(results))) {
+    return null;
+  }
+  return decision;
+}
+
+export function boundRoleDiscrepancyFieldError(
+  decision: RoleDiscrepancyDecision | null | undefined,
+  kind: 'organization' | 'training',
+  results: RoleDiscrepancyResults | undefined,
+): string | null {
+  return roleDiscrepancyActiveDecision(decision, kind, results)?.fieldError ?? null;
+}
+
+/**
+ * Omit discrepancy from the wire only when own attendance is known present (no open dispute).
+ * Null myAttendance is AMBIGUOUS (manager projection gap) — never proof of not_participant_manager;
+ * do not drop text. Outcome not_held always allows the field. Missing results → optional.
+ */
+export function shouldOmitRoleDiscrepancy(results: RoleDiscrepancyResults | undefined): boolean {
+  if (!results) return false;
+  if (results.outcome.value === 'not_held') return false;
+  const my = results.attendance?.installed ? results.attendance.myAttendance : undefined;
+  // Ambiguous null projection: server may still require explanation — keep text.
+  if (results.attendance?.installed && my === null) return false;
+  if (my && my.value === 'present' && my.dispute?.status !== 'open') return true;
+  return false;
+}
+
+export type RoleDiscrepancyPresentation = {
+  /** Show the discrepancy input (or a disabled stand-in with hint). */
+  visible: boolean;
+  /** Accept typed input; false when explanation is known-unnecessary. */
+  editable: boolean;
+  /** Strip discrepancyExplanation from the POST body. */
+  omitFromWire: boolean;
+  /** Clear Russian hint when the field must not look silently editable. */
+  hint: string | null;
+};
+
+/**
+ * UI + wire for role discrepancy: server REQUIRED recovers even if prior omit inference differs;
+ * known-unnecessary (present) hides editable input and omits on wire while draft stays in store.
+ * Callers pass already kind+context-bound fieldError (see boundRoleDiscrepancyFieldError).
+ */
+export function roleDiscrepancyPresentation(
+  results: RoleDiscrepancyResults | undefined,
+  fieldError: string | null | undefined,
+): RoleDiscrepancyPresentation {
+  if (fieldError === DISCREPANCY_REQUIRED_MESSAGE) {
+    return { visible: true, editable: true, omitFromWire: false, hint: null };
+  }
+  if (shouldOmitRoleDiscrepancy(results) || fieldError === DISCREPANCY_UNEXPECTED_MESSAGE) {
+    return {
+      visible: true,
+      editable: false,
+      omitFromWire: true,
+      hint: DISCREPANCY_OMIT_HINT,
+    };
+  }
+  return { visible: true, editable: true, omitFromWire: false, hint: null };
+}
+
+/**
+ * After explicit server FEEDBACK_DISCREPANCY_REQUIRED, empty normalized current-role
+ * discrepancy blocks create CTA and handler. First ambiguous open (no REQUIRED) does not.
+ * Callers pass normalizeFormReason(...) for the currently rendered role field.
+ */
+export function roleDiscrepancyRequiredBlocksCreate(
+  fieldError: string | null | undefined,
+  normalizedDiscrepancy: string,
+): boolean {
+  return fieldError === DISCREPANCY_REQUIRED_MESSAGE && !normalizedDiscrepancy;
+}
+
+export type FeedbackUiMode = 'peer' | 'organization' | 'training' | 'received' | 'sent';
+
+/**
+ * Display mode from visible tabs — never auto-write draft.mode.
+ * Hidden-tab draft.mode (e.g. lost canCreateTraining) falls back to an available surface.
+ */
+export function resolveFeedbackDisplayMode(
+  draftMode: FeedbackUiMode | undefined,
+  tabs: { peer: boolean; organization: boolean; training: boolean },
+): FeedbackUiMode {
+  const allowed = (mode: FeedbackUiMode): boolean => {
+    if (mode === 'peer') return tabs.peer;
+    if (mode === 'organization') return tabs.organization;
+    if (mode === 'training') return tabs.training;
+    return true;
+  };
+  if (draftMode !== undefined && allowed(draftMode)) return draftMode;
+  if (tabs.peer) return 'peer';
+  if (tabs.organization) return 'organization';
+  if (tabs.training) return 'training';
+  return 'received';
+}
+
+/**
+ * Same patch DiscrepancyField applies — explicit rendered kind, never inferred draft.mode.
+ * Peer comment/tags are untouched. REQUIRED recover stays while editing in the SAME bound context.
+ * Pass the active (kind+context-matched) decision; unbound/stale/cross-kind clears the store slot.
+ */
+export function feedbackDiscrepancyDraftPatch(
+  kind: 'organization' | 'training',
+  text: string,
+  activeDecision?: RoleDiscrepancyDecision | null,
+): (
+  | { organizationDiscrepancy: string; discrepancyDecision: RoleDiscrepancyDecision | null }
+  | { trainingDiscrepancy: string; discrepancyDecision: RoleDiscrepancyDecision | null }
+) {
+  const discrepancyDecision = activeDecision
+    && activeDecision.kind === kind
+    && activeDecision.fieldError === DISCREPANCY_REQUIRED_MESSAGE
+    ? activeDecision
+    : null;
+  return kind === 'organization'
+    ? { organizationDiscrepancy: text, discrepancyDecision }
+    : { trainingDiscrepancy: text, discrepancyDecision };
+}
+
 /**
  * Feedback section: installed=false shows honest disable; create rights, peer reason,
- * or own history lane (incl. when results denied) show the surface.
+ * org/training caps, or own history lane (incl. when results denied) show the surface.
  */
 export function feedbackSectionVisible(
   gameId: string,
@@ -272,6 +504,9 @@ export function feedbackSectionVisible(
     installed: boolean;
     capabilities: {
       canCreatePeer?: boolean;
+      canCreateOrganization?: boolean;
+      canCreateTraining?: boolean;
+      organizationRecipientDisplay?: string | null;
       peerCreateReason?: PeerCreateReason | null;
       peerSubjects?: { contextId: string; displayName: string }[];
     };
@@ -284,13 +519,15 @@ export function feedbackSectionVisible(
   if (feedback?.installed === false) return true;
   const caps = feedback?.capabilities;
   if (caps?.canCreatePeer) return true;
+  if (caps?.canCreateOrganization || caps?.organizationRecipientDisplay) return true;
+  if (caps?.canCreateTraining) return true;
   if ((caps?.peerSubjects?.length ?? 0) > 0) return true;
   if (caps?.peerCreateReason) return true;
   for (const lane of [histories.received, histories.sent]) {
     if (!lane) continue;
     if (lane.status === 'loading' || lane.status === 'error' || lane.status === 'idle') return true;
     if (lane.status === 'ready') {
-      if (peerReviewsForGame(lane.data?.items ?? [], gameId).length > 0) return true;
+      if (privateReviewsForGame(lane.data?.items ?? [], gameId).length > 0) return true;
       // Honest empty history is still a visible lane when results denied / create unavailable.
       if (lane.data) return true;
     }
@@ -379,7 +616,7 @@ export function resolvePeerDraftSubject(
   return { selected: undefined, needsReselect: false };
 }
 
-/** Empty copy for same-game peer history; cursor means the page is not definitive. */
+/** Empty copy for same-game private history; cursor means the page is not definitive. */
 export function peerHistoryEmptyText(
   direction: 'received' | 'sent',
   nextCursor: string | null | undefined,
@@ -388,4 +625,9 @@ export function peerHistoryEmptyText(
   return direction === 'received'
     ? 'Пока нет полученных отзывов по этой игре.'
     : 'Пока нет отправленных отзывов по этой игре.';
+}
+
+export function organizationScoreValue(v: unknown): number {
+  const n = num(v, 1);
+  return n >= 1 && n <= 5 ? n : invalid();
 }
