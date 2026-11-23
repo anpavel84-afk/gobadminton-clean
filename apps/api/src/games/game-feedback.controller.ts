@@ -108,7 +108,7 @@ export class GameFeedbackController {
     @Param("gameId") gameId: string,
     @Param("contextId") contextId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.feedback.putNote(
       actor.userId,
       actor.sessionId,
@@ -129,7 +129,7 @@ export class GameFeedbackController {
     @Param("gameId") gameId: string,
     @Param("contextId") contextId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.feedback.deleteNote(
       actor.userId,
       actor.sessionId,
@@ -149,7 +149,7 @@ export class GameFeedbackController {
     @Param("gameId") gameId: string,
     @Param("contextId") contextId: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.feedback.getOwnNote(actor.userId, gameId, contextId);
   }
 }

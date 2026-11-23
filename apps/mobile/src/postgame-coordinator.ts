@@ -2,8 +2,8 @@ import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import type { GameInvitation } from './messages.ts';
 import { MessagesError } from './messages.ts';
-import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention } from './postgame.ts';
-import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage } from './postgame.ts';
+import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention, noteText } from './postgame.ts';
+import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage, PersonalNote } from './postgame.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -18,6 +18,15 @@ export type DisputeDraft = {
   helpExplanation?: string;
   withdrawReason?: string;
 };
+/** Actor-bound private note form drafts — wiped on logout / different actor. */
+export type NoteDraft = {
+  selectedContextId?: string;
+  createText?: string;
+  editText?: string;
+  /** Explicit create-form mutation (incl. deliberate empty); distinct from pristine empty prefill. */
+  createDirty?: boolean;
+};
+export type OwnNoteRef = { gameId: string; contextId: string };
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
@@ -27,10 +36,15 @@ function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
   return {...row,attendance:{...row.attendance,acknowledgedVersion:ack.version},
     notice:row.notice?.attendanceVersion === ack.version && !row.notice.acknowledgedAt ? null : row.notice};
 }
+function noteKey(gameId: string, contextId: string) { return `${gameId}:${contextId}`; }
 type Snapshot = {
   actor: Actor | null; filter: Filter; own: Source<OwnResults>; reminders: Source<Reminders>; invitations: Source<InvitationPage>;
   games: Record<string,Source<Results>>; disputes: Record<string,Source<AttendanceDispute>>; histories: Record<string,Source<AttendanceHistoryPage>>;
-  selection: DisputeSelection | null; drafts: Record<string,DisputeDraft>;
+  /** Direct own-note GET projections — independent of denied results/roster. */
+  notes: Record<string,Source<PersonalNote>>;
+  /** Exact actor-bound owned contexts remembered this session (no cold discovery). */
+  knownNoteRefs: Record<string,OwnNoteRef>;
+  selection: DisputeSelection | null; drafts: Record<string,DisputeDraft>; noteDrafts: Record<string,NoteDraft>;
   review: Intent | null; command: Command | null; notice: string | null;
 };
 type Port = {
@@ -41,11 +55,14 @@ type Port = {
   /** Closed dispute detail/history ports; absent neighbors keep prior PG-1 surfaces compiling. */
   dispute?: (actor: Actor, disputeId: string) => Promise<AttendanceDispute>;
   history?: (actor: Actor, gameId: string, contextId: string, limit?: number) => Promise<AttendanceHistoryPage>;
+  /** Direct own personal note GET — exists independently of results access. */
+  note?: (actor: Actor, gameId: string, contextId: string) => Promise<PersonalNote>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
 const empty = (actor: Actor | null): Snapshot => ({
   actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, invitations: {status:'idle'},
-  games: {}, disputes: {}, histories: {}, selection: null, drafts: {}, review:null, command:null, notice:null,
+  games: {}, disputes: {}, histories: {}, notes: {}, knownNoteRefs: {}, selection: null, drafts: {}, noteDrafts: {},
+  review:null, command:null, notice:null,
 });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
 function draftKey(gameId: string, contextId: string, disputeId?: string | null) {
@@ -64,6 +81,8 @@ function freezeIntent(intent: Intent): Intent {
     case 'respond': copy={...intent,body:{...intent.body,...(intent.body.correction ? {correction:{...intent.body.correction}} : {})}}; break;
     case 'help': copy={...intent,body:{...intent.body}}; break;
     case 'later': copy={...intent,body:{...intent.body}}; break;
+    case 'note-upsert': copy={...intent,body:{...intent.body}}; break;
+    case 'note-delete': copy={...intent,body:{...intent.body}}; break;
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
   if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
@@ -87,12 +106,21 @@ export class PostgameCoordinator {
   private invitationsFollowup = false;
   /** Generation that owns busy/followup; stale finally must not clear a newer actor/read. */
   private invitationsBusyGen = 0;
+  /** Confirmed delete / definitive known-note 404 watermarks — block late GET/results resurrection. */
+  private noteTombs = new Map<string, number>();
+  /** Last applied read generation per note key — fences late results vs newer direct GET. */
+  private noteAppliedGen = new Map<string, number>();
+  /** Monotonic version floor per note key — survives loading/error so transient Source cannot forget newer. */
+  private noteVersionFloor = new Map<string, number>();
+  /** After confirmed upsert: only typed direct GET may reestablish ready rights (not historical myNotes). */
+  private noteAwaitingTyped = new Set<string>();
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
     // Keep the caller's port object identity so tests can replace lanes in place.
     if (!port.dispute) port.dispute = async () => { throw new PostgameError('private', 404); };
     if (!port.history) port.history = async () => ({ items: [] });
+    if (!port.note) port.note = async () => { throw new PostgameError('private', 404); };
     this.port = port as Required<Port>;
     this.random = random;
   }
@@ -107,20 +135,24 @@ export class PostgameCoordinator {
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
+    this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear();
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
+    // Known own-note refs restore for in-session recovery only — never auto-write / cold discovery.
     if (saved) this.show({
       filter:saved.filter,
       command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,
       notice:saved.command ? unknownNotice : null,
       review:saved.review,
       drafts:saved.drafts,
+      noteDrafts:saved.noteDrafts,
+      knownNoteRefs:saved.knownNoteRefs,
       selection:saved.selection,
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -145,6 +177,89 @@ export class PostgameCoordinator {
       }
     }
     if (changed) this.show({drafts});
+  }
+  /**
+   * Prefill/refresh only pristine selection — createDirty tracks explicit mutations
+   * (incl. deliberate empty) independently of createText truthiness. Used for every
+   * accepted current projection (direct GET and results.myNotes), never discarded/stale.
+   */
+  private refreshPristineSelectedPrefill(gameId: string, contextId: string, text: string, noteDrafts: Record<string, NoteDraft>) {
+    const createDraft = noteDrafts[gameId];
+    if (createDraft?.selectedContextId === contextId && !createDraft.createDirty) {
+      return { ...noteDrafts, [gameId]: { ...createDraft, createText: text } };
+    }
+    return noteDrafts;
+  }
+  /** Monotonic note projection: never regress version; same-version rights may refresh under newer gens; tombs block resurrection. */
+  private rememberOwnedNotes(notes: PersonalNote[], gen: number, fromDirect = false) {
+    const known = {...this.snapshot.knownNoteRefs};
+    const sources = {...this.snapshot.notes};
+    let noteDrafts = this.snapshot.noteDrafts;
+    let changed = false;
+    let draftsChanged = false;
+    for (const note of notes) {
+      const key = noteKey(note.gameId, note.contextId);
+      if (this.noteTombs.has(key)) continue;
+      // Post-upsert: results/myNotes must not regrant ready rights before typed GET.
+      if (!fromDirect && this.noteAwaitingTyped.has(key)) continue;
+      const floor = this.noteVersionFloor.get(key) ?? 0;
+      const applied = this.noteAppliedGen.get(key) ?? 0;
+      // Floor survives loading/error — do not rely on ready Source.data alone.
+      if (note.version < floor) continue;
+      if (note.version === floor && gen < applied) continue;
+      this.noteVersionFloor.set(key, note.version);
+      this.noteAppliedGen.set(key, gen);
+      if (fromDirect) this.noteAwaitingTyped.delete(key);
+      known[key] = { gameId: note.gameId, contextId: note.contextId };
+      sources[key] = { status: 'ready', data: note };
+      changed = true;
+      // After version/gen/tomb/current authority — results and direct GET share this path.
+      const nextDrafts = this.refreshPristineSelectedPrefill(note.gameId, note.contextId, note.text, noteDrafts);
+      if (nextDrafts !== noteDrafts) { noteDrafts = nextDrafts; draftsChanged = true; }
+    }
+    if (changed) this.show({ knownNoteRefs: known, notes: sources, ...(draftsChanged ? { noteDrafts } : {}) });
+  }
+  /** Clear scoped create/edit drafts for a confirmed-absent owned context; unrelated selections stay. */
+  private clearAbsentContextDrafts(gameId: string, contextId: string) {
+    const key = noteKey(gameId, contextId);
+    const noteDrafts = {...this.snapshot.noteDrafts}; delete noteDrafts[key];
+    const createDraft = noteDrafts[gameId];
+    if (createDraft?.selectedContextId === contextId) {
+      // Confirmed absence of the selected context must clear its create-form text (prefill from loadNote),
+      // not retain private content in the reachable NotesSection TextInput. Unrelated contexts stay intact.
+      noteDrafts[gameId] = { selectedContextId: undefined, createText: '', editText: createDraft.editText };
+    }
+    return noteDrafts;
+  }
+  private tombstoneOwnedNote(gameId: string, contextId: string, version: number) {
+    const key = noteKey(gameId, contextId);
+    const prior = this.noteTombs.get(key) ?? 0;
+    this.noteTombs.set(key, Math.max(prior, version));
+    // Invalidate in-flight direct GETs so late replies cannot reinstall private text.
+    this.reads.set(`note:${key}`, ++this.serial);
+    this.noteAppliedGen.delete(key);
+    this.noteVersionFloor.delete(key);
+    this.noteAwaitingTyped.delete(key);
+    const known = {...this.snapshot.knownNoteRefs}; delete known[key];
+    // Keep definitive unavailable so stale feedback.myNotes cannot render/resurrect the row.
+    const notes = {...this.snapshot.notes, [key]: { status: 'unavailable' as const }};
+    this.show({ knownNoteRefs: known, notes, noteDrafts: this.clearAbsentContextDrafts(gameId, contextId) });
+  }
+  private shadowKnownNoteAbsence(gameId: string, contextId: string) {
+    const key = noteKey(gameId, contextId);
+    const priorVersion = Math.max(
+      this.noteVersionFloor.get(key) ?? 0,
+      this.snapshot.notes[key]?.data?.version ?? 0,
+      this.noteTombs.get(key) ?? 0,
+    );
+    this.noteTombs.set(key, Math.max(this.noteTombs.get(key) ?? 0, priorVersion));
+    this.noteAppliedGen.delete(key);
+    this.noteVersionFloor.delete(key);
+    this.noteAwaitingTyped.delete(key);
+    const known = {...this.snapshot.knownNoteRefs}; delete known[key];
+    // Same selected-context draft privacy cleanup as DELETE ACK — current known GET404 must not leave
+    // private prefill in NotesSection TextInput; unrelated selected context B drafts stay intact.
+    this.show({ knownNoteRefs: known, noteDrafts: this.clearAbsentContextDrafts(gameId, contextId) });
   }
   loadOwn = async (more = false) => {
     if (this.snapshot.own.status === 'loading') return;
@@ -232,6 +347,7 @@ export class PostgameCoordinator {
     if (append === 'roster' && (!old.data?.attendance?.rosterNextCursor || query.rosterCursor !== old.data.attendance.rosterNextCursor) ||
         append === 'revisions' && (!old.data?.revisionsNextCursor || query.revisionsCursor !== old.data.revisionsNextCursor)) return;
     const {actor,valid}=this.start(`game:${gameId}`); if (!actor) return;
+    const resultsGen = this.reads.get(`game:${gameId}`) ?? 0;
     const selection=this.snapshot.selection?.gameId === gameId ? this.snapshot.selection : this.snapshot.selection;
     const put=(source: Source<Results>)=>this.show({games:{...this.snapshot.games,[gameId]:source}});
     put({...old,status:'loading'});
@@ -267,12 +383,102 @@ export class PostgameCoordinator {
       // A GET never acknowledges or settles a pending command. Roster pagination keeps selection.
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
+      if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
       if (selection?.gameId === gameId) {
         const rows=[...(data.attendance?.roster ?? []),...(data.attendance?.myAttendance ? [data.attendance.myAttendance] : [])];
         const still=rows.some(r=>r.contextId === selection.contextId && r.dispute?.id === selection.disputeId);
         if (!still && !this.snapshot.disputes[selection.disputeId]?.data) this.show({selection:null});
       }
-    } catch(error) { if(valid()) put(this.failure(error,old)); }
+    } catch(error) {
+      // Denied results must not wipe actor-bound known own-note refs or direct note sources.
+      if(valid()) put(this.failure(error,old));
+    }
+  };
+  /** Direct own-note GET for a known/selected context — independent of results/roster denial. */
+  loadNote = async (gameId: string, contextId: string) => {
+    try { postgameId(gameId); postgameId(contextId); } catch { return; }
+    const key = noteKey(gameId, contextId);
+    const old = this.snapshot.notes[key] ?? { status: 'idle' };
+    const { actor, valid } = this.start(`note:${key}`); if (!actor) return;
+    const noteGen = this.reads.get(`note:${key}`) ?? 0;
+    const put = (source: Source<PersonalNote>) => this.show({ notes: { ...this.snapshot.notes, [key]: source } });
+    // Only confirmed delete / known-owned definitive 404 (noteTombs) fence through select/refresh.
+    // Fresh never-owned GET404 is provisional create authority — next direct GET must go loading
+    // (block create0) until the read confirms absence again, errors, or finds the note.
+    const tombFenced = this.noteTombs.has(key);
+    if (!tombFenced) put({ ...old, status: 'loading' });
+    try {
+      const data = await this.port.note(actor, gameId, contextId); if (!valid()) return;
+      if (data.gameId !== gameId || data.contextId !== contextId) throw new PostgameError('invalid');
+      if (this.noteTombs.has(key)) {
+        put({ status: 'unavailable' });
+        return;
+      }
+      // Monotonic apply first — never put ready before floor/gen comparison (reverse race).
+      // Pristine selected prefill runs inside rememberOwnedNotes for accepted current only.
+      this.rememberOwnedNotes([data], noteGen, true);
+      const cur = this.snapshot.notes[key];
+      if (cur?.status === 'ready' && this.noteAppliedGen.get(key) === noteGen) {
+        return;
+      }
+      // Stale/rejected reply: reinstate retained newer ready projection if still loading.
+      if (cur?.status === 'loading') {
+        const retained = cur.data ?? old.data;
+        if (retained) put({ status: 'ready', data: retained });
+      }
+    } catch (error) {
+      if (!valid()) return;
+      // Stale negative fence: newer results/direct already accepted after this GET started.
+      // Late older private404 must not tombstone that projection; late network must not downgrade ready rights.
+      const applied = this.noteAppliedGen.get(key) ?? 0;
+      if (noteGen < applied) return;
+      const denied = error instanceof PostgameError && error.kind === 'private';
+      const current = this.snapshot.notes[key] ?? old;
+      const known = !!this.snapshot.knownNoteRefs[key] || this.noteTombs.has(key) || !!current.data || !!old.data;
+      if (denied && known) {
+        // Definitive private 404 of a known/tombstoned own note: shadow stale myNotes; never turn into create.
+        this.shadowKnownNoteAbsence(gameId, contextId);
+        put({ status: 'unavailable' });
+        return;
+      }
+      // Tombstone display fence persists through read error — no stale myNotes resurrection.
+      if (this.noteTombs.has(key)) {
+        put({ status: 'unavailable' });
+        return;
+      }
+      // Transient errors keep retained text via current/prior data but do not grant write authority (see currentNote).
+      // Fresh never-owned private 404 → unavailable (create eligible); network → error (create blocked).
+      put(this.failure(error, current.data || old.data ? current : old));
+    }
+  };
+  setNoteDraft = (gameId: string, contextId: string | null, patch: NoteDraft) => {
+    if (!this.snapshot.actor) return;
+    try { postgameId(gameId); if (contextId) postgameId(contextId); } catch { return; }
+    // Create-form drafts key by gameId; per-note edit drafts by gameId:contextId.
+    const key = contextId ? noteKey(gameId, contextId) : gameId;
+    const prior = this.snapshot.noteDrafts[key] ?? {};
+    // Switching selected participant must not carry create text into another context.
+    // Bounded myNotes absence is not authority — always direct-GET the chosen context before create/edit.
+    if (patch.selectedContextId !== undefined && patch.selectedContextId !== prior.selectedContextId) {
+      const hasText = patch.createText !== undefined;
+      this.show({
+        noteDrafts: {
+          ...this.snapshot.noteDrafts,
+          [key]: {
+            selectedContextId: patch.selectedContextId,
+            createText: hasText ? patch.createText : '',
+            editText: prior.editText,
+            ...(hasText ? { createDirty: true } : {}),
+          },
+        },
+      });
+      if (patch.selectedContextId) void this.loadNote(gameId, patch.selectedContextId);
+      return;
+    }
+    const next: NoteDraft = { ...prior, ...patch };
+    // Explicit createText patch (including '') marks dirty; selection-only init stays pristine.
+    if (patch.createText !== undefined) next.createDirty = true;
+    this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [key]: next } });
   };
   loadDispute = async (disputeId: string) => {
     try { postgameId(disputeId); } catch { return; }
@@ -322,7 +528,53 @@ export class PostgameCoordinator {
     const prior=this.snapshot.drafts[key] ?? {};
     this.show({drafts:{...this.snapshot.drafts,[key]:{...prior,...patch}}});
   };
+  private currentNote(gameId: string, contextId: string): PersonalNote | null {
+    const key = noteKey(gameId, contextId);
+    if (this.noteTombs.has(key)) return null;
+    const direct = this.snapshot.notes[key];
+    // Definitive unavailable shadows stale feedback.myNotes — never resurrect create/edit from the list.
+    if (direct?.status === 'unavailable') return null;
+    // Only ready typed authority grants review/confirm — retained loading/error data is display-only.
+    if (direct?.status === 'ready' && direct.data && direct.data.gameId === gameId && direct.data.contextId === contextId) {
+      return direct.data;
+    }
+    // Transient loading/error: no write authority (blocks historical myNotes fallback after PUT+GET failure too).
+    if (direct?.status === 'loading' || direct?.status === 'error') {
+      return null;
+    }
+    const feedback = this.snapshot.games[gameId]?.data?.feedback;
+    return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
+  }
   private allowed(intent: Intent) {
+    if (intent.kind === 'note-upsert' || intent.kind === 'note-delete') {
+      if (intent.kind === 'note-upsert') {
+        try { noteText(intent.body.text); } catch { return false; }
+      }
+      const key = noteKey(intent.gameId, intent.contextId);
+      const note = this.currentNote(intent.gameId, intent.contextId);
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (intent.kind === 'note-delete') {
+        return !!note && note.version === intent.body.expectedVersion && note.allowedActions.canDelete
+          && (feedback ? feedback.installed && feedback.writesEnabled : true);
+      }
+      // First create: requires definitive selected direct GET absence — bounded list gap is not authority.
+      if (intent.body.expectedVersion === 0) {
+        if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreateNote) return false;
+        if (this.noteTombs.has(key) || this.snapshot.knownNoteRefs[key]) return false;
+        const selected = this.snapshot.notes[key];
+        if (selected?.status !== 'unavailable') return false;
+        if (note) return false;
+        const subjects = feedback.capabilities.peerSubjects;
+        const roster = results?.data?.attendance?.roster ?? [];
+        const allowedContext = subjects.some(s => s.contextId === intent.contextId)
+          || roster.some(r => r.contextId === intent.contextId);
+        return allowedContext;
+      }
+      // Edit: own note rights from authoritative current projection — independent of create form / roster after revoke.
+      return !!note && note.version === intent.body.expectedVersion && note.allowedActions.canEdit
+        && (feedback ? feedback.installed && feedback.writesEnabled : true);
+    }
     if(intent.kind === 'later') { const source=this.snapshot.reminders.data, item=source?.items.find(r=>r.id === intent.reminderId); return this.snapshot.reminders.status === 'ready' && !!source?.writesEnabled && !!item && item.gameId === intent.gameId && item.version === intent.body.expectedVersion && item.allowedActions.canLater; }
     if (intent.kind === 'withdraw' || intent.kind === 'respond' || intent.kind === 'help') {
       const detail=this.snapshot.disputes[intent.disputeId];
@@ -397,15 +649,54 @@ export class PostgameCoordinator {
       if ((packet.kind === 'dispute' || packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help') && 'id' in receipt && 'history' in receipt) {
         disputes[receipt.id]={status:'ready',data:receipt};
       }
+      if (packet.kind === 'note-upsert' && 'text' in receipt && 'allowedActions' in receipt) {
+        // Historical ACK settles the original packet only — do not repaint receipt as current or unlock writes.
+        const noteKeyId = noteKey(packet.gameId, packet.contextId);
+        this.reads.set(`note:${noteKeyId}`, ++this.serial);
+        // Per-context tombstone (e.g. owned GET404 after UNKNOWN PUT + external delete): settle without
+        // replacing unavailable with loading, restoring known refs/private text/version/rights, or create.
+        // Historical ACK is never current projection; follow-up loadNote stays tomb-fenced.
+        if (!this.noteTombs.has(noteKeyId)) {
+          this.noteAwaitingTyped.add(noteKeyId);
+          // Raise floor from receipt version so older myNotes cannot win before typed GET; receipt stays non-current.
+          if (typeof receipt.version === 'number') {
+            this.noteVersionFloor.set(noteKeyId, Math.max(this.noteVersionFloor.get(noteKeyId) ?? 0, receipt.version));
+          }
+          const known = { ...this.snapshot.knownNoteRefs, [noteKeyId]: { gameId: packet.gameId, contextId: packet.contextId } };
+          // Retain accepted newer projection as display-only under loading — do not drop data and fall
+          // back to stale bounded myNotes while follow-up GET is pending/error. Writes stay typed-ready only.
+          const priorNote = this.snapshot.notes[noteKeyId];
+          const notes = {
+            ...this.snapshot.notes,
+            [noteKeyId]: {
+              status: 'loading' as const,
+              ...(priorNote?.data ? { data: priorNote.data } : {}),
+            },
+          };
+          const createKey = packet.gameId;
+          const editKey = noteKeyId;
+          const noteDrafts = { ...this.snapshot.noteDrafts };
+          if (noteDrafts[createKey]?.selectedContextId === packet.contextId) {
+            noteDrafts[createKey] = { selectedContextId: '', createText: '' };
+          }
+          if (noteDrafts[editKey]) delete noteDrafts[editKey];
+          this.show({ knownNoteRefs: known, notes, noteDrafts });
+        }
+      }
+      if (packet.kind === 'note-delete' && 'deleted' in receipt && receipt.deleted) {
+        this.tombstoneOwnedNote(packet.gameId, packet.contextId, receipt.version);
+      }
       // Resolving ACK: verified resolvedDispute stays on the ACK receipt only.
       // Never fabricate dispute timestamps/rights or regress the projection from historical receipt fields.
       // Authoritative DTO comes from loadDispute below; follow-up GET failure stays a distinct retryable read error.
+      // Historical note ACK settles the original action only — refresh current projection before next op.
       this.show({own,disputes,command:null,notice:reconciling ? 'Исходное действие подтверждено. Обновляем текущие данные.' : 'Изменения сохранены.'});
       // Receipt replay is history; always read current rights/version separately.
       const gameId = packet.gameId;
       void this.loadResults(gameId); void this.loadReminders();
       const disputeWrite = packet.kind === 'dispute' || packet.kind === 'withdraw' || packet.kind === 'respond' || packet.kind === 'help';
       const resolvingAck = packet.kind === 'ack' && packet.body.resolvingDisputeId !== undefined;
+      const noteWrite = packet.kind === 'note-upsert' || packet.kind === 'note-delete';
       // Dispute lifecycle and resolving ACK refresh own hub; ordinary ACK keeps local notice settlement.
       if (disputeWrite || resolvingAck) void this.loadOwn();
       if (disputeWrite) {
@@ -414,10 +705,24 @@ export class PostgameCoordinator {
       }
       if (resolvingAck && packet.kind === 'ack') void this.loadDispute(packet.body.resolvingDisputeId!);
       if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
+      // After upsert ACK: typed GET reestablishes rights/version; GET failure is retryable READ, not write success.
+      if (noteWrite && packet.kind === 'note-upsert') void this.loadNote(packet.gameId, packet.contextId);
     } catch(error) {
       if(!valid()) return;
       const definite=!reconciling && error instanceof PostgameError && error.status < 500 && error.kind === 'business' && !['COMMAND_IN_PROGRESS','KEY_REUSED','IDEMPOTENCY_KEY_REUSED'].includes(error.code);
-      this.show({command:definite ? null : {packet,status:'unknown'},notice:definite ? 'Изменение отклонено. Обновите данные и проверьте условия.' : unknownNotice});
+      const noteConflict = definite && packet.kind.startsWith('note-') && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
+      const noteUnknown = !definite && (packet.kind === 'note-upsert' || packet.kind === 'note-delete');
+      const notice = definite
+        ? (noteConflict
+          ? 'Версия заметки изменилась. Обновите заметку и сохраните снова.'
+          : 'Изменение отклонено. Обновите данные и проверьте условия.')
+        : (noteUnknown
+          ? (packet.kind === 'note-delete'
+            ? 'Пока не удалось подтвердить удаление. Проверьте исходное действие.'
+            : 'Пока не удалось подтвердить сохранение. Проверьте исходное действие.')
+          : unknownNotice);
+      // Dirty note drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
+      this.show({command:definite ? null : {packet,status:'unknown'},notice});
     } finally { if(this.inFlight === packet) this.inFlight=null; }
   }
 }

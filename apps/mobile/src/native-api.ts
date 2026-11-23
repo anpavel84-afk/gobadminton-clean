@@ -4,7 +4,7 @@ import {
   COMMENT_PHOTO_MAX_BYTES, PHOTO_RIGHTS, isCommentPhotoMime, isPhotoReceipt,
 } from './venue-comment-photos.ts';
 import type { VenueCommentPhotoReceipt } from './venue-comment-photos.ts';
-import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, historyQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders, parseAttendanceDispute, parseAttendanceHistory } from './postgame.ts';
+import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, historyQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders, parseAttendanceDispute, parseAttendanceHistory, parsePersonalNote } from './postgame.ts';
 import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
@@ -322,6 +322,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     postgameReminders: async (access: string) => parseReminders(await postgameRequest('/me/postgame-reminders?limit=20',access)),
     postgameDispute: async (access: string, disputeId: string) => parseAttendanceDispute(await postgameRequest(`/attendance-disputes/${postgameId(disputeId)}`,access)),
     postgameHistory: async (access: string, gameId: string, contextId: string, limit?: number) => parseAttendanceHistory(await postgameRequest(`/games/${postgameId(gameId)}/attendance/${postgameId(contextId)}/history${historyQuery(limit)}`,access)),
+    postgameNote: async (access: string, gameId: string, contextId: string) => parsePersonalNote(await postgameRequest(`/games/${postgameId(gameId)}/notes/${postgameId(contextId)}`, access)),
     postgameMutation: (access: string, packet: PostgamePacket) => postgameRequest(postgameWire(packet).path,access,packet),
     playInterestStates: (access: string, ids: readonly string[]) => interestRequest(statesPath([...ids]), access),
     playInterestMutation: async (access: string, packet: PlayInterestPacket) => {
