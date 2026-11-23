@@ -4,8 +4,11 @@ import { createNativeApi } from '../src/native-api.ts';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseResults, parsePersonalNote, wire, validateReceipt, noteText,
-  notesSectionVisible, noteSubjectOptions, collectNotes,
+  notesSectionVisible, noteSubjectOptions, collectNotes, noteConflictRefreshVisible,
 } from '../src/postgame.ts';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Intent, Packet, PersonalNote, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import { game as publicGame } from './fixtures.ts';
@@ -1895,4 +1898,176 @@ test('pristine selection prefills; typed-then-cleared empty draft survives pendi
   assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
   assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'unrelated-dirty-B');
   assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+});
+
+test('results-driven pristine prefill: select v1 then Обновить итоги adopts v2; dirty X/empty survive; stale rejected', async () => {
+  const v1Text = 'mobile-v1-prefill';
+  const v2Text = 'web-edit-v2-results';
+  const s = setup({
+    note: { ...note, text: v1Text, version: 1 },
+    results: {
+      ...result,
+      feedback: { ...feedbackReady, myNotes: [{ ...note, text: v1Text, version: 1 }] },
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  // Select v1 → autoprefill via direct GET (no user typing).
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA });
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, v1Text);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, undefined);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 1);
+
+  // Web edit v2; user presses «Обновить итоги» — results.myNotes must refresh pristine form.
+  const v2Note = { ...note, text: v2Text, version: 2, allowedActions: { canEdit: true, canDelete: true } };
+  s.notes.set(`${game.id}:${contextA}`, v2Note);
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, myNotes: [structuredClone(v2Note)] },
+  });
+  await s.coordinator.loadResults(game.id);
+  const afterResults = s.coordinator.getSnapshot();
+  assert.equal(afterResults.notes[`${game.id}:${contextA}`]?.data?.version, 2);
+  assert.equal(afterResults.notes[`${game.id}:${contextA}`]?.data?.text, v2Text);
+  assert.equal(afterResults.noteDrafts[game.id]?.createText, v2Text,
+    'pristine createText must adopt results.myNotes v2 without typing');
+  assert.equal(afterResults.noteDrafts[game.id]?.createDirty, undefined);
+  // Proposed Save uses store selectors (selectedExisting.version + createText), not a source mirror.
+  const selectedExisting = afterResults.notes[`${game.id}:${contextA}`]?.data;
+  const createTrimmed = (afterResults.noteDrafts[game.id]?.createText ?? '').trim();
+  assert.equal(selectedExisting?.version, 2);
+  assert.equal(createTrimmed, v2Text);
+
+  // Dirty nonempty X survives newer results.
+  s.coordinator.setNoteDraft(game.id, null, { createText: 'dirty-typed-X' });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  const v3Note = { ...note, text: 'results-v3-should-not-win', version: 3, allowedActions: { canEdit: true, canDelete: true } };
+  s.notes.set(`${game.id}:${contextA}`, v3Note);
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, myNotes: [structuredClone(v3Note)] },
+  });
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'dirty-typed-X');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+
+  // Dirty empty survives newer results.
+  s.coordinator.setNoteDraft(game.id, null, { createText: '' });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  const v4Note = { ...note, text: 'results-v4-empty-keep', version: 4, allowedActions: { canEdit: true, canDelete: true } };
+  s.notes.set(`${game.id}:${contextA}`, v4Note);
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, myNotes: [structuredClone(v4Note)] },
+  });
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 4);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, '');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+
+  // Context switch clears dirty; reselect A prefills current v4 pristine.
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB });
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, undefined);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'results-v4-empty-keep');
+  // Stale older projection via results cannot regress floor or overwrite pristine current.
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: {
+      ...feedbackReady,
+      myNotes: [{ ...note, text: 'stale-v2-rejected', version: 2, allowedActions: { canEdit: true, canDelete: true } }],
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 4);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'results-v4-empty-keep');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'results-v4-empty-keep',
+    'older/rejected results projection must not overwrite pristine current');
+});
+
+test('DELETE 409 while not editing: per-note refresh visible outside editor; explicit recover then delete', async () => {
+  const s = setup();
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+
+  // Non-playing manager: results denied; own note remains via known direct GET.
+  s.port.results = async () => { throw new PostgameError('private', 403); };
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().games[game.id]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+  assert.ok(s.coordinator.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`]);
+
+  // Not editing (no editText) — DELETE VERSION_CONFLICT must still expose per-note refresh.
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[`${game.id}:${contextA}`]?.editText, undefined);
+  s.port.send = async (p) => {
+    s.sent.push(p);
+    throw new PostgameError('business', 409, 'VERSION_CONFLICT');
+  };
+  s.coordinator.review({
+    kind: 'note-delete', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 1 },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'original delete failed count 1 — no autosend/retry');
+  assert.equal(s.sent[0]!.kind, 'note-delete');
+  assert.equal(s.coordinator.getSnapshot().command, null);
+  assert.match(s.coordinator.getSnapshot().notice ?? '', /Обновите заметку/);
+  const key = `${game.id}:${contextA}`;
+  const direct = s.coordinator.getSnapshot().notes[key];
+  assert.equal(direct?.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[key]?.editText, undefined, 'still not editing');
+  // Actual helper used by NoteCard — visible outside editor with ready direct + conflict notice.
+  assert.equal(
+    noteConflictRefreshVisible(s.coordinator.getSnapshot().notice, direct?.status),
+    true,
+    'conflict refresh must be visible when editing=false and typed ready',
+  );
+  // Composition: helper drives the single refresh action outside the editing-only branch.
+  const notesUi = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../src/components/postgame-notes.tsx'),
+    'utf8',
+  );
+  const cardStart = notesUi.indexOf('function NoteCard');
+  const cardBody = notesUi.slice(cardStart, notesUi.indexOf('export function NotesSection'));
+  assert.match(cardBody, /noteConflictRefreshVisible\(s\.notice, direct\?\.status\)/);
+  const editingClose = cardBody.indexOf('</> : <Label>{note.text}</Label>}');
+  const showRefreshUse = cardBody.indexOf('{showRefresh ?');
+  assert.ok(editingClose >= 0 && showRefreshUse > editingClose,
+    'refresh action outside editing-only branch (available after DELETE 409 while reviewing)');
+  assert.equal((cardBody.match(/title="Обновить заметку"/g) ?? []).length, 1,
+    'one context refresh action — no duplicate editor/error buttons');
+
+  // Explicit user refresh recovers v2; no auto-retry of delete.
+  const v2 = { ...note, text: 'after-conflict-v2', version: 2, allowedActions: { canEdit: true, canDelete: true } };
+  s.notes.set(key, v2);
+  s.port.note = async () => structuredClone(v2);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.version, 2);
+  assert.equal(s.sent.length, 1, 'loadNote must not autosend delete');
+
+  // Fresh Delete only after explicit user action on recovered version.
+  s.port.send = async (p) => {
+    s.sent.push(p);
+    if (p.kind === 'note-delete') {
+      s.notes.delete(`${p.gameId}:${p.contextId}`);
+      return { gameId: p.gameId, contextId: p.contextId, version: p.body.expectedVersion + 1, deleted: true as const };
+    }
+    throw new PostgameError('invalid');
+  };
+  s.coordinator.review({
+    kind: 'note-delete', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 2 },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 2);
+  assert.equal(s.sent[1]!.kind, 'note-delete');
+  assert.equal((s.sent[1]!.body as { expectedVersion: number }).expectedVersion, 2);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable');
 });

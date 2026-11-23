@@ -178,11 +178,25 @@ export class PostgameCoordinator {
     }
     if (changed) this.show({drafts});
   }
+  /**
+   * Prefill/refresh only pristine selection — createDirty tracks explicit mutations
+   * (incl. deliberate empty) independently of createText truthiness. Used for every
+   * accepted current projection (direct GET and results.myNotes), never discarded/stale.
+   */
+  private refreshPristineSelectedPrefill(gameId: string, contextId: string, text: string, noteDrafts: Record<string, NoteDraft>) {
+    const createDraft = noteDrafts[gameId];
+    if (createDraft?.selectedContextId === contextId && !createDraft.createDirty) {
+      return { ...noteDrafts, [gameId]: { ...createDraft, createText: text } };
+    }
+    return noteDrafts;
+  }
   /** Monotonic note projection: never regress version; same-version rights may refresh under newer gens; tombs block resurrection. */
   private rememberOwnedNotes(notes: PersonalNote[], gen: number, fromDirect = false) {
     const known = {...this.snapshot.knownNoteRefs};
     const sources = {...this.snapshot.notes};
+    let noteDrafts = this.snapshot.noteDrafts;
     let changed = false;
+    let draftsChanged = false;
     for (const note of notes) {
       const key = noteKey(note.gameId, note.contextId);
       if (this.noteTombs.has(key)) continue;
@@ -199,8 +213,11 @@ export class PostgameCoordinator {
       known[key] = { gameId: note.gameId, contextId: note.contextId };
       sources[key] = { status: 'ready', data: note };
       changed = true;
+      // After version/gen/tomb/current authority — results and direct GET share this path.
+      const nextDrafts = this.refreshPristineSelectedPrefill(note.gameId, note.contextId, note.text, noteDrafts);
+      if (nextDrafts !== noteDrafts) { noteDrafts = nextDrafts; draftsChanged = true; }
     }
-    if (changed) this.show({ knownNoteRefs: known, notes: sources });
+    if (changed) this.show({ knownNoteRefs: known, notes: sources, ...(draftsChanged ? { noteDrafts } : {}) });
   }
   /** Clear scoped create/edit drafts for a confirmed-absent owned context; unrelated selections stay. */
   private clearAbsentContextDrafts(gameId: string, contextId: string) {
@@ -398,16 +415,10 @@ export class PostgameCoordinator {
         return;
       }
       // Monotonic apply first — never put ready before floor/gen comparison (reverse race).
+      // Pristine selected prefill runs inside rememberOwnedNotes for accepted current only.
       this.rememberOwnedNotes([data], noteGen, true);
       const cur = this.snapshot.notes[key];
       if (cur?.status === 'ready' && this.noteAppliedGen.get(key) === noteGen) {
-        // Prefill/refresh only pristine selection — createDirty tracks explicit mutations
-        // (incl. deliberate empty) independently of createText truthiness, so nonempty
-        // autoprefill may adopt a newer typed GET without sticking to stale server text.
-        const createDraft = this.snapshot.noteDrafts[gameId];
-        if (createDraft?.selectedContextId === contextId && !createDraft.createDirty) {
-          this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [gameId]: { ...createDraft, createText: data.text } } });
-        }
         return;
       }
       // Stale/rejected reply: reinstate retained newer ready projection if still loading.

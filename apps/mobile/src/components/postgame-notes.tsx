@@ -1,12 +1,12 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { Platform, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
-import { collectNotes, normalizeFormReason, noteSubjectOptions, notesSectionVisible } from '../postgame.ts';
+import { collectNotes, normalizeFormReason, noteConflictRefreshVisible, noteSubjectOptions, notesSectionVisible } from '../postgame.ts';
 import type { PersonalNote, Results } from '../postgame.ts';
 import { Choice, ReviewButton } from './postgame.tsx';
 import { Label, Loading, TextButton, styles } from './ui.tsx';
 
-export { collectNotes, notesSectionVisible, noteSubjectOptions };
+export { collectNotes, noteConflictRefreshVisible, notesSectionVisible, noteSubjectOptions };
 
 function useOwner() {
   const owner = useAuth().postgame;
@@ -29,8 +29,8 @@ function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote
   const editing = draft.editText !== undefined && note.allowedActions.canEdit && typedReady;
   const editText = draft.editText ?? note.text;
   const trimmed = normalizeFormReason(editText);
-  const needsRefresh = !!(s.notice && /Обновите заметку/i.test(s.notice));
-  const showRefresh = needsRefresh || direct?.status === 'error';
+  // Outside editing-only branch: DELETE 409 / error recovery while reviewing (typed ready).
+  const showRefresh = noteConflictRefreshVisible(s.notice, direct?.status);
   return <View style={styles.card} accessibilityLabel={`Заметка · ${note.subjectDisplay}`}>
     <Label style={{ fontWeight: '700' }}>{note.subjectDisplay}</Label>
     {editing ? <>
@@ -40,7 +40,6 @@ function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote
         value={editText} onChangeText={text => owner.setNoteDraft(gameId, note.contextId, { editText: text })}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 100, maxHeight: 180 }]} />
-      {showRefresh ? <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, note.contextId)} /> : null}
       <ReviewButton title={`Сохранить изменения · ${note.subjectDisplay}`} onPress={() => {
         if (!trimmed || !typedReady) return;
         owner.review({ kind: 'note-upsert', gameId, contextId: note.contextId, body: { expectedVersion: note.version, text: trimmed } });
@@ -56,7 +55,7 @@ function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote
           kind: 'note-delete', gameId, contextId: note.contextId, body: { expectedVersion: note.version },
         })} />
       ) : null}
-      {!typedReady && direct?.status === 'error' ? (
+      {showRefresh ? (
         <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, note.contextId)} />
       ) : null}
     </View>

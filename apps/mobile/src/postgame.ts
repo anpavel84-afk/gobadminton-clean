@@ -436,6 +436,16 @@ export function noteSubjectOptions(
   return data?.feedback?.capabilities.peerSubjects ?? [];
 }
 /**
+ * Per-note conflict/error refresh visibility — used by NoteCard outside the editing branch
+ * so DELETE VERSION_CONFLICT can recover while reviewing (editing=false, typed ready).
+ */
+export function noteConflictRefreshVisible(
+  notice: string | null | undefined,
+  directStatus: string | undefined,
+): boolean {
+  return !!(notice && /Обновите заметку/i.test(notice)) || directStatus === 'error';
+}
+/**
  * Display composition for NotesSection — definitive unavailable shadows stale myNotes;
  * ready/loading/error direct data may show retained private text (writes still typed-ready only).
  */
