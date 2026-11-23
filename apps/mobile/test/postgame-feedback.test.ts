@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL as NodeURL } from 'node:url';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseResults, parsePrivateReview, parseMeReviewsPage, parseReviewReportReceipt,
@@ -1784,10 +1785,22 @@ test('#522 Root A/B: default-kind discrepancy patch, ambiguous null attendance, 
 
 test('#522 Astra address3: REQUIRED empty discrepancy blocks create; readonly org score Choice disabled', () => {
   // Explicit REQUIRED + empty/whitespace-normalized current-role text blocks; filled text does not.
+  // Spaces/newlines alone normalize to empty (trim); tab/C0 are retained for strict wire rejection.
   assert.equal(roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, ''), true);
   assert.equal(
-    roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, normalizeFormReason('   \n\t  ')),
+    roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, normalizeFormReason('   \n  ')),
     true,
+  );
+  assert.equal(
+    roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, normalizeFormReason(' \r\n  ')),
+    true,
+  );
+  const withTab = normalizeFormReason('   \n\t  ');
+  assert.equal(withTab, '   \t  ', 'tab/C0 must survive normalize for strict wire rejection');
+  assert.equal(
+    roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, withTab),
+    false,
+    'preserved tab is non-empty; emptiness gate must not pretend trim removed C0',
   );
   assert.equal(
     roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_REQUIRED_MESSAGE, normalizeFormReason('пояснение')),
@@ -1799,7 +1812,7 @@ test('#522 Astra address3: REQUIRED empty discrepancy blocks create; readonly or
   assert.equal(roleDiscrepancyRequiredBlocksCreate(DISCREPANCY_UNEXPECTED_MESSAGE, ''), false);
   assert.equal(roleDiscrepancyRequiredBlocksCreate('other field copy', ''), false);
 
-  const ui = readFileSync(new URL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
+  const ui = readFileSync(new NodeURL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
   // Readonly organization score affordance: existing Choice gets disabled={!canCreateOrganization}.
   assert.match(ui, /title="Без оценки"[\s\S]*?disabled=\{!canCreateOrganization\}/);
   assert.match(ui, /title=\{String\(n\)\}[\s\S]*?disabled=\{!canCreateOrganization\}/);
