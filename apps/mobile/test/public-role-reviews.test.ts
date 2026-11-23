@@ -3337,7 +3337,7 @@ test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen can
   const ownerRep = new PostgameCoordinator({
     ...idlePort({
       publicRoleByHandle: async () => page,
-      send: async (packet) => {
+      send: async () => {
         if (mode === 'unknown') throw new PostgameError('network', 503);
         return {
           reportId: '77777777-7777-4777-8777-777777777777',
