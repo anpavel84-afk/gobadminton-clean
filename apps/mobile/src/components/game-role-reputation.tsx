@@ -167,6 +167,7 @@ function ReadyRoleBody({
           beginPublicReaderEntry({
             authenticated: auth.status === 'authenticated',
             target,
+            rememberPending: t => auth.postgame.rememberPendingPublicReader(t),
             open: t => auth.postgame.openPublicReader(t),
             signIn: path => { void auth.signIn(path); },
             returnPath: gameId ? publicAuthorReturnPath(gameId) : null,

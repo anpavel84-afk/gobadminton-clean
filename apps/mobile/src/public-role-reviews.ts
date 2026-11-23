@@ -689,10 +689,76 @@ export function publicRoleReportBusinessNotice(code: string | undefined): string
 }
 
 export function subjectOwnReplyLabel(tip: { status: string }): string {
-  const waiting = tip.status === 'submitted' || tip.status === 'revision_waiting';
-  return waiting
-    ? `Ваш ответ: ${tip.status} — ожидает разбора`
-    : `Ваш ответ: ${tip.status}`;
+  switch (tip.status) {
+    case 'submitted':
+    case 'revision_waiting':
+      return 'Ваш ответ: ожидает разбора';
+    case 'published':
+      return 'Ваш ответ: опубликован';
+    case 'needs_correction':
+      return 'Ваш ответ: нужна правка';
+    case 'withdrawn':
+      return 'Ваш ответ: отозван';
+    case 'removed':
+      return 'Ваш ответ: снят';
+    case 'held_basis':
+      return 'Ваш ответ: основание на проверке';
+    default:
+      return 'Ваш ответ: статус обновлён. Обновите список отзывов.';
+  }
+}
+
+/**
+ * Append-page duplicate fence: never keep an older typed row when a newer handle page arrives;
+ * same-version permissions fail closed; subject tip follows the higher tip version.
+ */
+export function mergeActorAwareReaderItem<T extends {
+  reviewHandle: string;
+  publishedRevision: number;
+  replyAggregateVersion: number;
+  subjectOwnReply: { status: string; version: number; pendingRevision: number | null } | null;
+  allowedActions: { canReport: boolean; canReply: boolean };
+}>(prior: T, incoming: T): T {
+  if (incoming.publishedRevision < prior.publishedRevision) return prior;
+  if (incoming.publishedRevision > prior.publishedRevision) return incoming;
+  if (incoming.replyAggregateVersion < prior.replyAggregateVersion) {
+    return {
+      ...prior,
+      allowedActions: {
+        canReply: prior.allowedActions.canReply && incoming.allowedActions.canReply,
+        canReport: prior.allowedActions.canReport && incoming.allowedActions.canReport,
+      },
+    };
+  }
+  if (incoming.replyAggregateVersion > prior.replyAggregateVersion) return incoming;
+  const priorTip = prior.subjectOwnReply;
+  const nextTip = incoming.subjectOwnReply;
+  let subjectOwnReply = nextTip;
+  if (priorTip && nextTip) {
+    subjectOwnReply = nextTip.version >= priorTip.version ? nextTip : priorTip;
+  } else if (priorTip && !nextTip) {
+    subjectOwnReply = priorTip;
+  }
+  return {
+    ...incoming,
+    subjectOwnReply,
+    allowedActions: {
+      canReply: prior.allowedActions.canReply && incoming.allowedActions.canReply,
+      canReport: prior.allowedActions.canReport && incoming.allowedActions.canReport,
+    },
+  };
+}
+
+/** Late reply ACK may settle the journal but must not paint over a newer typed aggregate. */
+export function mayPaintPublicReplyReceipt(
+  receipt: { version: number },
+  typed: { replyAggregateVersion: number; subjectOwnReply: { version: number } | null } | undefined,
+  floorBeforeReceipt: number,
+): boolean {
+  if (receipt.version < floorBeforeReceipt) return false;
+  if (typed && typed.replyAggregateVersion > receipt.version) return false;
+  if (typed?.subjectOwnReply && typed.subjectOwnReply.version > receipt.version) return false;
+  return true;
 }
 
 /** Stable guest return uses existing game path only — role/game target lives on PostgameCoordinator. */

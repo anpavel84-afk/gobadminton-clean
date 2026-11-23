@@ -712,10 +712,15 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(disclosure, /rotate:\s*'180deg'/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
   // Author entry + actor-aware reader entry on game disclosure; guest list stays private-field-free.
+  // Reply/report authority and buttons live on root PublicRoleReaderSheet, not disclosure rows.
   assert.match(disclosure, /Поделиться опытом/);
   assert.match(disclosure, /openPublicComposer|beginPublicAuthorEntry|rememberPendingPublicAuthor/);
   assert.match(disclosure, /Ответить или пожаловаться|beginPublicReaderEntry|openPublicReader/);
-  assert.match(disclosure, /canReply|canReport|Сообщить о нарушении/);
+  assert.match(disclosure, /rememberPendingPublicReader/);
+  assert.doesNotMatch(disclosure, /allowedActions\.canReply|allowedActions\.canReport|Сообщить о нарушении/);
+  const readerHost = read('../src/components/public-role-reviews.tsx');
+  assert.match(readerHost, /PublicRoleReaderSheet/);
+  assert.match(readerHost, /canReply|canReport|Сообщить о нарушении/);
   assert.match(profile, /PlayerRoleReputation/);
   assert.match(profile, /bindPlayer/);
   assert.match(profile, /playerRoleReputation/);

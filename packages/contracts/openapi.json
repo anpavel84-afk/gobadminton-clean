@@ -23101,19 +23101,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "requestBody": {
@@ -23265,19 +23266,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           },
           {
             "name": "gameId",

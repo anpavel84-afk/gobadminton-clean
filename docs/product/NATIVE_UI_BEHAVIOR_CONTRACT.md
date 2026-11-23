@@ -110,12 +110,13 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Field | Content |
 | --- | --- |
 | Authority | Accepted web `RoleReviewsDialog` + Astra High #522 parity; `GET /role-reputations/:handle`, `POST .../reply-commands`, `POST .../reports`; Root `PublicRoleReviewHost` + same `PostgameCoordinator` journal |
-| Entry | Game/profile role lane «Ответить или пожаловаться» (guest → sign-in); signed-in actor-aware by-handle sheet; profile binds `publicPlayerId` (no invented gameId) |
+| Entry | Game/profile role lane «Ответить или пожаловаться» (guest → `rememberPendingPublicReader` + allowed auth return; signed-in opens root reader sheet); profile binds `publicPlayerId` (no invented gameId) |
 | Trigger | Explicit reply consent + preview/submit; explicit report reason/submit; cancel sends nothing; UNKNOWN same-account reconcile only |
-| Expected | Typed `canReply`/`canReport`/`subjectOwnReply` from current actor page only; reply ACK without private id/pendingIntake; report private ACK; published text stays visible; generation/account/origin fences; guest projection private-field-free |
-| Non-scope | Reply-withdraw UI; report-on-reply UI; cold-start pending; PROD; OTA; C5 |
-| Evidence | Mobile unit `public-role-reviews.test.ts` / `role-reputation.test.ts`; API disposable native bearer reply/report; source APK counter 35 |
-| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 public reply/report source slice; not VERIFIED_SOURCE / not device PASS / not product acceptance |
+| Expected | Typed `canReply`/`canReport`/`subjectOwnReply` from current actor page only (actions on root reader sheet, not disclosure rows); consent retires on newer typed review/reply versions without silent rebase; append merges duplicate handles with version/permission fences; reply/report ACK paint scoped to owned handle/version (no whole-thread freeze); deferred older ACK cannot paint over newer typed aggregate; Russian `subjectOwnReplyLabel` without raw status codes; OpenAPI Origin/CSRF cookie-conditional on reply/report; guest projection private-field-free |
+| Unfinished | App-kill / cold interrupted guest reader pending persistence not implemented — not claimed; profile auth returnPath may be null (pending reader still resumes via root host) |
+| Non-scope | Reply-withdraw UI; report-on-reply UI; PROD; OTA; C5 |
+| Evidence | Mobile unit `public-role-reviews.test.ts` / `role-reputation.test.ts`; API disposable native bearer reply/report + profile-origin; source APK counter 35 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 public reply/report address1 source repair; not VERIFIED_SOURCE / not device PASS / not product acceptance / not built |
 
 ## S-01 · Swipe bounded next-card media warmup (#522)
 

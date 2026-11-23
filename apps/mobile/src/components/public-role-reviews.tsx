@@ -327,7 +327,9 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
     ? (count > 0 ? `Отзывы о тренировках · ${count}` : 'Отзывы о тренировках')
     : (count > 0 ? `Отзывы об организации · ${count}` : 'Отзывы об организации');
   const report = s.publicReportDraft;
-  const disabled = !!publicBusy || !!s.publicReplyReceipt || !!s.publicReportReceipt;
+  const replyAckHandle = s.publicReplyReceipt?.reviewHandle ?? null;
+  const reportAckHandle = s.publicReportReceipt?.reviewHandle ?? null;
+  const threadBusy = !!publicBusy;
   return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
     <Page keyboard header={<View style={{ gap: 8 }}>
       <TextButton title="Закрыть" onPress={close} />
@@ -350,6 +352,9 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
           {!summary.items.length ? <Label>Пока нет опубликованных отзывов.</Label> : null}
           {summary.items.map(item => {
             const draft = s.publicReplyDrafts[item.reviewHandle] ?? { text: '', consent: false };
+            const rowDisabled = threadBusy
+              || replyAckHandle === item.reviewHandle
+              || reportAckHandle === item.reviewHandle;
             return <View key={item.reviewHandle} style={styles.card} accessibilityLabel={item.authorLabel}>
               <Label style={{ fontWeight: '700' }}>{item.authorLabel}</Label>
               <Label>✓ Участие подтверждено</Label>
@@ -362,17 +367,20 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
               {item.subjectOwnReply ? (
                 <Label accessibilityLiveRegion="polite">{subjectOwnReplyLabel(item.subjectOwnReply)}</Label>
               ) : null}
+              {s.publicReplyReceipt?.reviewHandle === item.reviewHandle ? (
+                <Label accessibilityLiveRegion="polite">Ответ принят.</Label>
+              ) : null}
               {item.allowedActions.canReport ? (
                 <OutlineButton
                   title="Сообщить о нарушении"
-                  disabled={disabled}
-                  onPress={() => owner.beginPublicReport(item)}
+                  disabled={rowDisabled}
+                  onPress={() => owner.beginPublicReport(item, s.actor, s.publicSurface!.gen)}
                 />
               ) : null}
               {item.allowedActions.canReply ? <>
                 <Label>Ваш ответ</Label>
                 <TextInput
-                  editable={!disabled}
+                  editable={!rowDisabled}
                   multiline
                   scrollEnabled
                   textAlignVertical="top"
@@ -384,7 +392,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                 />
                 <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
                   <Switch
-                    disabled={disabled}
+                    disabled={rowDisabled}
                     accessibilityLabel="Публикую ответ от своего имени по этой роли"
                     value={draft.consent}
                     onValueChange={consent => owner.patchPublicReplyDraft(item.reviewHandle, { consent })}
@@ -393,8 +401,11 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                 </View>
                 <PrimaryButton
                   title="Отправить ответ"
-                  disabled={disabled || !draft.text.trim()}
-                  onPress={() => { Keyboard.dismiss(); void owner.submitPublicReply(item.reviewHandle); }}
+                  disabled={rowDisabled || !draft.text.trim()}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    void owner.submitPublicReply(item.reviewHandle, s.actor, s.publicSurface!.gen);
+                  }}
                 />
               </> : null}
             </View>;
@@ -402,7 +413,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
           {summary.nextCursor ? (
             <OutlineButton
               title="Ещё отзывы"
-              disabled={disabled || s.publicReader.status !== 'ready'}
+              disabled={threadBusy || s.publicReader.status !== 'ready'}
               onPress={() => void owner.loadPublicReader({ cursor: summary.nextCursor, append: true })}
             />
           ) : null}
@@ -410,21 +421,22 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
         {report ? <View style={styles.card} accessibilityLabel="Жалоба на отзыв">
           <Label style={{ fontWeight: '700' }}>Жалоба на отзыв</Label>
           <Label>Причина</Label>
-          {PUBLIC_ROLE_REPORT_REASONS.map(r => (
-            <Pressable
+          {PUBLIC_ROLE_REPORT_REASONS.map(r => {
+            const reportDisabled = threadBusy || reportAckHandle === report.reviewHandle;
+            return <Pressable
               key={r.code}
               accessibilityRole="button"
-              accessibilityState={{ selected: report.reasonCode === r.code, disabled }}
-              disabled={disabled}
+              accessibilityState={{ selected: report.reasonCode === r.code, disabled: reportDisabled }}
+              disabled={reportDisabled}
               onPress={() => owner.patchPublicReportDraft({ reasonCode: r.code as PublicRoleReportReason })}
-              style={[styles.chip, { opacity: disabled ? 0.45 : 1 }]}
+              style={[styles.chip, { opacity: reportDisabled ? 0.45 : 1 }]}
             >
               <Label>{report.reasonCode === r.code ? '✓ ' : ''}{r.label}</Label>
-            </Pressable>
-          ))}
+            </Pressable>;
+          })}
           <Label>Пояснение</Label>
           <TextInput
-            editable={!disabled}
+            editable={!(threadBusy || reportAckHandle === report.reviewHandle)}
             multiline
             scrollEnabled
             textAlignVertical="top"
@@ -436,8 +448,11 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
           />
           <PrimaryButton
             title="Отправить жалобу"
-            disabled={disabled}
-            onPress={() => { Keyboard.dismiss(); void owner.submitPublicReport(); }}
+            disabled={threadBusy || reportAckHandle === report.reviewHandle}
+            onPress={() => {
+              Keyboard.dismiss();
+              void owner.submitPublicReport(s.actor, s.publicSurface!.gen);
+            }}
           />
           <TextButton title="Отмена" onPress={() => owner.cancelPublicReport()} />
         </View> : null}
@@ -459,8 +474,11 @@ export function PublicRoleReviewHost() {
     if (auth.status !== 'authenticated') return;
     if (!auth.me || !s.actor) return;
     if (s.actor.actorId !== auth.me.id || s.actor.sessionId !== auth.me.session.id) return;
-    if (!s.pendingPublicAuthor) return;
-    owner.resumePendingPublicAuthor();
+    if (s.pendingPublicAuthor) {
+      owner.resumePendingPublicAuthor();
+      return;
+    }
+    if (s.pendingPublicReader) owner.resumePendingPublicReader();
   }, [
     auth.status,
     auth.me?.id,
@@ -469,6 +487,7 @@ export function PublicRoleReviewHost() {
     s.actor?.actorId,
     s.actor?.sessionId,
     s.pendingPublicAuthor,
+    s.pendingPublicReader,
   ]);
   const surface = s.publicSurface;
   if (!surface) return null;
@@ -492,9 +511,11 @@ export function beginPublicReaderEntry(args: {
   target: PublicRoleReaderTarget;
   signIn: (returnPath: string | null) => void;
   open: (target: PublicRoleReaderTarget) => void;
+  rememberPending: (target: PublicRoleReaderTarget) => void;
   returnPath: string | null;
 }) {
   if (!args.authenticated) {
+    args.rememberPending(args.target);
     args.signIn(args.returnPath);
     return;
   }
