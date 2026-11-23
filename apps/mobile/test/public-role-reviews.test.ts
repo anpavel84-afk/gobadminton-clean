@@ -27,6 +27,8 @@ import {
   parseOwnEligibility,
   parseOwnPublicRoleReviewsPage,
   parsePublicRoleMutationReceipt,
+  parsePublicRoleReplyReceipt,
+  parsePublicRoleReportReceipt,
   publicAuthorReturnPath,
   publicRoleBusinessNotice,
   publicRoleReplyBusinessNotice,
@@ -3689,4 +3691,243 @@ test('#522 address13: reply/report hard auth denial retires owned reader; UNKNOW
   assert.equal(ownerPreview.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
   ownerPreview.patchPublicReplyDraft(reviewHandle, { consent: true });
   assert.equal(ownerPreview.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
+});
+
+test('#522 address15: reply/report ACK parsers reject empty receiptToken; opaque nonempty accepted', () => {
+  assert.throws(
+    () => parsePublicRoleReplyReceipt({ version: 1, status: 'submitted', receiptToken: '' }),
+    PublicRoleError,
+  );
+  assert.throws(
+    () => parsePublicRoleReportReceipt({
+      reportId: '88888888-8888-4888-8888-888888888888',
+      receiptToken: '',
+      status: 'submitted',
+    }),
+    PublicRoleError,
+  );
+  const replyOk = parsePublicRoleReplyReceipt({
+    version: 1,
+    status: 'submitted',
+    receiptToken: 'opaque-reply',
+  });
+  assert.equal(replyOk.receiptToken, 'opaque-reply');
+  assert.equal(replyOk.version, 1);
+  assert.equal(replyOk.status, 'submitted');
+  const reportOk = parsePublicRoleReportReceipt({
+    reportId: '88888888-8888-4888-8888-888888888888',
+    receiptToken: 'opaque-report',
+    status: 'submitted',
+  });
+  assert.equal(reportOk.receiptToken, 'opaque-report');
+  assert.equal(reportOk.reportId, '88888888-8888-4888-8888-888888888888');
+  assert.equal(reportOk.status, 'submitted');
+  // Author mutation parser unchanged — empty token still type-accepted there.
+  const author = parsePublicRoleMutationReceipt({
+    id: '22222222-2222-4222-8222-222222222222',
+    reviewHandle: 'c'.repeat(32),
+    version: 1,
+    status: 'submitted',
+    receiptToken: '',
+    pendingIntakeStatus: 'waiting_intake',
+  });
+  assert.equal(author.receiptToken, '');
+});
+
+test('#522 address15: empty reply/report ACK keeps immutable UNKNOWN; explicit valid ACK reconciles same packet', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const item = {
+    reviewHandle,
+    role: 'organization' as const,
+    text: 'Текст',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision: 2,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: { status: 'submitted', version: 1, pendingRevision: null as number | null },
+    allowedActions: { canReport: true, canReply: true },
+  };
+  const page = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'q'.repeat(32),
+    items: [item],
+    nextCursor: null as string | null,
+    availability: 'available' as const,
+  };
+
+  // --- Reply: otherwise-valid ACK with empty token → UNKNOWN; valid ACK reconciles same packet ---
+  const replyKeys: string[] = [];
+  let replyMode: 'empty' | 'valid' = 'empty';
+  const ownerReply = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => page,
+      publicConsentPreview: async () => ({ consentProjectionHash: 'f'.repeat(64) }),
+      send: async (packet) => {
+        replyKeys.push(packet.key);
+        if (packet.kind !== 'public-role-reply') throw new PostgameError('invalid');
+        if (replyMode === 'empty') {
+          return { version: packet.body.expectedVersion + 1, status: 'submitted', receiptToken: '' };
+        }
+        return {
+          version: packet.body.expectedVersion + 1,
+          status: 'submitted',
+          receiptToken: 'reply-ack-ok',
+        };
+      },
+    }),
+  }, () => `addr15-reply-${replyKeys.length + 1}`);
+
+  ownerReply.setActor(actor);
+  ownerReply.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  assert.equal(ownerReply.getSnapshot().publicReader.status, 'ready');
+  assert.equal(ownerReply.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReply, true);
+
+  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Ответ до empty ACK' });
+  ownerReply.patchPublicReplyDraft(reviewHandle, { consent: true });
+  await ownerReply.submitPublicReply(reviewHandle);
+  await tick();
+
+  const replyCmd = ownerReply.getSnapshot().command;
+  assert.equal(replyCmd?.status, 'unknown');
+  assert.equal(replyCmd?.packet.kind, 'public-role-reply');
+  if (replyCmd == null || replyCmd.packet.kind !== 'public-role-reply') throw new Error('expected reply UNKNOWN');
+  const replyFrozen = {
+    key: replyCmd.packet.key,
+    method: replyCmd.packet.method,
+    path: replyCmd.packet.path,
+    body: { ...replyCmd.packet.body },
+    reviewHandle: replyCmd.packet.reviewHandle,
+    actorId: replyCmd.packet.actor.actorId,
+  };
+  assert.equal(replyKeys.length, 1);
+  assert.equal(replyKeys[0], replyFrozen.key);
+  assert.equal(ownerReply.getSnapshot().publicReplyReceipt, null);
+  assert.notEqual(ownerReply.getSnapshot().publicNotice, 'Ответ принят.');
+  assert.equal(ownerReply.getSnapshot().publicReader.status, 'ready');
+  assert.equal(ownerReply.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReply, true);
+  assert.equal(ownerReply.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Ответ до empty ACK');
+
+  // Before reconcile: UNKNOWN packet still matches the original capture (no paint / no new key).
+  const replyStill = ownerReply.getSnapshot().command;
+  assert.equal(replyStill?.status, 'unknown');
+  if (replyStill == null || replyStill.packet.kind !== 'public-role-reply') throw new Error('expected reply UNKNOWN');
+  assert.equal(replyStill.packet.key, replyFrozen.key);
+  assert.equal(replyStill.packet.method, replyFrozen.method);
+  assert.equal(replyStill.packet.path, replyFrozen.path);
+  assert.deepEqual(replyStill.packet.body, replyFrozen.body);
+  assert.equal(replyStill.packet.reviewHandle, replyFrozen.reviewHandle);
+  assert.equal(replyStill.packet.actor.actorId, replyFrozen.actorId);
+  assert.equal(replyKeys.length, 1);
+
+  replyMode = 'valid';
+  await ownerReply.reconcilePublic();
+  await tick();
+  assert.equal(ownerReply.getSnapshot().command, null);
+  assert.equal(ownerReply.getSnapshot().publicReplyReceipt?.receiptToken, 'reply-ack-ok');
+  assert.equal(ownerReply.getSnapshot().publicReplyReceipt?.version, replyFrozen.body.expectedVersion + 1);
+  assert.equal(ownerReply.getSnapshot().publicNotice, 'Ответ принят.');
+  assert.equal(replyKeys.length, 2);
+  assert.equal(replyKeys[1], replyFrozen.key);
+
+  // --- Report: empty token ACK → UNKNOWN; valid ACK reconciles same packet ---
+  const reportKeys: string[] = [];
+  let reportMode: 'empty' | 'valid' = 'empty';
+  const ownerReport = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => page,
+      send: async (packet) => {
+        reportKeys.push(packet.key);
+        if (packet.kind !== 'public-role-report') throw new PostgameError('invalid');
+        if (reportMode === 'empty') {
+          return {
+            reportId: '88888888-8888-4888-8888-888888888888',
+            receiptToken: '',
+            status: 'submitted',
+          };
+        }
+        return {
+          reportId: '88888888-8888-4888-8888-888888888888',
+          receiptToken: 'report-ack-ok',
+          status: 'submitted',
+        };
+      },
+    }),
+  }, () => `addr15-report-${reportKeys.length + 1}`);
+
+  ownerReport.setActor(actor);
+  ownerReport.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  });
+  await tick();
+  assert.equal(ownerReport.getSnapshot().publicReader.status, 'ready');
+  assert.equal(ownerReport.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
+
+  ownerReport.beginPublicReport(item);
+  ownerReport.patchPublicReportDraft({ reasonCode: 'spam', explanation: 'Жалоба до empty ACK' });
+  await ownerReport.submitPublicReport();
+  await tick();
+
+  const reportCmd = ownerReport.getSnapshot().command;
+  assert.equal(reportCmd?.status, 'unknown');
+  assert.equal(reportCmd?.packet.kind, 'public-role-report');
+  if (reportCmd == null || reportCmd.packet.kind !== 'public-role-report') throw new Error('expected report UNKNOWN');
+  const reportFrozen = {
+    key: reportCmd.packet.key,
+    method: reportCmd.packet.method,
+    path: reportCmd.packet.path,
+    body: { ...reportCmd.packet.body },
+    gameQuery: reportCmd.packet.gameQuery,
+    reviewHandle: reportCmd.packet.reviewHandle,
+    actorId: reportCmd.packet.actor.actorId,
+  };
+  assert.equal(reportKeys.length, 1);
+  assert.equal(reportKeys[0], reportFrozen.key);
+  assert.equal(ownerReport.getSnapshot().publicReportReceipt, null);
+  assert.notEqual(
+    ownerReport.getSnapshot().publicNotice,
+    'Жалоба отправлена. Отзыв остаётся видимым до решения человека.',
+  );
+  assert.equal(ownerReport.getSnapshot().publicReader.status, 'ready');
+  assert.equal(ownerReport.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
+  assert.equal(ownerReport.getSnapshot().publicReportDraft?.explanation, 'Жалоба до empty ACK');
+
+  const reportStill = ownerReport.getSnapshot().command;
+  assert.equal(reportStill?.status, 'unknown');
+  if (reportStill == null || reportStill.packet.kind !== 'public-role-report') throw new Error('expected report UNKNOWN');
+  assert.equal(reportStill.packet.key, reportFrozen.key);
+  assert.equal(reportStill.packet.method, reportFrozen.method);
+  assert.equal(reportStill.packet.path, reportFrozen.path);
+  assert.deepEqual(reportStill.packet.body, reportFrozen.body);
+  assert.equal(reportStill.packet.gameQuery, reportFrozen.gameQuery);
+  assert.equal(reportStill.packet.reviewHandle, reportFrozen.reviewHandle);
+  assert.equal(reportStill.packet.actor.actorId, reportFrozen.actorId);
+  assert.equal(reportKeys.length, 1);
+
+  reportMode = 'valid';
+  await ownerReport.reconcilePublic();
+  await tick();
+  assert.equal(ownerReport.getSnapshot().command, null);
+  assert.equal(ownerReport.getSnapshot().publicReportReceipt?.receiptToken, 'report-ack-ok');
+  assert.equal(ownerReport.getSnapshot().publicReportReceipt?.reportId, '88888888-8888-4888-8888-888888888888');
+  assert.equal(
+    ownerReport.getSnapshot().publicNotice,
+    'Жалоба отправлена. Отзыв остаётся видимым до решения человека.',
+  );
+  assert.equal(reportKeys.length, 2);
+  assert.equal(reportKeys[1], reportFrozen.key);
 });

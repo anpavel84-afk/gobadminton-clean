@@ -658,19 +658,25 @@ export function parsePublicRoleReplyReceipt(value: unknown): PublicRoleReplyRece
     throw new PublicRoleError('invalid');
   }
   if (row.status !== 'submitted') throw new PublicRoleError('invalid');
+  // Operation contract: opaque receiptToken minLength 1 — no format/length/normalization/trim.
+  const receiptToken = str(row.receiptToken);
+  if (receiptToken.length < 1) throw new PublicRoleError('invalid');
   return {
     version: num(row.version),
     status: 'submitted',
-    receiptToken: str(row.receiptToken),
+    receiptToken,
   };
 }
 
 export function parsePublicRoleReportReceipt(value: unknown): PublicRoleReportReceipt {
   const row = object(value);
   if (row.status !== 'submitted') throw new PublicRoleError('invalid');
+  // Operation contract: opaque receiptToken minLength 1 — no format/length/normalization/trim.
+  const receiptToken = str(row.receiptToken);
+  if (receiptToken.length < 1) throw new PublicRoleError('invalid');
   return {
     reportId: uuid(row.reportId),
-    receiptToken: str(row.receiptToken),
+    receiptToken,
     status: 'submitted',
   };
 }
