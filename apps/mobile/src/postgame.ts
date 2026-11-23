@@ -382,10 +382,7 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
     exact(versions, ['proofVersion', 'outcomeVersion', 'attendanceVersion']);
     num(versions.proofVersion, 1); num(versions.outcomeVersion); num(versions.attendanceVersion);
     publicRoleReviewText(str(body.text));
-    const createTopics = body.topics;
-    if (!Array.isArray(createTopics)) invalid();
-    const createTopicList: string[] = [];
-    for (const topic of createTopics) createTopicList.push(str(topic));
+    const createTopicList = array(body.topics, str);
     publicRoleTopics(body.role as 'organization' | 'training', createTopicList);
     const hash = str(body.consentProjectionHash);
     if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
@@ -414,9 +411,8 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
       exact(versions, ['proofVersion', 'outcomeVersion', 'attendanceVersion']);
       num(versions.proofVersion, 1); num(versions.outcomeVersion); num(versions.attendanceVersion);
       publicRoleReviewText(str(body.text));
-      const commandTopics = body.topics;
-      if (!Array.isArray(commandTopics) || commandTopics.length > 2) invalid();
-      for (const topic of commandTopics) str(topic);
+      const commandTopics = array(body.topics, str);
+      if (commandTopics.length > 2) return invalid();
       // Transport admits all server-authorized command variants; role-specific topics rechecked server-side.
       const hash = str(body.consentProjectionHash);
       if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();

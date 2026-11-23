@@ -340,29 +340,39 @@ export class PostgameCoordinator {
     });
     else this.show({ pendingPublicAuthor: pendingPublic });
     // Same-actor reauth may retry original UNKNOWN packet — rebind UI generation to restored surface.
-    if (actor && saved?.command && isPublicRolePacketKind(saved.command.packet.kind)) {
+    if (actor && saved?.command) {
       const packet = saved.command.packet;
-      this.publicMutationBind = {
-        surfaceGen: this.publicSurfaceGen,
-        actorId: actor.actorId,
-        sessionId: actor.sessionId,
-        roleHandle: packet.kind === 'public-role-create' ? packet.roleHandle : 'own',
-        role: packet.kind === 'public-role-create'
-          ? packet.body.role
-          : (saved.publicSurface?.target?.role ?? ''),
-        gameId: packet.gameId,
-        editor: packet.kind === 'public-role-create'
-          ? (saved.publicDraft && saved.publicSurface?.target
+      // Explicit discriminant narrow — type predicate on .kind alone does not narrow Packet.
+      if (packet.kind === 'public-role-create') {
+        this.publicMutationBind = {
+          surfaceGen: this.publicSurfaceGen,
+          actorId: actor.actorId,
+          sessionId: actor.sessionId,
+          roleHandle: packet.roleHandle,
+          role: packet.body.role,
+          gameId: packet.gameId,
+          editor: saved.publicDraft && saved.publicSurface?.target
             ? draftEditorKey(
               { ...saved.publicDraft, consent: false },
               saved.publicSurface.target.roleHandle,
               saved.publicSurface.target.role,
             )
-            : '')
-          : (packet.kind === 'public-role-command' ? `withdraw:${packet.reviewId}` : ''),
-        kind: packet.kind,
-        ...(packet.kind === 'public-role-command' ? { reviewId: packet.reviewId } : {}),
-      };
+            : '',
+          kind: 'public-role-create',
+        };
+      } else if (packet.kind === 'public-role-command') {
+        this.publicMutationBind = {
+          surfaceGen: this.publicSurfaceGen,
+          actorId: actor.actorId,
+          sessionId: actor.sessionId,
+          roleHandle: 'own',
+          role: saved.publicSurface?.target?.role ?? '',
+          gameId: packet.gameId,
+          editor: `withdraw:${packet.reviewId}`,
+          kind: 'public-role-command',
+          reviewId: packet.reviewId,
+        };
+      }
     }
     // Re-read eligibility/own history after same-account reauth — never autosend.
     if (actor && saved?.publicSurface?.mode === 'composer') void this.loadPublicEligibility();
@@ -1107,10 +1117,16 @@ export class PostgameCoordinator {
     }
     this.show({ publicDraft: next });
   };
-  loadPublicEligibility = async () => {
+  /**
+   * @param opts.preserveNotice Keep actionable business rejection (e.g. after 422 reread/reconsent).
+   * Manual refresh omits this and may clear a stale notice on success.
+   */
+  loadPublicEligibility = async (opts?: { preserveNotice?: boolean }) => {
     const actor = this.snapshot.actor;
     const target = this.snapshot.publicSurface?.mode === 'composer' ? this.snapshot.publicSurface.target : null;
     if (!actor || !target) return;
+    const preserveNotice = opts?.preserveNotice === true;
+    const priorNotice = this.snapshot.publicNotice;
     const gen = ++this.publicEligibilityGen;
     const preferred = this.snapshot.publicDraft?.gameId || target.gameId;
     this.show({ publicEligibility: { status: 'loading', data: this.snapshot.publicEligibility.data } });
@@ -1119,7 +1135,12 @@ export class PostgameCoordinator {
       if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
       if (this.snapshot.publicSurface?.target?.roleHandle !== target.roleHandle) return;
       if (data.role !== target.role) {
-        this.show({ publicEligibility: { status: 'error' }, publicNotice: 'Роль не совпала с карточкой. Обновите отзывы.' });
+        this.show({
+          publicEligibility: { status: 'error' },
+          publicNotice: preserveNotice && priorNotice
+            ? priorNotice
+            : 'Роль не совпала с карточкой. Обновите отзывы.',
+        });
         return;
       }
       const gameId = pickPreferredGameId(data, preferred);
@@ -1132,11 +1153,16 @@ export class PostgameCoordinator {
         consent: false,
       };
       this.publicPreviewGen++;
+      const empty = !eligibleBases(data).length;
       this.show({
         publicEligibility: { status: 'ready', data },
         publicDraft: nextDraft,
         publicConsentHash: null,
-        publicNotice: eligibleBases(data).length ? null : 'Нет подтверждённой встречи для публичного отзыва по этой роли.',
+        publicNotice: empty
+          ? (preserveNotice && priorNotice
+            ? priorNotice
+            : 'Нет подтверждённой встречи для публичного отзыва по этой роли.')
+          : (preserveNotice ? priorNotice : null),
       });
     } catch (error) {
       if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
@@ -1144,7 +1170,9 @@ export class PostgameCoordinator {
       const auth = error instanceof PostgameError && error.status === 401;
       this.show({
         publicEligibility: denied || auth ? { status: 'unavailable' } : { status: 'error' },
-        publicNotice: auth ? 'Войдите снова, чтобы продолжить.' : 'Не удалось загрузить список встреч.',
+        publicNotice: preserveNotice && priorNotice
+          ? priorNotice
+          : (auth ? 'Войдите снова, чтобы продолжить.' : 'Не удалось загрузить список встреч.'),
       });
     }
   };
@@ -1809,7 +1837,9 @@ export class PostgameCoordinator {
           publicConsentHash: definite ? null : this.snapshot.publicConsentHash,
           publicNotice: paintNotice ? notice : this.snapshot.publicNotice,
         });
-        if (publicBusiness && packet.kind === 'public-role-create') void this.loadPublicEligibility();
+        if (publicBusiness && packet.kind === 'public-role-create') {
+          void this.loadPublicEligibility({ preserveNotice: true });
+        }
         if (publicBusiness && packet.kind === 'public-role-command') void this.loadOwnPublicReviews();
       } else {
         this.show({

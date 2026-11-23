@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState, useSyncExternalStore, type ComponentRef, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { publicApi } from '../public-api.ts';
@@ -15,8 +15,11 @@ import {
 } from '../role-reputation.ts';
 import type { RoleKind, RoleLaneState } from '../role-reputation.ts';
 import { publicAuthorReturnPath } from '../public-role-reviews.ts';
-import { FocusContext } from './postgame.tsx';
-import { beginPublicAuthorEntry, PublicRoleReviewHost } from './public-role-reviews.tsx';
+import {
+  beginPublicAuthorEntry,
+  PublicRoleAuthorEntryButton,
+  PublicRoleReviewHost,
+} from './public-role-reviews.tsx';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
 import { Label, OutlineButton, TextButton } from './ui.tsx';
@@ -121,8 +124,6 @@ export function RoleLaneView({
 function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: () => void; gameId?: string }) {
   const summary = lane.summary!;
   const auth = useAuth();
-  const focus = useContext(FocusContext);
-  const entryRef = useRef<ComponentRef<typeof Pressable>>(null);
   const history = lane.role === 'organization'
     ? (compactHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete)
       ?? heldHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete))
@@ -132,11 +133,9 @@ function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: 
     {history ? <Label style={styles.history}>{history}</Label> : null}
     <Label style={styles.secondary}>{publishedReviewsLabel(summary.publishedReviewCount)}</Label>
     {canAuthor ? (
-      <Pressable
-        ref={entryRef}
-        accessibilityRole="button"
+      <PublicRoleAuthorEntryButton
+        title="Поделиться опытом"
         onPress={() => {
-          if (focus) focus.current = entryRef.current;
           const target = {
             roleHandle: summary.roleHandle,
             role: lane.role,
@@ -152,10 +151,7 @@ function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: 
             returnPath: publicAuthorReturnPath(gameId!),
           });
         }}
-        style={({ pressed }) => [styles.authorEntry, pressed && styles.authorEntryPressed]}
-      >
-        <Label style={styles.authorEntryLabel}>Поделиться опытом</Label>
-      </Pressable>
+      />
     ) : null}
     {summary.items.length === 0 ? (
       <Label style={styles.secondary}>Пока нет опубликованных отзывов.</Label>
@@ -229,17 +225,4 @@ const styles = StyleSheet.create({
   review: { gap: 6, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.line },
   meta: { color: colors.secondary, fontSize: 13, lineHeight: 18 },
   reply: { color: colors.secondary, fontSize: 13, lineHeight: 19 },
-  authorEntry: {
-    alignSelf: 'flex-start',
-    minHeight: 48,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.lineDark,
-    backgroundColor: colors.card,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  authorEntryPressed: { backgroundColor: colors.paper },
-  authorEntryLabel: { fontWeight: '700', textAlign: 'left' },
 });

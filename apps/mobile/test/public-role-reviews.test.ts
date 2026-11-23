@@ -42,6 +42,7 @@ function eligibilityBody(over: Record<string, unknown> = {}) {
     role: 'organization',
     bases: [{
       gameId,
+      role: 'organization',
       endsAt: '2026-10-01T18:00:00.000Z',
       proofVersion: 2,
       outcomeVersion: 1,
@@ -83,7 +84,47 @@ test('public text allows LF / normalizes CRLF; private reviewComment rejects LF'
 test('eligibility/own/receipt parsers and withdraw status fence', () => {
   const elig = parseOwnEligibility(eligibilityBody());
   assert.equal(elig.bases[0]?.admission, 'may_submit');
+  assert.equal(elig.bases[0]?.role, 'organization');
   assert.throws(() => parseOwnEligibility(eligibilityBody({ roleHandle: 'b'.repeat(32) }), handle), PublicRoleError);
+  // Nested basis role required and must match parent — reject mismatch / missing / invalid.
+  assert.throws(() => parseOwnEligibility(eligibilityBody({
+    bases: [{
+      gameId,
+      role: 'training',
+      endsAt: '2026-10-01T18:00:00.000Z',
+      proofVersion: 2,
+      outcomeVersion: 1,
+      attendanceVersion: 1,
+      projectionHashPreview: null,
+      admission: 'may_submit',
+      reason: null,
+    }],
+  })), PublicRoleError);
+  assert.throws(() => parseOwnEligibility(eligibilityBody({
+    bases: [{
+      gameId,
+      endsAt: '2026-10-01T18:00:00.000Z',
+      proofVersion: 2,
+      outcomeVersion: 1,
+      attendanceVersion: 1,
+      projectionHashPreview: null,
+      admission: 'may_submit',
+      reason: null,
+    }],
+  })), PublicRoleError);
+  assert.throws(() => parseOwnEligibility(eligibilityBody({
+    bases: [{
+      gameId,
+      role: 'peer',
+      endsAt: '2026-10-01T18:00:00.000Z',
+      proofVersion: 2,
+      outcomeVersion: 1,
+      attendanceVersion: 1,
+      projectionHashPreview: null,
+      admission: 'may_submit',
+      reason: null,
+    }],
+  })), PublicRoleError);
 
   const page = parseOwnPublicRoleReviewsPage({
     items: [{
@@ -416,6 +457,7 @@ test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-ac
         roleHandle,
         bases: [{
           gameId: roleHandle === handleB ? gameB : gameId,
+          role: 'organization',
           endsAt: '2026-10-01T18:00:00.000Z',
           proofVersion: 2,
           outcomeVersion: 1,
@@ -525,12 +567,16 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   const disclosure = read('../src/components/game-role-reputation.tsx');
   assert.match(disclosure, /Поделиться опытом/);
   assert.match(disclosure, /beginPublicAuthorEntry/);
+  assert.match(disclosure, /PublicRoleAuthorEntryButton|rememberPublicRoleFocusTarget/);
   assert.match(disclosure, /consumePendingPublicAuthor/);
   assert.doesNotMatch(disclosure, /canReply|canReport|Сообщить о нарушении/);
+  assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
 
   const host = read('../src/components/public-role-reviews.tsx');
   assert.match(host, /publicRoleHostListeners|notifyPublicRoleHostEpoch/);
   assert.match(host, /restorePublicTriggerFocus|bindPublicRoleFocusTrigger/);
+  assert.match(host, /rememberPublicRoleFocusTarget/);
+  assert.match(host, /PublicRoleAuthorEntryButton/);
   assert.doesNotMatch(host, /без выдуманного исполнителя/);
   assert.match(host, /срок и исполнитель не обещаются/);
 

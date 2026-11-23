@@ -38,6 +38,8 @@ export class PublicRoleError extends Error {
 export type PublicAudience = 'personal' | 'public';
 export type OwnEligibilityBasis = {
   gameId: string;
+  /** Nested basis role — must match parent OwnEligibility.role (API OwnEligibilityBasisDto). */
+  role: RoleKind;
   endsAt: string;
   proofVersion: number;
   outcomeVersion: number;
@@ -246,10 +248,14 @@ export function usableOwnRoleHandle(roleHandleValue: string): boolean {
   return HANDLE.test(roleHandleValue) && roleHandleValue.length === 32;
 }
 
-function parseBasis(value: unknown): OwnEligibilityBasis {
+function parseBasis(value: unknown, expectedRole: RoleKind): OwnEligibilityBasis {
   const row = object(value);
+  const role = roleKind(row.role);
+  // Reject missing/invalid/mismatched nested role — parent card role is authoritative.
+  if (role !== expectedRole) throw new PublicRoleError('invalid');
   return {
     gameId: uuid(row.gameId),
+    role,
     endsAt: time(row.endsAt),
     proofVersion: num(row.proofVersion, 1),
     outcomeVersion: num(row.outcomeVersion),
@@ -269,7 +275,8 @@ export function parseOwnEligibility(value: unknown, expectedHandle?: string): Ow
   const handle = roleHandle(row.roleHandle);
   if (expectedHandle && handle !== expectedHandle.toLowerCase()) throw new PublicRoleError('invalid');
   if (!Array.isArray(row.bases)) throw new PublicRoleError('invalid');
-  return { roleHandle: handle, role: roleKind(row.role), bases: row.bases.map(parseBasis) };
+  const role = roleKind(row.role);
+  return { roleHandle: handle, role, bases: row.bases.map(b => parseBasis(b, role)) };
 }
 
 export function parseOwnPublicRoleReview(value: unknown): OwnPublicRoleReview {
@@ -443,7 +450,9 @@ export function publicAuthorReturnPath(gameId: string): string | null {
   }
 }
 
-export function isPublicRolePacketKind(kind: string): boolean {
+export function isPublicRolePacketKind(
+  kind: string,
+): kind is 'public-role-create' | 'public-role-command' {
   return kind === 'public-role-create' || kind === 'public-role-command';
 }
 

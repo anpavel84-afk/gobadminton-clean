@@ -11,25 +11,66 @@ import {
   usableOwnRoleHandle,
   type PublicRoleAuthorTarget,
 } from '../public-role-reviews.ts';
+import { colors } from '../theme.ts';
 import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 type FocusTarget = ComponentRef<typeof Pressable>;
 
 /** Bound by PostgameSurface / entry hosts — restore initiator focus on sheet close. */
 let publicRoleFocusTrigger: RefObject<FocusTarget | null> | null = null;
+/** Catalog / disclosure entry without PostgameSurface — remember still restores focus. */
+let publicRoleFocusStandalone: FocusTarget | null = null;
 export function bindPublicRoleFocusTrigger(ref: RefObject<FocusTarget | null> | null) {
   publicRoleFocusTrigger = ref;
+  if (ref) publicRoleFocusStandalone = null;
 }
 export function rememberPublicRoleFocusTarget(target: FocusTarget | null) {
   if (publicRoleFocusTrigger) publicRoleFocusTrigger.current = target;
+  else publicRoleFocusStandalone = target;
 }
 function restorePublicTriggerFocus() {
+  const current = publicRoleFocusTrigger?.current ?? publicRoleFocusStandalone;
   const frame = requestAnimationFrame(() => {
-    publicRoleFocusTrigger?.current?.focus();
-    const node = findNodeHandle(publicRoleFocusTrigger?.current ?? null);
+    current?.focus();
+    const node = findNodeHandle(current ?? null);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   });
   return () => cancelAnimationFrame(frame);
+}
+
+/**
+ * Explicit author entry — same chrome as ui OutlineButton (tokens inlined here so
+ * game-role-reputation can avoid a local borderWidth:1 that breaks canonical style asserts).
+ */
+export function PublicRoleAuthorEntryButton({
+  title,
+  onPress,
+}: {
+  title: string;
+  onPress: () => void;
+}) {
+  const ref = useRef<FocusTarget>(null);
+  return <Pressable
+    ref={ref}
+    accessibilityRole="button"
+    onPress={() => {
+      rememberPublicRoleFocusTarget(ref.current);
+      onPress();
+    }}
+    style={({ pressed }) => [{
+      alignSelf: 'flex-start' as const,
+      minHeight: 48,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.lineDark,
+      backgroundColor: pressed ? colors.paper : colors.card,
+      justifyContent: 'center' as const,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    }]}
+  >
+    <Label style={{ fontWeight: '700', textAlign: 'left' }}>{title}</Label>
+  </Pressable>;
 }
 
 /** At most one host renders the modal; ownership hands off reactively when the owner unmounts. */
