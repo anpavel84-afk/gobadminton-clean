@@ -370,9 +370,10 @@ export class PostgameCoordinator {
     const { actor, valid } = this.start(`note:${key}`); if (!actor) return;
     const noteGen = this.reads.get(`note:${key}`) ?? 0;
     const put = (source: Source<PersonalNote>) => this.show({ notes: { ...this.snapshot.notes, [key]: source } });
-    // Confirmed delete / definitive unavailable must stay fenced through select/refresh + pending GET.
-    // Replacing with loading/error lets collectNotes re-render stale results.myNotes private text.
-    const tombFenced = old.status === 'unavailable' || this.noteTombs.has(key);
+    // Only confirmed delete / known-owned definitive 404 (noteTombs) fence through select/refresh.
+    // Fresh never-owned GET404 is provisional create authority — next direct GET must go loading
+    // (block create0) until the read confirms absence again, errors, or finds the note.
+    const tombFenced = this.noteTombs.has(key);
     if (!tombFenced) put({ ...old, status: 'loading' });
     try {
       const data = await this.port.note(actor, gameId, contextId); if (!valid()) return;
@@ -409,11 +410,12 @@ export class PostgameCoordinator {
         return;
       }
       // Tombstone display fence persists through read error — no stale myNotes resurrection.
-      if (tombFenced || this.noteTombs.has(key)) {
+      if (this.noteTombs.has(key)) {
         put({ status: 'unavailable' });
         return;
       }
       // Transient errors keep retained text via current/prior data but do not grant write authority (see currentNote).
+      // Fresh never-owned private 404 → unavailable (create eligible); network → error (create blocked).
       put(this.failure(error, current.data || old.data ? current : old));
     }
   };

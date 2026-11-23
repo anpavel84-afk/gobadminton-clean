@@ -839,3 +839,68 @@ test('tombstone fence persists through select/pending GET/error — collectNotes
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1, 'no further delete without ready authority');
 });
+
+test('fresh never-owned GET404 refresh: loading blocks create0; error rejects; retry 404 restores; late v7 enables edit', async () => {
+  const key = `${game.id}:${contextB}`;
+  const emptyFeedback = { ...feedbackReady, myNotes: [] as PersonalNote[] };
+  const s = setup({ note: null, results: { ...result, feedback: emptyFeedback } });
+  await s.coordinator.loadResults(game.id);
+
+  // Eligible NEW unowned context: fresh selected GET404 → create0 admitted.
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB });
+  await s.coordinator.loadNote(game.id, contextB);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'eligible create' } });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'note-upsert');
+  s.coordinator.cancelReview();
+
+  // Next direct GET pending: must transition loading and reject create0 (not tomb-fence fresh absence).
+  let failNote!: (error: PostgameError) => void;
+  let noteGate: Promise<PersonalNote> = new Promise<PersonalNote>((_, reject) => { failNote = reject; });
+  s.port.note = async () => noteGate;
+  const pendingFail = s.coordinator.loadNote(game.id, contextB);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'loading');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'during pending' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 0, 'create0 rejected while fresh-absence refresh is loading');
+
+  failNote(new PostgameError('network', 503));
+  await pendingFail;
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'error');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'during error' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 0, 'create0 rejected while fresh-absence refresh errored');
+
+  // Explicit retry fresh404 restores create eligibility (no send — cancel after admitted review).
+  s.port.note = async () => { throw new PostgameError('private', 404); };
+  await s.coordinator.loadNote(game.id, contextB);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'after retry 404' } });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'note-upsert', 'fresh404 retry restores create eligibility');
+  s.coordinator.cancelReview();
+  assert.equal(s.sent.length, 0);
+
+  // Separately: deferred GET that finds existing v7 enables edit7, not create0.
+  let settleV7!: (value: PersonalNote) => void;
+  noteGate = new Promise<PersonalNote>((resolve) => { settleV7 = resolve; });
+  s.port.note = async () => noteGate;
+  const pendingV7 = s.coordinator.loadNote(game.id, contextB);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'loading');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'create during v7 pending' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 0, 'create0 still rejected while pending before v7');
+  settleV7({
+    gameId: game.id, contextId: contextB, subjectDisplay: 'Илья', text: 'off-list v7',
+    version: 7, updatedAt: date, allowedActions: { canEdit: true, canDelete: true },
+  });
+  await pendingV7;
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.version, 7);
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'wrong create0' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 0, 'existing v7 must not create0');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 7, text: 'edit v7' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1);
+  assert.equal((s.sent[0]!.body as { expectedVersion: number }).expectedVersion, 7);
+});
