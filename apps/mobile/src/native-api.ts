@@ -10,8 +10,12 @@ import { parseConsentPreview, parseOwnEligibility, parseOwnPublicRoleReviewsPage
 import type { ConsentPreview } from './public-role-reviews.ts';
 import {
   parseOwnVenueEligibility,
+  parseOwnVenueReviewsPage,
+  parseSelectedOwnVenueReview,
   parseVenueConsentPreview,
   type OwnVenueEligibility,
+  type OwnVenueReviewsPage,
+  type SelectedOwnVenueReview,
   type VenueConsentPreview,
   type VenueReviewTopic,
 } from './venue-reviews.ts';
@@ -398,6 +402,17 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       if (!isVenueId(venueId)) throw new PostgameError('invalid');
       return parseOwnVenueEligibility(
         await postgameRequest(`/me/venue-reviews/eligibility?venueId=${encodeURIComponent(venueId)}`, access),
+      );
+    },
+    venueExperienceOwnList: async (access: string): Promise<OwnVenueReviewsPage> => (
+      parseOwnVenueReviewsPage(await postgameRequest('/me/venue-reviews', access))
+    ),
+    venueExperienceOwnDetail: async (access: string, id: string): Promise<SelectedOwnVenueReview> => {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        throw new PostgameError('invalid');
+      }
+      return parseSelectedOwnVenueReview(
+        await postgameRequest(`/me/venue-reviews/${id.toLowerCase()}`, access),
       );
     },
     venueExperienceConsentPreview: async (

@@ -1356,31 +1356,121 @@ run("#394 venue experience — disposable", () => {
         assessSpy.mockRestore();
       }
 
-      // Cookie-only siblings: listMine/getMine → BEARER_NOT_ALLOWED; mutation → CREDENTIALS_CONFLICT.
+      // Owner bearer list/detail + submit_revision/withdraw; report + appeal stay cookie-only.
       const mine = await nativeApp.inject({
         method: "GET",
         url: "/v1/me/venue-reviews",
         headers: bearer(),
       });
-      expect(mine.statusCode).toBe(401);
-      expect(mine.json().code).toBe("BEARER_NOT_ALLOWED");
+      expect(mine.statusCode, mine.body).toBe(200);
+      expect(mine.headers["cache-control"]).toBe("no-store");
+      const mineItems = mine.json().items as Array<{ id: string; reviewHandle: string; version: number }>;
+      expect(Array.isArray(mineItems)).toBe(true);
+      expect(mineItems.length).toBeLessThanOrEqual(50);
+      const privateOwn = mineItems.find((row) => row.id === privateCreate.json().id);
+      expect(privateOwn).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+      });
 
       const detail = await nativeApp.inject({
         method: "GET",
         url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
         headers: bearer(),
       });
-      expect(detail.statusCode).toBe(401);
-      expect(detail.json().code).toBe("BEARER_NOT_ALLOWED");
+      expect(detail.statusCode, detail.body).toBe(200);
+      expect(detail.headers["cache-control"]).toBe("no-store");
+      expect(detail.json()).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+        venueId: seeded.venueId,
+        status: "self_draft",
+        editContext: {
+          gameId: seeded.gameId,
+          basis: { gameId: seeded.gameId, admission: "may_submit" },
+        },
+        editUnavailableReason: null,
+      });
 
-      const ownCommand = await nativeApp.inject({
+      const foreignDetail = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
+        headers: { authorization: `Bearer ${outsiderIssued.accessToken}` },
+      });
+      expect(foreignDetail.statusCode).toBe(404);
+      expect(foreignDetail.json().code).toBe("RESOURCE_UNAVAILABLE");
+      const absentDetail = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${randomUUID()}`,
+        headers: bearer(),
+      });
+      expect(absentDetail.statusCode).toBe(404);
+      expect(absentDetail.json().code).toBe("RESOURCE_UNAVAILABLE");
+
+      const reviseText = "Личная редакция через native bearer — только себе.";
+      const revise = await nativeApp.inject({
         method: "POST",
         url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
         headers: { ...bearer(randomUUID()), "content-type": "application/json" },
-        payload: { action: "withdraw", expectedVersion: 1 },
+        payload: {
+          action: "submit_revision",
+          expectedVersion: detail.json().version,
+          gameId: seeded.gameId,
+          audience: "self_draft",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: reviseText,
+          topics: ["surface"],
+        },
       });
-      expect(ownCommand.statusCode).toBe(403);
-      expect(ownCommand.json().code).toBe("CREDENTIALS_CONFLICT");
+      expect(revise.statusCode, revise.body).toBe(200);
+      expect(revise.json()).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+        version: detail.json().version + 1,
+        status: "revision_waiting",
+        receiptToken: null,
+        publicVisible: false,
+        notBefore: null,
+      });
+
+      const afterRevise = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
+        headers: bearer(),
+      });
+      expect(afterRevise.statusCode, afterRevise.body).toBe(200);
+      expect(afterRevise.json().text).toBe(reviseText);
+      expect(afterRevise.json().version).toBe(detail.json().version + 1);
+
+      const withdraw = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: { action: "withdraw", expectedVersion: afterRevise.json().version },
+      });
+      expect(withdraw.statusCode, withdraw.body).toBe(200);
+      expect(withdraw.json()).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+        version: afterRevise.json().version + 1,
+        status: "withdrawn",
+        receiptToken: null,
+        publicVisible: false,
+        notBefore: null,
+      });
+
+      const appealClosed = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          action: "appeal",
+          expectedVersion: withdraw.json().version,
+          explanation: "Native appeal остаётся cookie-only.",
+        },
+      });
+      expect(appealClosed.statusCode).toBe(403);
+      expect(appealClosed.json().code).toBe("CREDENTIALS_CONFLICT");
 
       const report = await nativeApp.inject({
         method: "POST",

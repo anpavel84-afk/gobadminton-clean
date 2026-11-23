@@ -20,7 +20,7 @@ import {
   type VenueReviewTopic,
 } from '../venue-reviews.ts';
 import { Choice, FocusContext } from './postgame.tsx';
-import { iosModalOrientations, Label, Loading, PrimaryButton, TextButton, Page, styles } from './ui.tsx';
+import { iosModalOrientations, Label, Loading, OutlineButton, PrimaryButton, TextButton, Page, styles } from './ui.tsx';
 
 type FocusTarget = ComponentRef<typeof Pressable>;
 
@@ -45,6 +45,7 @@ export function VenueExperienceComposer({
   const wasOpen = useRef(false);
   const surface = s.venueExperience;
   const open = !!surface && surface.gameId === gameId && surface.venueId === venueId;
+  const editing = open && !!surface?.reviewId;
   const draft = open ? s.venueDraft : null;
   const eligibility = open && s.venueEligibility.status === 'ready' ? s.venueEligibility.data : null;
   const basis = exactGameMaySubmitBasis(eligibility, gameId);
@@ -52,12 +53,13 @@ export function VenueExperienceComposer({
     eligibility?.bases.find(b => b.gameId === gameId) ?? (s.venueEligibility.status === 'ready' ? undefined : null),
   );
   const command = s.command && isVenueExperiencePacketKind(s.command.packet.kind) ? s.command : null;
-  const locked = !!command || !!s.venueReceipt;
+  const locked = !!command || !!s.venueReceipt || (editing && s.ownVenueReadRequired && !s.venueReceipt);
   const busy = command?.status === 'sending';
   const unknown = command?.status === 'unknown';
   const retentionBlocked = unknown && postgameIdempotencyReplayBlocked(command?.firstDispatchedAt);
   const previewHash = open ? s.venueConsentHash : null;
   const canSubmit = open && !locked && !!basis && !!draft
+    && !s.ownVenueReadRequired
     && draft.text.trim().length >= 1 && draft.text.trim().length <= 500
     && (draft.audience === 'self_draft' || (!!draft.consent && !!previewHash));
   const receiptSummary = s.venueReceipt && draft
@@ -95,8 +97,8 @@ export function VenueExperienceComposer({
       : busy
         ? 'Сохраняем…'
         : s.venueReceipt
-          ? 'Отзыв сохранён'
-          : 'Как вам площадка?';
+          ? (editing ? 'Редакция сохранена' : 'Отзыв сохранён')
+          : (editing ? 'Изменить отзыв о площадке' : 'Как вам площадка?');
 
   return (
     <Modal visible animationType="none" presentationStyle="fullScreen"
@@ -136,10 +138,14 @@ export function VenueExperienceComposer({
           ) : null}
           {busy ? <Loading title="Отправляем исходное действие…" /> : null}
           {!s.venueReceipt && !unknown ? (
-            <Label>По умолчанию текст только вам. Публичный отзыв — без профиля, игры и состава.</Label>
+            <Label>
+              {editing
+                ? 'Публичное согласие нужно подтвердить заново. По умолчанию текст только вам.'
+                : 'По умолчанию текст только вам. Публичный отзыв — без профиля, игры и состава.'}
+            </Label>
           ) : null}
           {!unknown && !s.venueReceipt && s.venueEligibility.status === 'loading'
-            ? <Loading title="Проверяем допуск по этой игре…" />
+            ? <Loading title={editing ? 'Перечитываем выбранный отзыв…' : 'Проверяем допуск по этой игре…'} />
             : null}
           {!unknown && !s.venueReceipt && (s.venueEligibility.status === 'error' || s.venueEligibility.status === 'unavailable')
             ? <Label accessibilityRole="alert">{s.venueNotice ?? 'Не удалось проверить допуск.'}</Label>
@@ -148,13 +154,17 @@ export function VenueExperienceComposer({
           {(unknown || busy || s.venueEligibility.status === 'ready' || s.venueReceipt) ? <>
             {!unknown && !busy && !s.venueReceipt && s.venueEligibility.status === 'ready' ? <>
               <Label style={{ fontWeight: '700' }}>
-                {basis ? 'Можно поделиться опытом' : 'Пока нельзя отправить'}
+                {basis ? (editing ? 'Можно сохранить редакцию' : 'Можно поделиться опытом') : 'Пока нельзя отправить'}
               </Label>
               <Label>
                 {draft.audience === 'self_draft' ? 'Только вам' : 'Публично на странице площадки'}
                 {basis?.gameTitle ? ` · игра: «${basis.gameTitle}»` : ''}
               </Label>
-              <Label>Отзыв относится только к этой игре. В публичном отзыве не будет названия игры, состава и точного времени.</Label>
+              <Label>
+                {editing
+                  ? 'Редакция использует сохранённое основание выбранной версии. Новый выбор игры недоступен.'
+                  : 'Отзыв относится только к этой игре. В публичном отзыве не будет названия игры, состава и точного времени.'}
+              </Label>
               {help ? <Label accessibilityRole="status">{help}</Label> : null}
             </> : null}
             {(unknown || busy || s.venueReceipt) ? (
@@ -264,6 +274,12 @@ export function VenueExperienceComposer({
                 ? <Label>Квитанция: {s.venueReceipt.receiptToken}</Label>
                 : null}
               <Label>Актуальный статус отзыва о площадке можно посмотреть на сайте.</Label>
+              {editing && s.ownVenueReadRequired && surface?.reviewId ? (
+                <OutlineButton
+                  title="Перечитать выбранный отзыв"
+                  onPress={() => void owner.loadOwnVenueSelected(surface.reviewId!, { clearConflict: true })}
+                />
+              ) : null}
             </View>
           ) : null}
         </View>

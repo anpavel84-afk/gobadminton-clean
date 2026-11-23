@@ -1,0 +1,345 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
+import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
+import { PostgameError, wire } from '../src/postgame.ts';
+import {
+  buildVenueExperienceSubmitRevisionBody,
+  buildVenueExperienceWithdrawBody,
+  isSelectedOwnVenueReview,
+  isSubmitVenueReviewReceipt,
+  isVenueExperienceCommandPacket,
+  isVenueExperienceCreatePacket,
+  isVenueExperiencePacketKind,
+  isWithdrawVenueReviewReceipt,
+  mayEditOwnVenue,
+  mayWithdrawOwnVenue,
+  parseOwnVenueReviewsPage,
+  parseSelectedOwnVenueReview,
+  postgameIdempotencyReplayBlocked,
+  type OwnVenueReview,
+  type SelectedOwnVenueReview,
+} from '../src/venue-reviews.ts';
+
+const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const gameId = '11111111-1111-4111-8111-111111111111';
+const venueId = '22222222-2222-4222-8222-222222222222';
+const reviewId = '55555555-5555-4555-8555-555555555555';
+const handle = 'abcdef0123456789abcdef0123456789';
+const actor = {
+  actorId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  generation: 1,
+};
+
+const ownRow = (version = 1): OwnVenueReview => ({
+  id: reviewId,
+  reviewHandle: handle,
+  venueId,
+  status: 'self_draft',
+  version,
+  audience: 'self_draft',
+  text: 'Покрытие удобное',
+  topics: ['surface'],
+  pendingRevision: null,
+  approvedRevision: 1,
+  publicVisible: false,
+  notBefore: null,
+  firstEligibleAt: '2026-01-01T12:00:00.000Z',
+  receiptToken: null,
+});
+
+const selected = (version = 1): SelectedOwnVenueReview => ({
+  ...ownRow(version),
+  editContext: {
+    revisionId: '33333333-3333-4333-8333-333333333333',
+    resourceVersion: 1,
+    gameId,
+    basis: {
+      gameId,
+      gameTitle: 'Practice',
+      admission: 'may_submit',
+      reason: null,
+      outcomeVersion: 1,
+      attendanceVersion: 1,
+      firstEligibleAt: '2026-01-01T12:00:00.000Z',
+      helpHint: null,
+    },
+  },
+  editUnavailableReason: null,
+});
+
+function idlePort(overrides: Partial<ConstructorParameters<typeof PostgameCoordinator>[0]> = {}) {
+  return {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], writesEnabled: true, installed: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async () => ({
+      gameId,
+      outcome: { value: 'held' as const, version: 1, reason: null, provenance: null },
+      allowedActions: { canRecordOutcome: false },
+    }),
+    send: async () => { throw new PostgameError('network'); },
+    venueExperienceOwnList: async () => ({ items: [ownRow()] }),
+    venueExperienceOwnDetail: async () => selected(),
+    venueExperienceEligibility: async () => ({ bases: [] }),
+    venueExperienceConsentPreview: async () => ({
+      consentProjectionHash: 'a'.repeat(64),
+      authorLabel: 'Участник игры',
+    }),
+    ...overrides,
+  };
+}
+
+const tick = () => new Promise(r => setImmediate(r));
+
+test('parsers: own list/selected/withdraw/revision receipts; create packet remains distinct', () => {
+  const page = parseOwnVenueReviewsPage({ items: [ownRow()] });
+  assert.equal(page.items.length, 1);
+  assert.equal(mayWithdrawOwnVenue(page.items[0]!), true);
+  const detail = parseSelectedOwnVenueReview(selected());
+  assert.equal(isSelectedOwnVenueReview(detail, ownRow()), true);
+  assert.equal(mayEditOwnVenue(detail), true);
+  assert.equal(isVenueExperiencePacketKind('venue-experience-command'), true);
+  assert.equal(isVenueExperienceCreatePacket({ kind: 'venue-experience-command' }), false);
+  assert.equal(isVenueExperienceCommandPacket({ kind: 'venue-experience-command' }), true);
+
+  const withdrawBody = buildVenueExperienceWithdrawBody(ownRow(3));
+  assert.deepEqual(withdrawBody, { action: 'withdraw', expectedVersion: 3 });
+  assert.equal(isWithdrawVenueReviewReceipt({
+    id: reviewId,
+    version: 4,
+    status: 'withdrawn',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  }, { id: reviewId, reviewHandle: handle, version: 3 }), true);
+
+  const reviseBody = buildVenueExperienceSubmitRevisionBody({
+    own: detail,
+    audience: 'self_draft',
+    text: 'Новая редакция',
+    topics: ['lighting'],
+  });
+  assert.equal(reviseBody.action, 'submit_revision');
+  assert.equal(reviseBody.expectedVersion, 1);
+  assert.equal(isSubmitVenueReviewReceipt({
+    id: reviewId,
+    version: 2,
+    status: 'revision_waiting',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  }, { id: reviewId, reviewHandle: handle, version: 1 }, 'self_draft'), true);
+
+  const withdrawWire = wire({
+    kind: 'venue-experience-command',
+    gameId: 'own-venue',
+    venueId,
+    reviewId,
+    body: withdrawBody,
+  });
+  assert.equal(withdrawWire.path, `/me/venue-reviews/${reviewId}/commands`);
+  assert.deepEqual(Object.keys(withdrawWire.body as object).sort(), ['action', 'expectedVersion']);
+});
+
+test('Profile history → selected edit/withdraw; conflict fences; create competition blocked', async () => {
+  const posts: Array<{ kind: string; path: string; body: unknown; key: string }> = [];
+  let detailVersion = 1;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnDetail: async () => selected(detailVersion),
+      send: async (packet) => {
+        posts.push({
+          kind: packet.kind,
+          path: packet.path,
+          body: packet.body,
+          key: packet.key,
+        });
+        if (!isVenueExperienceCommandPacket(packet)) {
+          throw new Error(`expected venue-experience-command, got ${packet.kind}`);
+        }
+        if (packet.body.action === 'withdraw') {
+          return {
+            id: reviewId,
+            version: packet.body.expectedVersion + 1,
+            status: 'withdrawn',
+            reviewHandle: handle,
+            receiptToken: null,
+            publicVisible: false,
+            notBefore: null,
+          };
+        }
+        return {
+          id: reviewId,
+          version: packet.body.expectedVersion + 1,
+          status: 'revision_waiting',
+          reviewHandle: handle,
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `own-key-${posts.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueSurface?.mode, 'history');
+  assert.equal(owner.getSnapshot().ownVenue.status, 'ready');
+  assert.equal(owner.getSnapshot().ownVenue.data?.items[0]?.id, reviewId);
+
+  // Competing exact-game create surface blocks edit replace; withdraw confirm still possible.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ text: 'Создать параллельно', topics: ['surface'] });
+  owner.openOwnVenueEdit(ownRow());
+  await tick();
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Создать параллельно');
+  owner.beginOwnVenueWithdraw(ownRow());
+  assert.equal(owner.getSnapshot().ownVenueWithdraw?.id, reviewId);
+  owner.cancelOwnVenueWithdraw();
+  owner.closeVenueExperience();
+
+  owner.openOwnVenueEdit(ownRow());
+  await tick();
+  const editSurface = owner.getSnapshot().venueExperience;
+  assert.equal(editSurface?.reviewId, reviewId);
+  assert.equal(editSurface?.gameId, gameId);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Покрытие удобное');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+
+  owner.patchVenueDraft({ text: 'Обновлённый личный текст', topics: ['surface'] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0]!.kind, 'venue-experience-command');
+  assert.match(posts[0]!.path, /\/me\/venue-reviews\/55555555.*\/commands/);
+  const reviseBody = posts[0]!.body as { action: string; consentProjectionHash?: string };
+  assert.equal(reviseBody.action, 'submit_revision');
+  assert.equal(reviseBody.consentProjectionHash, undefined);
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueReceipt?.status, 'revision_waiting');
+
+  // Conflict: selected version moved under fresh dispatch.
+  owner.closeVenueExperience();
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, false);
+  detailVersion = 2;
+  owner.openOwnVenueEdit(ownRow(1));
+  await tick();
+  // After forEdit load, selected is v2; patch then force newer on submit recheck.
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+  owner.patchVenueDraft({ text: 'Ещё одна редакция', topics: ['lighting'] });
+  detailVersion = 3;
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(posts.length, 1); // no second POST
+
+  // Withdraw needs no game admission — sentinel gameId own-venue.
+  const withdrawOwner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => ({ items: [ownRow(3)] }),
+      send: async (packet) => {
+        posts.push({ kind: packet.kind, path: packet.path, body: packet.body, key: packet.key });
+        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        assert.equal(packet.gameId, 'own-venue');
+        return {
+          id: reviewId,
+          version: 4,
+          status: 'withdrawn',
+          reviewHandle: handle,
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `wd-${posts.length + 1}`);
+  withdrawOwner.setActor(actor);
+  withdrawOwner.openOwnVenueHistory();
+  await tick();
+  withdrawOwner.beginOwnVenueWithdraw(ownRow(3));
+  await withdrawOwner.confirmOwnVenueWithdraw();
+  await tick();
+  const withdrawPost = posts[posts.length - 1]!;
+  assert.equal(withdrawPost.kind, 'venue-experience-command');
+  assert.deepEqual(withdrawPost.body, { action: 'withdraw', expectedVersion: 3 });
+  assert.equal(withdrawOwner.getSnapshot().venueNotice?.includes('отозван'), true);
+});
+
+test('24h UNKNOWN owner packet: retention blocks replay; GET does not settle', async () => {
+  let now = 1_000_000;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      send: async () => { throw new PostgameError('network', 503); },
+    }),
+  }, () => 'unknown-own-key');
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.beginOwnVenueWithdraw(ownRow());
+  await owner.confirmOwnVenueWithdraw();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(isVenueExperienceCommandPacket(owner.getSnapshot().command!.packet), true);
+  const first = owner.getSnapshot().command!.firstDispatchedAt;
+  assert.equal(typeof first, 'number');
+
+  // List refresh must not clear UNKNOWN.
+  await owner.loadOwnVenueReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, 'unknown-own-key');
+
+  assert.equal(postgameIdempotencyReplayBlocked(first, first! + 24 * 60 * 60 * 1000), true);
+  // Controllable clock via blocked helper — coordinator uses Date.now; stamp age manually for fence unit.
+  assert.equal(postgameIdempotencyReplayBlocked(now, now + 23 * 60 * 60 * 1000), false);
+});
+
+test('source wiring: Profile entry + controller bearer + APK38 + fixture owner coverage', () => {
+  const profile = read('../app/profile.tsx');
+  assert.match(profile, /OwnVenueReviewsEntry/);
+  assert.match(profile, /OwnVenueReviewsHost/);
+  assert.match(profile, /openOwnVenueHistory/);
+  assert.match(profile, /Отзывы о площадках/);
+
+  const host = read('../src/components/own-venue-reviews.tsx');
+  assert.match(host, /Перечитать выбранный отзыв/);
+  assert.match(host, /Отозвать отзыв/);
+  assert.match(host, /experienceReviews/);
+  assert.doesNotMatch(host, /game.?picker|новый выбор игры/i);
+
+  const controller = read('../../api/src/venues/venue-reviews.controller.ts');
+  assert.match(controller, /listMine[\s\S]*requirePrincipal/);
+  assert.match(controller, /getMine[\s\S]*requirePrincipal/);
+  assert.match(controller, /submit_revision[\s\S]*withdraw/);
+  assert.match(controller, /requirePrincipalMutation/);
+  assert.match(controller, /requireCookieMutation/);
+
+  const fixture = read('../../api/test/integration/venue-reviews.disposable.test.ts');
+  assert.match(fixture, /Owner bearer list\/detail \+ submit_revision\/withdraw/);
+  assert.match(fixture, /Native appeal остаётся cookie-only/);
+  assert.doesNotMatch(fixture, /Cookie-only siblings: listMine\/getMine/);
+
+  const openapi = read('../../../packages/contracts/openapi.json');
+  assert.match(openapi, /"operationId": "listOwnVenueReviews"[\s\S]*"NativeBearer"/);
+  assert.match(openapi, /"operationId": "getOwnVenueReview"[\s\S]*"NativeBearer"/);
+  assert.match(openapi, /"operationId": "ownVenueReviewCommand"[\s\S]*"NativeBearer"/);
+
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 38);
+
+  const auth = read('../src/auth-coordinator.ts');
+  assert.match(auth, /venueExperienceOwnList/);
+  assert.match(auth, /venueExperienceOwnDetail/);
+  const api = read('../src/native-api.ts');
+  assert.match(api, /\/me\/venue-reviews\/\$\{/);
+  assert.match(api, /venueExperienceOwnList/);
+});

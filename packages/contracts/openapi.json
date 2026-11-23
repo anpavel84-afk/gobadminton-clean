@@ -24283,6 +24283,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "responses": {
@@ -24310,7 +24313,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Owner private list (at most 50 latest). NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404. Cookie session remains. Absence from the list is not proof of deletion."
       },
       "post": {
         "operationId": "createVenueReview",
@@ -24615,10 +24619,13 @@
           "Venues"
         ],
         "summary": "Own venue review commands (revise/withdraw/appeal)",
-        "description": "#394 + #506 B1c. Public submit_revision/resubmit use the same venue_review_body gate as create (422/503/429; ALLOW stays human-pending). self_draft revise, withdraw and appeal are provider-independent.",
+        "description": "#394 + #506 B1c + #522. Public submit_revision/resubmit use the same venue_review_body gate as create (422/503/429; ALLOW stays human-pending). self_draft revise, withdraw and appeal are provider-independent. NativeBearer opt-in only for submit_revision and withdraw while enabled; mixed credentials rejected. appeal/resubmit remain cookie-only (Origin + X-CSRF-Token). Bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -24634,19 +24641,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookieSession mutations (exact allowed consumer Origin + matching X-CSRF-Token). Not required for NativeBearer submit_revision/withdraw; bearer must not supply cookie credentials. appeal/resubmit require cookie CSRF."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Must match a configured consumer web origin when using cookieSession. Not required for NativeBearer submit_revision/withdraw."
           },
           {
             "name": "Idempotency-Key",
@@ -25479,10 +25487,13 @@
           "Venues"
         ],
         "summary": "Read exactly one own venue review and its persisted edit basis",
-        "description": "Cookie owner only; other owner, absent and malformed id share RESOURCE_UNAVAILABLE 404. No-store, consistent read-only snapshot; no fence/window writes. Exact selected pending-first revision.game_id, no latest30/latest50 admission scan. Missing history or withdrawn revision is unavailable for editing; hold/window/canonical checks use existing write policy. This read never proves an unresolved command completed and never authorizes a future write. Withdrawal remains independent. Private provenance is never part of public review DTOs.",
+        "description": "Owner selected read. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie session remains. Other owner, absent and malformed id share RESOURCE_UNAVAILABLE 404. No-store, consistent read-only snapshot; no fence/window writes. Exact selected pending-first revision.game_id, no latest30/latest50 admission scan. Missing history or withdrawn revision is unavailable for editing; hold/window/canonical checks use existing write policy. This read never proves an unresolved command completed and never authorizes a future write. Withdrawal remains independent. Private provenance is never part of public review DTOs. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [

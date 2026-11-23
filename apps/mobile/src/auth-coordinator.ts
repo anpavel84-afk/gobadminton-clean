@@ -83,6 +83,14 @@ export class AuthCoordinator {
         access => deps.api.venueExperienceEligibility(access, venueId),
         actor,
       ),
+      venueExperienceOwnList: actor => this.participationRead(
+        access => deps.api.venueExperienceOwnList(access),
+        actor,
+      ),
+      venueExperienceOwnDetail: (actor, id) => this.participationRead(
+        access => deps.api.venueExperienceOwnDetail(access, id),
+        actor,
+      ),
       venueExperienceConsentPreview: (actor, body) => this.participationRead(
         access => deps.api.venueExperienceConsentPreview(access, body),
         actor,
