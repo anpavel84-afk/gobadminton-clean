@@ -196,6 +196,18 @@ export class PostgameCoordinator {
     }
     if (changed) this.show({ knownNoteRefs: known, notes: sources });
   }
+  /** Clear scoped create/edit drafts for a confirmed-absent owned context; unrelated selections stay. */
+  private clearAbsentContextDrafts(gameId: string, contextId: string) {
+    const key = noteKey(gameId, contextId);
+    const noteDrafts = {...this.snapshot.noteDrafts}; delete noteDrafts[key];
+    const createDraft = noteDrafts[gameId];
+    if (createDraft?.selectedContextId === contextId) {
+      // Confirmed absence of the selected context must clear its create-form text (prefill from loadNote),
+      // not retain private content in the reachable NotesSection TextInput. Unrelated contexts stay intact.
+      noteDrafts[gameId] = { ...createDraft, selectedContextId: undefined, createText: '' };
+    }
+    return noteDrafts;
+  }
   private tombstoneOwnedNote(gameId: string, contextId: string, version: number) {
     const key = noteKey(gameId, contextId);
     const prior = this.noteTombs.get(key) ?? 0;
@@ -208,14 +220,7 @@ export class PostgameCoordinator {
     const known = {...this.snapshot.knownNoteRefs}; delete known[key];
     // Keep definitive unavailable so stale feedback.myNotes cannot render/resurrect the row.
     const notes = {...this.snapshot.notes, [key]: { status: 'unavailable' as const }};
-    const noteDrafts = {...this.snapshot.noteDrafts}; delete noteDrafts[key];
-    const createDraft = noteDrafts[gameId];
-    if (createDraft?.selectedContextId === contextId) {
-      // Confirmed delete of the selected context must clear its create-form text (prefill from loadNote),
-      // not retain private content in the reachable NotesSection TextInput. Unrelated contexts stay intact.
-      noteDrafts[gameId] = { ...createDraft, selectedContextId: undefined, createText: '' };
-    }
-    this.show({ knownNoteRefs: known, notes, noteDrafts });
+    this.show({ knownNoteRefs: known, notes, noteDrafts: this.clearAbsentContextDrafts(gameId, contextId) });
   }
   private shadowKnownNoteAbsence(gameId: string, contextId: string) {
     const key = noteKey(gameId, contextId);
@@ -229,7 +234,9 @@ export class PostgameCoordinator {
     this.noteVersionFloor.delete(key);
     this.noteAwaitingTyped.delete(key);
     const known = {...this.snapshot.knownNoteRefs}; delete known[key];
-    this.show({ knownNoteRefs: known });
+    // Same selected-context draft privacy cleanup as DELETE ACK — current known GET404 must not leave
+    // private prefill in NotesSection TextInput; unrelated selected context B drafts stay intact.
+    this.show({ knownNoteRefs: known, noteDrafts: this.clearAbsentContextDrafts(gameId, contextId) });
   }
   loadOwn = async (more = false) => {
     if (this.snapshot.own.status === 'loading') return;

@@ -1249,3 +1249,216 @@ test('confirmed delete clears selected createText prefill; unrelated context dra
   assert.equal(other.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'ready');
   assert.equal(other.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.data?.text, 'other-owned');
 });
+
+test('current known GET404 clears selected create/edit drafts; unrelated B and fences preserved', async () => {
+  const privateText = 'Личная заметка';
+  const keyA = `${game.id}:${contextA}`;
+  const keyB = `${game.id}:${contextB}`;
+  const s = setup({
+    note: { ...note, text: privateText },
+    results: {
+      ...result,
+      feedback: { ...feedbackReady, myNotes: [{ ...note, text: privateText }] },
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  // Select A → direct GET prefills createText (NOTES33861 repro path).
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA });
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[keyA]?.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, privateText);
+  s.coordinator.setNoteDraft(game.id, contextA, { editText: 'scoped-edit-A' });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[keyA]?.editText, 'scoped-edit-A');
+
+  // Current owned GET404 via shadowKnownNoteAbsence — same draft privacy as DELETE ACK.
+  s.notes.delete(keyA);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[keyA]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().knownNoteRefs[keyA], undefined);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, undefined,
+    'selected form context cleared');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText ?? '', '',
+    'createText empty — TextInput cannot retain deleted private content');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[keyA], undefined, 'scoped editDraft cleared');
+  const listed = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.ok(!listed.some(n => n.text === privateText), 'collectNotes hides deleted private text');
+  assert.equal(listed.length, 0);
+
+  // Unrelated B dirty draft survives A404.
+  const other = setup({
+    note: { ...note, text: privateText },
+    results: {
+      ...result,
+      feedback: {
+        ...feedbackReady,
+        myNotes: [
+          { ...note, text: privateText },
+          {
+            ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'other-owned',
+            version: 3, allowedActions: { canEdit: true, canDelete: true },
+          },
+        ],
+      },
+    },
+  });
+  other.notes.set(keyB, {
+    ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'other-owned',
+    version: 3, allowedActions: { canEdit: true, canDelete: true },
+  });
+  await other.coordinator.loadResults(game.id);
+  await other.coordinator.loadNote(game.id, contextA);
+  other.coordinator.setNoteDraft(game.id, null, {
+    selectedContextId: contextB, createText: 'unrelated-dirty-B',
+  });
+  await other.coordinator.loadNote(game.id, contextB);
+  assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'unrelated-dirty-B');
+  other.notes.delete(keyA);
+  await other.coordinator.loadNote(game.id, contextA);
+  assert.equal(other.coordinator.getSnapshot().notes[keyA]?.status, 'unavailable');
+  assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
+  assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'unrelated-dirty-B',
+    'unrelated selected context B dirty draft must survive A404');
+  assert.equal(other.coordinator.getSnapshot().notes[keyB]?.status, 'ready');
+
+  // UNKNOWN original packet retained; later historical ACK keeps card/form private content hidden.
+  const unk = setup({
+    note: { ...note, text: 'before-put', version: 1 },
+    results: {
+      ...result,
+      feedback: { ...feedbackReady, myNotes: [{ ...note, text: 'before-put', version: 1 }] },
+    },
+  });
+  await unk.coordinator.loadResults(game.id);
+  unk.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA });
+  await unk.coordinator.loadNote(game.id, contextA);
+  assert.equal(unk.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'before-put');
+  unk.port.send = async (p) => {
+    unk.sent.push(p);
+    if (p.kind !== 'note-upsert') throw new PostgameError('invalid');
+    const next: PersonalNote = {
+      gameId: p.gameId, contextId: p.contextId, subjectDisplay: 'Анна',
+      text: p.body.text, version: p.body.expectedVersion + 1, updatedAt: date,
+      allowedActions: { canEdit: true, canDelete: true },
+    };
+    unk.notes.set(`${p.gameId}:${p.contextId}`, next);
+    throw new PostgameError('network', 503);
+  };
+  unk.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 1, text: 'UNKNOWN-PRIVATE-PUT' },
+  });
+  await unk.coordinator.confirm();
+  const original = unk.coordinator.getSnapshot().command!.packet;
+  assert.equal(unk.coordinator.getSnapshot().command?.status, 'unknown');
+  assert.equal(original.method, 'PUT');
+  assert.equal(original.key, 'key-0');
+  assert.equal(original.actor.actorId, actor.actorId);
+  assert.ok(original.kind === 'note-upsert');
+  assert.equal(original.body.text, 'UNKNOWN-PRIVATE-PUT');
+  unk.notes.delete(keyA);
+  await unk.coordinator.loadNote(game.id, contextA);
+  assert.equal(unk.coordinator.getSnapshot().notes[keyA]?.status, 'unavailable');
+  assert.equal(unk.coordinator.getSnapshot().noteDrafts[game.id]?.createText ?? '', '');
+  assert.equal(unk.coordinator.getSnapshot().command?.packet, original, 'UNKNOWN original packet retained');
+  unk.port.note = async () => { throw new PostgameError('private', 404); };
+  unk.port.send = async (p) => {
+    unk.sent.push(p);
+    assert.equal(p, original);
+    return {
+      gameId: game.id, contextId: contextA, subjectDisplay: 'Анна',
+      text: 'UNKNOWN-PRIVATE-PUT', version: 2, updatedAt: date,
+      allowedActions: { canEdit: true, canDelete: true },
+    };
+  };
+  await unk.coordinator.reconcile(game.id);
+  assert.equal(unk.coordinator.getSnapshot().command, null);
+  assert.equal(unk.coordinator.getSnapshot().notes[keyA]?.status, 'unavailable');
+  assert.equal(unk.coordinator.getSnapshot().knownNoteRefs[keyA], undefined);
+  assert.equal(unk.coordinator.getSnapshot().noteDrafts[game.id]?.createText ?? '', '',
+    'form private content stays hidden after historical ACK');
+  const listedAfterAck = collectNotes(
+    game.id,
+    unk.coordinator.getSnapshot().games[game.id]?.data,
+    unk.coordinator.getSnapshot().notes,
+    unk.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.ok(!listedAfterAck.some(n =>
+    n.text === 'UNKNOWN-PRIVATE-PUT' || n.text === 'before-put' || n.text === privateText));
+  assert.equal(listedAfterAck.length, 0);
+
+  // Stale 404 under newer accepted read must NOT clear legitimate own dirty draft.
+  let failOlder!: (error: PostgameError) => void;
+  const olderGate = new Promise<PersonalNote>((_, reject) => { failOlder = reject; });
+  let releaseResults!: (value: Results) => void;
+  const resultsGate = new Promise<Results>((resolve) => { releaseResults = resolve; });
+  const fenceSent: Packet[] = [];
+  const fencePort = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async () => resultsGate,
+    note: async () => olderGate,
+    send: async (p: Packet): Promise<unknown> => {
+      fenceSent.push(p);
+      throw new PostgameError('invalid');
+    },
+  };
+  const fence = new PostgameCoordinator(fencePort, () => `fence-${fenceSent.length}`);
+  fence.setActor(actor);
+  const ownedV1: PersonalNote = {
+    gameId: game.id, contextId: contextB, subjectDisplay: 'Илья', text: 'web-created-v1',
+    version: 1, updatedAt: date, allowedActions: { canEdit: true, canDelete: true },
+  };
+  fence.setNoteDraft(game.id, null, { selectedContextId: contextB, createText: 'legitimate-dirty-B' });
+  const older404 = fence.loadNote(game.id, contextB);
+  const newerResults = fence.loadResults(game.id);
+  releaseResults({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [ownedV1] },
+  });
+  await newerResults;
+  assert.equal(fence.getSnapshot().notes[keyB]?.status, 'ready');
+  assert.equal(fence.getSnapshot().noteDrafts[game.id]?.createText, 'legitimate-dirty-B');
+  failOlder(new PostgameError('private', 404));
+  await older404;
+  assert.equal(fence.getSnapshot().notes[keyB]?.status, 'ready', 'stale 404 ignored under newer accepted read');
+  assert.equal(fence.getSnapshot().noteDrafts[game.id]?.createText, 'legitimate-dirty-B',
+    'stale 404 must not clear legitimate dirty draft');
+  assert.equal(fence.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
+
+  // Transient late network error MUST NOT clear legitimate own dirty draft (negative gen fence).
+  let failNet!: (error: PostgameError) => void;
+  const netGate = new Promise<PersonalNote>((_, reject) => { failNet = reject; });
+  let releaseResults2!: (value: Results) => void;
+  const resultsGate2 = new Promise<Results>((resolve) => { releaseResults2 = resolve; });
+  fencePort.note = async () => netGate;
+  fencePort.results = async () => resultsGate2;
+  fence.setActor(null);
+  fence.setActor({ ...actor, sessionId: 'session-net-draft', generation: 2 });
+  fence.setNoteDraft(game.id, null, { selectedContextId: contextB, createText: 'still-dirty-net' });
+  const olderNet = fence.loadNote(game.id, contextB);
+  const newerResults2 = fence.loadResults(game.id);
+  releaseResults2({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [ownedV1] },
+  });
+  await newerResults2;
+  assert.equal(fence.getSnapshot().notes[keyB]?.status, 'ready');
+  assert.equal(fence.getSnapshot().noteDrafts[game.id]?.createText, 'still-dirty-net');
+  failNet(new PostgameError('network', 503));
+  await olderNet;
+  assert.equal(fence.getSnapshot().notes[keyB]?.status, 'ready', 'late network must not downgrade ready');
+  assert.equal(fence.getSnapshot().noteDrafts[game.id]?.createText, 'still-dirty-net',
+    'transient network must not clear legitimate dirty draft');
+  assert.equal(fence.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
+  fence.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextB,
+    body: { expectedVersion: 1, text: 'edit after net' },
+  });
+  assert.equal(fence.getSnapshot().review?.kind, 'note-upsert', 'typed ready writes preserved');
+});
