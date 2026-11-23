@@ -60,8 +60,10 @@ import {
 } from './public-role-reviews.ts';
 import {
   parseActorAwareRoleReputationSummary,
+  parseRoleReputationSummary,
   type ActorAwareRoleReputationSummary,
   type ActorAwarePublicRoleReviewItem,
+  type RoleKind,
 } from './role-reputation.ts';
 type PublicMutationBind = {
   surfaceGen: number;
@@ -163,6 +165,11 @@ type Snapshot = {
     target: PublicRoleAuthorTarget | null;
     reader: PublicRoleReaderTarget | null;
     gen: number;
+    /**
+     * Resumed cold-auth author only: keep the original game across eligibility reloads.
+     * Never silent-fallback to another basis when the frozen game disappears.
+     */
+    resumeFrozenGameId?: string;
   };
   publicEligibility: Source<OwnEligibility>;
   publicOwn: Source<OwnPublicRoleReviewsPage>;
@@ -222,6 +229,20 @@ type Port = {
     roleHandle: string,
     query: { gameId?: string; cursor?: string; limit?: number },
     expected?: { roleHandle?: string; role?: ActorAwareRoleReputationSummary['role'] },
+  ) => Promise<unknown>;
+  /**
+   * Optional credential-omit public game→role projection (gameSurfaceOpen).
+   * Missing port fail-closes resumed author/game-reader only; normal signed-in opens stay intact.
+   */
+  publicGameRoleOrigin?: (gameId: string, role: RoleKind) => Promise<unknown>;
+  /**
+   * Optional credential-omit public player→role projection.
+   * Missing port fail-closes resumed profile-reader only.
+   */
+  publicPlayerRoleOrigin?: (
+    publicPlayerId: string,
+    role: RoleKind,
+    query?: { cursor?: string; limit?: number },
   ) => Promise<unknown>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
@@ -1184,6 +1205,11 @@ export class PostgameCoordinator {
     const feedback = this.snapshot.games[gameId]?.data?.feedback;
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
   }
+  /** Drop warm guest author/reader targets — cancel/expiry/replacement login must not inherit them. */
+  clearPendingPublicGoals = () => {
+    if (!this.snapshot.pendingPublicAuthor && !this.snapshot.pendingPublicReader) return;
+    this.show({ pendingPublicAuthor: null, pendingPublicReader: null });
+  };
   /** Guest: remember bounded role/game only; consent/text never retained across auth. */
   rememberPendingPublicAuthor = (target: PublicRoleAuthorTarget) => {
     this.show({
@@ -1235,7 +1261,7 @@ export class PostgameCoordinator {
     this.openPublicReader(pending);
     return true;
   };
-  openPublicComposer = (target: PublicRoleAuthorTarget) => {
+  openPublicComposer = (target: PublicRoleAuthorTarget, opts?: { resumeFrozen?: boolean }) => {
     if (!this.snapshot.actor) return;
     const draft = emptyPublicRoleDraft(target.gameId);
     this.publicEligibilityGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++;
@@ -1245,6 +1271,7 @@ export class PostgameCoordinator {
         target: Object.freeze({ ...target }),
         reader: null,
         gen: this.publicSurfaceGen,
+        ...(opts?.resumeFrozen ? { resumeFrozenGameId: target.gameId } : {}),
       },
       publicEligibility: { status: 'idle' },
       publicReader: { status: 'idle' },
@@ -1261,9 +1288,104 @@ export class PostgameCoordinator {
     });
     void this.loadPublicEligibility();
   };
+  /**
+   * Cold-auth resumed author goal: credential-omit public game/role projection + exact eligibility
+   * before opening. Handle-wide eligibility alone cannot authorize; missing origin port fail-closes.
+   */
+  openResumedPublicComposer = async (
+    target: PublicRoleAuthorTarget,
+    opts?: { isLive?: () => boolean },
+  ): Promise<boolean> => {
+    const actor = this.snapshot.actor;
+    if (!actor) return false;
+    const originPort = this.port.publicGameRoleOrigin;
+    if (!originPort) return false;
+    const live = () => (!opts?.isLive || opts.isLive())
+      && !!this.snapshot.actor && sameActor(actor, this.snapshot.actor)
+      && !this.snapshot.publicSurface;
+    if (!live()) return false;
+    const eligibilityGen = ++this.publicEligibilityGen;
+    const surfaceGen = this.publicSurfaceGen;
+    try {
+      const origin = parseRoleReputationSummary(
+        await originPort(target.gameId, target.role),
+        { role: target.role },
+      );
+      if (eligibilityGen !== this.publicEligibilityGen || surfaceGen !== this.publicSurfaceGen || !live()) return false;
+      if (origin.roleHandle !== target.roleHandle.toLowerCase() || origin.role !== target.role) return false;
+      if (origin.availability !== 'available') return false;
+      const data = parseOwnEligibility(await this.port.publicEligibility(actor, target.roleHandle), target.roleHandle);
+      if (eligibilityGen !== this.publicEligibilityGen || surfaceGen !== this.publicSurfaceGen || !live()) return false;
+      if (data.role !== target.role) return false;
+      if (!eligibleBases(data).some(basis => basis.gameId === target.gameId)) return false;
+      if (!live()) return false;
+      this.openPublicComposer(target, { resumeFrozen: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /**
+   * Cold-auth resumed reader: resolve current public game/profile role→handle before by-handle read.
+   * Denial, replaced origin, or role/handle mismatch suppresses the sheet (no fallback origin).
+   */
+  openResumedPublicReader = async (
+    target: PublicRoleReaderTarget,
+    opts?: { isLive?: () => boolean },
+  ): Promise<boolean> => {
+    const actor = this.snapshot.actor;
+    if (!actor) return false;
+    const live = () => (!opts?.isLive || opts.isLive())
+      && !!this.snapshot.actor && sameActor(actor, this.snapshot.actor)
+      && !this.snapshot.publicSurface;
+    if (!live()) return false;
+    const readerGen = ++this.publicReaderGen;
+    const surfaceGen = this.publicSurfaceGen;
+    try {
+      if (target.origin.kind === 'game') {
+        const originPort = this.port.publicGameRoleOrigin;
+        if (!originPort) return false;
+        const origin = parseRoleReputationSummary(
+          await originPort(target.origin.gameId, target.role),
+          { role: target.role },
+        );
+        if (readerGen !== this.publicReaderGen || surfaceGen !== this.publicSurfaceGen || !live()) return false;
+        if (origin.roleHandle !== target.roleHandle.toLowerCase() || origin.role !== target.role) return false;
+        if (origin.availability !== 'available') return false;
+      } else {
+        const originPort = this.port.publicPlayerRoleOrigin;
+        if (!originPort) return false;
+        const origin = parseRoleReputationSummary(
+          await originPort(target.origin.publicPlayerId, target.role),
+          { role: target.role },
+        );
+        if (readerGen !== this.publicReaderGen || surfaceGen !== this.publicSurfaceGen || !live()) return false;
+        if (origin.roleHandle !== target.roleHandle.toLowerCase() || origin.role !== target.role) return false;
+        if (origin.availability !== 'available') return false;
+      }
+      const page = await this.port.publicRoleByHandle!(
+        actor,
+        target.roleHandle,
+        this.readerQuery(target),
+        { roleHandle: target.roleHandle, role: target.role },
+      );
+      const parsed = parseActorAwareRoleReputationSummary(page, {
+        roleHandle: target.roleHandle,
+        role: target.role,
+      });
+      if (readerGen !== this.publicReaderGen || surfaceGen !== this.publicSurfaceGen || !live()) return false;
+      if (parsed.roleHandle !== target.roleHandle || parsed.role !== target.role) return false;
+      if (!live()) return false;
+      this.openPublicReader(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   openOwnPublicHistory = () => {
     if (!this.snapshot.actor) return;
-    this.publicOwnGen++; this.publicSurfaceGen++; this.publicReaderGen++;
+    // Bump eligibility gen so a delayed resumed author open cannot overwrite this surface.
+    this.publicEligibilityGen++; this.publicOwnGen++; this.publicSurfaceGen++; this.publicReaderGen++;
     this.show({
       publicSurface: { mode: 'history', target: null, reader: null, gen: this.publicSurfaceGen },
       publicOwn: { status: 'idle' },
@@ -1282,7 +1404,8 @@ export class PostgameCoordinator {
   /** Actor-aware public role reviews sheet — game or profile origin; no anonymous fallback. */
   openPublicReader = (target: PublicRoleReaderTarget) => {
     if (!this.snapshot.actor) return;
-    this.publicReaderGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
+    // Bump eligibility gen so a delayed resumed author open cannot overwrite this surface.
+    this.publicEligibilityGen++; this.publicReaderGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
     this.publicReaderReplyFloor.clear();
     this.show({
       publicSurface: {
@@ -1901,6 +2024,30 @@ export class PostgameCoordinator {
           publicNotice: preserveNotice && priorNotice
             ? priorNotice
             : 'Роль не совпала с карточкой. Обновите отзывы.',
+        });
+        return;
+      }
+      const frozen = this.snapshot.publicSurface?.mode === 'composer'
+        ? this.snapshot.publicSurface.resumeFrozenGameId
+        : undefined;
+      if (frozen) {
+        // Resumed cold author: never silent-fallback to another eligible game.
+        if (!eligibleBases(data).some(b => b.gameId === frozen)) {
+          const kept = this.snapshot.publicDraft ?? emptyPublicRoleDraft(frozen);
+          this.retirePublicConsentAuthority({
+            publicEligibility: { status: 'unavailable' },
+            publicDraft: { ...kept, gameId: frozen, consent: false },
+            publicNotice: preserveNotice && priorNotice
+              ? priorNotice
+              : 'Нет подтверждённой встречи для публичного отзыва по этой роли.',
+          });
+          return;
+        }
+        const draft = this.snapshot.publicDraft ?? emptyPublicRoleDraft(frozen);
+        this.retirePublicConsentAuthority({
+          publicEligibility: { status: 'ready', data },
+          publicDraft: { ...draft, gameId: frozen, consent: false },
+          publicNotice: preserveNotice ? priorNotice : null,
         });
         return;
       }

@@ -1,10 +1,15 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View, type ScrollView } from 'react-native';
+import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
+import { publicRoleGoalPath, type PublicRoleLocalGoal } from '../native-auth-protocol.ts';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
   bindPublicRoleFocusRef,
   clearPublicRoleFocusTarget,
+  coldClaimStillOwnsNavigation,
+  coldPendingResumeEventualLive,
+  coldPendingResumePathPhase,
   currentPublicRoleFocusTarget,
   eligibleBases,
   mayWithdrawOwnPublic,
@@ -612,30 +617,163 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
 
 /**
  * Single persistent host under AuthProvider (RootLayout) — opens composer/history/reader from
- * PostgameCoordinator surface ownership; resumes bounded guest pending once when actor is current.
+ * PostgameCoordinator surface ownership; claims durable cold goal once before warm pending resume.
  */
 export function PublicRoleReviewHost() {
-  const auth = useAuth(), owner = auth.postgame;
+  const auth = useAuth(), owner = auth.postgame, router = useRouter();
+  const pathname = usePathname();
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
-  useEffect(() => {
-    if (auth.status !== 'authenticated') return;
-    if (!auth.me || !s.actor) return;
-    if (s.actor.actorId !== auth.me.id || s.actor.sessionId !== auth.me.session.id) return;
-    if (s.pendingPublicAuthor) {
-      owner.resumePendingPublicAuthor();
+  const claimGen = useRef(0);
+  const navGen = useRef(0);
+  const pathnameRef = useRef(pathname);
+  const prevPathnameRef = useRef(pathname);
+  if (pathname !== prevPathnameRef.current) {
+    prevPathnameRef.current = pathname;
+    navGen.current++;
+  }
+  pathnameRef.current = pathname;
+  /** After claim+replace: wait for actual pathname to match before eventual open. */
+  const pendingResume = useRef<null | {
+    gen: number;
+    path: string;
+    waitFromPath: string;
+    goal: PublicRoleLocalGoal;
+    matched: boolean;
+    opening: boolean;
+  }>(null);
+  const retirePendingResume = (pending: NonNullable<typeof pendingResume.current>) => {
+    pendingResume.current = null;
+    if (claimGen.current === pending.gen) claimGen.current++;
+  };
+  const tryOpenPendingResume = () => {
+    const pending = pendingResume.current;
+    if (!pending) return;
+    if (pending.gen !== claimGen.current) {
+      pendingResume.current = null;
       return;
     }
-    if (s.pendingPublicReader) owner.resumePendingPublicReader();
+    if (owner.getSnapshot().publicSurface) {
+      pendingResume.current = null;
+      return;
+    }
+    const phase = coldPendingResumePathPhase({
+      pendingPath: pending.path,
+      waitFromPath: pending.waitFromPath,
+      currentPath: pathnameRef.current,
+      matched: pending.matched,
+    });
+    if (phase === 'wait') return;
+    if (phase === 'retire') {
+      // Unrelated pathname before or after first match — retire consumed goal (no later revival).
+      retirePendingResume(pending);
+      return;
+    }
+    if (pending.opening) return;
+    pending.matched = true;
+    pending.opening = true;
+    const isLive = () => coldPendingResumeEventualLive({
+      pendingStillCurrent: pendingResume.current === pending,
+      genMatches: pending.gen === claimGen.current,
+      hasPublicSurface: !!owner.getSnapshot().publicSurface,
+      currentPath: pathnameRef.current,
+      pendingPath: pending.path,
+    });
+    void (async () => {
+      const { goal } = pending;
+      try {
+        if (goal.mode === 'author' && goal.origin.kind === 'game') {
+          await owner.openResumedPublicComposer({
+            roleHandle: goal.roleHandle,
+            role: goal.role,
+            gameId: goal.origin.gameId,
+          }, { isLive });
+        } else if (goal.mode === 'reader') {
+          await owner.openResumedPublicReader({
+            roleHandle: goal.roleHandle,
+            role: goal.role,
+            origin: goal.origin,
+          }, { isLive });
+        }
+      } finally {
+        if (pendingResume.current === pending) pendingResume.current = null;
+      }
+    })();
+  };
+  useEffect(() => {
+    if (auth.status !== 'authenticated') {
+      pendingResume.current = null;
+      return;
+    }
+    if (!auth.me || !s.actor) return;
+    if (s.actor.actorId !== auth.me.id || s.actor.sessionId !== auth.me.session.id) return;
+    if (s.publicSurface) {
+      pendingResume.current = null;
+      return;
+    }
+    if (pendingResume.current) return;
+    const gen = ++claimGen.current;
+    // Capture navigation lifetime before SecureStore claim await — pathname is not an effect dep.
+    const pathAtClaim = pathnameRef.current;
+    const navGenAtClaim = navGen.current;
+    void (async () => {
+      const goal = await auth.claimPublicRoleGoal();
+      if (gen !== claimGen.current) return;
+      if (goal) {
+        const path = publicRoleGoalPath(goal);
+        // Bare origin must be restored before sheet handoff — route-only safe fallback cannot authorize.
+        if (!path) return;
+        if (!coldClaimStillOwnsNavigation({
+          pathAtClaim,
+          navGenAtClaim,
+          currentPath: pathnameRef.current,
+          currentNavGen: navGen.current,
+          goalPath: path,
+        })) {
+          // Intervening unrelated / ABA (incl. already-at-goal leave→return) while claim awaited —
+          // drop without old-origin replace; own single expected goal commit still owns.
+          return;
+        }
+        const waitFromPath = pathnameRef.current;
+        if (waitFromPath !== path) {
+          router.replace(path as '/games');
+          if (gen !== claimGen.current) return;
+        }
+        // replace is an async route commit — do not open until pathname matches.
+        pendingResume.current = {
+          gen, path, waitFromPath, goal, matched: false, opening: false,
+        };
+        tryOpenPendingResume();
+        return;
+      }
+      const live = owner.getSnapshot();
+      if (live.publicSurface) return;
+      if (live.pendingPublicAuthor) {
+        owner.resumePendingPublicAuthor();
+        return;
+      }
+      if (live.pendingPublicReader) owner.resumePendingPublicReader();
+    })();
+    return () => {
+      // Retire stale async claim work on unmount / auth change / surface replacement.
+      if (claimGen.current === gen) claimGen.current++;
+      if (pendingResume.current?.gen === gen) pendingResume.current = null;
+    };
   }, [
     auth.status,
     auth.me?.id,
     auth.me?.session.id,
+    auth.claimPublicRoleGoal,
     owner,
+    router,
     s.actor?.actorId,
     s.actor?.sessionId,
     s.pendingPublicAuthor,
     s.pendingPublicReader,
+    s.publicSurface,
   ]);
+  useEffect(() => {
+    tryOpenPendingResume();
+  }, [pathname, owner, s.publicSurface]);
   const surface = s.publicSurface;
   if (!surface) return null;
   if (surface.mode === 'history') {
@@ -656,14 +794,14 @@ export function PublicRoleReviewHost() {
 export function beginPublicReaderEntry(args: {
   authenticated: boolean;
   target: PublicRoleReaderTarget;
-  signIn: (returnPath: string | null) => void;
+  signIn: (returnPath: string | null, goal?: PublicRoleLocalGoal | null) => void;
   open: (target: PublicRoleReaderTarget) => void;
-  rememberPending: (target: PublicRoleReaderTarget) => void;
   returnPath: string | null;
+  goal: PublicRoleLocalGoal | null;
 }) {
   if (!args.authenticated) {
-    args.rememberPending(args.target);
-    args.signIn(args.returnPath);
+    // Durable goal is admitted only inside beginLogin — no warm remember that survives cancel.
+    args.signIn(args.returnPath, args.goal);
     return;
   }
   args.open(args.target);
@@ -672,14 +810,13 @@ export function beginPublicReaderEntry(args: {
 export function beginPublicAuthorEntry(args: {
   authenticated: boolean;
   target: PublicRoleAuthorTarget;
-  signIn: (returnPath: string | null) => void;
+  signIn: (returnPath: string | null, goal?: PublicRoleLocalGoal | null) => void;
   open: (target: PublicRoleAuthorTarget) => void;
-  rememberPending: (target: PublicRoleAuthorTarget) => void;
   returnPath: string | null;
+  goal: PublicRoleLocalGoal | null;
 }) {
   if (!args.authenticated) {
-    args.rememberPending(args.target);
-    args.signIn(args.returnPath);
+    args.signIn(args.returnPath, args.goal);
     return;
   }
   args.open(args.target);

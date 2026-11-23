@@ -798,7 +798,66 @@ export function mayPaintPublicReportReceipt(
   return !!typed && typed.publishedRevision === expectedRevision;
 }
 
-/** Stable guest return uses existing game path only — role/game target lives on PostgameCoordinator. */
+/**
+ * Host claim-phase navigation fence (PublicRoleReviewHost).
+ * Capture path+navGen before awaiting SecureStore claim; after claim, restore/replace only while
+ * ownership holds. Unchanged navigation on the claim-start path stays live; a single expected
+ * generation hop from a different claim-start path onto the goal stays live. Intervening
+ * unrelated navigation — including ABA back to the claim-start/goal path after leave/return —
+ * drops without forcing old origin (must not revive solely because currentPath === goalPath).
+ */
+export function coldClaimStillOwnsNavigation(args: {
+  pathAtClaim: string;
+  navGenAtClaim: number;
+  currentPath: string;
+  currentNavGen: number;
+  goalPath: string;
+}): boolean {
+  if (args.currentNavGen === args.navGenAtClaim) {
+    return args.currentPath === args.pathAtClaim;
+  }
+  // Own expected route commit: exactly one generation hop from a different start onto goal.
+  // Multi-hop / already-at-goal ABA (Messages→Back etc.) must retire even when path === goal.
+  return args.currentPath === args.goalPath
+    && args.pathAtClaim !== args.goalPath
+    && args.currentNavGen === args.navGenAtClaim + 1;
+}
+
+/**
+ * Pending origin restore before/after first pathname match.
+ * Wait while still on the pre-replace path; retire on intervening unrelated pathname
+ * (matched or not) so a later ordinary visit cannot reopen a consumed goal; open once on match.
+ */
+export function coldPendingResumePathPhase(args: {
+  pendingPath: string;
+  waitFromPath: string;
+  currentPath: string;
+  matched: boolean;
+}): 'open' | 'wait' | 'retire' {
+  if (args.currentPath === args.pendingPath) return 'open';
+  if (args.matched) return 'retire';
+  if (args.currentPath !== args.waitFromPath) return 'retire';
+  return 'wait';
+}
+
+/**
+ * Eventual-open isLive fence: pending identity + claim gen + no surface + current pathname
+ * still equals the restored origin (sync; must not wait for passive cleanup).
+ */
+export function coldPendingResumeEventualLive(args: {
+  pendingStillCurrent: boolean;
+  genMatches: boolean;
+  hasPublicSurface: boolean;
+  currentPath: string;
+  pendingPath: string;
+}): boolean {
+  return args.pendingStillCurrent
+    && args.genMatches
+    && !args.hasPublicSurface
+    && args.currentPath === args.pendingPath;
+}
+
+/** Stable guest return uses existing game path only — role destination is admitted with the login envelope. */
 export function publicAuthorReturnPath(gameId: string): string | null {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(gameId)) return null;
   try {
@@ -807,6 +866,60 @@ export function publicAuthorReturnPath(gameId: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Bare game or public-player detail return for a reader origin; reserved `/players/browse` is not a detail. */
+export function publicReaderReturnPath(origin: PublicRoleReaderOrigin): string | null {
+  if (origin.kind === 'game') return publicAuthorReturnPath(origin.gameId);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(origin.publicPlayerId) || origin.publicPlayerId === 'browse') return null;
+  return `/players/${origin.publicPlayerId}`;
+}
+
+/** Closed local goal for guest author entry — no display name, draft, consent or command fields. */
+export function publicAuthorLocalGoal(target: PublicRoleAuthorTarget): {
+  mode: 'author';
+  role: RoleKind;
+  roleHandle: string;
+  origin: { kind: 'game'; gameId: string };
+} | null {
+  if (!/^[0-9a-f]{32}$/i.test(target.roleHandle)) return null;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(target.gameId)) return null;
+  if (target.role !== 'organization' && target.role !== 'training') return null;
+  return {
+    mode: 'author',
+    role: target.role,
+    roleHandle: target.roleHandle.toLowerCase(),
+    origin: { kind: 'game', gameId: target.gameId },
+  };
+}
+
+/** Closed local goal for guest reader entry — game or profile origin only. */
+export function publicReaderLocalGoal(target: PublicRoleReaderTarget): {
+  mode: 'reader';
+  role: RoleKind;
+  roleHandle: string;
+  origin: PublicRoleReaderOrigin;
+} | null {
+  if (!/^[0-9a-f]{32}$/i.test(target.roleHandle)) return null;
+  if (target.role !== 'organization' && target.role !== 'training') return null;
+  if (target.origin.kind === 'game') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(target.origin.gameId)) return null;
+    return {
+      mode: 'reader',
+      role: target.role,
+      roleHandle: target.roleHandle.toLowerCase(),
+      origin: { kind: 'game', gameId: target.origin.gameId },
+    };
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(target.origin.publicPlayerId) || target.origin.publicPlayerId === 'browse') {
+    return null;
+  }
+  return {
+    mode: 'reader',
+    role: target.role,
+    roleHandle: target.roleHandle.toLowerCase(),
+    origin: { kind: 'profile', publicPlayerId: target.origin.publicPlayerId },
+  };
 }
 
 export function isPublicRolePacketKind(

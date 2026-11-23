@@ -14,7 +14,12 @@ import {
   ROLE_TOPIC_LABEL,
 } from '../role-reputation.ts';
 import type { RoleKind, RoleLaneState } from '../role-reputation.ts';
-import { publicAuthorReturnPath } from '../public-role-reviews.ts';
+import {
+  publicAuthorLocalGoal,
+  publicAuthorReturnPath,
+  publicReaderLocalGoal,
+  publicReaderReturnPath,
+} from '../public-role-reviews.ts';
 import {
   beginPublicAuthorEntry,
   beginPublicReaderEntry,
@@ -144,10 +149,10 @@ function ReadyRoleBody({
           beginPublicAuthorEntry({
             authenticated: auth.status === 'authenticated',
             target,
-            rememberPending: t => auth.postgame.rememberPendingPublicAuthor(t),
             open: t => auth.postgame.openPublicComposer(t),
-            signIn: path => { void auth.signIn(path); },
+            signIn: (path, goal) => { void auth.signIn(path, goal); },
             returnPath: publicAuthorReturnPath(gameId!),
+            goal: publicAuthorLocalGoal(target),
           });
         }}
       />
@@ -156,21 +161,22 @@ function ReadyRoleBody({
       <PublicRoleAuthorEntryButton
         title="Ответить или пожаловаться"
         onPress={() => {
+          const origin = gameId
+            ? { kind: 'game' as const, gameId }
+            : { kind: 'profile' as const, publicPlayerId: publicPlayerId! };
           const target = {
             roleHandle: summary.roleHandle,
             role: lane.role,
             subjectDisplayName: summary.subjectDisplayName,
-            origin: gameId
-              ? { kind: 'game' as const, gameId }
-              : { kind: 'profile' as const, publicPlayerId: publicPlayerId! },
+            origin,
           };
           beginPublicReaderEntry({
             authenticated: auth.status === 'authenticated',
             target,
-            rememberPending: t => auth.postgame.rememberPendingPublicReader(t),
             open: t => auth.postgame.openPublicReader(t),
-            signIn: path => { void auth.signIn(path); },
-            returnPath: gameId ? publicAuthorReturnPath(gameId) : null,
+            signIn: (path, goal) => { void auth.signIn(path, goal); },
+            returnPath: publicReaderReturnPath(origin),
+            goal: publicReaderLocalGoal(target),
           });
         }}
       />
