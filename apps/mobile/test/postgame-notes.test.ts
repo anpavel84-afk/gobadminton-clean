@@ -830,8 +830,8 @@ test('tombstone fence persists through select/pending GET/error — collectNotes
     s.coordinator.getSnapshot().notes,
     s.coordinator.getSnapshot().knownNoteRefs,
   );
-  assert.deepEqual(listed, []);
   assert.ok(!listed.some(n => n.text === deletedText), 'no text resurrection after GET error');
+  assert.deepEqual(listed, []);
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 0, text: 'resurrect' } });
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1, 'no create after tombstone');
