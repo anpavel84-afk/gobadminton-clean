@@ -1,12 +1,12 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { Platform, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
-import { collectNotes, normalizeFormReason, noteConflictRefreshVisible, noteSubjectOptions, notesSectionVisible } from '../postgame.ts';
+import { collectNotes, normalizeFormReason, noteConflictRefreshVisible, noteRecoveryTargets, noteSubjectOptions, notesSectionVisible } from '../postgame.ts';
 import type { PersonalNote, Results } from '../postgame.ts';
 import { Choice, ReviewButton } from './postgame.tsx';
 import { Label, Loading, TextButton, styles } from './ui.tsx';
 
-export { collectNotes, noteConflictRefreshVisible, notesSectionVisible, noteSubjectOptions };
+export { collectNotes, noteConflictRefreshVisible, noteRecoveryTargets, notesSectionVisible, noteSubjectOptions };
 
 function useOwner() {
   const owner = useAuth().postgame;
@@ -90,15 +90,13 @@ export function NotesSection({ gameId, data }: { gameId: string; data?: Results 
   const needsSelectedRefresh = !!(s.notice && /Обновите заметку/i.test(s.notice) && selectedId);
 
   useEffect(() => {
-    // Recover known own notes via direct GET when results denied or list incomplete.
+    // Recover known own notes and restored selected create context via direct GET
+    // when source is missing/idle (same-account reauth clears notes, keeps drafts).
     // Error stays user-retry only — do not auto-loop loadNote on persistent failure.
-    for (const ref of Object.values(s.knownNoteRefs)) {
-      if (ref.gameId !== gameId) continue;
-      const key = `${ref.gameId}:${ref.contextId}`;
-      const source = s.notes[key];
-      if (!source || source.status === 'idle') void owner.loadNote(ref.gameId, ref.contextId);
+    for (const ref of noteRecoveryTargets(gameId, s.notes, s.knownNoteRefs, selectedId || undefined)) {
+      void owner.loadNote(ref.gameId, ref.contextId);
     }
-  }, [gameId, owner, s.knownNoteRefs, s.notes]);
+  }, [gameId, owner, s.knownNoteRefs, s.notes, selectedId]);
 
   if (!visible || !installed) {
     if (feedback && feedback.installed === false) {

@@ -5,6 +5,7 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseResults, parsePersonalNote, wire, validateReceipt, noteText,
   notesSectionVisible, noteSubjectOptions, collectNotes, noteConflictRefreshVisible,
+  noteRecoveryTargets,
 } from '../src/postgame.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -2070,4 +2071,157 @@ test('DELETE 409 while not editing: per-note refresh visible outside editor; exp
   assert.equal(s.sent[1]!.kind, 'note-delete');
   assert.equal((s.sent[1]!.body as { expectedVersion: number }).expectedVersion, 2);
   assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable');
+});
+
+test('#522 P2: same-actor reauth recovers selected fresh context without knownref; draft preserved', async () => {
+  const rosterB = {
+    contextId: contextB, value: 'present' as const, version: 1, late: false,
+    assertion: { actorDisplay: 'Org', source: 'manager_explicit' as const, at: date },
+    acknowledgedVersion: null, dispute: null, displayName: 'Илья',
+    allowedActions: {
+      canSetAttendance: true, canAcknowledge: false, canDispute: false,
+      canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+    },
+  };
+  const freshResults: Results = {
+    ...result,
+    attendance: {
+      ...result.attendance!,
+      roster: [...(result.attendance!.roster ?? []), rosterB],
+      summary: { rosterCount: 2, marked: 2, unknown: 0, underClarification: 0, agreed: 0 },
+    },
+    feedback: { ...feedbackReady, myNotes: [] },
+  };
+  const s = setup({ note: null, results: freshResults });
+  await s.coordinator.loadResults(game.id);
+
+  // Never-owned selected context: dirty draft, no knownNoteRef after typed 404.
+  const dirty = 'dirty-reauth-draft';
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB, createText: dirty });
+  await s.coordinator.loadNote(game.id, contextB);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().knownNoteRefs[`${game.id}:${contextB}`], undefined);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, dirty);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
+
+  // Same-account reauth: drafts restored, notes cleared, still no knownref for fresh context.
+  s.coordinator.setActor(null);
+  s.coordinator.setActor({ ...actor, sessionId: 'reauth-selected-fresh', generation: 6 });
+  const afterReauth = s.coordinator.getSnapshot();
+  assert.deepEqual(afterReauth.notes, {});
+  assert.equal(afterReauth.noteDrafts[game.id]?.selectedContextId, contextB);
+  assert.equal(afterReauth.noteDrafts[game.id]?.createText, dirty);
+  assert.equal(afterReauth.noteDrafts[game.id]?.createDirty, true);
+  assert.equal(afterReauth.knownNoteRefs[`${game.id}:${contextB}`], undefined);
+  assert.equal(s.sent.length, 0, 'reauth must not autowrite');
+
+  // Recovery selector (actual helper used by NotesSection effect) must target selected independently of knownrefs.
+  const selectedId = afterReauth.noteDrafts[game.id]?.selectedContextId;
+  const targets = noteRecoveryTargets(game.id, afterReauth.notes, afterReauth.knownNoteRefs, selectedId);
+  assert.deepEqual(targets, [{ gameId: game.id, contextId: contextB }]);
+  // Empty/malformed/wrong-game never auto-read; draft-text changes alone are not inputs.
+  assert.deepEqual(noteRecoveryTargets(game.id, {}, {}, ''), []);
+  assert.deepEqual(noteRecoveryTargets(game.id, {}, {}, 'bad context'), []);
+  assert.deepEqual(
+    noteRecoveryTargets(game.id, {}, { [`other:${contextB}`]: { gameId: 'other-game', contextId: contextB } }, undefined),
+    [],
+  );
+
+  let noteCalls = 0;
+  s.port.note = async (_a, gid, cid) => {
+    noteCalls += 1;
+    assert.equal(gid, game.id);
+    assert.equal(cid, contextB);
+    throw new PostgameError('private', 404);
+  };
+  // Effect path: issue scoped owned GET exactly once for missing selected source.
+  for (const ref of targets) await s.coordinator.loadNote(ref.gameId, ref.contextId);
+  assert.equal(noteCalls, 1, 'selected recovery GET exactly once');
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, dirty, 'typed404 preserves dirty draft');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  assert.equal(s.sent.length, 0, 'pending recovery must not Save/mutate');
+  // After settle, helper must not re-autoload unavailable (no fetch loop).
+  assert.deepEqual(
+    noteRecoveryTargets(
+      game.id,
+      s.coordinator.getSnapshot().notes,
+      s.coordinator.getSnapshot().knownNoteRefs,
+      contextB,
+    ),
+    [],
+  );
+
+  // Results reload + typed404 → explicit review Save0 with original draft (no prefill/autosend).
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, dirty);
+  s.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextB,
+    body: { expectedVersion: 0, text: dirty },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'note-upsert');
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.sent[0]!.kind, 'note-upsert');
+  assert.equal((s.sent[0]!.body as { expectedVersion: number; text: string }).expectedVersion, 0);
+  assert.equal((s.sent[0]!.body as { expectedVersion: number; text: string }).text, dirty);
+
+  // Error does not loop; explicit retry recovers. Known∩selected dedupe.
+  const err = setup({ note: null, results: freshResults });
+  await err.coordinator.loadResults(game.id);
+  err.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB, createText: 'err-keep' });
+  err.port.note = async () => { throw new PostgameError('network'); };
+  await err.coordinator.loadNote(game.id, contextB);
+  assert.equal(err.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'error');
+  assert.deepEqual(
+    noteRecoveryTargets(game.id, err.coordinator.getSnapshot().notes, err.coordinator.getSnapshot().knownNoteRefs, contextB),
+    [],
+    'error must not auto-loop',
+  );
+  err.port.note = async () => { throw new PostgameError('private', 404); };
+  await err.coordinator.loadNote(game.id, contextB);
+  assert.equal(err.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'unavailable');
+  assert.equal(err.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'err-keep');
+
+  // Dedupe: selected already in known refs → single target when missing/idle.
+  const keyA = `${game.id}:${contextA}`;
+  assert.deepEqual(
+    noteRecoveryTargets(
+      game.id,
+      {},
+      { [keyA]: { gameId: game.id, contextId: contextA } },
+      contextA,
+    ),
+    [{ gameId: game.id, contextId: contextA }],
+  );
+  // Typed existing: dirty nonempty survives ready GET (no pristine prefill overwrite).
+  const owned = setup({
+    note: { ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'server-owned-B', version: 3 },
+    results: {
+      ...freshResults,
+      feedback: {
+        ...feedbackReady,
+        myNotes: [{ ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'server-owned-B', version: 3 }],
+      },
+    },
+  });
+  await owned.coordinator.loadResults(game.id);
+  owned.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB, createText: 'keep-over-existing' });
+  await owned.coordinator.loadNote(game.id, contextB);
+  assert.equal(owned.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'ready');
+  assert.equal(owned.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.data?.version, 3);
+  assert.equal(owned.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'keep-over-existing');
+  assert.equal(owned.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+
+  // Composition: NotesSection effect uses noteRecoveryTargets (not knownrefs-only iteration).
+  const notesUi = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../src/components/postgame-notes.tsx'),
+    'utf8',
+  );
+  const sectionStart = notesUi.indexOf('export function NotesSection');
+  const sectionBody = notesUi.slice(sectionStart);
+  assert.match(sectionBody, /noteRecoveryTargets\(gameId, s\.notes, s\.knownNoteRefs, selectedId \|\| undefined\)/);
+  assert.equal(sectionBody.includes('for (const ref of Object.values(s.knownNoteRefs))'), false,
+    'effect must not iterate knownNoteRefs alone — selected recovery goes through helper');
 });

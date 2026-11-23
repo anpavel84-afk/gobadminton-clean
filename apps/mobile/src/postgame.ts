@@ -446,6 +446,34 @@ export function noteConflictRefreshVisible(
   return !!(notice && /Обновите заметку/i.test(notice)) || directStatus === 'error';
 }
 /**
+ * Direct-GET recovery targets on mount/reauth: known own refs plus restored selected
+ * create context when source is missing/idle (independent of knownrefs). Dedupes
+ * selected∩known; skips ready/unavailable/loading/error (error stays explicit retry).
+ * Empty/malformed context and wrong-game refs are never emitted.
+ */
+export function noteRecoveryTargets(
+  gameId: string,
+  notes: Record<string, { status: string }>,
+  known: Record<string, { gameId: string; contextId: string }>,
+  selectedContextId?: string,
+): { gameId: string; contextId: string }[] {
+  const out: { gameId: string; contextId: string }[] = [];
+  const seen = new Set<string>();
+  const consider = (gid: string, cid: string) => {
+    if (gid !== gameId || !cid || !/^[A-Za-z0-9_-]{1,128}$/.test(cid)) return;
+    const key = `${gid}:${cid}`;
+    if (seen.has(key)) return;
+    const source = notes[key];
+    // Only missing/idle autoload — never loop on ready/unavailable/loading/error.
+    if (source && source.status !== 'idle') return;
+    seen.add(key);
+    out.push({ gameId: gid, contextId: cid });
+  };
+  for (const ref of Object.values(known)) consider(ref.gameId, ref.contextId);
+  if (selectedContextId) consider(gameId, selectedContextId);
+  return out;
+}
+/**
  * Display composition for NotesSection — definitive unavailable shadows stale myNotes;
  * ready/loading/error direct data may show retained private text (writes still typed-ready only).
  */
