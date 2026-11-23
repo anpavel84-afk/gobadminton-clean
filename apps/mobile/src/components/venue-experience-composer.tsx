@@ -369,8 +369,10 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     if (!current || !liveVenueId || results?.status !== 'ready') return;
     // Fresh-admission probe only — pending recovery does not invent new eligibility rights.
     if (pendingCommand) return;
+    // Composer open owns its eligibility load; close→idle then this dep fires a focused fresh probe.
+    if (composerOpen) return;
     owner.probeVenueEligibility(gameId, liveVenueId);
-  }, [current, liveVenueId, results?.status, results?.data, owner, gameId, pendingCommand]);
+  }, [current, liveVenueId, results?.status, results?.data, owner, gameId, pendingCommand, composerOpen]);
 
   // While focused, remember latest matching surface (open after focus / close+reopen); no retire here.
   useEffect(() => {

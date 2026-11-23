@@ -2729,6 +2729,10 @@ export class PostgameCoordinator {
       venueConsentHash: null,
       venueReceipt: null,
       venueNotice: null,
+      // Cancelled opening/close eligibility must leave recoverable idle — not phantom loading.
+      // Old response stays fenced by venueEligibilityGen; Entry may fresh-probe when focused.
+      venueProbe: null,
+      venueEligibility: { status: 'idle' },
     });
   };
   /**

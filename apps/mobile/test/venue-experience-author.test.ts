@@ -925,6 +925,102 @@ test('#522 address8: production route lifecycle capture retires THIS owner only'
   assert.equal(keys.length, 0);
 });
 
+test('#522 address13 P2: close cancels opening eligibility → idle; stale response fenced; Entry reprobe; UNKNOWN preserved', async () => {
+  let releaseOpen!: () => void;
+  const openGate = new Promise<void>(r => { releaseOpen = r; });
+  let eligCalls = 0;
+  const seen: Array<{ call: number; venueId: string }> = [];
+  const keys: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async (_actor, venue) => {
+        const call = ++eligCalls;
+        seen.push({ call, venueId: venue });
+        if (call === 1) await openGate;
+        return eligibilityBody(call === 1 ? 'deny' : 'may_submit');
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => `addr13-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  // Opening eligibility GET starts unresolved.
+  owner.openVenueExperience(gameId, venueId);
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'loading');
+  assert.equal(owner.getSnapshot().venueProbe?.venueId, venueId);
+  const openGen = owner.getSnapshot().venueExperience!.gen;
+
+  // Close immediately — cancelled read must leave recoverable idle, not phantom loading.
+  owner.closeVenueExperience();
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  assert.equal(owner.getSnapshot().venueProbe, null);
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'idle');
+  assert.notEqual(openGen, undefined);
+
+  // Old opening response resolves after close — must not paint loading/deny onto Entry.
+  releaseOpen();
+  await tick();
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'idle');
+  assert.equal(owner.getSnapshot().venueProbe, null);
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  assert.equal(keys.length, 0);
+
+  // Actual Entry lifecycle: after close, focused probe (composerOpen false) starts fresh read.
+  // Mirrors VenueExperienceEntry effect deps including composerOpen — no probe while composer open.
+  const composerSrc = read('../src/components/venue-experience-composer.tsx');
+  assert.match(composerSrc, /if \(composerOpen\) return;/);
+  assert.match(composerSrc, /pendingCommand, composerOpen\]/);
+  assert.match(composerSrc, /probeVenueEligibility\(gameId, liveVenueId\)/);
+
+  owner.probeVenueEligibility(gameId, venueId);
+  await tick();
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'ready');
+  assert.ok(exactGameMaySubmitBasis(owner.getSnapshot().venueEligibility.data!, gameId));
+  assert.equal(eligCalls >= 2, true);
+  // Newer may_submit wins; cancelled deny never stuck the card.
+  assert.equal(seen[0]!.call, 1);
+  assert.equal(keys.length, 0);
+
+  // Explicit reopen after fresh probe — no autosend.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  assert.equal(!!owner.getSnapshot().venueExperience, true);
+  assert.equal(keys.length, 0);
+
+  // UNKNOWN packet/key/body/age survive close; original recovery still works; close never POSTs.
+  owner.patchVenueDraft({ audience: 'self_draft', text: 'Сохранённый текст закрытия', topics: ['surface'] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownKey = owner.getSnapshot().command!.packet.key;
+  const unknownBody = structuredClone(owner.getSnapshot().command!.packet.body);
+  const unknownAge = owner.getSnapshot().command!.firstDispatchedAt;
+  assert.ok(unknownAge);
+  const postsBeforeClose = keys.length;
+  owner.closeVenueExperience();
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'idle');
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command!.packet.key, unknownKey);
+  assert.deepEqual(owner.getSnapshot().command!.packet.body, unknownBody);
+  assert.equal(owner.getSnapshot().command!.firstDispatchedAt, unknownAge);
+  assert.equal(keys.length, postsBeforeClose);
+
+  // Same-origin reopen recovers read-only pending; zero POST / no key rotate.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  assert.equal(!!owner.getSnapshot().venueExperience, true);
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(keys.length, postsBeforeClose);
+
+  // Coordinator close path must reset probe+idle (same honest recoverability as route retire).
+  const coordinatorSrc = read('../src/postgame-coordinator.ts');
+  assert.match(coordinatorSrc, /closeVenueExperience[\s\S]*venueProbe: null[\s\S]*venueEligibility: \{ status: 'idle' \}/);
+});
+
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const results = read('../app/my-games/[gameId]/results.tsx');
   assert.match(results, /VenueExperienceEntry/);
