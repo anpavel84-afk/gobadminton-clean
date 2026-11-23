@@ -151,6 +151,14 @@ export class PostgameCoordinator {
   private reviewVersionFloor = new Map<string, number>();
   /** Reply version floor per review id. */
   private replyVersionFloor = new Map<string, number>();
+  /** Last applied read generation per review id — fences deferred results vs history. */
+  private reviewAppliedGen = new Map<string, number>();
+  /** After reply/create ACK: only typed history GET may reestablish write rights. */
+  private reviewAwaitingTyped = new Set<string>();
+  /** Ids whose current floor was established by typed history — results cannot same-version regress. */
+  private reviewHistoryOwned = new Set<string>();
+  /** Hard-denied own-history directions — results gameReviews must not resurrect writes. */
+  private reviewDirectionDenied = new Set<ReviewDirection>();
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -175,6 +183,8 @@ export class PostgameCoordinator {
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
     this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear();
     this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear();
+    this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear();
+    this.reviewDirectionDenied.clear();
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
@@ -193,7 +203,7 @@ export class PostgameCoordinator {
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -425,7 +435,7 @@ export class PostgameCoordinator {
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
       if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
-      if (data.feedback?.gameReviews?.length) this.rememberReviews(data.feedback.gameReviews);
+      if (data.feedback?.gameReviews?.length) this.rememberReviews(data.feedback.gameReviews, resultsGen, 'results');
       if (selection?.gameId === gameId) {
         const rows=[...(data.attendance?.roster ?? []),...(data.attendance?.myAttendance ? [data.attendance.myAttendance] : [])];
         const still=rows.some(r=>r.contextId === selection.contextId && r.dispute?.id === selection.disputeId);
@@ -576,40 +586,142 @@ export class PostgameCoordinator {
     const prior = this.snapshot.feedbackDrafts[gameId] ?? {};
     const next: FeedbackDraft = { ...prior, ...patch };
     if (patch.replyText) next.replyText = { ...(prior.replyText ?? {}), ...patch.replyText };
-    // Opening/changing report target resets consent; revision mismatch also resets.
+    // Opening/changing report target resets consent; keep known version from the open patch.
     if (patch.reportReviewId !== undefined && patch.reportReviewId !== prior.reportReviewId) {
       next.reportConsent = false;
-      next.reportConsentVersion = undefined;
+      if (patch.reportConsentVersion === undefined) next.reportConsentVersion = undefined;
     }
+    // Revision change without an explicit consent field resets true consent (preserve detail).
+    // Explicit current-version grant in the same patch must take one press.
     if (patch.reportConsentVersion !== undefined && prior.reportConsentVersion !== undefined
-      && patch.reportConsentVersion !== prior.reportConsentVersion) {
+      && patch.reportConsentVersion !== prior.reportConsentVersion
+      && patch.reportConsent === undefined) {
       next.reportConsent = false;
     }
     this.show({ feedbackDrafts: { ...this.snapshot.feedbackDrafts, [gameId]: next } });
   };
-  /** Monotonic typed review store — stale lower versions never regress latest. */
-  private rememberReviews(rows: PrivateReview[]) {
+  /** Reset report consent when typed revision advances; preserve detail draft. */
+  private resetReportConsentForRevision(row: PrivateReview) {
+    const drafts = { ...this.snapshot.feedbackDrafts };
+    let changed = false;
+    for (const [gameId, draft] of Object.entries(drafts)) {
+      if (draft.reportReviewId !== row.id) continue;
+      if (!draft.reportConsent && draft.reportConsentVersion === row.version) continue;
+      if (draft.reportConsentVersion === row.version && draft.reportConsent) continue;
+      drafts[gameId] = { ...draft, reportConsent: false };
+      changed = true;
+    }
+    if (changed) this.show({ feedbackDrafts: drafts });
+  }
+  /**
+   * Monotonic typed review store — version + read-gen authority.
+   * History restores writes; results cannot resurrect after hard deny or while awaiting typed GET;
+   * receipt ACK is display-only until typed history refresh.
+   */
+  private rememberReviews(rows: PrivateReview[], gen: number, source: 'results' | 'history' | 'receipt') {
     const byId = { ...this.snapshot.reviewsById };
     let changed = false;
+    const revisionAdvances: PrivateReview[] = [];
     for (const row of rows) {
+      if (source === 'results' && this.reviewDirectionDenied.has(row.direction)) continue;
+      if (source === 'results' && this.reviewAwaitingTyped.has(row.id)) continue;
       const floor = this.reviewVersionFloor.get(row.id) ?? 0;
       if (row.version < floor) continue;
+      // Typed history owns the current floor — later results cannot same-version regress rights/text.
+      if (source === 'results' && this.reviewHistoryOwned.has(row.id) && row.version <= floor) continue;
+      const applied = this.reviewAppliedGen.get(row.id) ?? 0;
+      if (row.version === floor && gen < applied) continue;
       const prior = byId[row.id];
       const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
       const replyVer = row.reply?.version ?? 0;
+      let next: PrivateReview = row;
       if (prior && row.version === prior.version && replyVer < replyFloor) {
-        byId[row.id] = { ...row, reply: prior.reply };
-      } else {
-        byId[row.id] = row;
+        next = { ...row, reply: prior.reply };
       }
+      if (source === 'receipt') {
+        // Historical ACK settles the packet only — strip write grants until typed history.
+        next = {
+          ...next,
+          allowedActions: {
+            canEdit: false,
+            canReply: false,
+            canReport: next.allowedActions.canReport,
+          },
+        };
+        this.reviewAwaitingTyped.add(row.id);
+        this.reviewHistoryOwned.delete(row.id);
+      }
+      if (source === 'history') {
+        this.reviewAwaitingTyped.delete(row.id);
+        this.reviewHistoryOwned.add(row.id);
+      }
+      if (source === 'results' && row.version > floor) this.reviewHistoryOwned.delete(row.id);
+      byId[row.id] = next;
       this.reviewVersionFloor.set(row.id, Math.max(floor, row.version));
       this.replyVersionFloor.set(row.id, Math.max(replyFloor, replyVer));
+      this.reviewAppliedGen.set(row.id, gen);
+      if (prior && prior.version !== next.version) revisionAdvances.push(next);
       changed = true;
     }
     if (changed) this.show({ reviewsById: byId });
+    for (const row of revisionAdvances) this.resetReportConsentForRevision(row);
   }
-  private currentReview(reviewId: string): PrivateReview | null {
-    return this.snapshot.reviewsById[reviewId] ?? null;
+  /** Hard-denied own-history: retire private projection/permissions for that direction. */
+  private retireReviewDirection(direction: ReviewDirection) {
+    this.reviewDirectionDenied.add(direction);
+    const byId = { ...this.snapshot.reviewsById };
+    const retired = new Set<string>();
+    let changed = false;
+    for (const [id, row] of Object.entries(byId)) {
+      if (row.direction !== direction) continue;
+      delete byId[id];
+      retired.add(id);
+      this.reviewVersionFloor.delete(id);
+      this.replyVersionFloor.delete(id);
+      this.reviewAppliedGen.delete(id);
+      this.reviewAwaitingTyped.delete(id);
+      this.reviewHistoryOwned.delete(id);
+      changed = true;
+    }
+    const drafts = { ...this.snapshot.feedbackDrafts };
+    let draftsChanged = false;
+    for (const [gameId, draft] of Object.entries(drafts)) {
+      if (!draft.reportReviewId || !retired.has(draft.reportReviewId)) continue;
+      drafts[gameId] = {
+        ...draft,
+        reportReviewId: undefined,
+        reportConsent: false,
+        reportConsentVersion: undefined,
+      };
+      draftsChanged = true;
+    }
+    if (changed || draftsChanged) {
+      this.show({
+        reviewsById: byId,
+        ...(draftsChanged ? { feedbackDrafts: drafts } : {}),
+      });
+    }
+  }
+  /**
+   * Write authority: actor/session-bound typed ready history (or idle+ready results bootstrap).
+   * Pending/error/unavailable and post-ACK awaiting typed never grant new reply/report.
+   */
+  private currentReviewForWrite(reviewId: string): PrivateReview | null {
+    if (this.reviewAwaitingTyped.has(reviewId)) return null;
+    const review = this.snapshot.reviewsById[reviewId] ?? null;
+    if (!review) return null;
+    if (this.reviewDirectionDenied.has(review.direction)) return null;
+    const history = this.snapshot.reviewHistory[review.direction];
+    if (history.status === 'loading' || history.status === 'error' || history.status === 'unavailable') {
+      return null;
+    }
+    if (history.status === 'ready') return review;
+    // Idle: only a ready results projection may bootstrap before the first history GET settles.
+    const results = this.snapshot.games[review.gameId];
+    if (results?.status === 'ready' && results.data?.feedback?.gameReviews?.some(r => r.id === reviewId)) {
+      return review;
+    }
+    return null;
   }
   /** Own directional history — independent of denied results; honest cursor/empty/error. */
   loadReviews = async (direction: ReviewDirection, more = false) => {
@@ -620,6 +732,7 @@ export class PostgameCoordinator {
     if (more && !cursor) return;
     const { actor, valid } = this.start(`reviews:${direction}`);
     if (!actor) return;
+    const historyGen = this.reads.get(`reviews:${direction}`) ?? 0;
     const put = (source: Source<MeReviewsPage>) => this.show({
       reviewHistory: { ...this.snapshot.reviewHistory, [direction]: source },
     });
@@ -634,10 +747,16 @@ export class PostgameCoordinator {
       const priorItems = more ? old.data?.items ?? [] : [];
       // Retain nextCursor honestly even when page has non-peer rows.
       const merged = mergeReviewPages(priorItems, page.items, direction);
-      this.rememberReviews(page.items);
-      put({ status: 'ready', data: { items: merged, nextCursor: page.nextCursor } });
+      this.reviewDirectionDenied.delete(direction);
+      this.rememberReviews(page.items, historyGen, 'history');
+      // Prefer store projection so UI/history page stay coherent with monotonic rights.
+      const projected = merged.map(row => this.snapshot.reviewsById[row.id] ?? row);
+      put({ status: 'ready', data: { items: projected, nextCursor: page.nextCursor } });
     } catch (error) {
-      if (valid()) put(this.failure(error, old));
+      if (!valid()) return;
+      const denied = error instanceof PostgameError && error.kind === 'private';
+      put(this.failure(error, old));
+      if (denied) this.retireReviewDirection(direction);
     }
   };
   private currentNote(gameId: string, contextId: string): PersonalNote | null {
@@ -666,7 +785,7 @@ export class PostgameCoordinator {
       return feedback.capabilities.peerSubjects.some(s => s.contextId === intent.body.subjectContextId);
     }
     if (intent.kind === 'peer-reply') {
-      const review = this.currentReview(intent.reviewId);
+      const review = this.currentReviewForWrite(intent.reviewId);
       if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
       if (review.direction !== 'received' || !review.allowedActions.canReply) return false;
       const results = this.snapshot.games[intent.gameId];
@@ -679,7 +798,7 @@ export class PostgameCoordinator {
       return replyVer === intent.body.expectedVersion;
     }
     if (intent.kind === 'peer-report') {
-      const review = this.currentReview(intent.reviewId);
+      const review = this.currentReviewForWrite(intent.reviewId);
       if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
       if (review.direction !== 'received' || !review.allowedActions.canReport) return false;
       // Report is independent of writesEnabled / create experience.
@@ -687,7 +806,8 @@ export class PostgameCoordinator {
       if (intent.body.gameId !== intent.gameId || intent.body.shareReviewWithSupport !== true) return false;
       const draft = this.snapshot.feedbackDrafts[intent.gameId];
       if (!draft?.reportConsent || draft.reportReviewId !== intent.reviewId) return false;
-      if (draft.reportConsentVersion !== undefined && draft.reportConsentVersion !== review.version) return false;
+      // Exact frozen revision consent — undefined version is not an escape.
+      if (draft.reportConsentVersion !== review.version) return false;
       return true;
     }
     if (intent.kind === 'note-upsert' || intent.kind === 'note-delete') {
@@ -831,7 +951,8 @@ export class PostgameCoordinator {
         this.tombstoneOwnedNote(packet.gameId, packet.contextId, receipt.version);
       }
       if (packet.kind === 'peer-create' && 'peerRating' in receipt && 'direction' in receipt) {
-        this.rememberReviews([receipt]);
+        // ACK display-only until typed sent history refresh reestablishes rights.
+        this.rememberReviews([receipt], ++this.serial, 'receipt');
         const drafts = { ...this.snapshot.feedbackDrafts };
         const prior = drafts[packet.gameId] ?? {};
         drafts[packet.gameId] = {
@@ -844,7 +965,8 @@ export class PostgameCoordinator {
         this.show({ feedbackDrafts: drafts });
       }
       if (packet.kind === 'peer-reply' && 'reply' in receipt && 'direction' in receipt) {
-        this.rememberReviews([receipt]);
+        // ACK display-only until typed received history refresh; do not grant another reply from receipt.
+        this.rememberReviews([receipt], ++this.serial, 'receipt');
         const drafts = { ...this.snapshot.feedbackDrafts };
         const prior = drafts[packet.gameId] ?? {};
         const replyText = { ...(prior.replyText ?? {}) };

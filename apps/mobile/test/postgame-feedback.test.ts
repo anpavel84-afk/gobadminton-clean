@@ -4,7 +4,8 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseResults, parsePrivateReview, parseMeReviewsPage, parseReviewReportReceipt,
   wire, validateReceipt, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
-  feedbackSectionVisible, mergeReviewPages,
+  feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
+  displayOnlyReview,
 } from '../src/postgame.ts';
 import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
@@ -223,10 +224,14 @@ test('coordinator: create from peerSubjects, history independent of denied resul
   });
   await s.coordinator.loadResults(game.id);
   await s.coordinator.loadReviews('received');
-  // Report available when writes disabled.
+  // Actual UI two-step: open report target (consent false + known version), then explicit checkbox.
   s.coordinator.setFeedbackDraft(game.id, {
-    reportReviewId: 'recv-1', reportConsent: true, reportConsentVersion: 1, reportReason: 'harassment',
+    reportReviewId: 'recv-1', reportConsent: false, reportConsentVersion: 1, reportReason: 'harassment',
   });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, false);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 1);
+  s.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 1 });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
   s.coordinator.review({
     kind: 'peer-report', gameId: game.id, reviewId: 'recv-1',
     body: {
@@ -236,6 +241,7 @@ test('coordinator: create from peerSubjects, history independent of denied resul
   });
   assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-report');
   await s.coordinator.confirm();
+  assert.equal(s.sentPkts.filter(p => p.kind === 'peer-report').length, 1);
   assert.equal(s.sentPkts.at(-1)?.kind, 'peer-report');
 
   // Denied results still allow history lane.
@@ -284,14 +290,48 @@ test('coordinator: peer create requires canCreatePeer+subject; reply expectedVer
     body: { expectedVersion: 1, text: 'ok reply' },
   });
   assert.equal(r.coordinator.getSnapshot().review?.kind, 'peer-reply');
+  r.coordinator.cancelReview();
 
+  // Real 409 report: initial UI consent grant, one send, detail preserved, consent reset, regrant.
   r.coordinator.setFeedbackDraft(game.id, {
-    reportReviewId: 'recv-2', reportConsent: true, reportConsentVersion: 2, reportDetail: 'keep me',
+    reportReviewId: 'recv-2', reportConsent: false, reportConsentVersion: 2, reportDetail: 'keep me',
   });
-  // Simulate conflict reset path via setFeedbackDraft version change.
-  r.coordinator.setFeedbackDraft(game.id, { reportConsentVersion: 3 });
+  r.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 2 });
+  assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  const originalSend = r.port.send;
+  r.port.send = async (p, a) => {
+    if (p.kind === 'peer-report') {
+      r.sentPkts.push(p);
+      throw new PostgameError('business', 409, 'VERSION_CONFLICT');
+    }
+    return originalSend(p, a);
+  };
+  r.coordinator.review({
+    kind: 'peer-report', gameId: game.id, reviewId: 'recv-2',
+    body: {
+      expectedVersion: 2, reasonCode: 'harassment', detail: 'keep me',
+      shareReviewWithSupport: true, gameId: game.id,
+    },
+  });
+  assert.equal(r.coordinator.getSnapshot().review?.kind, 'peer-report');
+  await r.coordinator.confirm();
+  assert.equal(r.sentPkts.filter(p => p.kind === 'peer-report').length, 1);
   assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, false);
   assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportDetail, 'keep me');
+  // Conflict path refreshes history — wait for that flight before a fresh version reload.
+  for (let i = 0; i < 50 && r.coordinator.getSnapshot().reviewHistory.received.status === 'loading'; i++) {
+    await new Promise<void>(res => setImmediate(res));
+  }
+  r.reviews.received = [{ ...received, version: 3, comment: 'fresh3' }];
+  await r.coordinator.loadReviews('received');
+  assert.equal(r.coordinator.getSnapshot().reviewsById['recv-2']?.version, 3);
+  // First explicit new-revision grant must work in one press (no vacuous setter-only assert).
+  r.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: 'recv-2', reportConsent: false, reportConsentVersion: 3, reportDetail: 'keep me',
+  });
+  r.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 3 });
+  assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 3);
 });
 
 test('mergeReviewPages is monotonic; UNKNOWN retry keeps original packet; reauth does not autosend', async () => {
@@ -326,4 +366,217 @@ test('mergeReviewPages is monotonic; UNKNOWN retry keeps original packet; reauth
   await s.coordinator.reconcile(game.id);
   assert.equal(s.sentPkts.length, 1);
   assert.equal(s.sentPkts[0]?.key, key);
+});
+
+test('ROOT peer explicit current-revision consent toggles ON on first click after version change', async () => {
+  const row = peerReview({
+    id: 'recv-root', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  s.coordinator.setFeedbackDraft(game.id, { reportReviewId: row.id, reportConsent: false, reportConsentVersion: 1 });
+  s.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 1 });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  s.reviews.received = [{ ...row, version: 2, comment: 'fresh2' }];
+  await s.coordinator.loadReviews('received');
+  // Exact actual ReportForm checkbox handler for false versionOk and checked older consent.
+  const prior = s.coordinator.getSnapshot().feedbackDrafts[game.id]!;
+  const versionOk = prior.reportConsentVersion === 2;
+  s.coordinator.setFeedbackDraft(game.id, {
+    reportConsent: !(!!prior.reportConsent && versionOk),
+    reportConsentVersion: 2,
+  });
+  assert.equal(
+    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent,
+    true,
+    'explicit current-version user consent must take one press',
+  );
+  assert.equal(s.sentPkts.length, 0);
+});
+
+test('ROOT peer history pending is display-only and cannot arm stale new reply', async () => {
+  const row = peerReview({
+    id: 'recv-pending', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  let resolve!: (p: { items: PrivateReview[]; nextCursor: null }) => void;
+  s.port.reviews = () => new Promise(r => { resolve = r; });
+  const flight = s.coordinator.loadReviews('received');
+  try {
+    assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'loading');
+    assert.equal(reviewCommandsOpen('loading'), false);
+    s.coordinator.review({
+      kind: 'peer-reply', gameId: game.id, reviewId: row.id,
+      body: { expectedVersion: 0, text: 'new reply' },
+    });
+    assert.equal(s.coordinator.getSnapshot().review, null, 'pending old rights cannot grant a new write');
+  } finally {
+    resolve({ items: [row], nextCursor: null });
+    await flight;
+  }
+});
+
+test('ROOT peer definitive own-history deny retires old new-report authority', async () => {
+  const row = peerReview({
+    id: 'recv-deny', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  s.coordinator.setFeedbackDraft(game.id, { reportReviewId: row.id, reportConsent: false, reportConsentVersion: 1 });
+  s.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 1 });
+  s.port.reviews = async () => { throw new PostgameError('private', 403); };
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id], undefined);
+  s.coordinator.review({
+    kind: 'peer-report', gameId: game.id, reviewId: row.id,
+    body: {
+      expectedVersion: 1, reasonCode: 'harassment', detail: null,
+      shareReviewWithSupport: true, gameId: game.id,
+    },
+  });
+  assert.equal(s.coordinator.getSnapshot().review, null, 'denied own-history must not retain old report authority');
+});
+
+test('denied Results keeps history canReply UI authority; writes-off results still gate reply', async () => {
+  const row = peerReview({
+    id: 'recv-ui', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const denied = setup({ results: 'deny', reviews: { received: [row], sent: [] } });
+  await denied.coordinator.loadResults(game.id);
+  await denied.coordinator.loadReviews('received');
+  assert.equal(denied.coordinator.getSnapshot().games[game.id]?.status, 'unavailable');
+  assert.equal(denied.coordinator.getSnapshot().reviewsById['recv-ui']?.allowedActions.canReply, true);
+  assert.equal(reviewCommandsOpen(denied.coordinator.getSnapshot().reviewHistory.received.status), true);
+  denied.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-ui',
+    body: { expectedVersion: 0, text: 'history reply' },
+  });
+  assert.equal(denied.coordinator.getSnapshot().review?.kind, 'peer-reply');
+  denied.coordinator.cancelReview();
+
+  const writesOff = setup({
+    results: {
+      ...result,
+      feedback: {
+        ...feedbackReady,
+        writesEnabled: false,
+        capabilities: { ...feedbackReady.capabilities, canCreatePeer: false, peerCreateReason: 'no_eligible_peers' },
+        gameReviews: [row],
+      },
+    },
+    reviews: {
+      received: [peerReview({
+        id: 'recv-ui', direction: 'received',
+        allowedActions: { canEdit: false, canReply: false, canReport: true },
+      })],
+      sent: [],
+    },
+  });
+  await writesOff.coordinator.loadResults(game.id);
+  await writesOff.coordinator.loadReviews('received');
+  writesOff.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-ui',
+    body: { expectedVersion: 0, text: 'blocked' },
+  });
+  assert.equal(writesOff.coordinator.getSnapshot().review, null);
+  writesOff.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: 'recv-ui', reportConsent: false, reportConsentVersion: 1,
+  });
+  writesOff.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 1 });
+  writesOff.coordinator.review({
+    kind: 'peer-report', gameId: game.id, reviewId: 'recv-ui',
+    body: {
+      expectedVersion: 1, reasonCode: 'spam', detail: null,
+      shareReviewWithSupport: true, gameId: game.id,
+    },
+  });
+  assert.equal(writesOff.coordinator.getSnapshot().review?.kind, 'peer-report');
+});
+
+test('deferred results/history same-version rights; older gen cannot restore; non-peer cursor retained', async () => {
+  const row = peerReview({
+    id: 'recv-defer', direction: 'received', version: 1, comment: 'v1',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [], nextCursor: 'cursor-a' },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, 'cursor-a');
+  // Newer history rights win at same version.
+  s.reviews.received = [{
+    ...row,
+    comment: 'v1-rights',
+    allowedActions: { canEdit: false, canReply: false, canReport: true },
+  }];
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v1-rights');
+  // Stale results gameReviews with old reply rights must not restore after newer history.
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v1-rights');
+  // Non-peer rows on the page still leave nextCursor honest.
+  const org = peerReview({
+    id: 'org-defer', kind: 'organization', subjectContextId: null, peerRating: null,
+    organizationScore: 4, direction: 'received',
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  });
+  s.reviews.received = [row, org];
+  s.port.reviews = async () => ({ items: structuredClone(s.reviews.received), nextCursor: 'cursor-b' });
+  // Fresh root load (not more) — replace cursor set.
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, 'cursor-b');
+  assert.equal(
+    peerReviewsOnly(s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? []).length,
+    1,
+  );
+  const projected = projectReviewsFromStore(
+    s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? [],
+    s.coordinator.getSnapshot().reviewsById,
+  );
+  assert.equal(projected.find(r => r.id === 'recv-defer')?.allowedActions.canReply, false);
+  assert.equal(displayOnlyReview(row).allowedActions.canReply, false);
+});
+
+test('actor switch clears private review projection and report draft', async () => {
+  const row = peerReview({
+    id: 'recv-actor', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  s.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: row.id, reportConsent: false, reportConsentVersion: 1,
+  });
+  s.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 1 });
+  const other: Actor = { actorId: 'actor-b', sessionId: 'session-b', generation: 1 };
+  s.coordinator.setActor(other);
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id], undefined);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'idle');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id], undefined);
 });

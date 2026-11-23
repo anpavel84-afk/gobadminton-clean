@@ -20,7 +20,8 @@ export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReport
 export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
   peerRatingLabel, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
-  feedbackSectionVisible, mergeReviewPages, parsePrivateReview, parseMeReviewsPage,
+  feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
+  displayOnlyReview, parsePrivateReview, parseMeReviewsPage,
   parseReviewReportReceipt, reviewsQuery, reviewComment, reviewReplyText, reportDetailText,
 } from './postgame-feedback.ts';
 

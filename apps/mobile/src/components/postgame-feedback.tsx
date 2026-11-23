@@ -2,12 +2,15 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { Platform, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import {
+  displayOnlyReview,
   feedbackSectionVisible,
   normalizeFormReason,
   peerCreateReasonLabel,
   peerRatingLabel,
   peerReviewsForGame,
   peerReviewsOnly,
+  projectReviewsFromStore,
+  reviewCommandsOpen,
   PEER_OPTIONS,
   REPORT_REASONS,
   TAG_OPTIONS,
@@ -26,9 +29,9 @@ function useBlocked() {
 }
 
 function ReviewCard({
-  gameId, review, writes, otherGame,
+  gameId, review, otherGame,
 }: {
-  gameId: string; review: PrivateReview; writes: boolean; otherGame?: boolean;
+  gameId: string; review: PrivateReview; otherGame?: boolean;
 }) {
   const { owner, s } = useOwner();
   const blocked = useBlocked();
@@ -37,8 +40,10 @@ function ReviewCard({
   const draft = s.feedbackDrafts[draftGameId] ?? {};
   const replyText = draft.replyText?.[review.id] ?? review.reply?.text ?? '';
   const replyTrimmed = normalizeFormReason(replyText);
-  const canReply = writes && review.allowedActions.canReply && !otherGame;
-  const canReport = review.allowedActions.canReport;
+  // canReply already reflects writesEnabled on the server — do not AND missing Results.
+  const commandsOpen = reviewCommandsOpen(s.reviewHistory[review.direction]?.status);
+  const canReply = commandsOpen && review.allowedActions.canReply && !otherGame;
+  const canReport = commandsOpen && review.allowedActions.canReport;
   const reporting = draft.reportReviewId === review.id;
   return <View style={styles.card} accessibilityLabel={`Отзыв · ${peerRatingLabel(review.peerRating)}`}>
     {otherGame ? <Label>Другая игра · отзыв из личной истории</Label> : null}
@@ -49,7 +54,7 @@ function ReviewCard({
     {review.reply ? <Label>Ответ{review.reply.editedAt ? ' (изменён)' : ''}: {review.reply.text}</Label> : null}
     {canReply ? <>
       <Label>Ответ адресата</Label>
-      <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
+      <TextInput editable={!blocked && canReply} multiline scrollEnabled textAlignVertical="top"
         accessibilityLabel="Ответ адресата"
         value={replyText}
         onChangeText={text => owner.setFeedbackDraft(draftGameId, { replyText: { [review.id]: text } })}
@@ -171,16 +176,31 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
     return null;
   }
 
-  const receivedPeer = peerReviewsForGame(
-    received.status === 'ready' ? received.data?.items ?? [] : peerReviewsOnly(feedback?.gameReviews?.filter(r => r.direction === 'received') ?? []),
-    gameId,
-  );
-  const sentPeer = peerReviewsForGame(
-    sent.status === 'ready' ? sent.data?.items ?? [] : peerReviewsOnly(feedback?.gameReviews?.filter(r => r.direction === 'sent') ?? []),
-    gameId,
-  );
-  const historyReceivedOther = peerReviewsOnly(received.data?.items ?? []).filter(r => r.gameId !== gameId);
-  const historySentOther = peerReviewsOnly(sent.data?.items ?? []).filter(r => r.gameId !== gameId);
+  const laneRows = (direction: 'received' | 'sent', history: typeof received) => {
+    const byId = s.reviewsById;
+    if (history.status === 'ready') {
+      return peerReviewsForGame(projectReviewsFromStore(history.data?.items ?? [], byId), gameId);
+    }
+    if (history.status === 'unavailable') return [];
+    if (history.status === 'loading' || history.status === 'error') {
+      // Retain approved display only — strip write actions; never resurrect via Results fallback.
+      const retained = peerReviewsOnly(Object.values(byId)).filter(r => r.direction === direction && r.gameId === gameId);
+      return retained.map(displayOnlyReview);
+    }
+    // Idle bootstrap from same-game results until the first history GET settles.
+    return peerReviewsForGame(
+      peerReviewsOnly(feedback?.gameReviews?.filter(r => r.direction === direction) ?? []),
+      gameId,
+    );
+  };
+  const receivedPeer = laneRows('received', received);
+  const sentPeer = laneRows('sent', sent);
+  const historyReceivedOther = received.status === 'ready'
+    ? peerReviewsOnly(projectReviewsFromStore(received.data?.items ?? [], s.reviewsById)).filter(r => r.gameId !== gameId)
+    : [];
+  const historySentOther = sent.status === 'ready'
+    ? peerReviewsOnly(projectReviewsFromStore(sent.data?.items ?? [], s.reviewsById)).filter(r => r.gameId !== gameId)
+    : [];
 
   return <View style={{ gap: 12 }}>
     <Label style={{ fontSize: 20, fontWeight: '700' }}>Как вам встреча?</Label>
@@ -259,14 +279,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         retry={() => void owner.loadReviews('received')}
         empty={received.status === 'ready' && receivedPeer.length === 0}
         emptyText="Пока нет полученных отзывов по этой игре." />
-      {receivedPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} writes={writes} />)}
+      {receivedPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} />)}
       {received.status === 'ready' && received.data?.nextCursor ? (
         <TextButton title="Ещё полученные" onPress={() => void owner.loadReviews('received', true)} />
       ) : null}
       {historyReceivedOther.length ? <>
         <Label style={{ fontWeight: '700' }}>Другие игры</Label>
         {historyReceivedOther.map(review => (
-          <ReviewCard key={review.id} gameId={gameId} review={review} writes={false} otherGame />
+          <ReviewCard key={review.id} gameId={gameId} review={review} otherGame />
         ))}
       </> : null}
     </> : null}
@@ -276,14 +296,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         retry={() => void owner.loadReviews('sent')}
         empty={sent.status === 'ready' && sentPeer.length === 0}
         emptyText="Пока нет отправленных отзывов по этой игре." />
-      {sentPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} writes={writes} />)}
+      {sentPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} />)}
       {sent.status === 'ready' && sent.data?.nextCursor ? (
         <TextButton title="Ещё отправленные" onPress={() => void owner.loadReviews('sent', true)} />
       ) : null}
       {historySentOther.length ? <>
         <Label style={{ fontWeight: '700' }}>Другие игры</Label>
         {historySentOther.map(review => (
-          <ReviewCard key={review.id} gameId={gameId} review={review} writes={false} otherGame />
+          <ReviewCard key={review.id} gameId={gameId} review={review} otherGame />
         ))}
       </> : null}
     </> : null}

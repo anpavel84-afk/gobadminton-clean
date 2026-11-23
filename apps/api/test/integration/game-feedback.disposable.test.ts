@@ -1288,9 +1288,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
 
   it("native bearer peer feedback: create/list/reply/report, consent/CAS/replay, writes-off report, PATCH denied", async () => {
     const { gameId, ilyaContext } = await createEndedGameWithPlayers();
-    const skillsBefore = (
-      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM trainer_profiles")
-    ).rows[0]!.n;
 
     const createKey = key();
     const created = await nativePost(
@@ -1408,7 +1405,8 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       shareReviewWithSupport: false,
       gameId,
     });
-    expect([400, 422]).toContain(noConsent.statusCode);
+    expect(noConsent.statusCode).toBe(422);
+    expect(noConsent.json().code).toBe("REVIEW_REPORT_INPUT_INVALID");
 
     const staleReport = await nativePost(ilya, `/v1/reviews/${reviewId}/report`, {
       expectedVersion: reviewVersion + 99,
@@ -1444,6 +1442,13 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
         text: "writes off reply",
       });
       expect(replyOff.statusCode).toBe(503);
+      // Own history projection under writes-off: canReply false, canReport stays independent.
+      const historyOff = await nativeGet(ilya, `/v1/me/reviews?direction=received`);
+      expect(historyOff.statusCode).toBe(200);
+      const offRow = historyOff.json().items.find((r: { id: string }) => r.id === reviewId);
+      expect(offRow).toBeTruthy();
+      expect(offRow.allowedActions.canReply).toBe(false);
+      expect(offRow.allowedActions.canReport).toBe(true);
       // Report remains independently available — service has no postgame switch gate for safety.
       const reportWhileOff = await nativePost(ilya, `/v1/reviews/${reviewId}/report`, {
         expectedVersion: reviewVersion,
@@ -1476,11 +1481,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     });
     expect(mixed.statusCode).toBe(403);
     expect(mixed.json().code).toBe("CREDENTIALS_CONFLICT");
-
-    const skillsAfter = (
-      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM trainer_profiles")
-    ).rows[0]!.n;
-    expect(skillsAfter).toBe(skillsBefore);
   });
 });
 

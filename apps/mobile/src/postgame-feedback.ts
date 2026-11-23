@@ -333,3 +333,24 @@ export function mergeReviewPages(
   }
   return [...byId.values()];
 }
+
+/** Prefer monotonic store projection over raw history/results page rows. */
+export function projectReviewsFromStore(
+  items: readonly PrivateReview[],
+  byId: Record<string, PrivateReview>,
+): PrivateReview[] {
+  return items.map(row => byId[row.id] ?? row);
+}
+
+/** Pending/error/unavailable history is display-only — no new reply/report controls. */
+export function reviewCommandsOpen(historyStatus: string | undefined): boolean {
+  return historyStatus === 'ready';
+}
+
+/** Strip write actions for retained display rows while history is not ready. */
+export function displayOnlyReview(row: PrivateReview): PrivateReview {
+  return {
+    ...row,
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  };
+}
