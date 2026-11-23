@@ -181,7 +181,29 @@ export function publicRoleStatusLabel(
     case 'held_basis':
       return 'Основание на проверке';
     default:
-      return status;
+      return 'Статус обновлён. Обновите список отзывов.';
+  }
+}
+/** Actionable Russian notice — never surface raw server CODE to the author. */
+export function publicRoleBusinessNotice(code: string | undefined, kind: 'create' | 'preview' | 'command' = 'create'): string {
+  switch (code) {
+    case 'VERSION_CONFLICT':
+    case 'BASIS_VERSION_CONFLICT':
+      return kind === 'command'
+        ? 'Версия отзыва изменилась. Обновите список и повторите действие.'
+        : 'Основание устарело. Обновите допуск, заново подтвердите согласие и отправьте.';
+    case 'ROLE_CONSENT_MISMATCH':
+      return 'Текст или темы изменились. Заново подтвердите согласие с текущей версией.';
+    case 'ROLE_REPUTATION_SELF':
+      return 'Нельзя оставить публичный отзыв о своей роли.';
+    case 'POST_GAME_WRITES_UNAVAILABLE':
+      return 'Запись публичных отзывов сейчас недоступна. Попробуйте позже.';
+    default:
+      return kind === 'preview'
+        ? 'Не удалось подготовить согласие. Обновите допуск и повторите.'
+        : kind === 'command'
+          ? 'Не удалось выполнить действие. Обновите список отзывов.'
+          : 'Не удалось отправить. Обновите допуск и согласие.';
   }
 }
 export function publicRoleLabel(role: RoleKind): string {
@@ -189,6 +211,35 @@ export function publicRoleLabel(role: RoleKind): string {
 }
 export function mayWithdrawOwnPublic(item: OwnPublicRoleReview): boolean {
   return item.status !== 'withdrawn' && item.status !== 'removed';
+}
+/** Withdraw/removed terminal projection — never resurrect private author text from stale GET/receipt. */
+export function retireOwnPublicReviewText(item: OwnPublicRoleReview): OwnPublicRoleReview {
+  if (item.status !== 'withdrawn' && item.status !== 'removed') return item;
+  return {
+    ...item,
+    text: null,
+    pendingIntakeStatus: item.pendingIntakeStatus === 'waiting_intake' ? 'none' : item.pendingIntakeStatus,
+  };
+}
+/**
+ * Monotonic own-list merge: version/status terminal fence wins across GET/ACK order.
+ * Returns null when incoming is stale vs floor or would resurrect a terminal row.
+ */
+export function mergeOwnPublicReviewItem(
+  prior: OwnPublicRoleReview | undefined,
+  incoming: OwnPublicRoleReview,
+  floor: number,
+): OwnPublicRoleReview | null {
+  if (incoming.version < floor) return null;
+  if (prior && incoming.version < prior.version) return null;
+  const priorTerminal = prior && (prior.status === 'withdrawn' || prior.status === 'removed');
+  if (priorTerminal && prior) {
+    if (incoming.version < prior.version) return null;
+    if (incoming.version === prior.version && incoming.status !== 'withdrawn' && incoming.status !== 'removed') {
+      return null;
+    }
+  }
+  return retireOwnPublicReviewText(incoming);
 }
 /** Empty historical roleHandle is not authoring authority or a guessed recipient. */
 export function usableOwnRoleHandle(roleHandleValue: string): boolean {
@@ -270,7 +321,7 @@ export function parseConsentPreview(value: unknown): ConsentPreview {
   return { consentProjectionHash: hash.toLowerCase() };
 }
 
-export function eligibleBases(eligibility: OwnEligibility | null): OwnEligibilityBasis[] {
+export function eligibleBases(eligibility: OwnEligibility | null | undefined): OwnEligibilityBasis[] {
   return eligibility?.bases.filter(b => b.admission === 'may_submit') ?? [];
 }
 

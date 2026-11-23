@@ -13,12 +13,14 @@ import {
   emptyPublicRoleDraft,
   isPublicRolePacketKind,
   mayWithdrawOwnPublic,
+  mergeOwnPublicReviewItem,
   normalizePublicRoleText,
   parseConsentPreview,
   parseOwnEligibility,
   parseOwnPublicRoleReviewsPage,
   parsePublicRoleMutationReceipt,
   publicAuthorReturnPath,
+  publicRoleBusinessNotice,
   publicRoleReviewText,
   publicRoleStatusLabel,
   publicRoleTopics,
@@ -29,7 +31,9 @@ import {
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const actor: Actor = { actorId: 'actor-a', sessionId: 'session-a', generation: 1 };
 const handle = 'a'.repeat(32);
+const handleB = 'b'.repeat(32);
 const gameId = '11111111-1111-4111-8111-111111111111';
+const gameB = '22222222-2222-4222-8222-222222222222';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function eligibilityBody(over: Record<string, unknown> = {}) {
@@ -46,6 +50,20 @@ function eligibilityBody(over: Record<string, unknown> = {}) {
       admission: 'may_submit',
       reason: null,
     }],
+    ...over,
+  };
+}
+
+function idlePort(over: Partial<ConstructorParameters<typeof PostgameCoordinator>[0]> = {}) {
+  return {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async () => { throw new PostgameError('private', 404); },
+    publicEligibility: async () => eligibilityBody(),
+    publicConsentPreview: async () => ({ consentProjectionHash: '1'.repeat(64) }),
+    publicOwnReviews: async () => ({ items: [] }),
+    send: async () => { throw new PostgameError('invalid'); },
     ...over,
   };
 }
@@ -98,6 +116,8 @@ test('eligibility/own/receipt parsers and withdraw status fence', () => {
   });
   assert.equal(publicRoleStatusLabel(receipt.status, receipt.pendingIntakeStatus), 'Отозван');
   assert.equal(parseConsentPreview({ consentProjectionHash: 'd'.repeat(64) }).consentProjectionHash, 'd'.repeat(64));
+  assert.match(publicRoleBusinessNotice('VERSION_CONFLICT'), /Основание устарело/);
+  assert.doesNotMatch(publicRoleBusinessNotice('BASIS_VERSION_CONFLICT'), /BASIS_VERSION_CONFLICT/);
 });
 
 test('consentPreview/create/withdraw wire + guest return path reuse existing game route', () => {
@@ -132,7 +152,7 @@ test('consentPreview/create/withdraw wire + guest return path reuse existing gam
     }),
   });
   assert.equal(withdraw.path, `/me/role-reviews/22222222-2222-4222-8222-222222222222/commands`);
-  assert.equal(withdraw.body.action, 'withdraw');
+  assert.equal((withdraw.body as { action: string }).action, 'withdraw');
   // Transport admits revision actions too — not falsely restricted at wire level.
   const revision = wire({
     kind: 'public-role-command',
@@ -148,7 +168,7 @@ test('consentPreview/create/withdraw wire + guest return path reuse existing gam
       consentProjectionHash: 'f'.repeat(64),
     },
   });
-  assert.equal(revision.body.action, 'submit_revision');
+  assert.equal((revision.body as { action: string }).action, 'submit_revision');
   assert.equal(publicAuthorReturnPath(gameId), `/games/${encodeURIComponent(gameId)}`);
   assert.equal(isPublicRolePacketKind('public-role-create'), true);
   assert.equal(isPublicRolePacketKind('peer-create'), false);
@@ -164,31 +184,28 @@ test('PostgameCoordinator owns public mutations; consent reset; late eligibility
   let releaseElig!: () => void;
   const lateElig = new Promise<unknown>(resolve => { releaseElig = () => resolve(eligibilityBody()); });
   const owner = new PostgameCoordinator({
-    own: async () => ({ items: [], nextCursor: null }),
-    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
-    invitations: async () => ({ items: [], nextCursor: null }),
-    results: async () => { throw new PostgameError('private', 404); },
-    publicEligibility: async () => {
-      eligCalls += 1;
-      if (eligCalls === 1) return lateElig;
-      return eligibilityBody();
-    },
-    publicConsentPreview: async () => ({ consentProjectionHash: '1'.repeat(64) }),
-    publicOwnReviews: async () => ({ items: [] }),
-    send: async (packet) => {
-      keys.push(packet.key);
-      if (packet.kind === 'public-role-create') {
-        return {
-          id: '33333333-3333-4333-8333-333333333333',
-          reviewHandle: 'c'.repeat(32),
-          version: 1,
-          status: 'submitted',
-          receiptToken: 'receipt-1',
-          pendingIntakeStatus: 'waiting_intake',
-        };
-      }
-      throw new PostgameError('invalid');
-    },
+    ...idlePort({
+      publicEligibility: async () => {
+        eligCalls += 1;
+        if (eligCalls === 1) return lateElig;
+        return eligibilityBody();
+      },
+      publicConsentPreview: async () => ({ consentProjectionHash: '1'.repeat(64) }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        if (packet.kind === 'public-role-create') {
+          return {
+            id: '33333333-3333-4333-8333-333333333333',
+            reviewHandle: 'c'.repeat(32),
+            version: 1,
+            status: 'submitted',
+            receiptToken: 'receipt-1',
+            pendingIntakeStatus: 'waiting_intake',
+          };
+        }
+        throw new PostgameError('invalid');
+      },
+    }),
   }, () => `key-${keys.length + 1}`);
 
   owner.setActor(actor);
@@ -209,7 +226,10 @@ test('PostgameCoordinator owns public mutations; consent reset; late eligibility
 
   owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
   await tick();
-  owner.patchPublicDraft({ audience: 'public', text: 'Публичный текст', topics: ['flow'], consent: true });
+  // Production: consent-sensitive patch resets; explicit consent is a separate action.
+  owner.patchPublicDraft({ audience: 'public', text: 'Публичный текст', topics: ['flow'] });
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  owner.patchPublicDraft({ consent: true });
   await owner.submitPublicCreate();
   await tick();
   assert.equal(owner.getSnapshot().publicReceipt?.receiptToken, 'receipt-1');
@@ -244,24 +264,22 @@ test('withdraw receipt status fence; original UNKNOWN replay; business 422 keeps
     pendingRevision: 1,
   };
   const owner = new PostgameCoordinator({
-    own: async () => ({ items: [], nextCursor: null }),
-    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
-    invitations: async () => ({ items: [], nextCursor: null }),
-    results: async () => { throw new PostgameError('private', 404); },
-    publicOwnReviews: async () => ({ items: [item] }),
-    send: async (packet) => {
-      keys.push(packet.key);
-      if (mode === 'unknown') throw new PostgameError('network', 503);
-      if (mode === 'business') throw new PostgameError('business', 422, 'BASIS_VERSION_CONFLICT');
-      return {
-        id: item.id,
-        reviewHandle: item.reviewHandle,
-        version: 3,
-        status: 'withdrawn',
-        receiptToken: 'withdraw-receipt',
-        pendingIntakeStatus: 'waiting_intake',
-      };
-    },
+    ...idlePort({
+      publicOwnReviews: async () => ({ items: [item] }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        if (mode === 'business') throw new PostgameError('business', 422, 'VERSION_CONFLICT');
+        return {
+          id: item.id,
+          reviewHandle: item.reviewHandle,
+          version: 3,
+          status: 'withdrawn',
+          receiptToken: 'withdraw-receipt',
+          pendingIntakeStatus: 'waiting_intake',
+        };
+      },
+    }),
   }, () => `w-${keys.length + 1}`);
 
   owner.setActor(actor);
@@ -286,25 +304,189 @@ test('withdraw receipt status fence; original UNKNOWN replay; business 422 keeps
 
 test('business 422 on public create retains draft and clears consent hash', async () => {
   const owner = new PostgameCoordinator({
-    own: async () => ({ items: [], nextCursor: null }),
-    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
-    invitations: async () => ({ items: [], nextCursor: null }),
-    results: async () => { throw new PostgameError('private', 404); },
-    publicEligibility: async () => eligibilityBody(),
-    publicConsentPreview: async () => ({ consentProjectionHash: '2'.repeat(64) }),
-    publicOwnReviews: async () => ({ items: [] }),
-    send: async () => { throw new PostgameError('business', 422, 'BASIS_VERSION_CONFLICT'); },
+    ...idlePort({
+      publicConsentPreview: async () => ({ consentProjectionHash: '2'.repeat(64) }),
+      send: async () => { throw new PostgameError('business', 422, 'VERSION_CONFLICT'); },
+    }),
   }, () => 'biz-key');
   owner.setActor(actor);
   owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
   await tick();
-  owner.patchPublicDraft({ audience: 'public', text: 'Сохранить черновик', topics: ['agreements'], consent: true });
+  owner.patchPublicDraft({ audience: 'public', text: 'Сохранить черновик', topics: ['agreements'] });
+  owner.patchPublicDraft({ consent: true });
   await owner.submitPublicCreate();
   await tick();
   assert.equal(owner.getSnapshot().publicDraft?.text, 'Сохранить черновик');
   assert.equal(owner.getSnapshot().publicConsentHash, null);
   assert.equal(owner.getSnapshot().command, null);
   assert.ok(owner.getSnapshot().publicNotice);
+  assert.doesNotMatch(owner.getSnapshot().publicNotice ?? '', /VERSION_CONFLICT|BASIS_VERSION_CONFLICT/);
+  assert.match(owner.getSnapshot().publicNotice ?? '', /Основание устарело|допуск|согласие/);
+});
+
+test('withdraw order: ACK v3 then stale GET v2 cannot resurrect text or withdraw action', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const v2 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'Живой текст',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'waiting_intake' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  let ownPhase: 'v2' | 'stale-v2' | 'v3' = 'v2';
+  let releaseWithdraw!: (value: unknown) => void;
+  const withdrawPending = new Promise<unknown>(resolve => { releaseWithdraw = resolve; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => {
+        if (ownPhase === 'v3') {
+          return {
+            items: [{
+              ...v2,
+              status: 'withdrawn',
+              version: 3,
+              text: null,
+              pendingIntakeStatus: 'none',
+              receiptToken: null,
+            }],
+          };
+        }
+        return { items: [v2] };
+      },
+      send: async () => withdrawPending,
+    }),
+  }, () => 'withdraw-order');
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.text, 'Живой текст');
+  assert.equal(mayWithdrawOwnPublic(owner.getSnapshot().publicOwn.data!.items[0]!), true);
+
+  const withdrawPromise = owner.withdrawOwnPublic(v2);
+  await tick();
+  releaseWithdraw({
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    version: 3,
+    status: 'withdrawn',
+    receiptToken: 'w-receipt',
+    pendingIntakeStatus: 'waiting_intake',
+  });
+  await withdrawPromise;
+  await tick();
+
+  const afterAck = owner.getSnapshot().publicOwn.data?.items.find(i => i.id === reviewId);
+  assert.equal(afterAck?.status, 'withdrawn');
+  assert.equal(afterAck?.text, null);
+  assert.equal(mayWithdrawOwnPublic(afterAck!), false);
+
+  // Follow-up stale GET v2 must not repaint old text / writable withdraw.
+  ownPhase = 'stale-v2';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  const afterStale = owner.getSnapshot().publicOwn.data?.items.find(i => i.id === reviewId);
+  assert.equal(afterStale?.status, 'withdrawn');
+  assert.equal(afterStale?.text, null);
+  assert.equal(mayWithdrawOwnPublic(afterStale!), false);
+  assert.equal(mergeOwnPublicReviewItem(afterAck, v2, 3), null);
+
+  ownPhase = 'v3';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 3);
+});
+
+test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-actor reauth', async () => {
+  const keys: string[] = [];
+  let releaseA!: (value: unknown) => void;
+  const pendingA = new Promise<unknown>(resolve => { releaseA = resolve; });
+  let createCalls = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicEligibility: async (_actor, roleHandle) => eligibilityBody({
+        roleHandle,
+        bases: [{
+          gameId: roleHandle === handleB ? gameB : gameId,
+          endsAt: '2026-10-01T18:00:00.000Z',
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+          projectionHashPreview: null,
+          admission: 'may_submit',
+          reason: null,
+        }],
+      }),
+      publicConsentPreview: async () => ({ consentProjectionHash: '3'.repeat(64) }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        createCalls += 1;
+        if (createCalls === 1) return pendingA;
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => `late-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId, subjectDisplayName: 'A' });
+  await tick();
+  owner.patchPublicDraft({ audience: 'public', text: 'Отзыв A', topics: ['agreements'] });
+  owner.patchPublicDraft({ consent: true });
+  const sendA = owner.submitPublicCreate();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+
+  // Close A / open B while A in flight.
+  owner.closePublicSurface();
+  owner.openPublicComposer({ roleHandle: handleB, role: 'organization', gameId: gameB, subjectDisplayName: 'B' });
+  await tick();
+  owner.patchPublicDraft({ audience: 'public', text: 'Черновик B', topics: ['flow'] });
+  owner.patchPublicDraft({ consent: true });
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'Черновик B');
+
+  releaseA({
+    id: '66666666-6666-4666-8666-666666666666',
+    reviewHandle: 'c'.repeat(32),
+    version: 1,
+    status: 'submitted',
+    receiptToken: 'receipt-A',
+    pendingIntakeStatus: 'waiting_intake',
+  });
+  await sendA;
+  await tick();
+  // Late A must not disable B with A's receipt.
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'Черновик B');
+  assert.equal(owner.getSnapshot().publicSurface?.target?.roleHandle, handleB);
+
+  // ABA: reopen A — still must not inherit late A receipt (new surface generation).
+  owner.closePublicSurface();
+  owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId, subjectDisplayName: 'A' });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+
+  // UNKNOWN path: create, then reauth — journal restores, never autosend.
+  owner.patchPublicDraft({ audience: 'public', text: 'Повтор', topics: ['communication'] });
+  owner.patchPublicDraft({ consent: true });
+  await owner.submitPublicCreate();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownKey = owner.getSnapshot().command!.packet.key;
+  const before = keys.length;
+  owner.setActor({ ...actor, generation: 2 });
+  await tick();
+  assert.equal(keys.length, before);
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 
 test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK34 wiring', () => {
@@ -338,12 +520,24 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(postgameUi, /isPublicRolePacketKind/);
   assert.match(postgameUi, /publicRole/);
   assert.match(postgameUi, /PublicRoleReviewHost/);
+  assert.match(postgameUi, /bindPublicRoleFocusTrigger/);
 
   const disclosure = read('../src/components/game-role-reputation.tsx');
   assert.match(disclosure, /Поделиться опытом/);
   assert.match(disclosure, /beginPublicAuthorEntry/);
   assert.match(disclosure, /consumePendingPublicAuthor/);
   assert.doesNotMatch(disclosure, /canReply|canReport|Сообщить о нарушении/);
+
+  const host = read('../src/components/public-role-reviews.tsx');
+  assert.match(host, /publicRoleHostListeners|notifyPublicRoleHostEpoch/);
+  assert.match(host, /restorePublicTriggerFocus|bindPublicRoleFocusTrigger/);
+  assert.doesNotMatch(host, /без выдуманного исполнителя/);
+  assert.match(host, /срок и исполнитель не обещаются/);
+
+  const myGames = read('../app/my-games.tsx');
+  assert.match(myGames, /Отзывы/);
+  assert.match(myGames, /Мои публичные отзывы о ролях/);
+  assert.match(myGames, /PublicOwnReviewsEntry|FocusContext/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /publicRoleEligibility/);

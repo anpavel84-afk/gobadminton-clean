@@ -518,6 +518,8 @@ run("#394 role reputation — disposable", () => {
     });
     return {
       authorization: `Bearer ${issued.accessToken}`,
+      accessToken: issued.accessToken,
+      sessionId: issued.sessionId,
       ...(idem ? { "idempotency-key": idem } : {}),
     };
   }
@@ -1309,7 +1311,52 @@ run("#394 role reputation — disposable", () => {
       url: `/v1/me/role-reviews/eligibility?roleHandle=${"f".repeat(32)}`,
       headers: bearer,
     });
-    expect([400, 404, 422]).toContain(absent.statusCode);
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json().code).toBe("RESOURCE_UNAVAILABLE");
+
+    // Self-marked attendance is not independently confirmed present → deny self_mark.
+    await pool.query(
+      `UPDATE game_attendance SET value='present', source='self_attested', actor_user_id=$2, version=version+1
+       WHERE game_id=$1 AND user_id=$2`,
+      [orgSeed.gameId, author.userId],
+    );
+    const selfMarkElig = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: await nativeBearer(author.userId),
+    });
+    expect(selfMarkElig.statusCode).toBe(200);
+    const selfMarkBasis = selfMarkElig
+      .json()
+      .bases.find((b: { gameId: string }) => b.gameId === orgSeed.gameId);
+    expect(selfMarkBasis.admission).toBe("deny");
+    expect(selfMarkBasis.reason).toBe("self_mark");
+    await pool.query(
+      `UPDATE game_attendance SET value='present', source='manager_explicit', actor_user_id=$2, version=1
+       WHERE game_id=$1 AND user_id=$3`,
+      [orgSeed.gameId, org.userId, author.userId],
+    );
+
+    // Open role dispute holds basis — not may_submit.
+    await pool.query(
+      `UPDATE game_role_proofs SET open_dispute=true, phase='disputed' WHERE game_id=$1 AND role='organization'`,
+      [orgSeed.gameId],
+    );
+    const disputedElig = await app.inject({
+      method: "GET",
+      url: `/v1/me/role-reviews/eligibility?roleHandle=${orgSeed.roleHandle}`,
+      headers: await nativeBearer(author.userId),
+    });
+    expect(disputedElig.statusCode).toBe(200);
+    const disputedBasis = disputedElig
+      .json()
+      .bases.find((b: { gameId: string }) => b.gameId === orgSeed.gameId);
+    expect(disputedBasis.admission).toBe("hold");
+    expect(disputedBasis.reason).toBe("held_or_role_dispute");
+    await pool.query(
+      `UPDATE game_role_proofs SET open_dispute=false, phase='performed' WHERE game_id=$1 AND role='organization'`,
+      [orgSeed.gameId],
+    );
 
     const multiline = "Нативный отзыв\nс переносом строки";
     const preview = await app.inject({
@@ -1327,7 +1374,7 @@ run("#394 role reputation — disposable", () => {
     const hash = preview.json().consentProjectionHash as string;
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
 
-    // LF topics/text mismatch and basis CAS negatives.
+    // Role-specific topics mismatch on consent-preview.
     const badTopics = await app.inject({
       method: "POST",
       url: "/v1/me/role-reviews/consent-preview",
@@ -1339,7 +1386,8 @@ run("#394 role reputation — disposable", () => {
         topics: ["explanations"],
       },
     });
-    expect([400, 422]).toContain(badTopics.statusCode);
+    expect(badTopics.statusCode).toBe(422);
+    expect(badTopics.json().code).toBe("ROLE_TOPICS_INVALID");
 
     const createKey = randomUUID();
     const create = await app.inject({
@@ -1414,7 +1462,31 @@ run("#394 role reputation — disposable", () => {
         consentProjectionHash: hash,
       },
     });
-    expect([409, 422]).toContain(staleBasis.statusCode);
+    expect(staleBasis.statusCode).toBe(409);
+    expect(staleBasis.json().code).toBe("VERSION_CONFLICT");
+
+    const consentMismatch = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: {
+        ...(await nativeBearer(author.userId, randomUUID())),
+        "content-type": "application/json",
+      },
+      payload: {
+        gameId: orgSeed.gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: multiline,
+        topics: ["agreements"],
+        consentProjectionHash: "0".repeat(64),
+      },
+    });
+    expect(consentMismatch.statusCode).toBe(422);
+    expect(consentMismatch.json().code).toBe("ROLE_CONSENT_MISMATCH");
 
     const mine = await app.inject({
       method: "GET",
@@ -1448,19 +1520,92 @@ run("#394 role reputation — disposable", () => {
     expect(withdrawn.text).toBeNull();
     expect(withdrawn.pendingIntakeStatus).toBe("none");
 
-    // Mixed cookie+bearer rejected; malformed/revoked; cookie CSRF still required on cookie path.
+    // Training author loop: eligibility → create → own → withdraw (not eligibility-only).
+    const trainText = "Тренировка\nбыла понятной";
+    const trainPreview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: { ...bearer, "content-type": "application/json" },
+      payload: {
+        role: "training",
+        subjectRoleHandle: trainSeed.roleHandle,
+        text: trainText,
+        topics: ["explanations"],
+      },
+    });
+    expect(trainPreview.statusCode).toBe(200);
+    const trainHash = trainPreview.json().consentProjectionHash as string;
+    const trainCreate = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: { ...bearer, "idempotency-key": randomUUID(), "content-type": "application/json" },
+      payload: {
+        gameId: trainSeed.gameId,
+        role: "training",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: trainText,
+        topics: ["explanations"],
+        consentProjectionHash: trainHash,
+      },
+    });
+    expect(trainCreate.statusCode).toBe(200);
+    expect(trainCreate.json().pendingIntakeStatus).toBe("waiting_intake");
+    const trainSlotId = trainCreate.json().id as string;
+    const trainMine = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: bearer,
+    });
+    expect(trainMine.statusCode).toBe(200);
+    const trainOwn = trainMine.json().items.find((i: { id: string }) => i.id === trainSlotId);
+    expect(trainOwn.status).toMatch(/submitted|revision_waiting/);
+    const trainWithdraw = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${trainSlotId}/commands`,
+      headers: { ...bearer, "idempotency-key": randomUUID(), "content-type": "application/json" },
+      payload: { action: "withdraw", expectedVersion: trainOwn.version },
+    });
+    expect(trainWithdraw.statusCode).toBe(200);
+    expect(trainWithdraw.json().status).toBe("withdrawn");
+
+    // Mixed cookie+bearer rejected; malformed/revoked/disabled; cookie CSRF still required on cookie path.
     const mixed = await app.inject({
       method: "GET",
       url: "/v1/me/role-reviews",
       headers: { ...bearer, cookie: author.cookie },
     });
-    expect([401, 403]).toContain(mixed.statusCode);
+    expect(mixed.statusCode).toBe(403);
+    expect(mixed.json().code).toBe("CREDENTIALS_CONFLICT");
     const malformed = await app.inject({
       method: "GET",
       url: "/v1/me/role-reviews",
       headers: { authorization: `Bearer ${"x".repeat(43)}` },
     });
     expect(malformed.statusCode).toBe(401);
+
+    const revokedCreds = await nativeBearer(author.userId);
+    await sessions.revokeSession(revokedCreds.sessionId);
+    const revoked = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { authorization: revokedCreds.authorization },
+    });
+    expect(revoked.statusCode).toBe(401);
+
+    const disabledUser = await actor("disabled-native");
+    const disabledCreds = await nativeBearer(disabledUser.userId);
+    await pool.query(`UPDATE users SET status='disabled' WHERE id=$1`, [disabledUser.userId]);
+    const disabled = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { authorization: disabledCreds.authorization },
+    });
+    expect(disabled.statusCode).toBe(401);
+
     const cookieNoCsrf = await app.inject({
       method: "POST",
       url: "/v1/me/role-reviews/consent-preview",
@@ -1476,7 +1621,8 @@ run("#394 role reputation — disposable", () => {
         topics: [],
       },
     });
-    expect([401, 403]).toContain(cookieNoCsrf.statusCode);
+    expect(cookieNoCsrf.statusCode).toBe(403);
+    expect(cookieNoCsrf.json().code).toBe("CSRF_REQUIRED");
 
     // Recipient reply/report remain cookie-only — native bearer denied.
     const replyDenied = await app.inject({
@@ -1491,13 +1637,15 @@ run("#394 role reputation — disposable", () => {
         consentProjectionHash: "0".repeat(64),
       },
     });
-    expect([401, 403, 404]).toContain(replyDenied.statusCode);
+    expect(replyDenied.statusCode).toBe(403);
+    expect(replyDenied.json().code).toBe("CREDENTIALS_CONFLICT");
     const reportDenied = await app.inject({
       method: "POST",
       url: `/v1/role-reviews/${"c".repeat(32)}/reports`,
       headers: { ...(await nativeBearer(author.userId, randomUUID())), "content-type": "application/json" },
       payload: { reasonCode: "harassment", detail: null },
     });
-    expect([401, 403, 404]).toContain(reportDenied.statusCode);
+    expect(reportDenied.statusCode).toBe(403);
+    expect(reportDenied.json().code).toBe("CREDENTIALS_CONFLICT");
   });
 });

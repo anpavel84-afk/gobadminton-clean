@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
@@ -13,9 +13,55 @@ import {
 } from '../public-role-reviews.ts';
 import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
-/** At most one host renders the modal when multiple trees mount the host. */
+type FocusTarget = ComponentRef<typeof Pressable>;
+
+/** Bound by PostgameSurface / entry hosts — restore initiator focus on sheet close. */
+let publicRoleFocusTrigger: RefObject<FocusTarget | null> | null = null;
+export function bindPublicRoleFocusTrigger(ref: RefObject<FocusTarget | null> | null) {
+  publicRoleFocusTrigger = ref;
+}
+export function rememberPublicRoleFocusTarget(target: FocusTarget | null) {
+  if (publicRoleFocusTrigger) publicRoleFocusTrigger.current = target;
+}
+function restorePublicTriggerFocus() {
+  const frame = requestAnimationFrame(() => {
+    publicRoleFocusTrigger?.current?.focus();
+    const node = findNodeHandle(publicRoleFocusTrigger?.current ?? null);
+    if (node) AccessibilityInfo.setAccessibilityFocus(node);
+  });
+  return () => cancelAnimationFrame(frame);
+}
+
+/** At most one host renders the modal; ownership hands off reactively when the owner unmounts. */
 let publicRoleHostSerial = 0;
 let publicRoleHostOwner = 0;
+let publicRoleHostEpoch = 0;
+const publicRoleHostListeners = new Set<() => void>();
+function notifyPublicRoleHostEpoch() {
+  publicRoleHostEpoch += 1;
+  for (const listener of publicRoleHostListeners) listener();
+}
+
+function usePublicRoleHostOwnership(token: number): boolean {
+  const [epoch, setEpoch] = useState(publicRoleHostEpoch);
+  const [owns, setOwns] = useState(false);
+  useEffect(() => {
+    const onBump = () => setEpoch(publicRoleHostEpoch);
+    publicRoleHostListeners.add(onBump);
+    return () => { publicRoleHostListeners.delete(onBump); };
+  }, []);
+  useLayoutEffect(() => {
+    if (publicRoleHostOwner === 0) publicRoleHostOwner = token;
+    setOwns(publicRoleHostOwner === token);
+    return () => {
+      if (publicRoleHostOwner === token) {
+        publicRoleHostOwner = 0;
+        notifyPublicRoleHostEpoch();
+      }
+    };
+  }, [token, epoch]);
+  return owns;
+}
 
 /** Own history / withdraw sheet — same surface for MyGames entry and create receipt link. */
 export function PublicRoleOwnHistorySheet({ onClose }: { onClose: () => void }) {
@@ -23,18 +69,22 @@ export function PublicRoleOwnHistorySheet({ onClose }: { onClose: () => void }) 
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const heading = useRef<ComponentRef<typeof Text>>(null);
   const command = s.command;
-  const publicBusy = command && isPublicRolePacketKind(command.packet.kind);
+  const publicBusy = command && isPublicRolePacketKind(command.packet.kind) ? command : null;
   useEffect(() => {
     const node = findNodeHandle(heading.current);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   }, []);
+  const close = () => {
+    onClose();
+    restorePublicTriggerFocus();
+  };
   const items = s.publicOwn.status === 'ready' ? s.publicOwn.data?.items ?? [] : [];
-  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={onClose} supportedOrientations={iosModalOrientations}>
+  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
     <Page keyboard header={<View style={{ gap: 8 }}>
-      <TextButton title="Закрыть" onPress={onClose} />
+      <TextButton title="Закрыть" onPress={close} />
       {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
     </View>}>
-      <View accessibilityViewIsModal onAccessibilityEscape={onClose} style={{ gap: 16 }}>
+      <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
         <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
           Мои публичные отзывы о ролях
         </Text>
@@ -89,23 +139,27 @@ export function PublicRoleComposerSheet({ onClose, onOpenHistory }: {
   const target = s.publicSurface?.mode === 'composer' ? s.publicSurface.target : null;
   const draft = s.publicDraft;
   const command = s.command;
-  const publicBusy = command && isPublicRolePacketKind(command.packet.kind);
+  const publicBusy = command && isPublicRolePacketKind(command.packet.kind) ? command : null;
   useEffect(() => {
     const node = findNodeHandle(heading.current);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   }, [target?.roleHandle]);
+  const close = () => {
+    onClose();
+    restorePublicTriggerFocus();
+  };
   if (!target || !draft) return null;
   const eligibility = s.publicEligibility.status === 'ready' ? s.publicEligibility.data : null;
   const eligible = eligibleBases(eligibility);
   const topics = topicOptionsForRole(target.role);
   const receipt = s.publicReceipt;
   const disabled = !!publicBusy || !!receipt;
-  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={onClose} supportedOrientations={iosModalOrientations}>
+  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
     <Page keyboard header={<View style={{ gap: 8 }}>
-      <TextButton title="Закрыть" onPress={onClose} />
+      <TextButton title="Закрыть" onPress={close} />
       {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
     </View>}>
-      <View accessibilityViewIsModal onAccessibilityEscape={onClose} style={{ gap: 16 }}>
+      <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
         <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
           Поделиться опытом · {target.role === 'training' ? 'о тренере' : 'об организаторе'}
         </Text>
@@ -219,7 +273,9 @@ export function PublicRoleComposerSheet({ onClose, onOpenHistory }: {
           <Label accessibilityLiveRegion="polite" accessibilityRole="header">
             {publicRoleStatusLabel(receipt.status, receipt.pendingIntakeStatus)}
           </Label>
-          <Label>Квитанция: {receipt.receiptToken}. Ожидание разбора — без выдуманного исполнителя.</Label>
+          <Label>
+            Квитанция: {receipt.receiptToken}. Отзыв принят на разбор; срок и исполнитель не обещаются.
+          </Label>
           <TextButton title="Мои публичные отзывы о ролях" onPress={onOpenHistory} />
         </> : null}
         {s.publicNotice ? <Label accessibilityRole="alert">{s.publicNotice}</Label> : null}
@@ -234,18 +290,7 @@ export function PublicRoleReviewHost() {
   const auth = useAuth(), owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const [token] = useState(() => ++publicRoleHostSerial);
-  const [owns, setOwns] = useState(() => publicRoleHostOwner === 0);
-  useLayoutEffect(() => {
-    if (publicRoleHostOwner === 0) {
-      publicRoleHostOwner = token;
-      setOwns(true);
-    } else {
-      setOwns(publicRoleHostOwner === token);
-    }
-    return () => {
-      if (publicRoleHostOwner === token) publicRoleHostOwner = 0;
-    };
-  }, [token]);
+  const owns = usePublicRoleHostOwnership(token);
   const surface = s.publicSurface;
   if (!owns || !surface) return null;
   if (surface.mode === 'history') {
@@ -274,4 +319,18 @@ export function beginPublicAuthorEntry(args: {
     return;
   }
   args.open(args.target);
+}
+
+/** Production ownership helpers exercised by unit tests — not mounted visual acceptance. */
+export function publicRoleHostOwnerToken(): number {
+  return publicRoleHostOwner;
+}
+export function publicRoleHostEpochValue(): number {
+  return publicRoleHostEpoch;
+}
+export function forcePublicRoleHostReleaseForTest() {
+  if (publicRoleHostOwner !== 0) {
+    publicRoleHostOwner = 0;
+    notifyPublicRoleHostEpoch();
+  }
 }

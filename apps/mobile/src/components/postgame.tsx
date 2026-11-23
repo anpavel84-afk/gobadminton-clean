@@ -7,12 +7,16 @@ import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, 
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
-import { PublicRoleReviewHost } from './public-role-reviews.tsx';
+import { bindPublicRoleFocusTrigger, PublicRoleReviewHost } from './public-role-reviews.tsx';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
 type FocusTarget = ComponentRef<typeof Pressable>;
 export const FocusContext=createContext<RefObject<FocusTarget | null> | null>(null);
 export function PostgameSurface({children}:PropsWithChildren) {
   const trigger=useRef<FocusTarget>(null);
+  useEffect(() => {
+    bindPublicRoleFocusTrigger(trigger);
+    return () => bindPublicRoleFocusTrigger(null);
+  }, [trigger]);
   return <FocusContext.Provider value={trigger}>{children}<PublicRoleReviewHost /></FocusContext.Provider>;
 }
 function useBlocked() {

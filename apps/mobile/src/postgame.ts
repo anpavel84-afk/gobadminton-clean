@@ -382,8 +382,11 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
     exact(versions, ['proofVersion', 'outcomeVersion', 'attendanceVersion']);
     num(versions.proofVersion, 1); num(versions.outcomeVersion); num(versions.attendanceVersion);
     publicRoleReviewText(str(body.text));
-    if (!Array.isArray(body.topics)) invalid();
-    publicRoleTopics(body.role as 'organization' | 'training', body.topics.map(str));
+    const createTopics = body.topics;
+    if (!Array.isArray(createTopics)) invalid();
+    const createTopicList: string[] = [];
+    for (const topic of createTopics) createTopicList.push(str(topic));
+    publicRoleTopics(body.role as 'organization' | 'training', createTopicList);
     const hash = str(body.consentProjectionHash);
     if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
     return { method: 'POST', path: '/me/role-reviews', body: packet.body };
@@ -391,18 +394,19 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
   if (packet.kind === 'public-role-command') {
     const reviewId = postgameId(packet.reviewId), body = object(packet.body);
     postgameId(packet.gameId);
-    if (body.action === 'withdraw') {
+    const action = str(body.action);
+    if (action === 'withdraw') {
       exact(body, ['action', 'expectedVersion']);
       num(body.expectedVersion, 1);
       return { method: 'POST', path: `/me/role-reviews/${reviewId}/commands`, body: packet.body };
     }
-    if (body.action === 'appeal') {
+    if (action === 'appeal') {
       exact(body, ['action', 'expectedVersion', 'explanation']);
       num(body.expectedVersion, 1);
       publicRoleReviewText(str(body.explanation));
       return { method: 'POST', path: `/me/role-reviews/${reviewId}/commands`, body: packet.body };
     }
-    if (body.action === 'submit_revision' || body.action === 'resubmit') {
+    if (action === 'submit_revision' || action === 'resubmit') {
       exact(body, ['action', 'expectedVersion', 'gameId', 'expectedBasisVersions', 'text', 'topics', 'consentProjectionHash']);
       num(body.expectedVersion, 1);
       postgameId(body.gameId);
@@ -410,8 +414,9 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
       exact(versions, ['proofVersion', 'outcomeVersion', 'attendanceVersion']);
       num(versions.proofVersion, 1); num(versions.outcomeVersion); num(versions.attendanceVersion);
       publicRoleReviewText(str(body.text));
-      if (!Array.isArray(body.topics) || body.topics.length > 2) invalid();
-      for (const topic of body.topics) str(topic);
+      const commandTopics = body.topics;
+      if (!Array.isArray(commandTopics) || commandTopics.length > 2) invalid();
+      for (const topic of commandTopics) str(topic);
       // Transport admits all server-authorized command variants; role-specific topics rechecked server-side.
       const hash = str(body.consentProjectionHash);
       if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
