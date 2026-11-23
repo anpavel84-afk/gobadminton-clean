@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
+import { createNativeApi } from '../src/native-api.ts';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import { PostgameError, validateReceipt, wire } from '../src/postgame.ts';
 import {
@@ -855,7 +856,8 @@ test('address5: Profile history lifetime — stale retire cannot close newer gen
 test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fence kept', async () => {
   const otherId = '66666666-6666-4666-8666-666666666666';
   const otherHandle = 'ffffffffffffffffffffffffffffffff';
-  let detailMode: 'ok' | 'wrong-id' | 'wrong-handle' = 'ok';
+  const otherVenue = '33333333-3333-4333-8333-333333333333';
+  let detailMode: 'ok' | 'wrong-id' | 'wrong-handle' | 'wrong-venue' = 'ok';
   const posts: string[] = [];
   const owner = new PostgameCoordinator({
     ...idlePort({
@@ -865,6 +867,9 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
         }
         if (detailMode === 'wrong-handle') {
           return { ...selected(2), reviewHandle: otherHandle };
+        }
+        if (detailMode === 'wrong-venue') {
+          return { ...selected(2), venueId: otherVenue };
         }
         assert.equal(id, reviewId);
         return selected(2);
@@ -891,6 +896,11 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
     venueId,
     reviewHandle: handle,
   }), false);
+  assert.equal(ownVenueSelectedMatchesRequest({ ...selected(), venueId: otherVenue }, {
+    id: reviewId,
+    venueId,
+    reviewHandle: handle,
+  }), false);
 
   owner.setActor(actor);
   owner.openOwnVenueHistory();
@@ -903,12 +913,19 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
   assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
   assert.equal(posts.length, 1);
 
+  // Fixture open returns selected(2); capture exact prior selected before wrong responses.
+  const priorSelected = owner.getSnapshot().ownVenueSelected;
+  assert.ok(priorSelected);
+  assert.equal(priorSelected.version, 2);
+  assert.equal(priorSelected.id, reviewId);
+
   detailMode = 'wrong-id';
   await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
   await tick();
   assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
   assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
-  assert.equal(owner.getSnapshot().ownVenueSelected?.version, 1);
+  assert.equal(owner.getSnapshot().ownVenueSelected, priorSelected);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, priorSelected.version);
   assert.equal(owner.getSnapshot().venueDraft?.text, 'Не менять таргет');
   assert.equal(posts.length, 1);
 
@@ -917,6 +934,19 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
   await tick();
   assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
   assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+  assert.equal(owner.getSnapshot().ownVenueSelected, priorSelected);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, priorSelected.version);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Не менять таргет');
+  assert.equal(posts.length, 1);
+
+  detailMode = 'wrong-venue';
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+  assert.equal(owner.getSnapshot().ownVenueSelected, priorSelected);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, priorSelected.version);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Не менять таргет');
   assert.equal(posts.length, 1);
 
   detailMode = 'ok';
@@ -927,8 +957,17 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
   assert.equal(owner.getSnapshot().venueDraft?.text, 'Не менять таргет');
   assert.equal(posts.length, 1);
 
-  const api = read('../src/native-api.ts');
-  assert.match(api, /selected\.id !== requested/);
+  // Native adapter id binding via injected fetch — not source-regex-only.
+  const wrongIdBody = { ...selected(2), id: otherId };
+  const wrongIdApi = createNativeApi(async () => new Response(JSON.stringify(wrongIdBody)));
+  await assert.rejects(
+    () => wrongIdApi.venueExperienceOwnDetail('access', reviewId),
+    (error: unknown) => error instanceof PostgameError && error.kind === 'invalid',
+  );
+  const okApi = createNativeApi(async () => new Response(JSON.stringify(selected(2))));
+  const bound = await okApi.venueExperienceOwnDetail('access', reviewId);
+  assert.equal(bound.id, reviewId);
+  assert.equal(bound.version, 2);
 });
 
 test('source wiring: Profile entry + controller bearer + APK38 + fixture owner coverage', () => {

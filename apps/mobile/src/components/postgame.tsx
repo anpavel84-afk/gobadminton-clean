@@ -112,8 +112,8 @@ export function CommandReview({gameId}: {gameId?:string}) {
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {showPrivatePendingCta && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
-    {venuePendingOtherGame && venuePendingRecovery?.kind === 'create-results' && <TextButton title={command.status === 'sending' ? 'Сохраняем… Открыть игру отправки' : 'Посмотреть отправку'} onPress={()=>router.push({pathname:'/my-games/[gameId]/results',params:{gameId:venuePendingRecovery.gameId}})} />}
-    {venuePendingOwnerHistory && <TextButton title={command.status === 'sending' ? 'Сохраняем… Посмотреть отправку' : 'Посмотреть отправку'} onPress={()=>{
+    {venuePendingOtherGame && command && venuePendingRecovery?.kind === 'create-results' && <TextButton title={command.status === 'sending' ? 'Сохраняем… Открыть игру отправки' : 'Посмотреть отправку'} onPress={()=>router.push({pathname:'/my-games/[gameId]/results',params:{gameId:venuePendingRecovery.gameId}})} />}
+    {venuePendingOwnerHistory && command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Посмотреть отправку' : 'Посмотреть отправку'} onPress={()=>{
       // Intent survives route commit — do not open history before navigation (blur would retire it).
       owner.requestOwnVenueHistoryNavIntent();
       router.push('/profile');
