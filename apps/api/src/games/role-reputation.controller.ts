@@ -94,7 +94,7 @@ export class RoleReputationController {
     @Req() request: FastifyRequest,
     @Query("roleHandle") roleHandle: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.reputation.eligibility(actor.userId, roleHandle);
   }
 
@@ -102,7 +102,7 @@ export class RoleReputationController {
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
   async consentPreview(@Req() request: FastifyRequest) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     return this.reputation.previewConsent(actor.userId, request.body);
   }
 
@@ -112,7 +112,7 @@ export class RoleReputationController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.reputation.createReview(
       actor.userId,
       actor.sessionId,
@@ -126,7 +126,7 @@ export class RoleReputationController {
   @Get("me/role-reviews")
   @Header("Cache-Control", "no-store")
   async listMine(@Req() request: FastifyRequest) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.reputation.listMine(actor.userId);
   }
 
@@ -137,7 +137,7 @@ export class RoleReputationController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("id") id: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.reputation.ownCommand(
       actor.userId,
       actor.sessionId,

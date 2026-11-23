@@ -22280,6 +22280,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -22319,7 +22322,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/me/role-reviews/consent-preview": {
@@ -22332,6 +22336,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -22470,7 +22477,8 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "x-operation-kind": "authenticated-read"
+        "x-operation-kind": "authenticated-read",
+        "description": "NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/me/role-reviews": {
@@ -22483,6 +22491,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "responses": {
@@ -22510,7 +22521,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404."
       },
       "post": {
         "operationId": "createRoleReview",
@@ -22518,10 +22530,13 @@
           "Games"
         ],
         "summary": "Submit public organizer/trainer role review (pending human approval)",
-        "description": "#394 + #506 B1b. Cookie+CSRF+Idempotency. Authorize experience/membership/role/revision/hash/consent before text moderation; provider outside DB locks; final write revalidates fences and binds classifier candidate evidence to exact role_review_revision. Classifier ALLOW still creates real human pending intake — never auto-publishes. Soft/ambiguous flags stay pendingreview (decision=review, never forged allow). Hard-safety categories → 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE / 429 MODERATION_RATE_LIMITED retain prior approved tip. Withdraw/appeal provider-independent. Private PG-3 notes/feedback never egress.",
+        "description": "#394 + #506 B1b. Cookie+CSRF+Idempotency. Authorize experience/membership/role/revision/hash/consent before text moderation; provider outside DB locks; final write revalidates fences and binds classifier candidate evidence to exact role_review_revision. Classifier ALLOW still creates real human pending intake — never auto-publishes. Soft/ambiguous flags stay pendingreview (decision=review, never forged allow). Hard-safety categories → 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE / 429 MODERATION_RATE_LIMITED retain prior approved tip. Withdraw/appeal provider-independent. Private PG-3 notes/feedback never egress. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -22624,6 +22639,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -22694,7 +22712,7 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "#394 + #506 B1b. submit_revision/resubmit use the same role_review_body gate as create (422/503/429; prior approved tip retained). withdraw/appeal are provider-independent."
+        "description": "#394 + #506 B1b. submit_revision/resubmit use the same role_review_body gate as create (422/503/429; prior approved tip retained). withdraw/appeal are provider-independent. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/games/{gameId}/role-reputations/{role}": {

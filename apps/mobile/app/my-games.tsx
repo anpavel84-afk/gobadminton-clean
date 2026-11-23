@@ -84,6 +84,10 @@ export default function MyGames() {
         void participation.loadOwn(); void participation.loadManaged();
         void owner.loadOwn(); void owner.loadReminders(); void owner.loadInvitations();
       }} />
+      <View style={{ gap: 8 }}>
+        <Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>Отзывы</Label>
+        <TextButton title="Мои публичные отзывы о ролях" onPress={() => owner.openOwnPublicHistory()} />
+      </View>
     </>}
   </Page></PostgameSurface>;
 }
