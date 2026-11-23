@@ -2196,16 +2196,22 @@ test('#522 P2: same-actor reauth recovers selected fresh context without knownre
     [{ gameId: game.id, contextId: contextA }],
   );
   // Typed existing: dirty nonempty survives ready GET (no pristine prefill overwrite).
+  // Generic setup always keys overrides.note under contextA; seed B under the correct map key.
+  const noteOwnedB: PersonalNote = {
+    ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'server-owned-B', version: 3,
+  };
   const owned = setup({
-    note: { ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'server-owned-B', version: 3 },
+    note: noteOwnedB,
     results: {
       ...freshResults,
       feedback: {
         ...feedbackReady,
-        myNotes: [{ ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'server-owned-B', version: 3 }],
+        myNotes: [noteOwnedB],
       },
     },
   });
+  owned.notes.delete(`${game.id}:${contextA}`);
+  owned.notes.set(`${game.id}:${contextB}`, noteOwnedB);
   await owned.coordinator.loadResults(game.id);
   owned.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB, createText: 'keep-over-existing' });
   await owned.coordinator.loadNote(game.id, contextB);
