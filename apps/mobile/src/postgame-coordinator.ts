@@ -78,6 +78,7 @@ import {
   venueExperienceText,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   type OwnVenueEligibility,
+  type VenueAudience,
   type VenueExperienceDraft,
   type VenueReviewMutationReceipt,
   type VenueReviewTopic,
@@ -96,6 +97,31 @@ type PublicMutationBind = {
   reviewHandle?: string;
   /** Captured at reply/report dispatch — replacement origin cannot inherit ACK/notice authority. */
   origin?: PublicRoleReaderOrigin;
+};
+/**
+ * Fresh venue create authority captured at deliberate dispatch — local only, never on the wire.
+ * Post-token AuthCoordinator recheck fails closed when auth/surface/editor/consent/basis/read gen retire.
+ * Explicit UNKNOWN reconcile does not set this bind (retention/age only).
+ */
+type VenueFreshDispatchBind = {
+  key: string;
+  actorId: string;
+  sessionId: string;
+  surfaceGen: number;
+  editor: string;
+  consent: boolean;
+  consentHash: string | null;
+  audience: VenueAudience;
+  basisAuthority: string;
+  eligibilityGen: number;
+};
+export type PostgameDispatchPermit = {
+  key: string;
+  actorId: string;
+  sessionId: string;
+  firstDispatchedAt?: number;
+  /** Present only for fresh venue-experience-create — never for UNKNOWN reconcile. */
+  freshVenue?: Omit<VenueFreshDispatchBind, 'key'>;
 };
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
@@ -425,6 +451,11 @@ export class PostgameCoordinator {
   private venuePreviewGen = 0;
   private venueSurfaceGen = 0;
   /**
+   * Fresh venue create post-token authority — cleared on settle/UNKNOWN path end/setActor/forget.
+   * Distinct from writePrepare (pre-dispatch) and from UNKNOWN reconcile (no fresh bind).
+   */
+  private venueFreshDispatchBind: VenueFreshDispatchBind | null = null;
+  /**
    * Single global fresh-write preparation reservation (eligibility/preview await).
    * Prevents competing fresh POSTs; finally must not clear a newer reservation.
    * Never a second journal — dispatch still owns UNKNOWN/inFlight.
@@ -472,6 +503,7 @@ export class PostgameCoordinator {
     const savedBind = parked?.publicMutationBind ?? null;
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     this.writePrepare = null;
+    this.venueFreshDispatchBind = null;
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
@@ -616,29 +648,79 @@ export class PostgameCoordinator {
     if (actor && saved?.publicSurface?.mode === 'reader') void this.loadPublicReader();
     if (actor && (saved?.venueExperience || saved?.venueProbe)) void this.loadVenueEligibility();
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.writePrepare=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.writePrepare=null; this.venueFreshDispatchBind=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.snapshot=empty(null); this.show({}); };
   /** Local permit captured before AuthCoordinator token await — never on the API wire. */
-  dispatchPermit = (packet: Packet) => {
+  dispatchPermit = (packet: Packet): PostgameDispatchPermit => {
     const cmd = this.snapshot.command;
-    return {
+    const base: PostgameDispatchPermit = {
       key: packet.key,
       actorId: packet.actor.actorId,
       sessionId: packet.actor.sessionId,
       firstDispatchedAt: cmd?.packet.key === packet.key ? cmd.firstDispatchedAt : undefined,
     };
+    const fresh = this.venueFreshDispatchBind;
+    if (fresh && fresh.key === packet.key && isVenueExperienceCreatePacket(packet)) {
+      return {
+        ...base,
+        freshVenue: {
+          actorId: fresh.actorId,
+          sessionId: fresh.sessionId,
+          surfaceGen: fresh.surfaceGen,
+          editor: fresh.editor,
+          consent: fresh.consent,
+          consentHash: fresh.consentHash,
+          audience: fresh.audience,
+          basisAuthority: fresh.basisAuthority,
+          eligibilityGen: fresh.eligibilityGen,
+        },
+      };
+    }
+    return base;
   };
-  /** Post-token journal ownership/age fence; failure keeps UNKNOWN (no business clear / new key). */
+  /**
+   * Post-token journal ownership/age fence (+ fresh venue authority when captured).
+   * Failure keeps UNKNOWN (no business clear / new key). Does not rebuild permission from
+   * restored reauth snapshot or frozen body — freshVenue must still match live surface.
+   */
   mayDispatchRetention = (
     packet: Packet,
-    permit: { key: string; actorId: string; sessionId: string; firstDispatchedAt?: number },
+    permit: PostgameDispatchPermit,
   ): boolean => {
     if (permit.key !== packet.key || permit.actorId !== packet.actor.actorId) return false;
     if (this.inFlight?.key !== packet.key) return false;
     const cmd = this.snapshot.command;
     if (!cmd || cmd.packet.key !== packet.key) return false;
     if (postgameIdempotencyReplayBlocked(cmd.firstDispatchedAt ?? permit.firstDispatchedAt)) return false;
+    if (permit.freshVenue) return this.mayDispatchFreshVenue(packet, permit.freshVenue);
     return true;
   };
+  /** Live surface/editor/consent/basis/read-gen still match the deliberate fresh capture. */
+  private mayDispatchFreshVenue(
+    packet: Packet,
+    fresh: NonNullable<PostgameDispatchPermit['freshVenue']>,
+  ): boolean {
+    if (!isVenueExperienceCreatePacket(packet)) return false;
+    const actor = this.snapshot.actor;
+    if (!actor || actor.actorId !== fresh.actorId || actor.sessionId !== fresh.sessionId) return false;
+    if (packet.actor.actorId !== fresh.actorId) return false;
+    const surface = this.snapshot.venueExperience;
+    if (!surface || surface.gen !== fresh.surfaceGen) return false;
+    if (surface.gameId !== packet.gameId || surface.venueId !== packet.venueId) return false;
+    if (fresh.eligibilityGen !== this.venueEligibilityGen) return false;
+    const draft = this.snapshot.venueDraft;
+    if (!draft || draft.audience !== fresh.audience || draft.consent !== fresh.consent) return false;
+    if (this.snapshot.venueConsentHash !== fresh.consentHash) return false;
+    const editor = this.venueDraftEditorKey(draft, this.snapshot.venueConsentHash);
+    if (editor !== fresh.editor) return false;
+    const currentBasis = venueExperienceBasisAuthority(
+      this.snapshot.venueEligibility.status === 'ready'
+        ? this.snapshot.venueEligibility.data ?? null
+        : null,
+      packet.gameId,
+    );
+    if (currentBasis === null || currentBasis !== fresh.basisAuthority) return false;
+    return true;
+  }
   retentionExpiredFor = (packet: Packet): boolean => {
     const cmd = this.snapshot.command;
     if (!cmd || cmd.packet.key !== packet.key) return false;
@@ -2947,6 +3029,21 @@ export class PostgameCoordinator {
         actor: Object.freeze({ ...actor }),
         key: this.random(),
       }) as Packet;
+      const basisFingerprint = venueExperienceBasisAuthority(fresh, surface.gameId);
+      if (basisFingerprint === null) return;
+      // Capture deliberate fresh authority for AuthCoordinator post-token fence — never on wire.
+      this.venueFreshDispatchBind = {
+        key: packet.key,
+        actorId: actor.actorId,
+        sessionId: actor.sessionId,
+        surfaceGen,
+        editor,
+        consent: liveDraft.consent,
+        consentHash: this.snapshot.venueConsentHash,
+        audience: liveDraft.audience,
+        basisAuthority: basisFingerprint,
+        eligibilityGen: eligibilityRequest,
+      };
       await this.dispatch(packet, actor, false);
     } catch (error) {
       if (!this.writePrepareOwns(prepareGen) || !sameActor(actor, this.snapshot.actor)) return;
@@ -2980,6 +3077,8 @@ export class PostgameCoordinator {
       });
       return;
     }
+    // Explicit original UNKNOWN recovery — retention/age only; never reattach fresh surface bind.
+    this.venueFreshDispatchBind = null;
     await this.dispatch(command.packet, actor, true);
   };
   private allowed(intent: Intent) {
@@ -3628,6 +3727,9 @@ export class PostgameCoordinator {
           notice,
         });
       }
-    } finally { if(this.inFlight === packet) this.inFlight=null; }
+    } finally {
+      if (this.inFlight === packet) this.inFlight = null;
+      if (this.venueFreshDispatchBind?.key === packet.key) this.venueFreshDispatchBind = null;
+    }
   }
 }

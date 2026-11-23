@@ -88,7 +88,7 @@ export class AuthCoordinator {
         actor,
       ),
       send: (packet, authority) => {
-        // Local retention permit before token await; recheck after refresh can cross 24h TTL.
+        // Local permit before token await; recheck age + fresh venue authority after refresh/retire.
         const permit = this.postgame.dispatchPermit(packet);
         return this.participationRead(access => {
           if (!this.postgame.mayDispatchRetention(packet, permit)) {

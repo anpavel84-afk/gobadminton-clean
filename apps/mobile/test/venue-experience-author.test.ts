@@ -988,6 +988,7 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(coordinator, /venueExperienceBasisAuthority/);
   assert.match(coordinator, /eligibilityRequest/);
   assert.match(coordinator, /mayDispatchRetention|dispatchPermit/);
+  assert.match(coordinator, /venueFreshDispatchBind|freshVenue|mayDispatchFreshVenue/);
   assert.match(coordinator, /Receipt card owns success copy|venueNotice: null/);
 
   const api = read('../src/native-api.ts');
@@ -999,7 +1000,8 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /venueExperienceEligibility/);
   assert.match(auth, /venueExperienceConsentPreview/);
-  assert.match(auth, /mayDispatchRetention|dispatchPermit|POSTGAME_RETENTION_EXPIRED/);
+  assert.match(auth, /mayDispatchRetention|dispatchPermit|POSTGAME_RETENTION_EXPIRED|POSTGAME_DISPATCH_STALE/);
+  assert.match(auth, /fresh venue authority|post-token/);
 
   const controller = read('../../api/src/venues/venue-reviews.controller.ts');
   assert.match(controller, /eligibility[\s\S]*requirePrincipal\(request\)/);
