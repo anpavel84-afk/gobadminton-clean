@@ -123,7 +123,11 @@ export function PublicRoleOwnHistorySheet({ onClose }: { onClose: () => void }) 
               <OutlineButton
                 title="Отозвать свой отзыв"
                 disabled={!!publicBusy}
-                onPress={() => void owner.withdrawOwnPublic(item)}
+                onPress={() => {
+                  const surface = s.publicSurface;
+                  if (!surface || surface.mode !== 'history') return;
+                  void owner.withdrawOwnPublic(item, s.actor, surface.gen);
+                }}
               />
             ) : null}
           </View>

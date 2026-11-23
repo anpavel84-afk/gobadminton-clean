@@ -16,6 +16,7 @@ import {
   draftEditorKey,
   emptyPublicRoleDraft,
   isPublicRolePacketKind,
+  mayPaintOwnPublicReceipt,
   mayWithdrawOwnPublic,
   mergeOwnPublicReviewItem,
   normalizePublicRoleText,
@@ -40,6 +41,16 @@ const handleB = 'b'.repeat(32);
 const gameId = '11111111-1111-4111-8111-111111111111';
 const gameB = '22222222-2222-4222-8222-222222222222';
 const tick = () => new Promise(resolve => setImmediate(resolve));
+/** Press-time capture: rendered actor + current history surface gen. */
+function withdrawWithRender(
+  owner: PostgameCoordinator,
+  item: Parameters<PostgameCoordinator['withdrawOwnPublic']>[0],
+  expectedActor: Actor | null = actor,
+) {
+  const surface = owner.getSnapshot().publicSurface;
+  assert.equal(surface?.mode, 'history');
+  return owner.withdrawOwnPublic(item, expectedActor, surface!.gen);
+}
 
 function eligibilityBody(over: Record<string, unknown> = {}) {
   return {
@@ -332,7 +343,7 @@ test('withdraw receipt status fence; original UNKNOWN replay; business 422 keeps
   owner.openOwnPublicHistory();
   await tick();
   mode = 'unknown';
-  await owner.withdrawOwnPublic(item);
+  await withdrawWithRender(owner, item);
   await tick();
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
   assert.equal(owner.getSnapshot().publicNotice?.includes('мог'), true);
@@ -421,6 +432,9 @@ test('applyOwnPublicAckToItem: older withdraw ACK cannot replace newer typed GET
   assert.equal(applyOwnPublicAckToItem(v4, ackV3, 4).version, 4);
   assert.equal(applyOwnPublicAckToItem(v4, ackV3, 4).status, 'submitted');
   assert.equal(applyOwnPublicAckToItem(v4, ackV3, 4).text, 'После повторной подачи');
+  assert.equal(mayPaintOwnPublicReceipt(ackV3, v4, 4), false);
+  assert.equal(mayPaintOwnPublicReceipt(ackV3, v4, 2), false);
+  assert.equal(mayPaintOwnPublicReceipt(ackV3, { ...base, status: 'submitted', version: 2, text: 'x' }, 2), true);
 
   const v3 = { ...base, status: 'submitted', version: 3, text: 'До отзыва' };
   const applied = applyOwnPublicAckToItem(v3, ackV3, 3);
@@ -485,7 +499,7 @@ test('deferred withdraw ACK after newer typed GET keeps v4; same-actor UNKNOWN s
 
   // Delayed withdraw ACK v3 in flight.
   mode = 'defer';
-  const withdrawPromise = owner.withdrawOwnPublic(v2);
+  const withdrawPromise = withdrawWithRender(owner, v2);
   await tick();
   assert.equal(owner.getSnapshot().command?.status, 'sending');
 
@@ -514,10 +528,13 @@ test('deferred withdraw ACK after newer typed GET keeps v4; same-actor UNKNOWN s
   assert.equal(afterAck?.text, v4.text);
   assert.equal(mayWithdrawOwnPublic(afterAck!), true);
   assert.equal(owner.getSnapshot().command, null);
+  // (a) Older ACK settles journal but must not paint withdrawn receipt/notice over typed v4.
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.notEqual(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
 
   // Same-actor UNKNOWN: original withdraw packet settles later without downgrading accepted v4.
   mode = 'unknown';
-  await owner.withdrawOwnPublic(v4);
+  await withdrawWithRender(owner, v4);
   await tick();
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
   const unknownKey = owner.getSnapshot().command!.packet.key;
@@ -540,6 +557,7 @@ test('deferred withdraw ACK after newer typed GET keeps v4; same-actor UNKNOWN s
   assert.equal(afterUnknown?.text, v4.text);
   assert.equal(mayWithdrawOwnPublic(afterUnknown!), true);
   assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
 });
 
 test('withdraw order: ACK v3 then stale GET v2 cannot resurrect text or withdraw action', async () => {
@@ -589,7 +607,7 @@ test('withdraw order: ACK v3 then stale GET v2 cannot resurrect text or withdraw
   assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.text, 'Живой текст');
   assert.equal(mayWithdrawOwnPublic(owner.getSnapshot().publicOwn.data!.items[0]!), true);
 
-  const withdrawPromise = owner.withdrawOwnPublic(v2);
+  const withdrawPromise = withdrawWithRender(owner, v2);
   await tick();
   releaseWithdraw({
     id: reviewId,
@@ -606,6 +624,8 @@ test('withdraw order: ACK v3 then stale GET v2 cannot resurrect text or withdraw
   assert.equal(afterAck?.status, 'withdrawn');
   assert.equal(afterAck?.text, null);
   assert.equal(mayWithdrawOwnPublic(afterAck!), false);
+  assert.equal(owner.getSnapshot().publicReceipt?.status, 'withdrawn');
+  assert.equal(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
 
   // Follow-up stale GET v2 must not repaint old text / writable withdraw.
   ownPhase = 'stale-v2';
@@ -616,11 +636,179 @@ test('withdraw order: ACK v3 then stale GET v2 cannot resurrect text or withdraw
   assert.equal(afterStale?.text, null);
   assert.equal(mayWithdrawOwnPublic(afterStale!), false);
   assert.equal(mergeOwnPublicReviewItem(afterAck, v2, 3), null);
+  // Stale older GET must not clear a matching terminal receipt.
+  assert.equal(owner.getSnapshot().publicReceipt?.status, 'withdrawn');
 
   ownPhase = 'v3';
   await owner.loadOwnPublicReviews();
   await tick();
   assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 3);
+});
+
+test('ACK v3 then typed GET v4 retires painted withdraw receipt/notice', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const v2 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'До отзыва',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  const v4 = {
+    ...v2,
+    version: 4,
+    text: 'Повторная подача',
+    receiptToken: 'r4',
+    pendingRevision: 2,
+  };
+  let ownPhase: 'v2' | 'v4' = 'v2';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => ({ items: ownPhase === 'v4' ? [v4] : [v2] }),
+      send: async () => ({
+        id: reviewId,
+        reviewHandle: 'c'.repeat(32),
+        version: 3,
+        status: 'withdrawn',
+        receiptToken: 'w-receipt-v3',
+        pendingIntakeStatus: 'waiting_intake',
+      }),
+    }),
+  }, () => 'ack-then-get-v4');
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  await withdrawWithRender(owner, v2);
+  await tick();
+  assert.equal(owner.getSnapshot().publicReceipt?.status, 'withdrawn');
+  assert.equal(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
+
+  // (b) Newer typed GET retires the historical receipt/notice.
+  ownPhase = 'v4';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.status, 'submitted');
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.equal(owner.getSnapshot().publicNotice, null);
+});
+
+test('captured withdraw callback: 403 / new version / surface close / account rotation send zero', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const ready = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'Живой',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  const newer = { ...ready, version: 3, text: 'Новее', receiptToken: 'r3' };
+  let ownPhase: 'ready' | 'newer' | 'deny' = 'ready';
+  let sends = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => {
+        if (ownPhase === 'deny') throw new PostgameError('private', 403);
+        return { items: ownPhase === 'newer' ? [newer] : [ready] };
+      },
+      send: async () => {
+        sends += 1;
+        return {
+          id: reviewId,
+          reviewHandle: 'c'.repeat(32),
+          version: 3,
+          status: 'withdrawn',
+          receiptToken: 'w',
+          pendingIntakeStatus: 'waiting_intake',
+        };
+      },
+    }),
+  }, () => `cap-${sends}`);
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  const surface = owner.getSnapshot().publicSurface!;
+  const capturedItem = ready;
+  const capturedActor = actor;
+  const capturedGen = surface.gen;
+  const invokeCaptured = () => owner.withdrawOwnPublic(capturedItem, capturedActor, capturedGen);
+
+  // Private 403 retires own-list authority — captured press must not POST.
+  ownPhase = 'deny';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.status, 'unavailable');
+  await invokeCaptured();
+  await tick();
+  assert.equal(sends, 0);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // Restore ready, capture again, then typed newer version fences the old row.
+  ownPhase = 'ready';
+  owner.closePublicSurface();
+  owner.openOwnPublicHistory();
+  await tick();
+  const genReady = owner.getSnapshot().publicSurface!.gen;
+  const capturedReady = () => owner.withdrawOwnPublic(ready, actor, genReady);
+  ownPhase = 'newer';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 3);
+  await capturedReady();
+  await tick();
+  assert.equal(sends, 0);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // Surface close fences the prior generation.
+  const genBeforeClose = owner.getSnapshot().publicSurface!.gen;
+  const itemBeforeClose = owner.getSnapshot().publicOwn.data!.items[0]!;
+  owner.closePublicSurface();
+  await owner.withdrawOwnPublic(itemBeforeClose, actor, genBeforeClose);
+  await tick();
+  assert.equal(sends, 0);
+
+  // Account rotation: previous account's captured row must not bind to the new actor.
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  const genA = owner.getSnapshot().publicSurface!.gen;
+  const itemA = owner.getSnapshot().publicOwn.data!.items[0]!;
+  owner.setActor({ actorId: 'actor-b', sessionId: 'session-b', generation: 1 });
+  owner.openOwnPublicHistory();
+  await tick();
+  await owner.withdrawOwnPublic(itemA, actor, genA);
+  await tick();
+  assert.equal(sends, 0);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // (d) Legitimate current-row withdraw still posts; same-actor UNKNOWN preserves original packet.
+  ownPhase = 'newer';
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  const live = owner.getSnapshot().publicOwn.data!.items[0]!;
+  await withdrawWithRender(owner, live);
+  await tick();
+  assert.equal(sends, 1);
+  assert.equal(owner.getSnapshot().publicReceipt?.status, 'withdrawn');
 });
 
 test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-actor reauth', async () => {
@@ -763,6 +951,7 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(host, /clearPublicRoleFocusTarget/);
   assert.match(host, /resumePendingPublicAuthor/);
   assert.match(host, /PublicRoleAuthorEntryButton/);
+  assert.match(host, /withdrawOwnPublic\(item,\s*s\.actor,\s*surface\.gen\)/);
   assert.doesNotMatch(host, /без выдуманного исполнителя/);
   assert.match(host, /срок и исполнитель не обещаются/);
 

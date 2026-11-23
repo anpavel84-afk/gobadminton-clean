@@ -268,6 +268,19 @@ export function applyOwnPublicAckToItem(
   if (receipt.version < prior.version || receipt.version < floor) return prior;
   return { ...prior, version: Math.max(prior.version, receipt.version) };
 }
+/**
+ * Receipt/notice paint fence: historical ACK may settle the journal but must not present
+ * withdrawn/current status when a newer typed own-list row (or floor) already won.
+ */
+export function mayPaintOwnPublicReceipt(
+  receipt: PublicRoleMutationReceipt,
+  typed: OwnPublicRoleReview | undefined,
+  floorBeforeReceipt: number,
+): boolean {
+  if (receipt.version < floorBeforeReceipt) return false;
+  if (typed && typed.version > receipt.version) return false;
+  return true;
+}
 
 /** Minimal focusable opener identity for sheet return-focus (Pressable-compatible). */
 export type PublicRoleFocusHandle = { focus: () => void };

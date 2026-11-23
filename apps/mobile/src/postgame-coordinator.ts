@@ -22,6 +22,8 @@ import {
   eligibleBases,
   emptyPublicRoleDraft,
   isPublicRolePacketKind,
+  mayPaintOwnPublicReceipt,
+  mayWithdrawOwnPublic,
   mergeOwnPublicReviewItem,
   parseConsentPreview,
   parseOwnEligibility,
@@ -120,7 +122,7 @@ type Snapshot = {
   feedbackDrafts: Record<string, FeedbackDraft>;
   review: Intent | null; command: Command | null; notice: string | null;
   /** Public role-review author surface — separate from private CommandReview. */
-  publicSurface: null | { mode: 'composer' | 'history'; target: PublicRoleAuthorTarget | null };
+  publicSurface: null | { mode: 'composer' | 'history'; target: PublicRoleAuthorTarget | null; gen: number };
   publicEligibility: Source<OwnEligibility>;
   publicOwn: Source<OwnPublicRoleReviewsPage>;
   publicDraft: PublicRoleDraft | null;
@@ -328,7 +330,10 @@ export class PostgameCoordinator {
       knownNoteRefs:saved.knownNoteRefs,
       selection:saved.selection,
       // Same-account reauth: restore public surface/draft without consent or autosend.
-      publicSurface: saved.publicSurface,
+      // Rebind surface gen to the bumped counter so captured withdraw callbacks cannot cross reauth.
+      publicSurface: saved.publicSurface
+        ? { ...saved.publicSurface, gen: this.publicSurfaceGen }
+        : null,
       publicDraft: saved.publicDraft
         ? { ...saved.publicDraft, consent: false }
         : null,
@@ -1079,7 +1084,7 @@ export class PostgameCoordinator {
     const draft = emptyPublicRoleDraft(target.gameId);
     this.publicEligibilityGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
     this.show({
-      publicSurface: { mode: 'composer', target: Object.freeze({ ...target }) },
+      publicSurface: { mode: 'composer', target: Object.freeze({ ...target }), gen: this.publicSurfaceGen },
       publicEligibility: { status: 'idle' },
       publicDraft: draft,
       publicConsentHash: null,
@@ -1092,7 +1097,7 @@ export class PostgameCoordinator {
     if (!this.snapshot.actor) return;
     this.publicOwnGen++; this.publicSurfaceGen++;
     this.show({
-      publicSurface: { mode: 'history', target: null },
+      publicSurface: { mode: 'history', target: null, gen: this.publicSurfaceGen },
       publicOwn: { status: 'idle' },
       publicReceipt: null,
       publicNotice: null,
@@ -1233,7 +1238,16 @@ export class PostgameCoordinator {
           merged.push(retireOwnPublicReviewText(prior));
         }
       }
-      this.show({ publicOwn: { status: 'ready', data: { items: merged } }, publicNotice: null });
+      // Typed GET newer than a painted receipt retires stale status/notice (no resurrection).
+      const painted = this.snapshot.publicReceipt;
+      const retireReceipt = !!painted && merged.some(
+        item => item.id === painted.id && item.version > painted.version,
+      );
+      this.show({
+        publicOwn: { status: 'ready', data: { items: merged } },
+        publicNotice: null,
+        ...(retireReceipt ? { publicReceipt: null } : {}),
+      });
     } catch (error) {
       if (gen !== this.publicOwnGen || !sameActor(actor, this.snapshot.actor)) return;
       const denied = error instanceof PostgameError && error.kind === 'private';
@@ -1355,27 +1369,44 @@ export class PostgameCoordinator {
       });
     }
   };
-  withdrawOwnPublic = async (item: OwnPublicRoleReview) => {
+  /**
+   * Withdraw from the CURRENT history surface + ready typed row.
+   * UI must pass the rendered actor/session and surface gen captured at press —
+   * never rebind a retired row onto a rotated account or closed/replaced surface.
+   */
+  withdrawOwnPublic = async (
+    item: OwnPublicRoleReview,
+    expectedActor: Actor | null,
+    expectedSurfaceGen: number,
+  ) => {
     const actor = this.snapshot.actor;
-    if (!actor || this.snapshot.command || this.inFlight) return;
+    if (!actor || !expectedActor || !sameActor(expectedActor, actor)) return;
+    if (this.snapshot.command || this.inFlight) return;
+    if (this.publicOwnDenied) return;
+    const surface = this.snapshot.publicSurface;
+    if (!surface || surface.mode !== 'history') return;
+    if (expectedSurfaceGen !== this.publicSurfaceGen || surface.gen !== expectedSurfaceGen) return;
+    if (this.snapshot.publicOwn.status !== 'ready') return;
+    const live = this.snapshot.publicOwn.data?.items.find(row => row.id === item.id);
+    if (!live) return;
+    if (live.version !== item.version || live.role !== item.role || live.roleHandle !== item.roleHandle) return;
+    if (!mayWithdrawOwnPublic(live)) return;
     try {
-      const body = buildPublicWithdrawBody(item);
+      const body = buildPublicWithdrawBody(live);
       const intent: Intent = {
         kind: 'public-role-command',
         gameId: 'public-role-own',
-        reviewId: item.id,
+        reviewId: live.id,
         body,
       };
-      const surface = this.snapshot.publicSurface;
       await this.submitPublicRole(intent, {
-        surfaceGen: this.publicSurfaceGen,
-        editor: `withdraw:${item.id}:${item.version}`,
-        roleHandle: item.roleHandle || 'own',
-        role: item.role,
+        surfaceGen: expectedSurfaceGen,
+        editor: `withdraw:${live.id}:${live.version}`,
+        roleHandle: live.roleHandle || 'own',
+        role: live.role,
         gameId: 'public-role-own',
-        reviewId: item.id,
+        reviewId: live.id,
       });
-      void surface;
     } catch {
       this.show({ publicNotice: 'Не удалось отозвать. Обновите список.' });
     }
@@ -1696,13 +1727,15 @@ export class PostgameCoordinator {
         this.publicMutationBind = null;
         // Raise floor from receipt; receipt never grants writes — retire text while awaiting typed GET.
         // Monotonic ACK: settle packet/floor without replacing a newer typed projection with an older receipt.
+        const floorBefore = this.publicOwnVersionFloor.get(reviewId) ?? 0;
+        const priorItems = this.snapshot.publicOwn.data?.items ?? [];
+        const priorTyped = priorItems.find(item => item.id === reviewId);
         this.publicOwnVersionFloor.set(
           reviewId,
-          Math.max(this.publicOwnVersionFloor.get(reviewId) ?? 0, publicReceipt.version),
+          Math.max(floorBefore, publicReceipt.version),
         );
         if (!this.publicOwnDenied) {
           this.publicOwnAwaitingTyped.add(reviewId);
-          const priorItems = this.snapshot.publicOwn.data?.items ?? [];
           const floor = this.publicOwnVersionFloor.get(reviewId) ?? 0;
           const items = priorItems.map(item => {
             if (item.id !== reviewId) return item;
@@ -1712,10 +1745,11 @@ export class PostgameCoordinator {
             this.show({ publicOwn: { status: 'ready', data: { items } } });
           }
         }
-        // Withdraw: status/version terminal fence wins over leftover waiting_intake on receipt.
+        // Historical ACK settles the journal; do not present its status when newer typed row/floor already won.
+        const paintReceipt = paint && mayPaintOwnPublicReceipt(publicReceipt, priorTyped, floorBefore);
         this.show({
           command: null,
-          ...(paint ? {
+          ...(paintReceipt ? {
             publicReceipt,
             publicNotice: publicReceipt.status === 'withdrawn'
               ? 'Отзыв отозван.'
