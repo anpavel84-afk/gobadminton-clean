@@ -401,9 +401,11 @@ export class PostgameCoordinator {
       this.rememberOwnedNotes([data], noteGen, true);
       const cur = this.snapshot.notes[key];
       if (cur?.status === 'ready' && this.noteAppliedGen.get(key) === noteGen) {
-        // Prefill only pristine selection — createDirty tracks deliberate empty separately from ''.
+        // Prefill/refresh only pristine selection — createDirty tracks explicit mutations
+        // (incl. deliberate empty) independently of createText truthiness, so nonempty
+        // autoprefill may adopt a newer typed GET without sticking to stale server text.
         const createDraft = this.snapshot.noteDrafts[gameId];
-        if (createDraft?.selectedContextId === contextId && !createDraft.createDirty && !createDraft.createText) {
+        if (createDraft?.selectedContextId === contextId && !createDraft.createDirty) {
           this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [gameId]: { ...createDraft, createText: data.text } } });
         }
         return;

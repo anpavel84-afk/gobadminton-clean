@@ -1728,6 +1728,50 @@ test('pristine selection prefills; typed-then-cleared empty draft survives pendi
   await s.coordinator.loadNote(game.id, contextA);
   assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, serverText);
 
+  // Pristine nonempty autoprefill must adopt newer typed GET (web edit v2), not stick to v1.
+  const v2Text = 'fresh web edit v2';
+  s.notes.set(`${game.id}:${contextA}`, {
+    ...note, text: v2Text, version: 2, allowedActions: { canEdit: true, canDelete: true },
+  });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, undefined);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, serverText);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, v2Text,
+    'pristine nonempty autoprefill must refresh to newest typed GET');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, undefined);
+
+  // Dirty typed X remains X through refresh to newer server text.
+  s.coordinator.setNoteDraft(game.id, null, { createText: 'dirty-typed-X' });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  s.notes.set(`${game.id}:${contextA}`, {
+    ...note, text: 'server-should-not-win', version: 3, allowedActions: { canEdit: true, canDelete: true },
+  });
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'dirty-typed-X',
+    'dirty nonempty must remain unchanged through refresh');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+
+  // Switching context resets pristine; new selection may prefill from its GET.
+  s.notes.set(`${game.id}:${contextB}`, {
+    ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'context-B-prefill',
+    version: 1, allowedActions: { canEdit: true, canDelete: true },
+  });
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, '');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, undefined);
+  await s.coordinator.loadNote(game.id, contextB);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'context-B-prefill');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, undefined);
+
+  // Same-actor reauth retains dirty intent (quarantine restore).
+  s.coordinator.setNoteDraft(game.id, null, { createText: 'reauth-dirty-keep' });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  s.coordinator.setActor(null);
+  s.coordinator.setActor({ ...actor, sessionId: 'reauth-pristine', generation: 5 });
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'reauth-dirty-keep');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
+
   // Deferred GET: user types then clears while pending — empty must survive late prefill.
   let releaseNote!: (value: PersonalNote) => void;
   const noteGate = new Promise<PersonalNote>((resolve) => { releaseNote = resolve; });
@@ -1747,16 +1791,16 @@ test('pristine selection prefills; typed-then-cleared empty draft survives pendi
   pending.coordinator.setNoteDraft(game.id, null, { createText: '' });
   assert.equal(pending.coordinator.getSnapshot().noteDrafts[game.id]?.createText, '');
   assert.equal(pending.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
-  releaseNote({ ...note, text: serverText, version: 1, allowedActions: { canEdit: true, canDelete: true } });
+  releaseNote({ ...note, text: 'pending-v2-should-not-win', version: 2, allowedActions: { canEdit: true, canDelete: true } });
   await noteGate;
   await load;
   await Promise.resolve();
   assert.equal(pending.coordinator.getSnapshot().noteDrafts[game.id]?.createText, '',
-    'deliberately emptied draft must remain empty across pending GET');
+    'deliberately emptied draft must remain empty across pending GET v2');
   assert.equal(pending.coordinator.getSnapshot().noteDrafts[game.id]?.createDirty, true);
 
   // Retry / refresh of same selection must not restore server text over dirty empty.
-  pending.port.note = async () => ({ ...note, text: serverText, version: 1, allowedActions: { canEdit: true, canDelete: true } });
+  pending.port.note = async () => ({ ...note, text: 'retry-v2', version: 2, allowedActions: { canEdit: true, canDelete: true } });
   await pending.coordinator.loadNote(game.id, contextA);
   assert.equal(pending.coordinator.getSnapshot().noteDrafts[game.id]?.createText, '',
     'retry must not overwrite typed-then-cleared empty');
