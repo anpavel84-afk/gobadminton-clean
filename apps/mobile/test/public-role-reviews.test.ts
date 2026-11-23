@@ -3586,12 +3586,13 @@ test('#522 address13: reply/report hard auth denial retires owned reader; UNKNOW
   assert.equal(ownerReport.getSnapshot().publicConsentHash, null);
   assert.equal(ownerReport.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик ответа');
   assert.equal(ownerReport.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
-  assert.equal(ownerReport.getSnapshot().command?.packet.key, repFrozen.key);
-  assert.equal(ownerReport.getSnapshot().command?.packet.method, repFrozen.method);
-  assert.equal(ownerReport.getSnapshot().command?.packet.path, repFrozen.path);
-  if (ownerReport.getSnapshot().command?.packet.kind !== 'public-role-report') throw new Error('expected report');
-  assert.deepEqual(ownerReport.getSnapshot().command.packet.body, repFrozen.body);
-  assert.equal(ownerReport.getSnapshot().command.packet.gameQuery, repFrozen.gameQuery);
+  const capturedCommand = ownerReport.getSnapshot().command;
+  assert.equal(capturedCommand?.packet.key, repFrozen.key);
+  assert.equal(capturedCommand?.packet.method, repFrozen.method);
+  assert.equal(capturedCommand?.packet.path, repFrozen.path);
+  if (capturedCommand == null || capturedCommand.packet.kind !== 'public-role-report') throw new Error('expected report');
+  assert.deepEqual(capturedCommand.packet.body, repFrozen.body);
+  assert.equal(capturedCommand.packet.gameQuery, repFrozen.gameQuery);
 
   // Delayed A denial after B open must not clear B rows/cursor/drafts/authority.
   let releaseA: (err: unknown) => void = () => {};
