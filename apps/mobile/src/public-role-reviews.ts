@@ -84,6 +84,65 @@ export type PublicRoleAuthorTarget = {
   gameId: string;
   subjectDisplayName?: string | null;
 };
+
+/** Signed-in reader sheet origin — game binds real gameId; profile binds publicPlayerId only. */
+export type PublicRoleReaderOrigin =
+  | { kind: 'game'; gameId: string }
+  | { kind: 'profile'; publicPlayerId: string };
+
+/** Exact game/profile origin equality for dispatch-surface ownership fences. */
+export function samePublicReaderOrigin(
+  a: PublicRoleReaderOrigin,
+  b: PublicRoleReaderOrigin,
+): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'game' && b.kind === 'game') return a.gameId === b.gameId;
+  if (a.kind === 'profile' && b.kind === 'profile') return a.publicPlayerId === b.publicPlayerId;
+  return false;
+}
+
+export type PublicRoleReaderTarget = {
+  roleHandle: string;
+  role: RoleKind;
+  origin: PublicRoleReaderOrigin;
+  subjectDisplayName?: string | null;
+};
+
+export const PUBLIC_ROLE_REPORT_REASONS = [
+  { code: 'harassment', label: 'Оскорбления' },
+  { code: 'spam', label: 'Спам' },
+  { code: 'inappropriate', label: 'Неуместный текст' },
+  { code: 'pii', label: 'Личные данные' },
+  { code: 'threat', label: 'Угрозы' },
+  { code: 'fabrication', label: 'Вымысел' },
+  { code: 'other', label: 'Другое' },
+] as const;
+
+export type PublicRoleReportReason = (typeof PUBLIC_ROLE_REPORT_REASONS)[number]['code'];
+
+export type PublicRoleReplyReceipt = {
+  version: number;
+  status: 'submitted';
+  receiptToken: string;
+};
+
+export type PublicRoleReportReceipt = {
+  reportId: string;
+  receiptToken: string;
+  status: 'submitted';
+};
+
+export type PublicRoleReplyDraft = {
+  text: string;
+  consent: boolean;
+};
+
+export type PublicRoleReportDraft = {
+  reviewHandle: string;
+  publishedRevision: number;
+  reasonCode: PublicRoleReportReason;
+  explanation: string;
+};
 export type PublicRoleDraft = {
   audience: PublicAudience;
   text: string;
@@ -509,6 +568,236 @@ export function consentPreviewBody(args: {
   };
 }
 
+/** Reply consent preview — exact targetKind reply + opaque reviewHandle + text. */
+export function replyConsentPreviewBody(args: {
+  reviewHandle: string;
+  text: string;
+}): { targetKind: 'reply'; reviewHandle: string; text: string } {
+  return {
+    targetKind: 'reply',
+    reviewHandle: roleHandle(args.reviewHandle),
+    text: publicRoleReviewText(args.text),
+  };
+}
+
+export type PublicReplyCommandBody = {
+  action: 'submit_revision';
+  expectedVersion: number;
+  expectedReviewRevision: number;
+  text: string;
+  consentProjectionHash: string;
+};
+
+export type PublicReportBody = {
+  targetKind: 'review';
+  expectedRevision: number;
+  reasonCode: PublicRoleReportReason;
+  explanation?: string;
+};
+
+export function buildPublicReplyBody(args: {
+  expectedVersion: number;
+  expectedReviewRevision: number;
+  text: string;
+  consentProjectionHash: string;
+}): PublicReplyCommandBody {
+  const text = publicRoleReviewText(args.text);
+  const hash = args.consentProjectionHash.toLowerCase();
+  if (!CONSENT_HASH.test(hash)) throw new PublicRoleError('invalid');
+  if (!Number.isInteger(args.expectedVersion) || args.expectedVersion < 0 || args.expectedVersion > 2147483647) {
+    throw new PublicRoleError('invalid');
+  }
+  if (!Number.isInteger(args.expectedReviewRevision) || args.expectedReviewRevision < 1) {
+    throw new PublicRoleError('invalid');
+  }
+  return {
+    action: 'submit_revision',
+    expectedVersion: args.expectedVersion,
+    expectedReviewRevision: args.expectedReviewRevision,
+    text,
+    consentProjectionHash: hash,
+  };
+}
+
+export function buildPublicReportBody(args: {
+  expectedRevision: number;
+  reasonCode: PublicRoleReportReason;
+  explanation?: string;
+}): PublicReportBody {
+  if (!Number.isInteger(args.expectedRevision) || args.expectedRevision < 1) {
+    throw new PublicRoleError('invalid');
+  }
+  if (!PUBLIC_ROLE_REPORT_REASONS.some(r => r.code === args.reasonCode)) {
+    throw new PublicRoleError('invalid');
+  }
+  const explanation = args.explanation === undefined
+    ? undefined
+    : normalizePublicRoleText(args.explanation);
+  if (explanation !== undefined) {
+    if (explanation.length < 1 || explanation.length > PUBLIC_ROLE_TEXT_MAX) {
+      throw new PublicRoleError('invalid');
+    }
+    for (const ch of explanation) {
+      const code = ch.codePointAt(0) ?? 0;
+      if (code === 0x0a) continue;
+      if (code < 0x20 || code === 0x7f) throw new PublicRoleError('invalid');
+    }
+  }
+  return {
+    targetKind: 'review',
+    expectedRevision: args.expectedRevision,
+    reasonCode: args.reasonCode,
+    ...(explanation ? { explanation } : {}),
+  };
+}
+
+export function parsePublicRoleReplyReceipt(value: unknown): PublicRoleReplyReceipt {
+  const row = object(value);
+  // Reply ACK is only version/status/receiptToken — never invent private id or pendingIntakeStatus.
+  if (row.id !== undefined || row.pendingIntakeStatus !== undefined || row.reviewHandle !== undefined) {
+    throw new PublicRoleError('invalid');
+  }
+  if (row.status !== 'submitted') throw new PublicRoleError('invalid');
+  // Operation contract: opaque receiptToken minLength 1 — no format/length/normalization/trim.
+  const receiptToken = str(row.receiptToken);
+  if (receiptToken.length < 1) throw new PublicRoleError('invalid');
+  return {
+    version: num(row.version),
+    status: 'submitted',
+    receiptToken,
+  };
+}
+
+export function parsePublicRoleReportReceipt(value: unknown): PublicRoleReportReceipt {
+  const row = object(value);
+  if (row.status !== 'submitted') throw new PublicRoleError('invalid');
+  // Operation contract: opaque receiptToken minLength 1 — no format/length/normalization/trim.
+  const receiptToken = str(row.receiptToken);
+  if (receiptToken.length < 1) throw new PublicRoleError('invalid');
+  return {
+    reportId: uuid(row.reportId),
+    receiptToken,
+    status: 'submitted',
+  };
+}
+
+export function publicRoleReplyBusinessNotice(code: string | undefined): string {
+  switch (code) {
+    case 'VERSION_CONFLICT':
+      return 'Конфликт версии. Обновите отзывы и проверьте снова.';
+    case 'ROLE_CONSENT_MISMATCH':
+      return 'Текст изменился. Заново подтвердите согласие с текущей версией.';
+    case 'ROLE_REPLY_UNAVAILABLE':
+      return 'Ответ сейчас недоступен. Обновите список отзывов.';
+    case 'POST_GAME_WRITES_UNAVAILABLE':
+      return 'Запись ответов сейчас недоступна. Попробуйте позже.';
+    default:
+      return 'Не удалось отправить ответ. Обновите отзывы.';
+  }
+}
+
+export function publicRoleReportBusinessNotice(code: string | undefined): string {
+  switch (code) {
+    case 'VERSION_CONFLICT':
+      return 'Версия отзыва изменилась. Обновите список и проверьте снова.';
+    default:
+      return 'Не удалось отправить жалобу. Обновите список и проверьте версию.';
+  }
+}
+
+export function subjectOwnReplyLabel(tip: { status: string }): string {
+  switch (tip.status) {
+    case 'submitted':
+    case 'revision_waiting':
+      return 'Ваш ответ: ожидает разбора';
+    case 'published':
+      return 'Ваш ответ: опубликован';
+    case 'needs_correction':
+      return 'Ваш ответ: нужна правка';
+    case 'withdrawn':
+      return 'Ваш ответ: отозван';
+    case 'removed':
+      return 'Ваш ответ: снят';
+    case 'held_basis':
+      return 'Ваш ответ: основание на проверке';
+    default:
+      return 'Ваш ответ: статус обновлён. Обновите список отзывов.';
+  }
+}
+
+/**
+ * Append-page duplicate fence: never keep an older typed row when a newer handle page arrives;
+ * same-version permissions fail closed; subject tip follows the higher tip version.
+ */
+export function mergeActorAwareReaderItem<T extends {
+  reviewHandle: string;
+  publishedRevision: number;
+  replyAggregateVersion: number;
+  subjectOwnReply: { status: string; version: number; pendingRevision: number | null } | null;
+  allowedActions: { canReport: boolean; canReply: boolean };
+}>(prior: T, incoming: T): T {
+  if (incoming.publishedRevision < prior.publishedRevision) return prior;
+  if (incoming.publishedRevision > prior.publishedRevision) return incoming;
+  if (incoming.replyAggregateVersion < prior.replyAggregateVersion) {
+    return {
+      ...prior,
+      allowedActions: {
+        canReply: prior.allowedActions.canReply && incoming.allowedActions.canReply,
+        canReport: prior.allowedActions.canReport && incoming.allowedActions.canReport,
+      },
+    };
+  }
+  if (incoming.replyAggregateVersion > prior.replyAggregateVersion) return incoming;
+  const priorTip = prior.subjectOwnReply;
+  const nextTip = incoming.subjectOwnReply;
+  let subjectOwnReply = nextTip;
+  if (priorTip && nextTip) {
+    subjectOwnReply = nextTip.version >= priorTip.version ? nextTip : priorTip;
+  } else if (priorTip && !nextTip) {
+    subjectOwnReply = priorTip;
+  }
+  return {
+    ...incoming,
+    subjectOwnReply,
+    allowedActions: {
+      canReply: prior.allowedActions.canReply && incoming.allowedActions.canReply,
+      canReport: prior.allowedActions.canReport && incoming.allowedActions.canReport,
+    },
+  };
+}
+
+/**
+ * Late reply ACK may settle the journal but must not paint over a newer typed aggregate
+ * or a different published review revision than the original packet expected.
+ */
+export function mayPaintPublicReplyReceipt(
+  receipt: { version: number },
+  typed: {
+    replyAggregateVersion: number;
+    publishedRevision: number;
+    subjectOwnReply: { version: number } | null;
+  } | undefined,
+  floorBeforeReceipt: number,
+  expectedReviewRevision: number,
+): boolean {
+  if (receipt.version < floorBeforeReceipt) return false;
+  if (!typed || typed.publishedRevision !== expectedReviewRevision) return false;
+  if (typed.replyAggregateVersion > receipt.version) return false;
+  if (typed.subjectOwnReply && typed.subjectOwnReply.version > receipt.version) return false;
+  return true;
+}
+
+/**
+ * Late report ACK may settle the journal but must not paint over a different published
+ * review revision than the original packet expectedRevision (server dedupes per revision).
+ */
+export function mayPaintPublicReportReceipt(
+  typed: { publishedRevision: number } | undefined,
+  expectedRevision: number,
+): boolean {
+  return !!typed && typed.publishedRevision === expectedRevision;
+}
+
 /** Stable guest return uses existing game path only — role/game target lives on PostgameCoordinator. */
 export function publicAuthorReturnPath(gameId: string): string | null {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(gameId)) return null;
@@ -522,8 +811,11 @@ export function publicAuthorReturnPath(gameId: string): string | null {
 
 export function isPublicRolePacketKind(
   kind: string,
-): kind is 'public-role-create' | 'public-role-command' {
-  return kind === 'public-role-create' || kind === 'public-role-command';
+): kind is 'public-role-create' | 'public-role-command' | 'public-role-reply' | 'public-role-report' {
+  return kind === 'public-role-create'
+    || kind === 'public-role-command'
+    || kind === 'public-role-reply'
+    || kind === 'public-role-report';
 }
 
 export function emptyPublicRoleDraft(preferredGameId = ''): PublicRoleDraft {

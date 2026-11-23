@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
-import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View, type ScrollView } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
@@ -8,14 +8,19 @@ import {
   currentPublicRoleFocusTarget,
   eligibleBases,
   mayWithdrawOwnPublic,
+  PUBLIC_ROLE_REPORT_REASONS,
   publicRoleLabel,
   publicRoleStatusLabel,
   rememberPublicRoleFocusTarget,
+  subjectOwnReplyLabel,
   topicOptionsForRole,
   usableOwnRoleHandle,
   type PublicRoleAuthorTarget,
   type PublicRoleFocusHandle,
+  type PublicRoleReaderTarget,
+  type PublicRoleReportReason,
 } from '../public-role-reviews.ts';
+import { ROLE_TOPIC_LABEL, reviewReplyLabel } from '../role-reputation.ts';
 import { colors } from '../theme.ts';
 import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
@@ -299,8 +304,314 @@ export function PublicRoleComposerSheet({ onClose, onOpenHistory }: {
   </Modal>;
 }
 
+/** Actor-aware public reviews sheet — reply/report with consent; no anonymous fallback. */
+export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
+  const auth = useAuth(), owner = auth.postgame;
+  const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const heading = useRef<ComponentRef<typeof Text>>(null);
+  const pageScrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  const reportHeadingRef = useRef<ComponentRef<typeof Text>>(null);
+  const reportFormRef = useRef<ComponentRef<typeof View>>(null);
+  const reportTriggerRefs = useRef(new Map<string, FocusTarget | null>());
+  const reportRowRefs = useRef(new Map<string, ComponentRef<typeof View> | null>());
+  const reportRevealedKey = useRef<string | null>(null);
+  const prevReportRowKey = useRef<string | null>(null);
+  const reader = s.publicSurface?.mode === 'reader' ? s.publicSurface.reader : null;
+  const surfaceGen = s.publicSurface?.mode === 'reader' ? s.publicSurface.gen : 0;
+  const command = s.command;
+  const publicBusy = command && isPublicRolePacketKind(command.packet.kind) ? command : null;
+  const report = s.publicReportDraft;
+  const reportRowKey = report ? `${report.reviewHandle}:${report.publishedRevision}` : null;
+  const reportInFlight = publicBusy?.packet.kind === 'public-role-report';
+  useEffect(() => {
+    const node = findNodeHandle(heading.current);
+    if (node) AccessibilityInfo.setAccessibilityFocus(node);
+  }, [reader?.roleHandle]);
+  useEffect(() => {
+    if (!reportRowKey) reportRevealedKey.current = null;
+  }, [reportRowKey]);
+  // Auto-retire (permission/revision loss): focus visible row or reader heading.
+  // Explicit Cancel keeps its own trigger focus when that button is still mounted.
+  useEffect(() => {
+    const prev = prevReportRowKey.current;
+    prevReportRowKey.current = reportRowKey;
+    if (!prev || reportRowKey) return;
+    const expectedGen = surfaceGen;
+    const retiredHandle = prev.slice(0, prev.lastIndexOf(':'));
+    const frame = requestAnimationFrame(() => {
+      const surface = owner.getSnapshot().publicSurface;
+      if (!surface || surface.mode !== 'reader' || surface.gen !== expectedGen) return;
+      if (owner.getSnapshot().publicReportDraft) return;
+      const trigger = reportTriggerRefs.current.get(prev);
+      if (trigger) return;
+      const row = reportRowRefs.current.get(retiredHandle);
+      const target = row ?? heading.current;
+      if (!target) return;
+      const node = findNodeHandle(target);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reportRowKey, surfaceGen, owner]);
+  const revealSelectedReport = () => {
+    if (!reportRowKey || reportRevealedKey.current === reportRowKey) return;
+    const expectedSurfaceGen = surfaceGen;
+    const expectedKey = reportRowKey;
+    // After layout only — no TextInput focus / keyboard.
+    Keyboard.dismiss();
+    const surface = owner.getSnapshot().publicSurface;
+    if (!surface || surface.mode !== 'reader' || surface.gen !== expectedSurfaceGen) return;
+    const draft = owner.getSnapshot().publicReportDraft;
+    if (!draft || `${draft.reviewHandle}:${draft.publishedRevision}` !== expectedKey) return;
+    reportRevealedKey.current = expectedKey;
+    const node = findNodeHandle(reportHeadingRef.current);
+    if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    const content = pageScrollRef.current?.getInnerViewRef?.();
+    const form = reportFormRef.current;
+    if (content && form) {
+      form.measureLayout(
+        content,
+        (_x, y) => {
+          const live = owner.getSnapshot();
+          if (live.publicSurface?.mode !== 'reader' || live.publicSurface.gen !== expectedSurfaceGen) return;
+          if (!live.publicReportDraft
+            || `${live.publicReportDraft.reviewHandle}:${live.publicReportDraft.publishedRevision}` !== expectedKey) {
+            return;
+          }
+          pageScrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: false });
+        },
+        () => undefined,
+      );
+    }
+  };
+  const close = () => {
+    onClose();
+    restorePublicTriggerFocus();
+  };
+  if (!reader) return null;
+  const summary = s.publicReader.status === 'ready' ? s.publicReader.data : null;
+  const count = summary?.publishedReviewCount ?? 0;
+  const title = reader.role === 'training'
+    ? (count > 0 ? `Отзывы о тренировках · ${count}` : 'Отзывы о тренировках')
+    : (count > 0 ? `Отзывы об организации · ${count}` : 'Отзывы об организации');
+  const replyAckHandle = s.publicReplyReceipt?.reviewHandle ?? null;
+  const reportAckHandle = s.publicReportReceipt?.reviewHandle ?? null;
+  const reportAckRevision = s.publicReportReceipt?.expectedRevision ?? null;
+  const threadBusy = !!publicBusy;
+  const cancelReport = () => {
+    if (reportInFlight) return;
+    const key = reportRowKey;
+    const expectedGen = surfaceGen;
+    owner.cancelPublicReport();
+    if (!key) return;
+    requestAnimationFrame(() => {
+      const surface = owner.getSnapshot().publicSurface;
+      if (!surface || surface.mode !== 'reader' || surface.gen !== expectedGen) return;
+      if (owner.getSnapshot().publicReportDraft) return;
+      const trigger = reportTriggerRefs.current.get(key);
+      if (!trigger) return;
+      trigger.focus();
+      const node = findNodeHandle(trigger);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+  };
+  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
+    <Page keyboard scrollRef={pageScrollRef} header={<View style={{ gap: 8 }}>
+      <TextButton title="Закрыть" onPress={close} />
+      {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
+    </View>}>
+      <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
+        <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
+          {title}
+        </Text>
+        <Label>Опыт участников. Отрицательные впечатления тоже важны. Читать можно без прошлого участия.</Label>
+        {s.publicReader.status === 'idle' || s.publicReader.status === 'loading' ? <Loading title="Загружаем отзывы…" /> : null}
+        {s.publicReader.status === 'error' ? <>
+          <Label accessibilityRole="alert">Не удалось загрузить.</Label>
+          <OutlineButton title="Обновить" onPress={() => void owner.loadPublicReader()} />
+        </> : null}
+        {s.publicReader.status === 'unavailable' ? (
+          <Label>Публичные отзывы по этой роли сейчас недоступны.</Label>
+        ) : null}
+        {s.publicReader.status === 'ready' && summary ? <>
+          {!summary.items.length ? <Label>Пока нет опубликованных отзывов.</Label> : null}
+          {summary.items.map(item => {
+            const draft = s.publicReplyDrafts[item.reviewHandle] ?? { text: '', consent: false };
+            // Per-action receipt gates: reply ACK must not disable report, and vice versa.
+            // Report receipt is revision-bound (server dedupes per published revision).
+            // Active/UNKNOWN journal still serializes via threadBusy.
+            const replyDisabled = threadBusy || replyAckHandle === item.reviewHandle;
+            const reportDisabled = threadBusy
+              || (reportAckHandle === item.reviewHandle
+                && reportAckRevision === item.publishedRevision);
+            const itemReportKey = `${item.reviewHandle}:${item.publishedRevision}`;
+            const showReport = !!report
+              && report.reviewHandle === item.reviewHandle
+              && report.publishedRevision === item.publishedRevision
+              && item.allowedActions.canReport;
+            return <View
+              key={item.reviewHandle}
+              ref={node => {
+                if (node) reportRowRefs.current.set(item.reviewHandle, node);
+                else reportRowRefs.current.delete(item.reviewHandle);
+              }}
+              style={styles.card}
+              accessibilityLabel={item.authorLabel}
+            >
+              <Label style={{ fontWeight: '700' }}>{item.authorLabel}</Label>
+              <Label>✓ Участие подтверждено</Label>
+              {item.experienceState === 'basis_under_review' ? <Label>Основание на проверке</Label> : null}
+              <Label>{item.text}</Label>
+              {item.topics.length ? (
+                <Label>{item.topics.map(t => ROLE_TOPIC_LABEL[t] ?? t).join(', ')}</Label>
+              ) : null}
+              {item.reply ? <Label>{reviewReplyLabel(item.role, item.reply.text)}</Label> : null}
+              {item.subjectOwnReply ? (
+                <Label accessibilityLiveRegion="polite">{subjectOwnReplyLabel(item.subjectOwnReply)}</Label>
+              ) : null}
+              {s.publicReplyReceipt?.reviewHandle === item.reviewHandle ? (
+                <Label accessibilityLiveRegion="polite">Ответ принят.</Label>
+              ) : null}
+              {item.allowedActions.canReport ? (
+                <Pressable
+                  ref={node => {
+                    if (node) reportTriggerRefs.current.set(itemReportKey, node);
+                    else reportTriggerRefs.current.delete(itemReportKey);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: reportDisabled }}
+                  disabled={reportDisabled}
+                  onPress={() => owner.beginPublicReport(item, s.actor, s.publicSurface!.gen)}
+                  style={({ pressed }) => [{
+                    alignSelf: 'flex-start' as const,
+                    minHeight: 48,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: colors.lineDark,
+                    backgroundColor: pressed ? colors.paper : colors.card,
+                    justifyContent: 'center' as const,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    opacity: reportDisabled ? 0.5 : 1,
+                  }]}
+                >
+                  <Label style={{ fontWeight: '700', textAlign: 'left' }}>Сообщить о нарушении</Label>
+                </Pressable>
+              ) : null}
+              {showReport ? <View
+                ref={reportFormRef}
+                onLayout={revealSelectedReport}
+                style={{ gap: 12 }}
+                accessibilityLabel="Жалоба на отзыв"
+              >
+                <Text
+                  ref={reportHeadingRef}
+                  accessibilityRole="header"
+                  accessibilityLiveRegion="polite"
+                  allowFontScaling
+                  style={[styles.text, { fontWeight: '700' }]}
+                >
+                  Жалоба на отзыв
+                </Text>
+                <Label>Причина</Label>
+                {PUBLIC_ROLE_REPORT_REASONS.map(r => (
+                  <Pressable
+                    key={r.code}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: report!.reasonCode === r.code, disabled: reportDisabled }}
+                    disabled={reportDisabled}
+                    onPress={() => owner.patchPublicReportDraft({ reasonCode: r.code as PublicRoleReportReason })}
+                    style={[styles.chip, { opacity: reportDisabled ? 0.45 : 1 }]}
+                  >
+                    <Label>{report!.reasonCode === r.code ? '✓ ' : ''}{r.label}</Label>
+                  </Pressable>
+                ))}
+                <Label>Пояснение</Label>
+                <TextInput
+                  editable={!reportDisabled}
+                  multiline
+                  scrollEnabled
+                  textAlignVertical="top"
+                  accessibilityLabel="Пояснение к жалобе"
+                  value={report!.explanation}
+                  onChangeText={explanation => owner.patchPublicReportDraft({ explanation })}
+                  maxLength={500}
+                  style={[styles.input, { minHeight: 96, maxHeight: 180 }]}
+                />
+                <PrimaryButton
+                  title="Отправить жалобу"
+                  disabled={reportDisabled}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    void owner.submitPublicReport(s.actor, s.publicSurface!.gen);
+                  }}
+                />
+                <OutlineButton
+                  title="Отмена"
+                  disabled={!!reportInFlight
+                    || (reportAckHandle === report!.reviewHandle
+                      && reportAckRevision === report!.publishedRevision)}
+                  onPress={cancelReport}
+                />
+              </View> : null}
+              {item.allowedActions.canReply ? <>
+                <Label>Ваш ответ</Label>
+                <TextInput
+                  editable={!replyDisabled}
+                  multiline
+                  scrollEnabled
+                  textAlignVertical="top"
+                  accessibilityLabel="Ваш ответ"
+                  value={draft.text}
+                  onChangeText={text => owner.patchPublicReplyDraft(item.reviewHandle, { text })}
+                  maxLength={500}
+                  style={[styles.input, { minHeight: 96, maxHeight: 180 }]}
+                />
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                  <Switch
+                    disabled={replyDisabled}
+                    accessibilityLabel="Публикую ответ от своего имени по этой роли"
+                    value={draft.consent}
+                    onValueChange={consent => owner.patchPublicReplyDraft(item.reviewHandle, { consent })}
+                  />
+                  <Label style={{ flex: 1 }}>Публикую ответ от своего имени по этой роли</Label>
+                </View>
+                <PrimaryButton
+                  title="Отправить ответ"
+                  disabled={replyDisabled || !draft.text.trim()}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    void owner.submitPublicReply(item.reviewHandle, s.actor, s.publicSurface!.gen);
+                  }}
+                />
+              </> : null}
+            </View>;
+          })}
+          {s.publicReaderMoreError && summary.nextCursor ? <>
+            <Label accessibilityRole="alert">Не удалось загрузить следующие отзывы. Уже загруженные сохранены.</Label>
+            <OutlineButton
+              title="Повторить"
+              disabled={threadBusy || s.publicReaderLoadingMore}
+              onPress={() => void owner.loadPublicReader({ cursor: summary.nextCursor, append: true })}
+            />
+          </> : summary.nextCursor ? (
+            s.publicReaderLoadingMore
+              ? <Label>Загружаем ещё отзывы…</Label>
+              : <OutlineButton
+                title="Ещё отзывы"
+                disabled={threadBusy}
+                onPress={() => void owner.loadPublicReader({ cursor: summary.nextCursor, append: true })}
+              />
+          ) : null}
+        </> : null}
+        {s.publicNotice ? <Label accessibilityRole="alert">{s.publicNotice}</Label> : null}
+        {publicBusy?.status === 'sending' ? <Loading title="Отправляем…" /> : null}
+      </View>
+    </Page>
+  </Modal>;
+}
+
 /**
- * Single persistent host under AuthProvider (RootLayout) — opens composer/history from
+ * Single persistent host under AuthProvider (RootLayout) — opens composer/history/reader from
  * PostgameCoordinator surface ownership; resumes bounded guest pending once when actor is current.
  */
 export function PublicRoleReviewHost() {
@@ -310,8 +621,11 @@ export function PublicRoleReviewHost() {
     if (auth.status !== 'authenticated') return;
     if (!auth.me || !s.actor) return;
     if (s.actor.actorId !== auth.me.id || s.actor.sessionId !== auth.me.session.id) return;
-    if (!s.pendingPublicAuthor) return;
-    owner.resumePendingPublicAuthor();
+    if (s.pendingPublicAuthor) {
+      owner.resumePendingPublicAuthor();
+      return;
+    }
+    if (s.pendingPublicReader) owner.resumePendingPublicReader();
   }, [
     auth.status,
     auth.me?.id,
@@ -320,11 +634,15 @@ export function PublicRoleReviewHost() {
     s.actor?.actorId,
     s.actor?.sessionId,
     s.pendingPublicAuthor,
+    s.pendingPublicReader,
   ]);
   const surface = s.publicSurface;
   if (!surface) return null;
   if (surface.mode === 'history') {
     return <PublicRoleOwnHistorySheet onClose={() => owner.closePublicSurface()} />;
+  }
+  if (surface.mode === 'reader') {
+    return <PublicRoleReaderSheet onClose={() => owner.closePublicSurface()} />;
   }
   return <PublicRoleComposerSheet
     onClose={() => owner.closePublicSurface()}
@@ -333,6 +651,22 @@ export function PublicRoleReviewHost() {
       owner.openOwnPublicHistory();
     }}
   />;
+}
+
+export function beginPublicReaderEntry(args: {
+  authenticated: boolean;
+  target: PublicRoleReaderTarget;
+  signIn: (returnPath: string | null) => void;
+  open: (target: PublicRoleReaderTarget) => void;
+  rememberPending: (target: PublicRoleReaderTarget) => void;
+  returnPath: string | null;
+}) {
+  if (!args.authenticated) {
+    args.rememberPending(args.target);
+    args.signIn(args.returnPath);
+    return;
+  }
+  args.open(args.target);
 }
 
 export function beginPublicAuthorEntry(args: {

@@ -70,6 +70,10 @@ export class AuthCoordinator {
       publicEligibility: (actor, roleHandle) => this.participationRead(access => deps.api.publicRoleEligibility(access, roleHandle), actor),
       publicConsentPreview: (actor, body) => this.participationRead(access => deps.api.publicRoleConsentPreview(access, body), actor),
       publicOwnReviews: actor => this.participationRead(access => deps.api.publicRoleOwn(access), actor),
+      publicRoleByHandle: (actor, roleHandle, query, expected) => this.participationRead(
+        access => deps.api.publicRoleByHandle(access, roleHandle, query, expected),
+        actor,
+      ),
       send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
     },deps.random);
     this.contact = new ContactCoordinator({
