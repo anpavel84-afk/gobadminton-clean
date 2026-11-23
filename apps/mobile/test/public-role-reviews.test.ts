@@ -966,8 +966,16 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(host, /withdrawOwnPublic\(item,\s*s\.actor,\s*surface\.gen\)/);
   assert.match(host, /submitPublicReply\(item\.reviewHandle,\s*s\.actor,\s*s\.publicSurface!\.gen\)/);
   // Separate per-action receipt gates — not a combined reply+report rowDisabled.
-  assert.match(host, /replyDisabled\s*=\s*threadBusy\s*\|\|\s*replyAckHandle/);
-  assert.match(host, /reportDisabled\s*=\s*threadBusy\s*\|\|\s*reportAckHandle/);
+  // Reply: handle-bound; report: handle + publishedRevision-bound (independent).
+  assert.match(host, /reportAckRevision\s*=\s*s\.publicReportReceipt\?\.expectedRevision/);
+  assert.match(
+    host,
+    /replyDisabled\s*=\s*threadBusy\s*\|\|\s*replyAckHandle\s*===\s*item\.reviewHandle/,
+  );
+  assert.match(
+    host,
+    /reportDisabled\s*=\s*threadBusy\s*\|\|\s*\(\s*reportAckHandle\s*===\s*item\.reviewHandle\s*&&\s*reportAckRevision\s*===\s*item\.publishedRevision\s*\)/,
+  );
   assert.doesNotMatch(host, /rowDisabled\s*=\s*threadBusy[\s\S]*replyAckHandle[\s\S]*reportAckHandle/);
   assert.doesNotMatch(host, /без выдуманного исполнителя/);
   assert.match(host, /срок и исполнитель не обещаются/);
