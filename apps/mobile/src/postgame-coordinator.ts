@@ -4,7 +4,10 @@ import type { GameInvitation } from './messages.ts';
 import { MessagesError } from './messages.ts';
 import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention, noteText } from './postgame.ts';
 import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage, PersonalNote } from './postgame.ts';
-import { mergeReviewPages, type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason } from './postgame-feedback.ts';
+import {
+  DISCREPANCY_REQUIRED_MESSAGE, DISCREPANCY_UNEXPECTED_MESSAGE, mergeReviewPages,
+  type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason,
+} from './postgame-feedback.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -1186,8 +1189,8 @@ export class PostgameCoordinator {
         drafts[packet.gameId] = {
           ...prior,
           discrepancyFieldError: error.code === 'FEEDBACK_DISCREPANCY_REQUIRED'
-            ? 'Поясните расхождение с отметкой или итогом игры'
-            : 'Пояснение для этой встречи не требуется',
+            ? DISCREPANCY_REQUIRED_MESSAGE
+            : DISCREPANCY_UNEXPECTED_MESSAGE,
         };
         this.show({ feedbackDrafts: drafts });
         void this.loadResults(packet.gameId);

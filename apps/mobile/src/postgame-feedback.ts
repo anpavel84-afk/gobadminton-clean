@@ -279,20 +279,31 @@ export function reviewKindModeLabel(kind: ReviewKind): string {
   }
 }
 
-/** Card headline: peer rating title, org score line, or training label. */
-export function privateReviewHeadline(review: PrivateReview): string {
+/**
+ * Distinct secondary card line only — never repeat the kind tab label.
+ * Org without score and training rely on reviewKindModeLabel alone.
+ */
+export function privateReviewHeadline(review: PrivateReview): string | null {
   if (review.kind === 'peer') return peerRatingLabel(review.peerRating);
   if (review.kind === 'organization') {
     return review.organizationScore != null
       ? `Оценка организации: ${review.organizationScore} из 5`
-      : 'Организатору лично';
+      : null;
   }
-  return 'Тренировка';
+  return null;
 }
 
+/** Russian field copy for FEEDBACK_DISCREPANCY_REQUIRED — also gates recover-on-wire. */
+export const DISCREPANCY_REQUIRED_MESSAGE = 'Поясните расхождение с отметкой или итогом игры';
+/** Russian field copy for FEEDBACK_DISCREPANCY_UNEXPECTED. */
+export const DISCREPANCY_UNEXPECTED_MESSAGE = 'Пояснение для этой встречи не требуется';
+/** Honest hint when client knows explanation will not be sent. */
+export const DISCREPANCY_OMIT_HINT = 'Пояснение сейчас не требуется и не будет отправлено';
+
 /**
- * When own attendance/outcome is known present or not_participant_manager, omit discrepancy
- * from the wire body. Outcome not_held always allows the field. Ambiguous (no results) → optional.
+ * Omit discrepancy from the wire only when own attendance is known present (no open dispute).
+ * Null myAttendance is AMBIGUOUS (manager projection gap) — never proof of not_participant_manager;
+ * do not drop text. Outcome not_held always allows the field. Missing results → optional.
  */
 export function shouldOmitRoleDiscrepancy(results: {
   outcome: { value: 'unknown' | 'held' | 'not_held' };
@@ -301,9 +312,86 @@ export function shouldOmitRoleDiscrepancy(results: {
   if (!results) return false;
   if (results.outcome.value === 'not_held') return false;
   const my = results.attendance?.installed ? results.attendance.myAttendance : undefined;
-  if (results.attendance?.installed && my === null) return true;
+  // Ambiguous null projection: server may still require explanation — keep text.
+  if (results.attendance?.installed && my === null) return false;
   if (my && my.value === 'present' && my.dispute?.status !== 'open') return true;
   return false;
+}
+
+export type RoleDiscrepancyPresentation = {
+  /** Show the discrepancy input (or a disabled stand-in with hint). */
+  visible: boolean;
+  /** Accept typed input; false when explanation is known-unnecessary. */
+  editable: boolean;
+  /** Strip discrepancyExplanation from the POST body. */
+  omitFromWire: boolean;
+  /** Clear Russian hint when the field must not look silently editable. */
+  hint: string | null;
+};
+
+/**
+ * UI + wire for role discrepancy: server REQUIRED recovers even if prior omit inference differs;
+ * known-unnecessary (present) hides editable input and omits on wire while draft stays in store.
+ */
+export function roleDiscrepancyPresentation(
+  results: Parameters<typeof shouldOmitRoleDiscrepancy>[0],
+  fieldError: string | null | undefined,
+): RoleDiscrepancyPresentation {
+  if (fieldError === DISCREPANCY_REQUIRED_MESSAGE) {
+    return { visible: true, editable: true, omitFromWire: false, hint: null };
+  }
+  if (shouldOmitRoleDiscrepancy(results) || fieldError === DISCREPANCY_UNEXPECTED_MESSAGE) {
+    return {
+      visible: true,
+      editable: false,
+      omitFromWire: true,
+      hint: DISCREPANCY_OMIT_HINT,
+    };
+  }
+  return { visible: true, editable: true, omitFromWire: false, hint: null };
+}
+
+export type FeedbackUiMode = 'peer' | 'organization' | 'training' | 'received' | 'sent';
+
+/**
+ * Display mode from visible tabs — never auto-write draft.mode.
+ * Hidden-tab draft.mode (e.g. lost canCreateTraining) falls back to an available surface.
+ */
+export function resolveFeedbackDisplayMode(
+  draftMode: FeedbackUiMode | undefined,
+  tabs: { peer: boolean; organization: boolean; training: boolean },
+): FeedbackUiMode {
+  const allowed = (mode: FeedbackUiMode): boolean => {
+    if (mode === 'peer') return tabs.peer;
+    if (mode === 'organization') return tabs.organization;
+    if (mode === 'training') return tabs.training;
+    return true;
+  };
+  if (draftMode !== undefined && allowed(draftMode)) return draftMode;
+  if (tabs.peer) return 'peer';
+  if (tabs.organization) return 'organization';
+  if (tabs.training) return 'training';
+  return 'received';
+}
+
+/**
+ * Same patch DiscrepancyField applies — explicit rendered kind, never inferred draft.mode.
+ * Peer comment/tags are untouched. REQUIRED recover stays until ACK so omit cannot drop text mid-edit.
+ */
+export function feedbackDiscrepancyDraftPatch(
+  kind: 'organization' | 'training',
+  text: string,
+  priorFieldError?: string | null,
+): (
+  | { organizationDiscrepancy: string; discrepancyFieldError: string | null }
+  | { trainingDiscrepancy: string; discrepancyFieldError: string | null }
+) {
+  const discrepancyFieldError = priorFieldError === DISCREPANCY_REQUIRED_MESSAGE
+    ? DISCREPANCY_REQUIRED_MESSAGE
+    : null;
+  return kind === 'organization'
+    ? { organizationDiscrepancy: text, discrepancyFieldError }
+    : { trainingDiscrepancy: text, discrepancyFieldError };
 }
 
 /**

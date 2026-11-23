@@ -1551,24 +1551,33 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     expect(orgReplay.statusCode).toBe(orgCreated.statusCode);
     expect(orgReplay.json().id).toBe(orgId);
 
-    const orgCommentOnly = await nativePost(anna, `/v1/games/${gameId}/reviews`, {
+    // Fresh Ilya comment-only on the same held game — proves create, not Anna owned-replay/409.
+    const orgCommentOnly = await nativePost(ilya, `/v1/games/${gameId}/reviews`, {
       kind: "organization",
       comment: "Только комментарий без оценки",
       experienceAssertion: "i_experienced_this_game",
     });
-    // Owned duplicate path or second org review — either exact prior receipt or conflict; never peer payload.
-    expect([200, 201, 409]).toContain(orgCommentOnly.statusCode);
-    if (orgCommentOnly.statusCode === 200 || orgCommentOnly.statusCode === 201) {
-      expect(orgCommentOnly.json().kind).toBe("organization");
-      expect(orgCommentOnly.json().peerRating).toBeNull();
-    }
+    expect([200, 201]).toContain(orgCommentOnly.statusCode);
+    expect(orgCommentOnly.json().kind).toBe("organization");
+    expect(orgCommentOnly.json().organizationScore).toBeNull();
+    expect(orgCommentOnly.json().comment).toBe("Только комментарий без оценки");
+    expect(orgCommentOnly.json().peerRating).toBeNull();
+    expect(orgCommentOnly.json().id).not.toBe(orgId);
+    const orgCommentOnlyId = orgCommentOnly.json().id as string;
+
+    // Anna scored review remains distinct and listable.
+    const annaOrgStill = await nativeGet(anna, `/v1/me/reviews?direction=sent`);
+    expect(annaOrgStill.statusCode).toBe(200);
+    expect(annaOrgStill.json().items.some((r: { id: string }) => r.id === orgId)).toBe(true);
+    expect(annaOrgStill.json().items.some((r: { id: string }) => r.id === orgCommentOnlyId)).toBe(false);
 
     const selfOrg = await nativePost(manager, `/v1/games/${gameId}/reviews`, {
       kind: "organization",
       organizationScore: 4,
       experienceAssertion: "i_experienced_this_game",
     });
-    expect([404, 422]).toContain(selfOrg.statusCode);
+    expect(selfOrg.statusCode).toBe(422);
+    expect(selfOrg.json().code).toBe("FEEDBACK_SELF_ORGANIZATION");
 
     const outsiderOrg = await nativePost(outsider, `/v1/games/${gameId}/reviews`, {
       kind: "organization",
@@ -1641,6 +1650,15 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       bio: "Native role feedback trainer",
     });
     expect([200, 201]).toContain(trainerProfile.statusCode);
+
+    // Ordinary regular game still lacks training context even after TrainerProfile exists.
+    const ordinaryTrain = await nativePost(anna, `/v1/games/${gameId}/reviews`, {
+      kind: "training",
+      comment: "на обычной игре",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect(ordinaryTrain.statusCode).toBe(422);
+    expect(ordinaryTrain.json().code).toBe("FEEDBACK_TRAINING_CONTEXT_MISSING");
 
     const venue = await post(manager, "/v1/venues", {
       cityId: MOSCOW_CITY_ID,
@@ -1728,7 +1746,8 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       comment: "сам себе",
       experienceAssertion: "i_experienced_this_game",
     });
-    expect([404, 422]).toContain(selfTrain.statusCode);
+    expect(selfTrain.statusCode).toBe(422);
+    expect(selfTrain.json().code).toBe("FEEDBACK_SELF_TRAINING");
 
     const outsiderTrain = await nativePost(outsider, `/v1/games/${trainGameId}/reviews`, {
       kind: "training",

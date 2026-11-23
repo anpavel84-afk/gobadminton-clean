@@ -12,10 +12,12 @@ import {
   privateReviewsForGame,
   privateReviewsOnly,
   projectReviewsFromStore,
+  feedbackDiscrepancyDraftPatch,
+  resolveFeedbackDisplayMode,
   resolvePeerDraftSubject,
   reviewCommandsOpen,
   reviewKindModeLabel,
-  shouldOmitRoleDiscrepancy,
+  roleDiscrepancyPresentation,
   PEER_OPTIONS,
   REPORT_REASONS,
   TAG_OPTIONS,
@@ -52,10 +54,12 @@ function ReviewCard({
   const canReport = commandsOpen && review.kind === 'peer' && review.allowedActions.canReport;
   const reporting = draft.reportReviewId === review.id;
   const kindLabel = reviewKindModeLabel(review.kind);
-  return <View style={styles.card} accessibilityLabel={`Отзыв · ${kindLabel} · ${privateReviewHeadline(review)}`}>
+  const detailLine = privateReviewHeadline(review);
+  const a11y = detailLine ? `Отзыв · ${kindLabel} · ${detailLine}` : `Отзыв · ${kindLabel}`;
+  return <View style={styles.card} accessibilityLabel={a11y}>
     {otherGame ? <Label>Другая игра · отзыв из личной истории</Label> : null}
     <Label style={{ fontWeight: '700' }}>{kindLabel}</Label>
-    <Label style={{ fontWeight: '700' }}>{privateReviewHeadline(review)}</Label>
+    {detailLine ? <Label style={{ fontWeight: '700' }}>{detailLine}</Label> : null}
     {review.direction === 'sent' ? <Label>Для {review.recipientDisplay}</Label> : null}
     {review.comment ? <Label>{review.comment}</Label> : null}
     {review.kind === 'peer' && review.tags.length ? (
@@ -148,25 +152,33 @@ function ReportForm({ draftGameId, review }: { draftGameId: string; review: Priv
   </View>;
 }
 
+/**
+ * Kind is the actually rendered role form — never infer from unstored draft.mode
+ * (default organization/training leaves mode undefined and would no-op onChange).
+ */
 function DiscrepancyField({
-  gameId, value, blocked, writes, fieldError,
+  gameId, kind, value, blocked, editable, fieldError, hint,
 }: {
-  gameId: string; value: string; blocked: boolean; writes: boolean; fieldError: string | null | undefined;
+  gameId: string;
+  kind: 'organization' | 'training';
+  value: string;
+  blocked: boolean;
+  editable: boolean;
+  fieldError: string | null | undefined;
+  hint: string | null;
 }) {
   const { owner } = useOwner();
-  const mode = (owner.getSnapshot().feedbackDrafts[gameId] ?? {}).mode;
+  const canEdit = !blocked && editable;
   return <>
     <Label>Пояснение расхождения при необходимости</Label>
     {fieldError ? <Label accessibilityRole="alert">{fieldError}</Label> : null}
-    <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
+    {hint && !editable ? <Label>{hint}</Label> : null}
+    <TextInput editable={canEdit} multiline scrollEnabled textAlignVertical="top"
       accessibilityLabel="Пояснение расхождения при необходимости"
       value={value}
       onChangeText={text => {
-        if (mode === 'organization') {
-          owner.setFeedbackDraft(gameId, { organizationDiscrepancy: text, discrepancyFieldError: null });
-        } else if (mode === 'training') {
-          owner.setFeedbackDraft(gameId, { trainingDiscrepancy: text, discrepancyFieldError: null });
-        }
+        if (!canEdit) return;
+        owner.setFeedbackDraft(gameId, feedbackDiscrepancyDraftPatch(kind, text, fieldError));
       }}
       maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
       style={[styles.input, { minHeight: 60, maxHeight: 120 }]} />
@@ -192,11 +204,10 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const showPeer = !!(caps?.canCreatePeer || (caps?.peerSubjects?.length ?? 0) > 0 || caps?.peerCreateReason);
   const subjects = caps?.peerSubjects ?? [];
   const draft = s.feedbackDrafts[gameId] ?? {};
-  const defaultMode = showPeer ? 'peer' as const
-    : showOrganization ? 'organization' as const
-      : showTraining ? 'training' as const
-        : 'received' as const;
-  const mode = draft.mode ?? defaultMode;
+  // Display mode from visible tabs only — do not auto-write draft.mode when falling back.
+  const mode = resolveFeedbackDisplayMode(draft.mode, {
+    peer: showPeer, organization: showOrganization, training: showTraining,
+  });
   const { selected, needsReselect } = resolvePeerDraftSubject(subjects, draft.subjectContextId);
   const peerRating = draft.peerRating;
   const comment = draft.comment ?? '';
@@ -207,7 +218,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const trainingComment = draft.trainingComment ?? '';
   const trainingDiscrepancy = draft.trainingDiscrepancy ?? '';
   const discrepancyError = draft.discrepancyFieldError;
-  const omitDiscrepancy = shouldOmitRoleDiscrepancy(data);
+  const discrepancyUi = roleDiscrepancyPresentation(data, discrepancyError);
   const received = s.reviewHistory.received;
   const sent = s.reviewHistory.sent;
   const visible = feedbackSectionVisible(gameId, feedback, { received, sent });
@@ -266,7 +277,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         experienceAssertion: 'i_experienced_this_game',
         ...(orgScore != null ? { organizationScore: orgScore } : {}),
         ...(trimmed ? { comment: trimmed } : {}),
-        ...(!omitDiscrepancy && discrepancy ? { discrepancyExplanation: discrepancy } : {}),
+        ...(!discrepancyUi.omitFromWire && discrepancy ? { discrepancyExplanation: discrepancy } : {}),
       },
     });
   };
@@ -282,7 +293,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         kind: 'training',
         experienceAssertion: 'i_experienced_this_game',
         comment: trimmed,
-        ...(!omitDiscrepancy && discrepancy ? { discrepancyExplanation: discrepancy } : {}),
+        ...(!discrepancyUi.omitFromWire && discrepancy ? { discrepancyExplanation: discrepancy } : {}),
       },
     });
   };
@@ -376,24 +387,39 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
           : 'Ваш отзыв увидит организатор этой встречи'}
       </Label>
       <Label>Адресат лично. Видно только вам и адресату — это не отзыв организации-компании.</Label>
+      {!canCreateOrganization ? (
+        <Label>Сейчас нельзя отправить отзыв организатору</Label>
+      ) : null}
       <Label>Оценка организации (1–5, необязательно если есть комментарий)</Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <Choice title="Без оценки" selected={orgScore == null}
-          onPress={() => owner.setFeedbackDraft(gameId, { organizationScore: null })} />
+          onPress={() => {
+            if (!canCreateOrganization) return;
+            owner.setFeedbackDraft(gameId, { organizationScore: null });
+          }} />
         {([1, 2, 3, 4, 5] as const).map(n => (
           <Choice key={n} title={String(n)} selected={orgScore === n}
-            onPress={() => owner.setFeedbackDraft(gameId, { organizationScore: n })} />
+            onPress={() => {
+              if (!canCreateOrganization) return;
+              owner.setFeedbackDraft(gameId, { organizationScore: n });
+            }} />
         ))}
       </View>
       <Label>Комментарий</Label>
-      <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
+      <TextInput editable={!blocked && canCreateOrganization} multiline scrollEnabled textAlignVertical="top"
         accessibilityLabel="Комментарий организатору"
         value={orgComment}
-        onChangeText={text => owner.setFeedbackDraft(gameId, { organizationComment: text })}
+        onChangeText={text => {
+          if (!canCreateOrganization) return;
+          owner.setFeedbackDraft(gameId, { organizationComment: text });
+        }}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 80, maxHeight: 160 }]} />
-      <DiscrepancyField gameId={gameId} value={orgDiscrepancy} blocked={blocked} writes={writes}
-        fieldError={discrepancyError} />
+      {discrepancyUi.visible ? (
+        <DiscrepancyField gameId={gameId} kind="organization" value={orgDiscrepancy}
+          blocked={blocked} editable={canCreateOrganization && discrepancyUi.editable}
+          fieldError={discrepancyError} hint={discrepancyUi.hint} />
+      ) : null}
       <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
       <ReviewButton title="Отправить организатору лично"
         disabled={!canCreateOrganization || (orgScore == null && !normalizeFormReason(orgComment))}
@@ -402,7 +428,6 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
 
     {mode === 'training' ? <View style={styles.card}>
       <Label>Ваш отзыв увидит тренер этой встречи</Label>
-      <Label>Только для подтверждённой тренировки с тренером. Без оценки навыка.</Label>
       <Label>Как прошла тренировка</Label>
       <TextInput editable={!blocked && canCreateTraining} multiline scrollEnabled textAlignVertical="top"
         accessibilityLabel="Как прошла тренировка"
@@ -410,8 +435,11 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         onChangeText={text => owner.setFeedbackDraft(gameId, { trainingComment: text })}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 100, maxHeight: 180 }]} />
-      <DiscrepancyField gameId={gameId} value={trainingDiscrepancy} blocked={blocked} writes={writes}
-        fieldError={discrepancyError} />
+      {discrepancyUi.visible ? (
+        <DiscrepancyField gameId={gameId} kind="training" value={trainingDiscrepancy}
+          blocked={blocked} editable={canCreateTraining && discrepancyUi.editable}
+          fieldError={discrepancyError} hint={discrepancyUi.hint} />
+      ) : null}
       <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
       <ReviewButton title="Отправить"
         disabled={!canCreateTraining || !normalizeFormReason(trainingComment)}

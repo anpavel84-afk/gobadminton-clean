@@ -5,7 +5,9 @@ import {
   PostgameError, parseResults, parsePrivateReview, parseMeReviewsPage, parseReviewReportReceipt,
   wire, validateReceipt, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
   privateReviewsOnly, privateReviewsForGame, privateReviewHeadline, reviewKindModeLabel,
-  shouldOmitRoleDiscrepancy, feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore,
+  shouldOmitRoleDiscrepancy, roleDiscrepancyPresentation, resolveFeedbackDisplayMode,
+  feedbackDiscrepancyDraftPatch, DISCREPANCY_REQUIRED_MESSAGE, DISCREPANCY_UNEXPECTED_MESSAGE,
+  DISCREPANCY_OMIT_HINT, feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore,
   reviewCommandsOpen, displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
 } from '../src/postgame.ts';
 import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
@@ -1390,8 +1392,8 @@ test('#522 private organization/training: wire whitelist, receipts, kind drafts,
   assert.equal(privateReviewHeadline(orgReceipt), 'Оценка организации: 4 из 5');
   assert.equal(privateReviewHeadline(peerReview({
     kind: 'organization', subjectContextId: null, peerRating: null, organizationScore: null,
-  })), 'Организатору лично');
-  assert.equal(privateReviewHeadline(trainReceipt), 'Тренировка');
+  })), null);
+  assert.equal(privateReviewHeadline(trainReceipt), null);
 
   const heldPresent: Results = {
     ...result,
@@ -1415,6 +1417,7 @@ test('#522 private organization/training: wire whitelist, receipts, kind drafts,
     ...heldPresent, outcome: { ...heldPresent.outcome, value: 'not_held' },
   }), false);
   assert.equal(shouldOmitRoleDiscrepancy(undefined), false);
+  // Null myAttendance is ambiguous — never drop explanation text.
   assert.equal(shouldOmitRoleDiscrepancy({
     ...result,
     attendance: {
@@ -1422,7 +1425,7 @@ test('#522 private organization/training: wire whitelist, receipts, kind drafts,
       rosterNextCursor: null, summary: null,
       allowedActions: { canRecordAttendance: false, canBulkPresent: false },
     },
-  }), true);
+  }), false);
 
   const org = peerReview({
     id: 'org-hist', kind: 'organization', subjectContextId: null, peerRating: null,
@@ -1589,7 +1592,7 @@ test('#522 private role: discrepancy REQUIRED/UNEXPECTED preserve draft; writes-
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'черновик');
   assert.equal(
     s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyFieldError,
-    'Поясните расхождение с отметкой или итогом игры',
+    DISCREPANCY_REQUIRED_MESSAGE,
   );
   assert.match(s.coordinator.getSnapshot().notice ?? '', /пояснение расхождения/i);
 
@@ -1606,7 +1609,7 @@ test('#522 private role: discrepancy REQUIRED/UNEXPECTED preserve draft; writes-
   await s.coordinator.confirm();
   assert.equal(
     s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyFieldError,
-    'Пояснение для этой встречи не требуется',
+    DISCREPANCY_UNEXPECTED_MESSAGE,
   );
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'черновик');
 
@@ -1641,3 +1644,133 @@ test('#522 private role: discrepancy REQUIRED/UNEXPECTED preserve draft; writes-
     sent: { status: 'ready', data: { items: [orgHist], nextCursor: null } },
   }), true);
 });
+
+test('#522 Root A/B: default-kind discrepancy patch, ambiguous null attendance, lost-tab display mode', async () => {
+  // Explicit rendered kind — draft.mode undefined (default org/training) must still write.
+  assert.deepEqual(
+    feedbackDiscrepancyDraftPatch('organization', 'пояснение орг'),
+    { organizationDiscrepancy: 'пояснение орг', discrepancyFieldError: null },
+  );
+  assert.deepEqual(
+    feedbackDiscrepancyDraftPatch('training', 'пояснение трен'),
+    { trainingDiscrepancy: 'пояснение трен', discrepancyFieldError: null },
+  );
+  assert.deepEqual(
+    feedbackDiscrepancyDraftPatch('organization', 'ещё', DISCREPANCY_REQUIRED_MESSAGE),
+    { organizationDiscrepancy: 'ещё', discrepancyFieldError: DISCREPANCY_REQUIRED_MESSAGE },
+  );
+  assert.deepEqual(
+    feedbackDiscrepancyDraftPatch('training', 'ещё', DISCREPANCY_UNEXPECTED_MESSAGE),
+    { trainingDiscrepancy: 'ещё', discrepancyFieldError: null },
+  );
+
+  assert.equal(resolveFeedbackDisplayMode(undefined, {
+    peer: false, organization: true, training: false,
+  }), 'organization');
+  assert.equal(resolveFeedbackDisplayMode(undefined, {
+    peer: false, organization: false, training: true,
+  }), 'training');
+  // Lost training tab: display falls back; draft.mode is not rewritten by the helper.
+  assert.equal(resolveFeedbackDisplayMode('training', {
+    peer: false, organization: true, training: false,
+  }), 'organization');
+  assert.equal(resolveFeedbackDisplayMode('received', {
+    peer: false, organization: false, training: false,
+  }), 'received');
+
+  const ambiguousNull: Results = {
+    ...result,
+    attendance: {
+      installed: true, writesEnabled: true, myAttendance: null, roster: null,
+      rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  };
+  assert.equal(shouldOmitRoleDiscrepancy(ambiguousNull), false);
+  assert.deepEqual(roleDiscrepancyPresentation(ambiguousNull, null), {
+    visible: true, editable: true, omitFromWire: false, hint: null,
+  });
+
+  const heldPresent: Results = {
+    ...result,
+    attendance: {
+      installed: true, writesEnabled: true,
+      myAttendance: {
+        contextId: 'me', value: 'present', version: 1, late: false,
+        assertion: { actorDisplay: null, source: 'self_attested', at: date },
+        acknowledgedVersion: null, dispute: null, displayName: 'Я',
+        allowedActions: {
+          canSetAttendance: false, canAcknowledge: false, canDispute: false,
+          canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+        },
+      },
+      roster: null, rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  };
+  assert.deepEqual(roleDiscrepancyPresentation(heldPresent, null), {
+    visible: true, editable: false, omitFromWire: true, hint: DISCREPANCY_OMIT_HINT,
+  });
+  // Server REQUIRED recovers even when prior omit inference would drop text.
+  assert.deepEqual(roleDiscrepancyPresentation(heldPresent, DISCREPANCY_REQUIRED_MESSAGE), {
+    visible: true, editable: true, omitFromWire: false, hint: null,
+  });
+  assert.deepEqual(roleDiscrepancyPresentation(heldPresent, DISCREPANCY_UNEXPECTED_MESSAGE), {
+    visible: true, editable: false, omitFromWire: true, hint: DISCREPANCY_OMIT_HINT,
+  });
+
+  const s = setup({
+    results: {
+      ...ambiguousNull,
+      feedback: {
+        ...feedbackReady,
+        capabilities: {
+          ...feedbackReady.capabilities,
+          canCreatePeer: false,
+          canCreateOrganization: true,
+          canCreateTraining: true,
+          peerSubjects: [],
+        },
+      },
+    },
+    reviews: { received: [], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  // Default mode (no draft.mode): kind-separated discrepancy + peer text retained.
+  s.coordinator.setFeedbackDraft(game.id, {
+    comment: 'peer-keep',
+    ...feedbackDiscrepancyDraftPatch('organization', 'нужно пояснение'),
+  });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.mode, undefined);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationDiscrepancy, 'нужно пояснение');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.comment, 'peer-keep');
+  s.coordinator.setFeedbackDraft(game.id, feedbackDiscrepancyDraftPatch('training', 'трен пояснение'));
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.trainingDiscrepancy, 'трен пояснение');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationDiscrepancy, 'нужно пояснение');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.comment, 'peer-keep');
+
+  s.port.send = async (p: Packet) => {
+    s.sentPkts.push(p);
+    if (p.kind === 'organization-create' && !p.body.discrepancyExplanation) {
+      throw new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_REQUIRED');
+    }
+    return peerReview({
+      id: 'org-ambig', kind: 'organization', subjectContextId: null, peerRating: null,
+      organizationScore: null, comment: p.kind === 'organization-create' ? (p.body.comment ?? null) : null,
+      discrepancyExplanation: p.kind === 'organization-create' ? (p.body.discrepancyExplanation ?? null) : null,
+      tags: [], direction: 'sent',
+    });
+  };
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      comment: 'после ambiguous', discrepancyExplanation: 'нужно пояснение',
+    },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sentPkts.at(-1)?.body.discrepancyExplanation, 'нужно пояснение');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.comment, 'peer-keep');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.trainingDiscrepancy, 'трен пояснение');
+});
+

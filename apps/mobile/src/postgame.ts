@@ -22,13 +22,16 @@ export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
   peerRatingLabel, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
   privateReviewsOnly, privateReviewsForGame, reviewKindModeLabel, privateReviewHeadline,
-  shouldOmitRoleDiscrepancy, organizationScoreValue,
+  shouldOmitRoleDiscrepancy, roleDiscrepancyPresentation, resolveFeedbackDisplayMode,
+  feedbackDiscrepancyDraftPatch,
+  DISCREPANCY_REQUIRED_MESSAGE, DISCREPANCY_UNEXPECTED_MESSAGE, DISCREPANCY_OMIT_HINT,
+  organizationScoreValue,
   feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
   displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
   parsePrivateReview, parseMeReviewsPage,
   parseReviewReportReceipt, reviewsQuery, reviewComment, reviewReplyText, reportDetailText,
 } from './postgame-feedback.ts';
-export type { PeerSubjectOption } from './postgame-feedback.ts';
+export type { PeerSubjectOption, FeedbackUiMode, RoleDiscrepancyPresentation } from './postgame-feedback.ts';
 
 export class PostgameError extends Error {
   readonly kind: 'invalid' | 'network' | 'business' | 'private' | 'stale';
