@@ -867,3 +867,230 @@ test('own list max 50; empty roleHandle not authoring authority', () => {
     items: [...items, items[0]],
   }), PublicRoleError);
 });
+
+test('deferred consent preview retired by private 403 eligibility reread; dirty draft kept, no create', async () => {
+  const keys: string[] = [];
+  let releasePreview!: (value: unknown) => void;
+  const previewPending = new Promise<unknown>(resolve => { releasePreview = resolve; });
+  let eligPhase: 'ready' | 'deny' = 'ready';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicEligibility: async () => {
+        if (eligPhase === 'deny') throw new PostgameError('private', 403);
+        return eligibilityBody();
+      },
+      publicConsentPreview: async () => previewPending,
+      send: async (packet) => {
+        keys.push(packet.key);
+        throw new PostgameError('invalid');
+      },
+    }),
+  }, () => `auth-retire-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
+  await tick();
+  assert.equal(owner.getSnapshot().publicEligibility.status, 'ready');
+  owner.patchPublicDraft({ audience: 'public', text: 'Черновик до отзыва допуска', topics: ['agreements'] });
+  owner.patchPublicDraft({ consent: true });
+  assert.equal(owner.getSnapshot().publicDraft?.consent, true);
+
+  const createPromise = owner.submitPublicCreate();
+  await tick();
+  assert.equal(keys.length, 0);
+
+  eligPhase = 'deny';
+  await owner.loadPublicEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().publicEligibility.status, 'unavailable');
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  assert.equal(owner.getSnapshot().publicConsentHash, null);
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'Черновик до отзыва допуска');
+  assert.deepEqual(owner.getSnapshot().publicDraft?.topics, ['agreements']);
+  assert.equal(owner.getSnapshot().publicDraft?.gameId, gameId);
+
+  releasePreview({ consentProjectionHash: '4'.repeat(64) });
+  await createPromise;
+  await tick();
+  assert.equal(keys.length, 0);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  assert.equal(owner.getSnapshot().publicConsentHash, null);
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'Черновик до отзыва допуска');
+});
+
+test('deferred consent preview retired by eligibility network/malformed failure; no create', async () => {
+  for (const mode of ['network', 'malformed'] as const) {
+    const keys: string[] = [];
+    let releasePreview!: (value: unknown) => void;
+    const previewPending = new Promise<unknown>(resolve => { releasePreview = resolve; });
+    let eligPhase: 'ready' | 'fail' = 'ready';
+    const owner = new PostgameCoordinator({
+      ...idlePort({
+        publicEligibility: async () => {
+          if (eligPhase === 'fail') {
+            if (mode === 'network') throw new PostgameError('network', 503);
+            return { roleHandle: handle, role: 'organization', bases: 'bad' };
+          }
+          return eligibilityBody();
+        },
+        publicConsentPreview: async () => previewPending,
+        send: async (packet) => {
+          keys.push(packet.key);
+          throw new PostgameError('invalid');
+        },
+      }),
+    }, () => `${mode}-${keys.length + 1}`);
+
+    owner.setActor(actor);
+    owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
+    await tick();
+    owner.patchPublicDraft({ audience: 'public', text: `Черновик ${mode}`, topics: ['flow'] });
+    owner.patchPublicDraft({ consent: true });
+    const createPromise = owner.submitPublicCreate();
+    await tick();
+
+    eligPhase = 'fail';
+    await owner.loadPublicEligibility();
+    await tick();
+    assert.equal(owner.getSnapshot().publicEligibility.status, 'error');
+    assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+    assert.equal(owner.getSnapshot().publicConsentHash, null);
+    assert.equal(owner.getSnapshot().publicDraft?.text, `Черновик ${mode}`);
+
+    releasePreview({ consentProjectionHash: '5'.repeat(64) });
+    await createPromise;
+    await tick();
+    assert.equal(keys.length, 0, mode);
+    assert.equal(owner.getSnapshot().command, null);
+    assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+    assert.equal(owner.getSnapshot().publicConsentHash, null);
+  }
+});
+
+test('deferred consent preview + newer basis revision does not auto-submit or rebase', async () => {
+  const keys: string[] = [];
+  let releasePreview!: (value: unknown) => void;
+  const previewPending = new Promise<unknown>(resolve => { releasePreview = resolve; });
+  let eligPhase: 'v1' | 'v2' = 'v1';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicEligibility: async () => eligibilityBody({
+        bases: [{
+          gameId,
+          role: 'organization',
+          endsAt: '2026-10-01T18:00:00.000Z',
+          proofVersion: eligPhase === 'v2' ? 3 : 2,
+          outcomeVersion: eligPhase === 'v2' ? 2 : 1,
+          attendanceVersion: 1,
+          projectionHashPreview: null,
+          admission: 'may_submit',
+          reason: null,
+        }],
+      }),
+      publicConsentPreview: async () => previewPending,
+      send: async (packet) => {
+        keys.push(packet.key);
+        return {
+          id: '77777777-7777-4777-8777-777777777777',
+          reviewHandle: 'c'.repeat(32),
+          version: 1,
+          status: 'submitted',
+          receiptToken: 'should-not-send',
+          pendingIntakeStatus: 'waiting_intake',
+        };
+      },
+    }),
+  }, () => `basis-rev-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
+  await tick();
+  owner.patchPublicDraft({ audience: 'public', text: 'Текст до смены основания', topics: ['communication'] });
+  owner.patchPublicDraft({ consent: true });
+  const createPromise = owner.submitPublicCreate();
+  await tick();
+  assert.equal(keys.length, 0);
+
+  eligPhase = 'v2';
+  await owner.loadPublicEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().publicEligibility.status, 'ready');
+  assert.equal(owner.getSnapshot().publicEligibility.data?.bases[0]?.proofVersion, 3);
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  assert.equal(owner.getSnapshot().publicConsentHash, null);
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'Текст до смены основания');
+  assert.deepEqual(owner.getSnapshot().publicDraft?.topics, ['communication']);
+
+  releasePreview({ consentProjectionHash: '6'.repeat(64) });
+  await createPromise;
+  await tick();
+  // Retired preview must not create on captured v1 basis or silently rebase onto v2.
+  assert.equal(keys.length, 0);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  assert.equal(owner.getSnapshot().publicConsentHash, null);
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'Текст до смены основания');
+});
+
+test('eligibility 401 retires consent; UNKNOWN create packet preserved without autosend', async () => {
+  const keys: string[] = [];
+  let releasePreview!: (value: unknown) => void;
+  const previewPending = new Promise<unknown>(resolve => { releasePreview = resolve; });
+  let eligPhase: 'ready' | 'auth' = 'ready';
+  let sendMode: 'defer-preview' | 'unknown' = 'defer-preview';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicEligibility: async () => {
+        if (eligPhase === 'auth') throw new PostgameError('private', 401);
+        return eligibilityBody();
+      },
+      publicConsentPreview: async () => {
+        if (sendMode === 'unknown') return { consentProjectionHash: '7'.repeat(64) };
+        return previewPending;
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => `unk-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
+  await tick();
+  owner.patchPublicDraft({ audience: 'public', text: 'UNKNOWN сохраняется', topics: ['agreements'] });
+  owner.patchPublicDraft({ consent: true });
+
+  // First: 401 during deferred preview retires authority without send.
+  const blocked = owner.submitPublicCreate();
+  await tick();
+  eligPhase = 'auth';
+  await owner.loadPublicEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().publicEligibility.status, 'unavailable');
+  releasePreview({ consentProjectionHash: '8'.repeat(64) });
+  await blocked;
+  await tick();
+  assert.equal(keys.length, 0);
+  assert.equal(owner.getSnapshot().publicDraft?.text, 'UNKNOWN сохраняется');
+
+  // Fresh ready path → UNKNOWN create; same-actor reauth restores original key, never autosend.
+  eligPhase = 'ready';
+  await owner.loadPublicEligibility();
+  await tick();
+  owner.patchPublicDraft({ consent: true });
+  sendMode = 'unknown';
+  await owner.submitPublicCreate();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownKey = owner.getSnapshot().command!.packet.key;
+  const before = keys.length;
+  owner.setActor({ ...actor, generation: 2 });
+  await tick();
+  assert.equal(keys.length, before);
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+});

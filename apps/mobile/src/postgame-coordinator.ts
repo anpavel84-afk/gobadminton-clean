@@ -1130,6 +1130,19 @@ export class PostgameCoordinator {
     this.show({ publicDraft: next });
   };
   /**
+   * Retire in-flight consent preview / hash when eligibility authority is reread or lost.
+   * Preserves dirty text/topics/game intent; does not autosend or rebase.
+   */
+  private retirePublicConsentAuthority(patch: Partial<Snapshot> = {}) {
+    this.publicPreviewGen++;
+    const draft = patch.publicDraft !== undefined ? patch.publicDraft : this.snapshot.publicDraft;
+    this.show({
+      ...patch,
+      publicDraft: draft ? { ...draft, consent: false } : draft ?? null,
+      publicConsentHash: null,
+    });
+  }
+  /**
    * @param opts.preserveNotice Keep actionable business rejection (e.g. after 422 reread/reconsent).
    * Manual refresh omits this and may clear a stale notice on success.
    */
@@ -1141,13 +1154,17 @@ export class PostgameCoordinator {
     const priorNotice = this.snapshot.publicNotice;
     const gen = ++this.publicEligibilityGen;
     const preferred = this.snapshot.publicDraft?.gameId || target.gameId;
-    this.show({ publicEligibility: { status: 'loading', data: this.snapshot.publicEligibility.data } });
+    // Authoritative reread retires outstanding preview/consent immediately — failure must not
+    // leave a deferred preview able to create on a captured basis.
+    this.retirePublicConsentAuthority({
+      publicEligibility: { status: 'loading', data: this.snapshot.publicEligibility.data },
+    });
     try {
       const data = parseOwnEligibility(await this.port.publicEligibility(actor, target.roleHandle), target.roleHandle);
       if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
       if (this.snapshot.publicSurface?.target?.roleHandle !== target.roleHandle) return;
       if (data.role !== target.role) {
-        this.show({
+        this.retirePublicConsentAuthority({
           publicEligibility: { status: 'error' },
           publicNotice: preserveNotice && priorNotice
             ? priorNotice
@@ -1164,12 +1181,10 @@ export class PostgameCoordinator {
           : gameId,
         consent: false,
       };
-      this.publicPreviewGen++;
       const empty = !eligibleBases(data).length;
-      this.show({
+      this.retirePublicConsentAuthority({
         publicEligibility: { status: 'ready', data },
         publicDraft: nextDraft,
-        publicConsentHash: null,
         publicNotice: empty
           ? (preserveNotice && priorNotice
             ? priorNotice
@@ -1180,7 +1195,7 @@ export class PostgameCoordinator {
       if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
       const denied = error instanceof PostgameError && error.kind === 'private';
       const auth = error instanceof PostgameError && error.status === 401;
-      this.show({
+      this.retirePublicConsentAuthority({
         publicEligibility: denied || auth ? { status: 'unavailable' } : { status: 'error' },
         publicNotice: preserveNotice && priorNotice
           ? priorNotice
@@ -1291,19 +1306,43 @@ export class PostgameCoordinator {
       if (this.snapshot.publicSurface?.target?.roleHandle !== surface.target.roleHandle) return;
       if (draftEditorKey(this.snapshot.publicDraft ?? draft, surface.target.roleHandle, surface.target.role) !== editor) return;
       void previewKey;
+      // Recheck CURRENT ready eligibility/target/basis versions/consent — never create on
+      // retired authority or silently rebase the captured packet onto a newer basis.
+      const liveSurface = this.snapshot.publicSurface;
+      const liveDraft = this.snapshot.publicDraft;
+      const liveElig = this.snapshot.publicEligibility.status === 'ready'
+        ? this.snapshot.publicEligibility.data ?? null
+        : null;
+      const liveTarget = liveSurface?.mode === 'composer' ? liveSurface.target : null;
+      const liveBasis = liveElig && liveDraft
+        ? eligibleBases(liveElig).find(b => b.gameId === liveDraft.gameId)
+        : undefined;
+      if (!liveDraft?.consent || !liveElig || !liveTarget || !liveBasis
+        || liveTarget.roleHandle !== surface.target.roleHandle
+        || liveTarget.role !== surface.target.role
+        || liveBasis.gameId !== basis.gameId
+        || liveBasis.role !== basis.role
+        || liveBasis.proofVersion !== basis.proofVersion
+        || liveBasis.outcomeVersion !== basis.outcomeVersion
+        || liveBasis.attendanceVersion !== basis.attendanceVersion) {
+        this.retirePublicConsentAuthority({
+          publicNotice: 'Проверьте выбранные данные и обновите допуск.',
+        });
+        return;
+      }
       this.show({ publicConsentHash: preview.consentProjectionHash });
       const createBody = buildPublicCreateBody({
-        basis, role: surface.target.role, text, topics: draft.topics,
+        basis: liveBasis, role: liveTarget.role, text, topics: liveDraft.topics,
         consentProjectionHash: preview.consentProjectionHash,
       });
       const intent: Intent = {
         kind: 'public-role-create',
-        gameId: basis.gameId,
-        roleHandle: surface.target.roleHandle,
+        gameId: liveBasis.gameId,
+        roleHandle: liveTarget.roleHandle,
         body: createBody,
       };
       await this.submitPublicRole(intent, {
-        surfaceGen, editor, roleHandle: surface.target.roleHandle, role: surface.target.role, gameId: basis.gameId,
+        surfaceGen, editor, roleHandle: liveTarget.roleHandle, role: liveTarget.role, gameId: liveBasis.gameId,
       });
     } catch (error) {
       if (previewGen !== this.publicPreviewGen || surfaceGen !== this.publicSurfaceGen || !sameActor(actor, this.snapshot.actor)) return;
