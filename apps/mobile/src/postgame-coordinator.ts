@@ -3071,7 +3071,8 @@ export class PostgameCoordinator {
           venueDraft: {
             audience: selected.audience ?? 'self_draft',
             text: selected.text ?? '',
-            topics: topics.length ? topics : ['surface'],
+            // Preserve selected empty topics exactly — no silent ['surface'] prefill on edit.
+            topics,
             consent: false,
           },
           venueConsentHash: null,
@@ -3352,7 +3353,8 @@ export class PostgameCoordinator {
     const next: VenueExperienceDraft = {
       audience: patch.audience ?? draft.audience,
       text: patch.text ?? draft.text,
-      topics: patch.topics ? [...patch.topics] : [...draft.topics],
+      // undefined = leave unchanged; [] is a deliberate empty selection (last topic removed).
+      topics: patch.topics !== undefined ? [...patch.topics] : [...draft.topics],
       consent: patch.consent ?? draft.consent,
     };
     const cleared = next.audience !== draft.audience

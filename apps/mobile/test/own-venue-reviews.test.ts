@@ -1178,6 +1178,165 @@ test('address8: history sheet close during sending retains immutable journal key
   assert.equal(owner.getSnapshot().venueNotice?.includes('отозван'), true);
 });
 
+test('#522 address10: selected empty topics preserved; last-topic removal stays empty; create default surface retained', async () => {
+  const emptySelected = (): SelectedOwnVenueReview => ({
+    ...selected(),
+    text: 'Текст без тем',
+    topics: [],
+  });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => ({ items: [{ ...ownRow(), text: 'Текст без тем', topics: [] }] }),
+      venueExperienceOwnDetail: async () => emptySelected(),
+    }),
+  }, () => 'addr10-empty-prefill');
+
+  owner.setActor(actor);
+  // Fresh create still defaults to surface — edit path must not rewrite that helper.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, ['surface']);
+  owner.closeVenueExperience();
+
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.openOwnVenueEdit({ ...ownRow(), text: 'Текст без тем', topics: [] });
+  await tick();
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, []);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Текст без тем');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+
+  // Deliberate last-topic removal (composer patch after deselect) must stay empty — no silent surface.
+  owner.patchVenueDraft({ topics: ['surface'] });
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, ['surface']);
+  owner.patchVenueDraft({ topics: [] });
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, []);
+});
+
+test('#522 address10: private revision body transmits empty topics; no silent surface replacement', async () => {
+  const posts: Array<{ body: Record<string, unknown> }> = [];
+  const emptySelected = (): SelectedOwnVenueReview => ({
+    ...selected(),
+    text: 'Личный текст без тем',
+    topics: [],
+  });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => ({
+        items: [{ ...ownRow(), text: 'Личный текст без тем', topics: [] }],
+      }),
+      venueExperienceOwnDetail: async () => emptySelected(),
+      send: async (packet) => {
+        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        posts.push({ body: packet.body as Record<string, unknown> });
+        return {
+          id: reviewId,
+          version: 2,
+          status: 'revision_waiting',
+          reviewHandle: handle,
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => 'addr10-private-empty');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.openOwnVenueEdit({ ...ownRow(), text: 'Личный текст без тем', topics: [] });
+  await tick();
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, []);
+
+  owner.patchVenueDraft({ text: 'Обновлённый личный без тем', topics: [] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0]!.body.action, 'submit_revision');
+  assert.deepEqual(posts[0]!.body.topics, []);
+  assert.equal(posts[0]!.body.consentProjectionHash, undefined);
+  assert.equal(posts[0]!.body.audience, 'self_draft');
+});
+
+test('#522 address10: public empty topics — fresh explicit consent; preview/transmit empty; no autoPOST', async () => {
+  const posts: Array<{ body: Record<string, unknown> }> = [];
+  const previewCalls: Array<{ topics: string[]; text: string }> = [];
+  const emptySelected = (): SelectedOwnVenueReview => ({
+    ...selected(),
+    text: 'Публичный текст без тем',
+    topics: [],
+    audience: 'self_draft',
+  });
+  const consentHash = 'b'.repeat(64);
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => ({
+        items: [{ ...ownRow(), text: 'Публичный текст без тем', topics: [] }],
+      }),
+      venueExperienceOwnDetail: async () => emptySelected(),
+      venueExperienceConsentPreview: async (_actor, args) => {
+        previewCalls.push({ topics: [...args.topics], text: args.text });
+        return { consentProjectionHash: consentHash, authorLabel: 'Участник игры' };
+      },
+      send: async (packet) => {
+        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        posts.push({ body: packet.body as Record<string, unknown> });
+        return {
+          id: reviewId,
+          version: 2,
+          status: 'revision_waiting',
+          reviewHandle: handle,
+          receiptToken: 'intake-token',
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => 'addr10-public-empty');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.openOwnVenueEdit({ ...ownRow(), text: 'Публичный текст без тем', topics: [] });
+  await tick();
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, []);
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  assert.equal(posts.length, 0);
+  assert.equal(previewCalls.length, 0);
+
+  // Audience flip alone must not auto-preview or auto-POST.
+  owner.patchVenueDraft({ audience: 'public_venue', text: 'Публичный текст без тем', topics: [] });
+  await tick();
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  assert.equal(previewCalls.length, 0);
+  assert.equal(posts.length, 0);
+
+  // Submit without consent blocked — still zero POST.
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(posts.length, 0);
+  assert.match(owner.getSnapshot().venueNotice ?? '', /согласие/i);
+
+  await owner.ensureVenueConsentPreview();
+  assert.equal(previewCalls.length, 1);
+  assert.deepEqual(previewCalls[0]!.topics, []);
+  assert.equal(owner.getSnapshot().venueConsentHash, consentHash);
+  assert.equal(owner.getSnapshot().venueDraft?.consent, true);
+  assert.equal(posts.length, 0);
+
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0]!.body.action, 'submit_revision');
+  assert.equal(posts[0]!.body.audience, 'public_venue');
+  assert.deepEqual(posts[0]!.body.topics, []);
+  assert.equal(posts[0]!.body.consentProjectionHash, consentHash);
+});
+
 test('source wiring: Profile entry + controller bearer + APK38 + fixture owner coverage', () => {
   const profile = read('../app/profile.tsx');
   assert.match(profile, /OwnVenueReviewsEntry/);

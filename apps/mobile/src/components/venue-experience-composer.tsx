@@ -193,7 +193,8 @@ export function VenueExperienceComposer({
                       : VENUE_TOPIC_OPTIONS
                         .filter(t => t.value === topic.value || draft.topics.includes(t.value))
                         .map(t => t.value);
-                    owner.patchVenueDraft({ topics: topics.length ? topics : ['surface'] });
+                    // Allow deliberate last-topic removal; create still defaults via emptyVenueExperienceDraft.
+                    owner.patchVenueDraft({ topics });
                   }}
                 />
               ))}
