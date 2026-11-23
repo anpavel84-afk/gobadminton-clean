@@ -10,6 +10,7 @@ import {
   roleDiscrepancyContextFromResults,
   roleDiscrepancyDecisionFromError,
   type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason,
+  type RoleDiscrepancyContext,
   type RoleDiscrepancyDecision,
 } from './postgame-feedback.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
@@ -63,7 +64,12 @@ export type FeedbackDraft = {
   reportConsentVersion?: number;
 };
 export type ReviewDirection = 'sent' | 'received';
-type Command = { packet: Packet; status: 'sending' | 'unknown' };
+type Command = {
+  packet: Packet;
+  status: 'sending' | 'unknown';
+  /** Attendance/outcome fingerprint at owned-packet send — never on the API wire. */
+  roleDiscrepancyContext?: RoleDiscrepancyContext;
+};
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
   if (row.gameId !== ack.gameId || row.contextId !== ack.contextId || row.attendance.version !== ack.version) return row;
@@ -220,7 +226,13 @@ export class PostgameCoordinator {
     // Feedback drafts restore without auto-send; history must recheck authority via fresh GET.
     if (saved) this.show({
       filter:saved.filter,
-      command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,
+      command:saved.command ? {
+        packet:saved.command.packet,
+        status:'unknown' as const,
+        ...(saved.command.roleDiscrepancyContext
+          ? { roleDiscrepancyContext: saved.command.roleDiscrepancyContext }
+          : {}),
+      } : null,
       notice:saved.command ? unknownNotice : null,
       review:saved.review,
       drafts:saved.drafts,
@@ -1041,7 +1053,24 @@ export class PostgameCoordinator {
     await this.dispatch(command.packet,actor,true);
   };
   private async dispatch(packet: Packet, authority: Actor, reconciling: boolean) {
-    this.inFlight=packet; this.show({command:{packet,status:'sending'},review:null,notice:null});
+    this.inFlight=packet;
+    // Capture role discrepancy fingerprint before send; UNKNOWN retry keeps the original binding.
+    const priorCommand = this.snapshot.command;
+    const roleDiscrepancyContext =
+      (packet.kind === 'organization-create' || packet.kind === 'training-create')
+        ? (reconciling && priorCommand?.packet === packet && priorCommand.roleDiscrepancyContext
+          ? priorCommand.roleDiscrepancyContext
+          : roleDiscrepancyContextFromResults(this.snapshot.games[packet.gameId]?.data))
+        : undefined;
+    this.show({
+      command: {
+        packet,
+        status: 'sending',
+        ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+      },
+      review: null,
+      notice: null,
+    });
     // Actor object identity also fences a switch away and back to identical
     // credentials. Explicit reconcile captures the new authority separately.
     const valid=()=>authority === this.snapshot.actor && this.snapshot.command?.packet === packet;
@@ -1206,17 +1235,15 @@ export class PostgameCoordinator {
       }
       if (roleDiscrepancy && error instanceof PostgameError
         && (error.code === 'FEEDBACK_DISCREPANCY_REQUIRED' || error.code === 'FEEDBACK_DISCREPANCY_UNEXPECTED')) {
-        // Bind to actual packet kind + current results context — not a game-global Russian message key.
+        // Bind to packet kind + context captured at owned-packet send — never transplant late current results.
         const drafts = { ...this.snapshot.feedbackDrafts };
         const prior = drafts[packet.gameId] ?? {};
         const kind = packet.kind === 'organization-create' ? 'organization' : 'training';
+        const decisionContext = roleDiscrepancyContext
+          ?? roleDiscrepancyContextFromResults(this.snapshot.games[packet.gameId]?.data);
         drafts[packet.gameId] = {
           ...prior,
-          discrepancyDecision: roleDiscrepancyDecisionFromError(
-            kind,
-            error.code,
-            this.snapshot.games[packet.gameId]?.data,
-          ),
+          discrepancyDecision: roleDiscrepancyDecisionFromError(kind, error.code, decisionContext),
         };
         this.show({ feedbackDrafts: drafts });
         void this.loadResults(packet.gameId);
@@ -1239,7 +1266,15 @@ export class PostgameCoordinator {
             ? 'Результат отправки пока неизвестен. Проверьте исходное действие.'
             : unknownNotice);
       // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
-      this.show({command:definite ? null : {packet,status:'unknown'},notice});
+      // Preserve original owned-packet discrepancy fingerprint across UNKNOWN for reconcile.
+      this.show({
+        command: definite ? null : {
+          packet,
+          status: 'unknown',
+          ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+        },
+        notice,
+      });
     } finally { if(this.inFlight === packet) this.inFlight=null; }
   }
 }

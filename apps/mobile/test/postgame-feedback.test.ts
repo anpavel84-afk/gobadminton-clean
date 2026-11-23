@@ -2047,3 +2047,59 @@ test('#522 address7: UNEXPECTED present→fresh absent/contested/not_held; kind 
   ), null);
 });
 
+test('ROOT: delayed role error must not bind to a newer unrelated outcome context', async () => {
+  let live: Results = structuredClone(result);
+  const s = setup({ results: live, reviews: { received: [], sent: [] } });
+  s.port.results = async (_a: Actor, id: string) => ({ ...structuredClone(live), gameId: id });
+  await s.coordinator.loadResults(game.id);
+  let rejectSend!: (e: unknown) => void;
+  s.port.send = async () => new Promise((_resolve, reject) => { rejectSend = reject; });
+  s.coordinator.review({ kind: 'organization-create', gameId: game.id,
+    body: { kind: 'organization', experienceAssertion: 'i_experienced_this_game', comment: 'context race', discrepancyExplanation: 'old context' } });
+  const pending = s.coordinator.confirm();
+  await Promise.resolve();
+  live = { ...live, outcome: { ...live.outcome, value: 'not_held', version: 2 } };
+  await s.coordinator.loadResults(game.id);
+  rejectSend(new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_UNEXPECTED'));
+  await pending;
+  await new Promise(resolve => setImmediate(resolve));
+  const decision = s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision;
+  assert.equal(boundRoleDiscrepancyFieldError(decision, 'organization', live), null,
+    'old request rejection cannot suppress explanation required by newer not_held context');
+});
+
+test('ROOT: UNKNOWN role retry keeps original owned packet discrepancy context', async () => {
+  let live: Results = structuredClone(result);
+  const s = setup({ results: live, reviews: { received: [], sent: [] } });
+  s.port.results = async (_a: Actor, id: string) => ({ ...structuredClone(live), gameId: id });
+  await s.coordinator.loadResults(game.id);
+  const heldContext = roleDiscrepancyContextFromResults(live);
+  s.port.send = async () => { throw new PostgameError('network', 0); };
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      comment: 'unknown race', discrepancyExplanation: 'old held',
+    },
+  });
+  await s.coordinator.confirm();
+  const unknownCmd = s.coordinator.getSnapshot().command;
+  assert.equal(unknownCmd?.status, 'unknown');
+  assert.deepEqual(unknownCmd?.roleDiscrepancyContext, heldContext);
+  assert.ok(unknownCmd?.packet);
+  assert.ok(!('roleDiscrepancyContext' in unknownCmd.packet),
+    'owned-packet fingerprint must not leak onto the API wire packet');
+
+  live = { ...live, outcome: { ...live.outcome, value: 'not_held', version: 2 } };
+  await s.coordinator.loadResults(game.id);
+  // Reconcile stays non-definite; prove retry does not recapture from the newer context.
+  s.port.send = async () => { throw new PostgameError('network', 0); };
+  await s.coordinator.reconcile(game.id);
+  assert.equal(s.coordinator.getSnapshot().command?.status, 'unknown');
+  assert.deepEqual(
+    s.coordinator.getSnapshot().command?.roleDiscrepancyContext,
+    heldContext,
+    'UNKNOWN retry must keep original owned-packet context, not recapture not_held',
+  );
+});
+

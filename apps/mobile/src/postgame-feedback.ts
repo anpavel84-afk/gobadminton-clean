@@ -351,14 +351,18 @@ export function roleDiscrepancyContextsEqual(
 export function roleDiscrepancyDecisionFromError(
   kind: 'organization' | 'training',
   code: 'FEEDBACK_DISCREPANCY_REQUIRED' | 'FEEDBACK_DISCREPANCY_UNEXPECTED',
-  results: RoleDiscrepancyResults | undefined,
+  resultsOrContext: RoleDiscrepancyResults | RoleDiscrepancyContext | undefined,
 ): RoleDiscrepancyDecision {
+  // Accept a pre-captured owned-packet fingerprint, or derive from results.
+  const context = resultsOrContext != null && typeof resultsOrContext.outcome === 'string'
+    ? resultsOrContext
+    : roleDiscrepancyContextFromResults(resultsOrContext);
   return {
     kind,
     fieldError: code === 'FEEDBACK_DISCREPANCY_REQUIRED'
       ? DISCREPANCY_REQUIRED_MESSAGE
       : DISCREPANCY_UNEXPECTED_MESSAGE,
-    context: roleDiscrepancyContextFromResults(results),
+    context,
   };
 }
 
