@@ -26,6 +26,7 @@ import {
   isPublicRolePacketKind,
   mayPaintOwnPublicReceipt,
   mayPaintPublicReplyReceipt,
+  mayPaintPublicReportReceipt,
   mayWithdrawOwnPublic,
   mergeActorAwareReaderItem,
   mergeOwnPublicReviewItem,
@@ -167,8 +168,14 @@ type Snapshot = {
     reviewHandle: string;
     expectedReviewRevision: number;
   }) | null;
-  /** Painted report ACK bound to the owning reviewHandle — never freezes other rows. */
-  publicReportReceipt: (PublicRoleReportReceipt & { reviewHandle: string }) | null;
+  /**
+   * Painted report ACK bound to owning reviewHandle + original packet expectedRevision —
+   * never freezes other rows or a newer published review revision (server dedupes per revision).
+   */
+  publicReportReceipt: (PublicRoleReportReceipt & {
+    reviewHandle: string;
+    expectedRevision: number;
+  }) | null;
   publicNotice: string | null;
   /** Guest auth return: bounded role/game only; never consent/text. */
   pendingPublicAuthor: PublicRoleAuthorTarget | null;
@@ -1397,22 +1404,34 @@ export class PostgameCoordinator {
         return;
       }
       if (parsed.roleHandle !== reader.roleHandle || parsed.role !== reader.role) {
+        if (!append) this.publicPreviewGen++;
         this.show({
           publicReader: append ? this.snapshot.publicReader : { status: 'error' },
           publicReaderLoadingMore: false,
           publicReaderMoreError: append,
           publicNotice: preserveNotice && priorNotice ? priorNotice : 'Не удалось загрузить отзывы.',
+          // Root mismatch loses read authority — retire consent/hash; keep draft text.
+          ...(!append ? {
+            publicReplyDrafts: Object.fromEntries(
+              Object.entries(this.snapshot.publicReplyDrafts).map(([k, d]) => [k, { text: d.text, consent: false }]),
+            ),
+            publicConsentHash: null,
+          } : {}),
         });
         return;
       }
       if (parsed.availability !== 'available') {
+        this.publicPreviewGen++;
         this.show({
           publicReader: { status: 'unavailable', data: parsed },
           publicReaderLoadingMore: false,
           publicReaderMoreError: false,
           publicNotice: preserveNotice ? priorNotice : null,
-          publicReplyDrafts: {},
+          publicReplyDrafts: Object.fromEntries(
+            Object.entries(this.snapshot.publicReplyDrafts).map(([k, d]) => [k, { text: d.text, consent: false }]),
+          ),
           publicReportDraft: null,
+          publicConsentHash: null,
         });
         return;
       }
@@ -1449,8 +1468,10 @@ export class PostgameCoordinator {
       for (const [handle, draft] of Object.entries(replyDrafts)) {
         const nextItem = items.find(i => i.reviewHandle === handle);
         const oldItem = priorByHandle.get(handle);
-        const versionMoved = !!oldItem && !!nextItem && (
-          oldItem.publishedRevision !== nextItem.publishedRevision
+        // Missing oldItem = prior read was non-authoritative (error/unavailable) — cannot keep consent.
+        const versionMoved = !!nextItem && (
+          !oldItem
+          || oldItem.publishedRevision !== nextItem.publishedRevision
           || oldItem.replyAggregateVersion !== nextItem.replyAggregateVersion
           || (oldItem.subjectOwnReply?.version ?? null) !== (nextItem.subjectOwnReply?.version ?? null)
         );
@@ -1474,6 +1495,14 @@ export class PostgameCoordinator {
         )
       );
       const paintedReport = this.snapshot.publicReportReceipt;
+      // Report receipt bound to original expectedRevision — newer published revision retires block.
+      const retireReportReceipt = !!paintedReport && (
+        !items.some(i => i.reviewHandle === paintedReport.reviewHandle)
+        || items.some(item =>
+          item.reviewHandle === paintedReport.reviewHandle
+          && item.publishedRevision !== paintedReport.expectedRevision,
+        )
+      );
       const keepReplyNotice = preserveNotice && priorNotice === 'Ответ принят.';
       // Open report editor follows live row permission/revision — not an already-dispatched journal.
       const openReport = this.snapshot.publicReportDraft;
@@ -1502,10 +1531,7 @@ export class PostgameCoordinator {
         } : {}),
         ...(retireReplyReceipt ? { publicReplyReceipt: null } : {}),
         ...(retireOpenReport ? { publicReportDraft: null } : {}),
-        // Report receipt stays scoped to its handle; typed refresh does not invent auto-hide.
-        ...(paintedReport && !items.some(i => i.reviewHandle === paintedReport.reviewHandle)
-          ? { publicReportReceipt: null }
-          : {}),
+        ...(retireReportReceipt ? { publicReportReceipt: null } : {}),
         ...(keepReplyNotice && retireReplyReceipt ? { publicNotice: priorNotice } : {}),
       });
     } catch (error) {
@@ -1539,11 +1565,17 @@ export class PostgameCoordinator {
         });
         return;
       }
+      // Root read authority lost — retire consent/hash and in-flight preview; keep draft text.
+      this.publicPreviewGen++;
       this.show({
         publicReader: { status: 'error' },
         publicReaderLoadingMore: false,
         publicReaderMoreError: false,
         publicNotice: preserveNotice && priorNotice ? priorNotice : 'Не удалось загрузить отзывы.',
+        publicReplyDrafts: Object.fromEntries(
+          Object.entries(this.snapshot.publicReplyDrafts).map(([k, d]) => [k, { text: d.text, consent: false }]),
+        ),
+        publicConsentHash: null,
       });
     }
   };
@@ -1578,10 +1610,15 @@ export class PostgameCoordinator {
       && (expectedSurfaceGen !== this.publicSurfaceGen || surface.gen !== expectedSurfaceGen)) {
       return;
     }
-    if (this.snapshot.publicReportReceipt?.reviewHandle === item.reviewHandle) return;
+    const reportReceipt = this.snapshot.publicReportReceipt;
+    // Same-revision receipt dedupes; a newer published revision may open a fresh report.
+    if (reportReceipt?.reviewHandle === item.reviewHandle
+      && reportReceipt.expectedRevision === item.publishedRevision) return;
     const live = this.currentReaderItem(item.reviewHandle);
     if (!live?.allowedActions.canReport) return;
     if (live.publishedRevision !== item.publishedRevision) return;
+    if (reportReceipt?.reviewHandle === live.reviewHandle
+      && reportReceipt.expectedRevision === live.publishedRevision) return;
     const open = this.snapshot.publicReportDraft;
     // Same-row repress keeps reason/explanation the user already edited.
     if (open
@@ -1603,7 +1640,9 @@ export class PostgameCoordinator {
   patchPublicReportDraft = (patch: Partial<Pick<PublicRoleReportDraft, 'reasonCode' | 'explanation'>>) => {
     const draft = this.snapshot.publicReportDraft;
     if (!draft) return;
-    if (this.snapshot.publicReportReceipt?.reviewHandle === draft.reviewHandle) return;
+    const reportReceipt = this.snapshot.publicReportReceipt;
+    if (reportReceipt?.reviewHandle === draft.reviewHandle
+      && reportReceipt.expectedRevision === draft.publishedRevision) return;
     const live = this.currentReaderItem(draft.reviewHandle);
     if (!live?.allowedActions.canReport || live.publishedRevision !== draft.publishedRevision) return;
     this.show({ publicReportDraft: { ...draft, ...patch } });
@@ -1729,7 +1768,9 @@ export class PostgameCoordinator {
     }
     const draft = this.snapshot.publicReportDraft;
     if (!actor || !reader || !draft) return;
-    const ownedReceipt = this.snapshot.publicReportReceipt?.reviewHandle === draft.reviewHandle;
+    const paintedReport = this.snapshot.publicReportReceipt;
+    const ownedReceipt = paintedReport?.reviewHandle === draft.reviewHandle
+      && paintedReport.expectedRevision === draft.publishedRevision;
     if (this.snapshot.command || this.inFlight || ownedReceipt) {
       const cmd = this.snapshot.command;
       if (cmd?.status === 'unknown' && cmd.packet.kind === 'public-role-report'
@@ -2484,13 +2525,22 @@ export class PostgameCoordinator {
       }
       if (packet.kind === 'public-role-report' && 'reportId' in receipt && 'receiptToken' in receipt) {
         const reportReceipt = parsePublicRoleReportReceipt(receipt);
-        const paint = this.publicMutationUiCurrent(packet);
+        const paintUi = this.publicMutationUiCurrent(packet);
         this.publicMutationBind = null;
+        const expectedRevision = packet.body.expectedRevision;
+        const typed = this.currentReaderItem(packet.reviewHandle) ?? undefined;
+        // Late older ACK still settles the journal but must not paint over a newer published
+        // revision or erase that revision's report draft/context.
+        const paint = paintUi && mayPaintPublicReportReceipt(typed, expectedRevision);
         this.show({
           command: null,
-          publicReportDraft: null,
           ...(paint ? {
-            publicReportReceipt: { ...reportReceipt, reviewHandle: packet.reviewHandle },
+            publicReportDraft: null,
+            publicReportReceipt: {
+              ...reportReceipt,
+              reviewHandle: packet.reviewHandle,
+              expectedRevision,
+            },
             publicNotice: 'Жалоба отправлена. Отзыв остаётся видимым до решения человека.',
           } : {}),
         });

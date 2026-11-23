@@ -395,6 +395,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
     : (count > 0 ? `Отзывы об организации · ${count}` : 'Отзывы об организации');
   const replyAckHandle = s.publicReplyReceipt?.reviewHandle ?? null;
   const reportAckHandle = s.publicReportReceipt?.reviewHandle ?? null;
+  const reportAckRevision = s.publicReportReceipt?.expectedRevision ?? null;
   const threadBusy = !!publicBusy;
   const cancelReport = () => {
     if (reportInFlight) return;
@@ -436,9 +437,12 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
           {summary.items.map(item => {
             const draft = s.publicReplyDrafts[item.reviewHandle] ?? { text: '', consent: false };
             // Per-action receipt gates: reply ACK must not disable report, and vice versa.
+            // Report receipt is revision-bound (server dedupes per published revision).
             // Active/UNKNOWN journal still serializes via threadBusy.
             const replyDisabled = threadBusy || replyAckHandle === item.reviewHandle;
-            const reportDisabled = threadBusy || reportAckHandle === item.reviewHandle;
+            const reportDisabled = threadBusy
+              || (reportAckHandle === item.reviewHandle
+                && reportAckRevision === item.publishedRevision);
             const itemReportKey = `${item.reviewHandle}:${item.publishedRevision}`;
             const showReport = !!report
               && report.reviewHandle === item.reviewHandle
@@ -543,7 +547,9 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                 />
                 <OutlineButton
                   title="Отмена"
-                  disabled={!!reportInFlight || reportAckHandle === report!.reviewHandle}
+                  disabled={!!reportInFlight
+                    || (reportAckHandle === report!.reviewHandle
+                      && reportAckRevision === report!.publishedRevision)}
                   onPress={cancelReport}
                 />
               </View> : null}

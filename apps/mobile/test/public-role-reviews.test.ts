@@ -18,6 +18,7 @@ import {
   isPublicRolePacketKind,
   mayPaintOwnPublicReceipt,
   mayPaintPublicReplyReceipt,
+  mayPaintPublicReportReceipt,
   mayWithdrawOwnPublic,
   mergeActorAwareReaderItem,
   mergeOwnPublicReviewItem,
@@ -985,7 +986,7 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(coordinator, /submitPublicReport/);
   assert.match(coordinator, /public-role-reply/);
   assert.match(coordinator, /public-role-report/);
-  assert.match(coordinator, /mergeActorAwareReaderItem|mayPaintPublicReplyReceipt/);
+  assert.match(coordinator, /mergeActorAwareReaderItem|mayPaintPublicReplyReceipt|mayPaintPublicReportReceipt/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /publicRoleEligibility/);
@@ -1705,6 +1706,9 @@ test('#522 address1: subjectOwnReplyLabel is Russian human; raw status never pri
     ),
     false,
   );
+  assert.equal(mayPaintPublicReportReceipt({ publishedRevision: 2 }, 2), true);
+  assert.equal(mayPaintPublicReportReceipt({ publishedRevision: 3 }, 2), false);
+  assert.equal(mayPaintPublicReportReceipt(undefined, 2), false);
   const older = {
     reviewHandle: 'd'.repeat(32),
     publishedRevision: 2,
@@ -2446,7 +2450,11 @@ test('#522 address6: post-success reply receipt does not disable report; report 
   await owner.submitPublicReport();
   await tick();
   assert.equal(owner.getSnapshot().publicReportReceipt?.reviewHandle, reviewHandle);
+  assert.equal(owner.getSnapshot().publicReportReceipt?.expectedRevision, 2);
   assert.equal(owner.getSnapshot().command, null);
+  // Same-revision receipt still dedupes — cannot open another report for revision 2.
+  owner.beginPublicReport({ ...item, allowedActions: { canReply: false, canReport: true } });
+  assert.equal(owner.getSnapshot().publicReportDraft, null);
 
   pageItems = [{
     ...item,
@@ -2458,12 +2466,18 @@ test('#522 address6: post-success reply receipt does not disable report; report 
   await owner.loadPublicReader();
   await tick();
   assert.equal(owner.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReply, true);
-  // Report receipt still painted for handle — must not block reply draft edits.
-  assert.equal(owner.getSnapshot().publicReportReceipt?.reviewHandle, reviewHandle);
+  // Newer published revision retires report receipt — must not block reply or report N+1.
+  assert.equal(owner.getSnapshot().publicReportReceipt, null);
   owner.patchPublicReplyDraft(reviewHandle, { text: 'Новый ответ после жалобы' });
   assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Новый ответ после жалобы');
   owner.patchPublicReplyDraft(reviewHandle, { consent: true });
   assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
+  owner.beginPublicReport({
+    ...item,
+    publishedRevision: 3,
+    allowedActions: { canReply: true, canReport: true },
+  });
+  assert.equal(owner.getSnapshot().publicReportDraft?.publishedRevision, 3);
 });
 
 test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retires; GET before old ACK does not paint or erase draft', async () => {
@@ -2616,5 +2630,273 @@ test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retir
   assert.equal(ownerB.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
   assert.equal(ownerB.getSnapshot().command, null);
   assert.equal(ownerB.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReply, true);
+  assert.equal(ownerB.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
+});
+
+test('#522 address8: root-read authority loss retires reply consent; retry new revision needs fresh consent', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const mk = (publishedRevision: number) => ({
+    reviewHandle,
+    role: 'organization' as const,
+    text: `Текст v${publishedRevision}`,
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: null as null | { status: string; version: number; pendingRevision: number | null },
+    allowedActions: { canReport: true, canReply: true },
+  });
+  let mode: 'ok1' | 'fail' | 'ok2' | 'mismatch' = 'ok1';
+  let page = {
+    roleHandle: handle,
+    role: 'organization' as const,
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'q'.repeat(32),
+    items: [mk(1)],
+    nextCursor: 'more' as string | null,
+    availability: 'available' as const,
+  };
+  const keys: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async (_a, _h, query) => {
+        if (query.cursor === 'more') {
+          // Append transient failure path is separate — root authority stays.
+          throw new PostgameError('network', 503);
+        }
+        if (mode === 'fail') throw new PostgameError('network', 503);
+        if (mode === 'mismatch') {
+          return { ...page, roleHandle: 'f'.repeat(32), role: 'training' as const };
+        }
+        return page;
+      },
+      publicConsentPreview: async () => ({ consentProjectionHash: 'a'.repeat(64) }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        if (packet.kind === 'public-role-reply') {
+          return {
+            version: packet.body.expectedVersion + 1,
+            status: 'submitted',
+            receiptToken: 'reply-ok',
+          };
+        }
+        throw new PostgameError('invalid');
+      },
+    }),
+  }, () => `addr8-root-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  owner.patchPublicReplyDraft(reviewHandle, { text: 'Черновик ответа' });
+  owner.patchPublicReplyDraft(reviewHandle, { consent: true });
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик ответа');
+
+  // Append transient failure: prior rows + consent retained; same cursor retry UX.
+  await owner.loadPublicReader({ cursor: 'more', append: true });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'ready');
+  assert.equal(owner.getSnapshot().publicReaderMoreError, true);
+  assert.equal(owner.getSnapshot().publicReader.data?.nextCursor, 'more');
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик ответа');
+
+  // Root network failure: authority lost — consent/hash retired, draft text kept.
+  mode = 'fail';
+  await owner.loadPublicReader();
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'error');
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик ответа');
+  assert.equal(owner.getSnapshot().publicConsentHash, null);
+
+  // Retry with newer published revision — no silent send without fresh consent.
+  mode = 'ok2';
+  page = { ...page, items: [mk(2)], nextCursor: null };
+  await owner.loadPublicReader();
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'ready');
+  assert.equal(owner.getSnapshot().publicReader.data?.items[0]?.publishedRevision, 2);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик ответа');
+  const beforeSend = keys.length;
+  await owner.submitPublicReply(reviewHandle);
+  await tick();
+  assert.equal(keys.length, beforeSend);
+  assert.match(owner.getSnapshot().publicNotice ?? '', /согласи/i);
+
+  // Failed-mutation recovery GET (preserveNotice) after root mismatch also retires consent.
+  owner.patchPublicReplyDraft(reviewHandle, { text: 'После сбоя' });
+  owner.patchPublicReplyDraft(reviewHandle, { consent: true });
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
+  mode = 'mismatch';
+  await owner.loadPublicReader({ preserveNotice: true });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'error');
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'После сбоя');
+  assert.equal(owner.getSnapshot().publicConsentHash, null);
+
+  // Explicit renewed consent on the new revision works after authority restored.
+  mode = 'ok2';
+  await owner.loadPublicReader();
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'ready');
+  assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
+  owner.patchPublicReplyDraft(reviewHandle, { consent: true });
+  await owner.submitPublicReply(reviewHandle);
+  await tick();
+  assert.equal(keys.length, beforeSend + 1);
+  assert.equal(owner.getSnapshot().publicReplyReceipt?.expectedReviewRevision, 2);
+});
+
+test('#522 address8: report receipt revision-bound — ACK then GET N→N+1 retires; GET before old ACK does not paint or erase draft', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const mk = (publishedRevision: number) => ({
+    reviewHandle,
+    role: 'organization' as const,
+    text: publishedRevision === 1 ? 'Текст v1' : 'Текст v2',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: null as null | { status: string; version: number; pendingRevision: number | null },
+    allowedActions: { canReport: true, canReply: true },
+  });
+
+  // --- Ordering A: ACK paints on revision N, then typed GET N+1 retires; N+1 report allowed ---
+  let pageA = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'q'.repeat(32),
+    items: [mk(1)],
+    nextCursor: null as string | null,
+    availability: 'available',
+  };
+  const ownerA = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => pageA,
+      send: async (packet) => {
+        if (packet.kind === 'public-role-report') {
+          assert.equal(packet.body.expectedRevision, 1);
+          return {
+            reportId: '88888888-8888-4888-8888-888888888888',
+            receiptToken: 'rep-n',
+            status: 'submitted',
+          };
+        }
+        throw new PostgameError('invalid');
+      },
+    }),
+  }, () => 'rep-ack-then-get');
+  ownerA.setActor(actor);
+  ownerA.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  ownerA.beginPublicReport(mk(1));
+  ownerA.patchPublicReportDraft({ reasonCode: 'spam', explanation: 'Жалоба на v1' });
+  await ownerA.submitPublicReport();
+  await tick();
+  assert.equal(ownerA.getSnapshot().publicReportReceipt?.reviewHandle, reviewHandle);
+  assert.equal(ownerA.getSnapshot().publicReportReceipt?.expectedRevision, 1);
+  assert.match(ownerA.getSnapshot().publicNotice ?? '', /Жалоба отправлена/);
+  // Same-revision repeated report stays deduped.
+  ownerA.beginPublicReport(mk(1));
+  assert.equal(ownerA.getSnapshot().publicReportDraft, null);
+
+  pageA = { ...pageA, items: [mk(2)] };
+  await ownerA.loadPublicReader({ preserveNotice: true });
+  await tick();
+  assert.equal(ownerA.getSnapshot().publicReportReceipt, null);
+  assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.publishedRevision, 2);
+  assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
+  ownerA.beginPublicReport(mk(2));
+  assert.equal(ownerA.getSnapshot().publicReportDraft?.publishedRevision, 2);
+  ownerA.patchPublicReportDraft({ reasonCode: 'harassment', explanation: 'Жалоба на v2' });
+  assert.equal(ownerA.getSnapshot().publicReportDraft?.explanation, 'Жалоба на v2');
+
+  // --- Ordering B: typed GET N+1 before deferred ACK for N — no paint, draft kept ---
+  let releaseAck: (value: unknown) => void = () => {};
+  const ackGate = new Promise(resolve => { releaseAck = resolve; });
+  let pageB = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'r'.repeat(32),
+    items: [mk(1)],
+    nextCursor: null as string | null,
+    availability: 'available',
+  };
+  const ownerB = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => pageB,
+      send: async () => ackGate,
+    }),
+  }, () => 'rep-get-before-ack');
+  ownerB.setActor(actor);
+  ownerB.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  ownerB.beginPublicReport(mk(1));
+  ownerB.patchPublicReportDraft({ reasonCode: 'spam', explanation: 'Жалоба на v1' });
+  const submit = ownerB.submitPublicReport();
+  for (let i = 0; i < 20 && !ownerB.getSnapshot().command; i++) await tick();
+  const inFlight = ownerB.getSnapshot().command;
+  assert.ok(inFlight);
+  assert.equal(inFlight.packet.kind, 'public-role-report');
+  if (inFlight.packet.kind !== 'public-role-report') throw new Error('expected public-role-report');
+  assert.equal(inFlight.packet.body.expectedRevision, 1);
+
+  pageB = { ...pageB, items: [mk(2)] };
+  await ownerB.loadPublicReader();
+  await tick();
+  // Open editor for N retired by revision move; start fresh draft for N+1.
+  assert.equal(ownerB.getSnapshot().publicReportDraft, null);
+  ownerB.beginPublicReport(mk(2));
+  ownerB.patchPublicReportDraft({ reasonCode: 'other', explanation: 'Черновик на v2' });
+  assert.equal(ownerB.getSnapshot().publicReportDraft?.publishedRevision, 2);
+  assert.equal(ownerB.getSnapshot().publicReportDraft?.explanation, 'Черновик на v2');
+
+  releaseAck({
+    reportId: '99999999-9999-4999-9999-999999999999',
+    receiptToken: 'late-rep',
+    status: 'submitted',
+  });
+  await submit;
+  await tick();
+  // Stale acceptance must not paint; new-revision report draft must survive.
+  assert.equal(ownerB.getSnapshot().publicReportReceipt, null);
+  assert.notEqual(ownerB.getSnapshot().publicNotice, 'Жалоба отправлена. Отзыв остаётся видимым до решения человека.');
+  assert.equal(ownerB.getSnapshot().publicReportDraft?.publishedRevision, 2);
+  assert.equal(ownerB.getSnapshot().publicReportDraft?.explanation, 'Черновик на v2');
+  assert.equal(ownerB.getSnapshot().command, null);
   assert.equal(ownerB.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
 });

@@ -770,6 +770,17 @@ export function mayPaintPublicReplyReceipt(
   return true;
 }
 
+/**
+ * Late report ACK may settle the journal but must not paint over a different published
+ * review revision than the original packet expectedRevision (server dedupes per revision).
+ */
+export function mayPaintPublicReportReceipt(
+  typed: { publishedRevision: number } | undefined,
+  expectedRevision: number,
+): boolean {
+  return !!typed && typed.publishedRevision === expectedRevision;
+}
+
 /** Stable guest return uses existing game path only — role/game target lives on PostgameCoordinator. */
 export function publicAuthorReturnPath(gameId: string): string | null {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(gameId)) return null;
