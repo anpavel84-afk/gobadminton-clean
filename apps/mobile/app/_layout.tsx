@@ -40,8 +40,7 @@ export default function RootLayout() {
   }, [attempt]);
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
-      <AuthProvider>
-        <RadarProvider><VenueCommunityProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
+      <AuthProvider><RadarProvider><VenueCommunityProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
           <Stack.Screen name="games/create/venue/[venueId]" options={{
             presentation: 'formSheet',
             headerShown: false,
@@ -50,9 +49,7 @@ export default function RootLayout() {
             sheetGrabberVisible: true,
             sheetExpandsWhenScrolledToEdge: false,
           }} />
-        </Stack></MainNavigation></MessagesOwner></VenueCommunityProvider></RadarProvider>
-        <PublicRoleReviewHost />
-      </AuthProvider>
+        </Stack><PublicRoleReviewHost /></MainNavigation></MessagesOwner></VenueCommunityProvider></RadarProvider></AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />
       {font === 'error' && <><Label>Не удалось загрузить шрифт приложения.</Label>
