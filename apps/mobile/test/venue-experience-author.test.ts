@@ -253,6 +253,51 @@ test('consent race + business retain + UNKNOWN recovery + 24h expiry blocks late
   void body;
 });
 
+test('venue business notice survives deferred automatic eligibility reread', async () => {
+  let releaseElig!: () => void;
+  const eligGate = new Promise<void>(r => { releaseElig = r; });
+  let eligCalls = 0;
+  const keys: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        eligCalls += 1;
+        // Open + submit prepare succeed immediately; post-business automatic reread waits.
+        if (eligCalls >= 3) await eligGate;
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        throw new PostgameError('business', 422, 'VENUE_CONSENT_MISMATCH');
+      },
+    }),
+  }, () => `preserve-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ audience: 'public_venue', text: 'Сохранённый публичный текст', topics: ['lighting'] });
+  await owner.ensureVenueConsentPreview();
+  assert.equal(owner.getSnapshot().venueDraft?.consent, true);
+
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+  assert.match(owner.getSnapshot().venueNotice ?? '', /сохранён|недоступна/i);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Сохранённый публичный текст');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  const noticeDuringReread = owner.getSnapshot().venueNotice;
+
+  releaseElig();
+  await tick();
+  assert.equal(owner.getSnapshot().venueNotice, noticeDuringReread);
+  assert.match(owner.getSnapshot().venueNotice ?? '', /сохранён|недоступна/i);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Сохранённый публичный текст');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'ready');
+  assert.equal(keys.length, 1);
+});
+
 test('buildVenueExperienceCreateBody fences public hash and private no-hash', () => {
   const basis = parseOwnVenueEligibility(eligibilityBody()).bases[0]!;
   const privateBody = buildVenueExperienceCreateBody({

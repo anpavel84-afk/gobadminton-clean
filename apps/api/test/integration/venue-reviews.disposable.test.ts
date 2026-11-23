@@ -9,15 +9,17 @@ import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AdminModule } from "../../src/admin/admin.module";
 import { ADMIN_COOKIE, type AdminRole } from "../../src/admin/rbac";
 import { SESSION_COOKIE } from "../../src/auth/constants";
+import { ConsumerAuthService } from "../../src/auth/consumer-auth.service";
 import { hashSecret, sealSecret } from "../../src/auth/crypto";
 import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
+import { ContentModerationService } from "../../src/moderation/moderation.service";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
 import { projectionHash } from "../../src/venues/venue-reviews.policy";
 import { VenuesModule } from "../../src/venues/venues.module";
@@ -1251,6 +1253,23 @@ run("#394 venue experience — disposable", () => {
         payload: replayBody,
       });
       expect(firstReplay.statusCode, firstReplay.body).toBe(200);
+      const replaySlotId = firstReplay.json().id as string;
+      const replayDbCounts = async () => {
+        const revisions = (
+          await pool.query<{ n: number }>(
+            `SELECT COUNT(*)::int AS n FROM venue_review_revisions WHERE slot_id = $1`,
+            [replaySlotId],
+          )
+        ).rows[0]!.n;
+        const intakes = (
+          await pool.query<{ n: number }>(
+            `SELECT COUNT(*)::int AS n FROM venue_review_pending_intakes WHERE slot_id = $1`,
+            [replaySlotId],
+          )
+        ).rows[0]!.n;
+        return { revisions, intakes };
+      };
+      const countsBeforeReplay = await replayDbCounts();
       const secondReplay = await nativeApp.inject({
         method: "POST",
         url: "/v1/me/venue-reviews",
@@ -1259,6 +1278,7 @@ run("#394 venue experience — disposable", () => {
       });
       expect(secondReplay.statusCode, secondReplay.body).toBe(200);
       expect(secondReplay.json()).toEqual(firstReplay.json());
+      expect(await replayDbCounts()).toEqual(countsBeforeReplay);
 
       // Same key / different body → mismatch.
       const mismatch = await nativeApp.inject({
@@ -1267,12 +1287,10 @@ run("#394 venue experience — disposable", () => {
         headers: { ...bearer(replayKey), "content-type": "application/json" },
         payload: { ...replayBody, text: "Другое тело при том же ключе." },
       });
-      expect([409, 400]).toContain(mismatch.statusCode);
-      expect(["IDEMPOTENCY_KEY_REUSED", "KEY_REUSED", "IDEMPOTENCY_KEY_INVALID"]).toContain(
-        mismatch.json().code,
-      );
+      expect(mismatch.statusCode).toBe(409);
+      expect(mismatch.json().code).toBe("IDEMPOTENCY_KEY_REUSED");
 
-      // Ineligible native actor denied before moderation.
+      // Private ineligible (self_draft) remains; public_venue proves authz-before-moderation.
       const outsiderNative = await actor(`native-venue-out-${randomUUID()}`);
       const outsiderIssued = await native.transaction(async (client) => {
         await fence.assertActiveConsumerInTransaction(client, {
@@ -1298,15 +1316,54 @@ run("#394 venue experience — disposable", () => {
           topics: ["surface"],
         },
       });
-      expect([403, 404, 422]).toContain(outsiderDenied.statusCode);
+      expect(outsiderDenied.statusCode).toBe(422);
+      expect(outsiderDenied.json().code).toBe("VENUE_EXPERIENCE_DENIED");
 
-      // Cookie-only siblings stay cookie-only on the native harness.
+      const ineligiblePublicText =
+        "Публичный опыт чужого участника — допуск до модерации.";
+      const ineligibleTopics = ["surface"] as const;
+      const ineligibleHash = projectionHash({
+        canonicalVenueId: seeded.venueId,
+        audience: "public_venue",
+        text: ineligiblePublicText,
+        topics: [...ineligibleTopics],
+      });
+      const moderation = refNative.get(ContentModerationService);
+      const assessSpy = vi.spyOn(moderation, "assessReviewTexts");
+      try {
+        const outsiderPublicDenied = await nativeApp.inject({
+          method: "POST",
+          url: "/v1/me/venue-reviews",
+          headers: {
+            authorization: `Bearer ${outsiderIssued.accessToken}`,
+            "idempotency-key": randomUUID(),
+            "content-type": "application/json",
+          },
+          payload: {
+            venueId: seeded.venueId,
+            gameId: seeded.gameId,
+            audience: "public_venue",
+            expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+            text: ineligiblePublicText,
+            topics: [...ineligibleTopics],
+            consentProjectionHash: ineligibleHash,
+          },
+        });
+        expect(outsiderPublicDenied.statusCode).toBe(422);
+        expect(outsiderPublicDenied.json().code).toBe("VENUE_EXPERIENCE_DENIED");
+        expect(assessSpy).toHaveBeenCalledTimes(0);
+      } finally {
+        assessSpy.mockRestore();
+      }
+
+      // Cookie-only siblings: listMine/getMine → BEARER_NOT_ALLOWED; mutation → CREDENTIALS_CONFLICT.
       const mine = await nativeApp.inject({
         method: "GET",
         url: "/v1/me/venue-reviews",
         headers: bearer(),
       });
       expect(mine.statusCode).toBe(401);
+      expect(mine.json().code).toBe("BEARER_NOT_ALLOWED");
 
       const detail = await nativeApp.inject({
         method: "GET",
@@ -1314,6 +1371,7 @@ run("#394 venue experience — disposable", () => {
         headers: bearer(),
       });
       expect(detail.statusCode).toBe(401);
+      expect(detail.json().code).toBe("BEARER_NOT_ALLOWED");
 
       const ownCommand = await nativeApp.inject({
         method: "POST",
@@ -1321,7 +1379,8 @@ run("#394 venue experience — disposable", () => {
         headers: { ...bearer(randomUUID()), "content-type": "application/json" },
         payload: { action: "withdraw", expectedVersion: 1 },
       });
-      expect(ownCommand.statusCode).toBe(401);
+      expect(ownCommand.statusCode).toBe(403);
+      expect(ownCommand.json().code).toBe("CREDENTIALS_CONFLICT");
 
       const report = await nativeApp.inject({
         method: "POST",
@@ -1329,7 +1388,8 @@ run("#394 venue experience — disposable", () => {
         headers: { ...bearer(randomUUID()), "content-type": "application/json" },
         payload: { reasonCode: "other", detail: "Synthetic native report reject" },
       });
-      expect([401, 404]).toContain(report.statusCode);
+      expect(report.statusCode).toBe(403);
+      expect(report.json().code).toBe("CREDENTIALS_CONFLICT");
 
       // Public GET stays credential-free; no private provenance leakage.
       const publicList = await nativeApp.inject({
@@ -1348,12 +1408,13 @@ run("#394 venue experience — disposable", () => {
       });
       expect(guest.statusCode).toBe(401);
 
-      const mixed = await nativeApp.inject({
+      const mixedCookieBearer = await nativeApp.inject({
         method: "GET",
         url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
         headers: { ...bearer(), cookie: author.cookie },
       });
-      expect([400, 401]).toContain(mixed.statusCode);
+      expect(mixedCookieBearer.statusCode).toBe(403);
+      expect(mixedCookieBearer.json().code).toBe("CREDENTIALS_CONFLICT");
 
       const malformed = await nativeApp.inject({
         method: "GET",
@@ -1361,8 +1422,34 @@ run("#394 venue experience — disposable", () => {
         headers: { authorization: "Bearer not-a-token" },
       });
       expect(malformed.statusCode).toBe(401);
+      expect(malformed.json().code).toBe("INVALID_AUTHORIZATION");
 
-      const duplicateBearer = await nativeApp.inject({
+      // Valid-format unknown opaque (43) — distinct from malformed.
+      const unknownOpaque = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+        headers: { authorization: `Bearer ${"x".repeat(43)}` },
+      });
+      expect(unknownOpaque.statusCode).toBe(401);
+
+      // Dedicated issued credential → native.logout → lookup/endpoint reject.
+      const revokedIssued = await native.transaction(async (client) => {
+        await fence.assertActiveConsumerInTransaction(client, {
+          actorId: author.userId,
+          sessionId: author.sessionId,
+        });
+        return native.issue(client, author.userId, nativeClientId);
+      });
+      await native.logout({ accessToken: revokedIssued.accessToken, clientId: nativeClientId });
+      const revoked = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+        headers: { authorization: `Bearer ${revokedIssued.accessToken}` },
+      });
+      expect(revoked.statusCode).toBe(401);
+
+      // Mixed cookie+bearer is not raw-duplicate Authorization coverage.
+      const mixedCookieBearerMutation = await nativeApp.inject({
         method: "POST",
         url: "/v1/me/venue-reviews/consent-preview",
         headers: {
@@ -1372,9 +1459,51 @@ run("#394 venue experience — disposable", () => {
         },
         payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
       });
-      expect([400, 401, 403]).toContain(duplicateBearer.statusCode);
+      expect(mixedCookieBearerMutation.statusCode).toBe(403);
+      expect(mixedCookieBearerMutation.json().code).toBe("CREDENTIALS_CONFLICT");
+
+      // True raw duplicate Authorization: DI ConsumerAuthService + real issued token + rawHeaders×2.
+      // Fastify inject object/array headers normalize to one Authorization — not raw-duplicate proof.
+      const consumerAuth = refNative.get(ConsumerAuthService);
+      const dupRaw = {
+        headers: { authorization: `Bearer ${issued.accessToken}` },
+        cookies: {},
+        raw: {
+          rawHeaders: [
+            "Authorization",
+            `Bearer ${issued.accessToken}`,
+            "Authorization",
+            `Bearer ${issued.accessToken}`,
+          ],
+        },
+      };
+      await expect(consumerAuth.requirePrincipal(dupRaw as never)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: "INVALID_AUTHORIZATION", status: 401 }),
+      });
+      const singleRaw = {
+        headers: { authorization: `Bearer ${issued.accessToken}` },
+        cookies: {},
+        raw: { rawHeaders: ["Authorization", `Bearer ${issued.accessToken}`] },
+      };
+      const principal = await consumerAuth.requirePrincipal(singleRaw as never);
+      expect(principal.userId).toBe(author.userId);
+      expect(principal.transport).toBe("bearer");
 
       // Cookie Origin/CSRF fences on original HTTP app (SessionService harness unchanged).
+      const cookiePreviewPayload = {
+        venueId: seeded.venueId,
+        text: publicText,
+        topics: [...topics],
+      };
+      const cookieCreatePayload = {
+        venueId: seeded.venueId,
+        gameId: seeded.gameId,
+        audience: "self_draft" as const,
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: "Cookie create path — Origin/CSRF exact.",
+        topics: ["amenities"],
+      };
+
       const cookieNoOrigin = await app.inject({
         method: "POST",
         url: "/v1/me/venue-reviews/consent-preview",
@@ -1383,9 +1512,10 @@ run("#394 venue experience — disposable", () => {
           "x-csrf-token": author.csrfToken,
           "content-type": "application/json",
         },
-        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+        payload: cookiePreviewPayload,
       });
-      expect(cookieNoOrigin.statusCode).toBeGreaterThanOrEqual(400);
+      expect(cookieNoOrigin.statusCode).toBe(403);
+      expect(cookieNoOrigin.json().code).toBe("ORIGIN_REJECTED");
 
       const cookieBadOrigin = await app.inject({
         method: "POST",
@@ -1396,9 +1526,10 @@ run("#394 venue experience — disposable", () => {
           "x-csrf-token": author.csrfToken,
           "content-type": "application/json",
         },
-        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+        payload: cookiePreviewPayload,
       });
-      expect(cookieBadOrigin.statusCode).toBeGreaterThanOrEqual(400);
+      expect(cookieBadOrigin.statusCode).toBe(403);
+      expect(cookieBadOrigin.json().code).toBe("ORIGIN_REJECTED");
 
       const cookieNoCsrf = await app.inject({
         method: "POST",
@@ -1408,9 +1539,10 @@ run("#394 venue experience — disposable", () => {
           origin,
           "content-type": "application/json",
         },
-        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+        payload: cookiePreviewPayload,
       });
-      expect(cookieNoCsrf.statusCode).toBeGreaterThanOrEqual(400);
+      expect(cookieNoCsrf.statusCode).toBe(403);
+      expect(cookieNoCsrf.json().code).toBe("CSRF_REQUIRED");
 
       const cookieBadCsrf = await app.inject({
         method: "POST",
@@ -1421,9 +1553,10 @@ run("#394 venue experience — disposable", () => {
           "x-csrf-token": "wrong-csrf",
           "content-type": "application/json",
         },
-        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+        payload: cookiePreviewPayload,
       });
-      expect(cookieBadCsrf.statusCode).toBeGreaterThanOrEqual(400);
+      expect(cookieBadCsrf.statusCode).toBe(403);
+      expect(cookieBadCsrf.json().code).toBe("CSRF_INVALID");
 
       const cookieOk = await app.inject({
         method: "POST",
@@ -1434,9 +1567,81 @@ run("#394 venue experience — disposable", () => {
           "x-csrf-token": author.csrfToken,
           "content-type": "application/json",
         },
-        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+        payload: cookiePreviewPayload,
       });
       expect(cookieOk.statusCode, cookieOk.body).toBe(200);
+
+      const cookieCreateNoOrigin = await app.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: {
+          cookie: author.cookie,
+          "x-csrf-token": author.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        payload: cookieCreatePayload,
+      });
+      expect(cookieCreateNoOrigin.statusCode).toBe(403);
+      expect(cookieCreateNoOrigin.json().code).toBe("ORIGIN_REJECTED");
+
+      const cookieCreateBadOrigin = await app.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: {
+          cookie: author.cookie,
+          origin: "https://evil.invalid",
+          "x-csrf-token": author.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        payload: cookieCreatePayload,
+      });
+      expect(cookieCreateBadOrigin.statusCode).toBe(403);
+      expect(cookieCreateBadOrigin.json().code).toBe("ORIGIN_REJECTED");
+
+      const cookieCreateNoCsrf = await app.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: {
+          cookie: author.cookie,
+          origin,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        payload: cookieCreatePayload,
+      });
+      expect(cookieCreateNoCsrf.statusCode).toBe(403);
+      expect(cookieCreateNoCsrf.json().code).toBe("CSRF_REQUIRED");
+
+      const cookieCreateBadCsrf = await app.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: {
+          cookie: author.cookie,
+          origin,
+          "x-csrf-token": "wrong-csrf",
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        payload: cookieCreatePayload,
+      });
+      expect(cookieCreateBadCsrf.statusCode).toBe(403);
+      expect(cookieCreateBadCsrf.json().code).toBe("CSRF_INVALID");
+
+      const cookieCreateOk = await app.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: {
+          cookie: author.cookie,
+          origin,
+          "x-csrf-token": author.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        payload: cookieCreatePayload,
+      });
+      expect(cookieCreateOk.statusCode, cookieCreateOk.body).toBe(200);
 
       // Original cookie HTTP app remains usable for cookie eligibility (environment unchanged).
       const cookieElig = await app.inject({

@@ -2645,12 +2645,18 @@ export class PostgameCoordinator {
       venueNotice: null,
     });
   };
-  loadVenueEligibility = async () => {
+  /**
+   * @param opts.preserveNotice Keep actionable venue business rejection through its automatic
+   * follow-up eligibility GET (mirrors public create eligibility preserveNotice). Manual refresh omits this.
+   */
+  loadVenueEligibility = async (opts?: { preserveNotice?: boolean }) => {
     const actor = this.snapshot.actor;
     const probe = this.snapshot.venueProbe;
     const surface = this.snapshot.venueExperience;
     const target = surface ?? (probe ? { ...probe, gen: 0 } : null);
     if (!actor || !target) return;
+    const preserveNotice = opts?.preserveNotice === true;
+    const priorNotice = this.snapshot.venueNotice;
     const request = ++this.venueEligibilityGen;
     const venueId = target.venueId;
     const gameId = target.gameId;
@@ -2662,15 +2668,23 @@ export class PostgameCoordinator {
       if (this.snapshot.venueProbe?.venueId !== venueId || this.snapshot.venueProbe?.gameId !== gameId) return;
       if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
       const data = parseOwnVenueEligibility(raw);
-      this.show({ venueEligibility: { status: 'ready', data }, venueNotice: null });
+      // Successful automatic reread must not erase conclusive business / newer user notice or touch draft.
+      const liveNotice = this.snapshot.venueNotice;
+      this.show({
+        venueEligibility: { status: 'ready', data },
+        venueNotice: preserveNotice ? (liveNotice ?? priorNotice) : null,
+      });
     } catch (error) {
       if (request !== this.venueEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
       if (this.snapshot.venueProbe?.venueId !== venueId || this.snapshot.venueProbe?.gameId !== gameId) return;
       if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
       const denied = error instanceof PostgameError && (error.kind === 'private' || error.status === 401);
+      const liveNotice = this.snapshot.venueNotice;
       this.show({
         venueEligibility: { status: denied ? 'unavailable' : 'error' },
-        venueNotice: denied ? 'Войдите, чтобы поделиться опытом площадки.' : 'Не удалось проверить допуск по этой игре.',
+        venueNotice: preserveNotice
+          ? (liveNotice ?? priorNotice)
+          : (denied ? 'Войдите, чтобы поделиться опытом площадки.' : 'Не удалось проверить допуск по этой игре.'),
       });
     }
   };
@@ -3511,7 +3525,7 @@ export class PostgameCoordinator {
               : notice,
           } : {}),
         });
-        if (paintUi && venueBusiness) void this.loadVenueEligibility();
+        if (paintUi && venueBusiness) void this.loadVenueEligibility({ preserveNotice: true });
       } else {
         this.show({
           command: definite ? null : {
