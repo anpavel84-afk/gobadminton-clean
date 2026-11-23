@@ -63,6 +63,20 @@ test('parsers whitelist venue eligibility/preview/receipt; reject role-shaped ex
   assert.equal(exactGameMaySubmitBasis(elig, gameId)?.attendanceVersion, 2);
   assert.equal(exactGameMaySubmitBasis(elig, '33333333-3333-4333-8333-333333333333'), null);
   assert.equal(exactGameMaySubmitBasis(parseOwnVenueEligibility(eligibilityBody('hold')), gameId), null);
+  // Missing/invalid firstEligibleAt fail-closed — no invented may_submit rights.
+  const missingAnchor = parseOwnVenueEligibility({
+    bases: [{
+      gameId,
+      gameTitle: 'Practice',
+      admission: 'may_submit',
+      reason: null,
+      outcomeVersion: 1,
+      attendanceVersion: 2,
+      firstEligibleAt: null,
+      helpHint: null,
+    }],
+  });
+  assert.equal(exactGameMaySubmitBasis(missingAnchor, gameId), null);
 
   const preview = parseVenueConsentPreview({
     consentProjectionHash: 'B'.repeat(64),
@@ -91,6 +105,17 @@ test('parsers whitelist venue eligibility/preview/receipt; reject role-shaped ex
   assert.equal(isVenueExperienceCreateReceipt(publicReceipt, 'public_venue'), true);
   assert.equal(isVenueExperiencePacketKind('venue-experience-create'), true);
   assert.equal(isVenueExperiencePacketKind('public-role-create'), false);
+
+  // Blank/whitespace-only public intake token is not a successful public receipt.
+  assert.throws(() => parseVenueReviewMutationReceipt({
+    ...privateReceipt,
+    status: 'submitted_waiting',
+    receiptToken: '   \t  ',
+  }));
+  assert.equal(isVenueExperienceCreateReceipt({
+    ...publicReceipt,
+    receiptToken: '   ',
+  }, 'public_venue'), false);
 });
 
 test('deferred entry/consent: private default, public needs preview; no autosend on open/reauth', async () => {
@@ -246,6 +271,95 @@ test('buildVenueExperienceCreateBody fences public hash and private no-hash', ()
   assert.deepEqual(emptyVenueExperienceDraft().topics, ['surface']);
 });
 
+test('deferred prepare ownership: one fresh POST; stale draft/consent invalidates; close hides UNKNOWN', async () => {
+  const keys: string[] = [];
+  let releaseSecond!: () => void;
+  const secondGate = new Promise<void>(r => { releaseSecond = r; });
+  let eligCalls = 0;
+  const racing = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        eligCalls += 1;
+        if (eligCalls >= 2) await secondGate;
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => `race-${keys.length + 1}`);
+  racing.setActor(actor);
+  racing.openVenueExperience(gameId, venueId);
+  await tick();
+  racing.patchVenueDraft({ text: 'Первый текст покрытия', topics: ['surface'] });
+
+  const first = racing.submitVenueExperience();
+  const second = racing.submitVenueExperience();
+  await tick();
+  releaseSecond();
+  await Promise.all([first, second]);
+  await tick();
+  assert.equal(keys.length, 1);
+  assert.equal(racing.getSnapshot().command?.status, 'unknown');
+  const unknownKey = racing.getSnapshot().command!.packet.key;
+  const age = racing.getSnapshot().command!.firstDispatchedAt;
+
+  // Close hides surface; journal packet/key/age immutable.
+  racing.closeVenueExperience();
+  assert.equal(racing.getSnapshot().venueExperience, null);
+  assert.equal(racing.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(racing.getSnapshot().command?.firstDispatchedAt, age);
+
+  // Same-origin reopen recovers read-only pending; no auto POST / key rotate.
+  const beforeReopen = keys.length;
+  racing.openVenueExperience(gameId, venueId);
+  await tick();
+  assert.equal(!!racing.getSnapshot().venueExperience, true);
+  assert.equal(racing.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(keys.length, beforeReopen);
+
+  // Stale draft during prepare: edit after eligibility await starts → no overwrite POST.
+  const staleKeys: string[] = [];
+  let releaseStale!: () => void;
+  const staleGate = new Promise<void>(r => { releaseStale = r; });
+  let staleElig = 0;
+  const stale = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        staleElig += 1;
+        if (staleElig >= 2) await staleGate;
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        staleKeys.push(packet.body.text);
+        return {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 1,
+          status: 'self_draft',
+          reviewHandle: 'e'.repeat(32),
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `stale-${staleKeys.length + 1}`);
+  stale.setActor(actor);
+  stale.openVenueExperience(gameId, venueId);
+  await tick();
+  stale.patchVenueDraft({ text: 'Старый захваченный текст', topics: ['surface'] });
+  const pending = stale.submitVenueExperience();
+  await tick();
+  stale.patchVenueDraft({ text: 'Новый черновик пользователя', topics: ['lighting'] });
+  releaseStale();
+  await pending;
+  await tick();
+  assert.equal(staleKeys.length, 0);
+  assert.equal(stale.getSnapshot().venueDraft?.text, 'Новый черновик пользователя');
+  assert.equal(stale.getSnapshot().command, null);
+});
+
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const results = read('../app/my-games/[gameId]/results.tsx');
   assert.match(results, /VenueExperienceEntry/);
@@ -266,6 +380,8 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(coordinator, /firstDispatchedAt/);
   assert.match(coordinator, /reconcileVenueExperience/);
   assert.match(coordinator, /postgameIdempotencyReplayBlocked|VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS|venueExperienceIdempotencyExpired/);
+  assert.match(coordinator, /writePrepare|beginWritePrepare/);
+  assert.match(coordinator, /mayDispatchRetention|dispatchPermit/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /venueExperienceEligibility/);
@@ -276,6 +392,11 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /venueExperienceEligibility/);
   assert.match(auth, /venueExperienceConsentPreview/);
+  assert.match(auth, /mayDispatchRetention|dispatchPermit|POSTGAME_RETENTION_EXPIRED/);
+
+  const composerUi = read('../src/components/venue-experience-composer.tsx');
+  assert.match(composerUi, /Более ранняя опубликованная версия может оставаться видимой|Ранее опубликованная версия может оставаться видимой/);
+  assert.doesNotMatch(composerUi, /Публичный отзыв не виден/);
 
   const controller = read('../../api/src/venues/venue-reviews.controller.ts');
   assert.match(controller, /eligibility[\s\S]*requirePrincipal\(request\)/);

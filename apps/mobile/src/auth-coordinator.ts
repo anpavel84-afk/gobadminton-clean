@@ -1,5 +1,6 @@
 import type { Packet as CommunityPacket, Query as CommunityQuery } from './venue-community.ts';
 import { PostgameCoordinator } from './postgame-coordinator.ts';
+import { PostgameError } from './postgame.ts';
 import type { RadarCommand, RadarRead } from './radar.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
 import { SafetyCoordinator } from './safety-coordinator.ts';
@@ -86,7 +87,22 @@ export class AuthCoordinator {
         access => deps.api.venueExperienceConsentPreview(access, body),
         actor,
       ),
-      send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
+      send: (packet, authority) => {
+        // Local retention permit before token await; recheck after refresh can cross 24h TTL.
+        const permit = this.postgame.dispatchPermit(packet);
+        return this.participationRead(access => {
+          if (!this.postgame.mayDispatchRetention(packet, permit)) {
+            throw new PostgameError(
+              'network',
+              503,
+              this.postgame.retentionExpiredFor(packet)
+                ? 'POSTGAME_RETENTION_EXPIRED'
+                : 'POSTGAME_DISPATCH_STALE',
+            );
+          }
+          return deps.api.postgameMutation(access, packet);
+        }, authority);
+      },
     },deps.random);
     this.contact = new ContactCoordinator({
       preview: context => this.participationRead(access => { if (!context.valid()) throw new MessagesError('private'); return deps.api.radarRead(access, { kind: 'preview', resultRef: context.resultRef, target: context.target }, deps.random()); }, context.actor),

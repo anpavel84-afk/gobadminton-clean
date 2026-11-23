@@ -300,6 +300,61 @@ test('public withdraw UNKNOWN: TTL-1 original packet; after TTL no POST; no key 
   }
 });
 
+test('auth-adapter local retention: deferred token after TTL keeps UNKNOWN + expired notice; no wire metadata', async () => {
+  const clock = controllableClock();
+  const realNow = Date.now;
+  Date.now = clock.now;
+  const sent: string[] = [];
+  let releaseToken!: () => void;
+  const tokenGate = new Promise<void>(r => { releaseToken = r; });
+  try {
+    const owner = new PostgameCoordinator({
+      ...idlePort({
+        send: async (packet) => {
+          // Simulate AuthCoordinator: capture permit, await token, recheck age, then API.
+          const permit = owner.dispatchPermit(packet);
+          await tokenGate;
+          if (!owner.mayDispatchRetention(packet, permit)) {
+            throw new PostgameError(
+              'network',
+              503,
+              owner.retentionExpiredFor(packet) ? 'POSTGAME_RETENTION_EXPIRED' : 'POSTGAME_DISPATCH_STALE',
+            );
+          }
+          sent.push(packet.key);
+          throw new PostgameError('network', 503);
+        },
+      }),
+    }, () => `ret-${sent.length + 1}`);
+
+    owner.setActor(actor);
+    await owner.loadResults(gameId);
+    await tick();
+    owner.review({
+      kind: 'ack',
+      gameId,
+      contextId: 'context-a',
+      body: { attendanceVersion: 1 },
+    });
+    const first = owner.confirm();
+    await tick();
+    assert.equal(owner.getSnapshot().command?.status, 'sending');
+    const key = owner.getSnapshot().command!.packet.key;
+    const age = owner.getSnapshot().command!.firstDispatchedAt!;
+    clock.set(age + POSTGAME_IDEMPOTENCY_TTL_MS);
+    releaseToken();
+    await first;
+    await tick();
+    assert.equal(sent.length, 0);
+    assert.equal(owner.getSnapshot().command?.status, 'unknown');
+    assert.equal(owner.getSnapshot().command!.packet.key, key);
+    assert.equal(owner.getSnapshot().command!.firstDispatchedAt, age);
+    assert.equal(owner.getSnapshot().notice, POSTGAME_RETENTION_EXPIRED_NOTICE);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test('venue create UNKNOWN: same journal fence; missing/backwards hold; legitimate fresh create still allowed after settle', async () => {
   const clock = controllableClock();
   const realNow = Date.now;

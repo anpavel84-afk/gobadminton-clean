@@ -194,7 +194,10 @@ export function exactGameMaySubmitBasis(
   if (!eligibility || !UUID.test(gameId)) return null;
   const wanted = gameId.toLowerCase();
   const basis = eligibility.bases.find(b => b.gameId === wanted);
-  return basis?.admission === 'may_submit' ? basis : null;
+  // Missing/invalid firstEligibleAt is unusable — do not invent rights from the clock alone.
+  if (!basis || basis.admission !== 'may_submit') return null;
+  if (!basis.firstEligibleAt || !Number.isFinite(Date.parse(basis.firstEligibleAt))) return null;
+  return basis;
 }
 
 export function parseVenueConsentPreview(value: unknown): VenueConsentPreview {
@@ -215,7 +218,9 @@ export function parseVenueReviewMutationReceipt(value: unknown): VenueReviewMuta
   if (!text(row.reviewHandle) || !HANDLE.test(row.reviewHandle)) throw new PublicApiError('invalid');
   if (!text(row.status) || row.status.length < 1 || row.status.length > 64) throw new PublicApiError('invalid');
   if (typeof row.publicVisible !== 'boolean') throw new PublicApiError('invalid');
-  if (!(row.receiptToken === null || text(row.receiptToken) && row.receiptToken.length >= 1)) {
+  // Blank/whitespace-only intake token is not a successful receipt (public or otherwise).
+  if (!(row.receiptToken === null
+    || text(row.receiptToken) && row.receiptToken.trim().length >= 1)) {
     throw new PublicApiError('invalid');
   }
   if (!(row.notBefore === null || date(row.notBefore))) throw new PublicApiError('invalid');
@@ -240,8 +245,9 @@ export function isVenueExperienceCreateReceipt(
     return (receipt.status === 'self_draft' || receipt.status === 'revision_waiting')
       && receipt.receiptToken === null;
   }
+  const token = typeof receipt.receiptToken === 'string' ? receipt.receiptToken.trim() : '';
   return (receipt.status === 'submitted_waiting' || receipt.status === 'revision_waiting')
-    && typeof receipt.receiptToken === 'string' && receipt.receiptToken.length > 0;
+    && token.length > 0;
 }
 
 export function venueExperienceText(value: string): string {

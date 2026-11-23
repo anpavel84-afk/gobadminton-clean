@@ -52,8 +52,9 @@ export function VenueExperienceComposer({
   if (!open || !draft) return null;
 
   const close = () => {
+    // Close/Back always hide the surface; immutable UNKNOWN/sending stays in the journal.
     owner.closeVenueExperience();
-    if (!command) onClose();
+    onClose();
   };
 
   return (
@@ -178,13 +179,24 @@ export function VenueExperienceComposer({
           {s.venueReceipt ? (
             <View style={styles.card}>
               <Label>
-                {s.venueReceipt.status === 'self_draft' ? 'Сохранено только вам.'
+                {s.venueReceipt.status === 'self_draft'
+                  ? 'Сохранено только вам. Эти изменения видите только вы.'
                   : s.venueReceipt.status === 'submitted_waiting' || s.venueReceipt.status === 'submitted'
-                    ? 'Отправлен; ещё не опубликован.'
-                    : s.venueReceipt.status === 'revision_waiting' ? 'Новая версия ожидает проверки.'
-                      : `Статус отзыва: ${s.venueReceipt.status}`}
+                    ? 'Новая публичная версия отправлена и ожидает проверки. Пока она не опубликована.'
+                    : s.venueReceipt.status === 'revision_waiting'
+                      ? 'Новая версия ожидает проверки. Ранее опубликованная версия может оставаться видимой.'
+                      : 'Отправка принята. Актуальный статус смотрите на сайте.'}
               </Label>
-              <Label>{s.venueReceipt.publicVisible ? 'Публичная версия отзыва доступна.' : 'Публичный отзыв не виден.'}</Label>
+              <Label>
+                {s.venueReceipt.publicVisible
+                  ? 'Публичная версия отзыва доступна на странице площадки.'
+                  : draft.audience === 'public_venue'
+                    || s.venueReceipt.status === 'submitted_waiting'
+                    || s.venueReceipt.status === 'submitted'
+                    || s.venueReceipt.status === 'revision_waiting'
+                    ? 'Эта новая версия ещё не опубликована. Более ранняя опубликованная версия может оставаться видимой.'
+                    : 'Только вам — без публикации на странице площадки.'}
+              </Label>
               {s.venueReceipt.receiptToken
                 ? <Label>Квитанция: {s.venueReceipt.receiptToken}</Label>
                 : null}
@@ -232,6 +244,10 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     && s.venueExperience.gameId === gameId
     && !!venueId
     && s.venueExperience.venueId === venueId;
+  const pendingSame = !!venueId && !!s.command && isVenueExperiencePacketKind(s.command.packet.kind)
+    && s.command.packet.actor.actorId === s.actor?.actorId
+    && s.command.packet.gameId === gameId
+    && s.command.packet.venueId === venueId;
   const probeMatch = !!venueId
     && s.venueProbe?.gameId === gameId
     && s.venueProbe.venueId === venueId;
@@ -282,17 +298,23 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
       <View style={styles.card}>
         <Label style={{ fontWeight: '700' }}>Отзыв о площадке после игры</Label>
         {composerOpen ? <Label accessibilityRole="status">Открыт отзыв по этой игре.</Label>
-          : phase === 'loading' || phase === 'idle' ? <Label>Проверяем допуск по этой игре…</Label>
-            : phase === 'error' || phase === 'unavailable' ? <>
-              <Label>{s.venueNotice ?? 'Не удалось проверить допуск по этой игре.'}</Label>
-              <TextButton title="Обновить допуск" onPress={() => owner.probeVenueEligibility(gameId, venueId)} />
-            </>
-              : basis ? (
-                <TextButton
-                  title="Оставить отзыв о площадке"
-                  onPress={() => owner.openVenueExperience(gameId, venueId)}
-                />
-              ) : <Label>{help ?? 'Сейчас нельзя оставить отзыв по этой игре.'}</Label>}
+          : pendingSame ? (
+            <TextButton
+              title="Проверить отправку"
+              onPress={() => owner.openVenueExperience(gameId, venueId)}
+            />
+          )
+            : phase === 'loading' || phase === 'idle' ? <Label>Проверяем допуск по этой игре…</Label>
+              : phase === 'error' || phase === 'unavailable' ? <>
+                <Label>{s.venueNotice ?? 'Не удалось проверить допуск по этой игре.'}</Label>
+                <TextButton title="Обновить допуск" onPress={() => owner.probeVenueEligibility(gameId, venueId)} />
+              </>
+                : basis ? (
+                  <TextButton
+                    title="Оставить отзыв о площадке"
+                    onPress={() => owner.openVenueExperience(gameId, venueId)}
+                  />
+                ) : <Label>{help ?? 'Сейчас нельзя оставить отзыв по этой игре.'}</Label>}
       </View>
       {composerOpen
         ? <VenueExperienceComposer gameId={gameId} venueId={venueId} onClose={() => owner.closeVenueExperience()} />
