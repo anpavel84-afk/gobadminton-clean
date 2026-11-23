@@ -2428,10 +2428,11 @@ test('#522 address6: post-success reply receipt does not disable report; report 
   assert.equal(owner.getSnapshot().publicReportDraft?.explanation, 'После ответа');
 
   // Clear painted reply receipt via typed refresh that advances aggregate (report draft stays).
+  // Retirement requires strict advance past painted ACK version (here 1), not tip/aggregate equality.
   pageItems = [{
     ...item,
-    replyAggregateVersion: 1,
-    subjectOwnReply: { status: 'submitted', version: 1, pendingRevision: 1 },
+    replyAggregateVersion: 2,
+    subjectOwnReply: { status: 'submitted', version: 2, pendingRevision: 1 },
     allowedActions: { canReply: false, canReport: true },
   }];
   await owner.loadPublicReader();
@@ -2467,6 +2468,7 @@ test('#522 address6: post-success reply receipt does not disable report; report 
 
 test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retires; GET before old ACK does not paint or erase draft', async () => {
   const reviewHandle = 'd'.repeat(32);
+  // Legitimate initial aggregate 0 → ValidACK expectedVersion+1 (=1). N→N+1 keeps aggregate unchanged.
   const mk = (publishedRevision: number, over: Record<string, unknown> = {}) => ({
     reviewHandle,
     role: 'organization' as const,
@@ -2475,7 +2477,7 @@ test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retir
     authorLabel: 'Участник игры' as const,
     experienceState: 'published' as const,
     publishedRevision,
-    replyAggregateVersion: 1,
+    replyAggregateVersion: 0,
     reply: null,
     subjectOwnReply: null as null | { status: string; version: number; pendingRevision: number | null },
     allowedActions: { canReport: true, canReply: true },
@@ -2502,7 +2504,11 @@ test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retir
       publicConsentPreview: async () => ({ consentProjectionHash: 'd'.repeat(64) }),
       send: async (packet) => {
         if (packet.kind === 'public-role-reply') {
-          return { version: 1, status: 'submitted', receiptToken: 'ack-n' };
+          return {
+            version: packet.body.expectedVersion + 1,
+            status: 'submitted',
+            receiptToken: 'ack-n',
+          };
         }
         throw new PostgameError('invalid');
       },
@@ -2533,7 +2539,7 @@ test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retir
   await tick();
   assert.equal(ownerA.getSnapshot().publicReplyReceipt, null);
   assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.publishedRevision, 2);
-  assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.replyAggregateVersion, 1);
+  assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.replyAggregateVersion, 0);
   assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReply, true);
   assert.equal(ownerA.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
   // Fresh consent required for the new published revision — no silent rebase/autosend.
@@ -2595,7 +2601,12 @@ test('#522 address6: reply receipt revision-bound — ACK then GET N→N+1 retir
   assert.equal(ownerB.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик на v2');
   assert.equal(ownerB.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
 
-  releaseAck({ version: 1, status: 'submitted', receiptToken: 'late-n' });
+  // Valid ACK for frozen packet (expectedVersion+1); newer publishedRevision prevents paint.
+  releaseAck({
+    version: inFlight.packet.body.expectedVersion + 1,
+    status: 'submitted',
+    receiptToken: 'late-n',
+  });
   await submit;
   await tick();
   // Stale acceptance must not paint; new-revision draft/consent must survive.
