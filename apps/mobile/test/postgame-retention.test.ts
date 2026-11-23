@@ -10,6 +10,7 @@ import {
   POSTGAME_IDEMPOTENCY_TTL_MS,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS,
+  isVenueExperienceCreatePacket,
   postgameIdempotencyReplayBlocked,
 } from '../src/venue-reviews.ts';
 
@@ -549,12 +550,16 @@ test('#522 address10: deferred token + route retire → 0 POST; auth quarantine 
         }
         authSent.push({ key: packet.key, body: structuredClone(packet.body) });
         if (authMode === 'stale') throw new PostgameError('network', 503);
+        // Original packet is public_venue — production decoder rejects mismatched self_draft/null.
+        if (!isVenueExperienceCreatePacket(packet)) {
+          assert.fail(`unexpected kind ${packet.kind}`);
+        }
         return {
           id: '55555555-5555-4555-8555-555555555555',
           version: 1,
-          status: 'self_draft',
+          status: packet.body.audience === 'self_draft' ? 'self_draft' : 'submitted_waiting',
           reviewHandle: 'd'.repeat(32),
-          receiptToken: null,
+          receiptToken: packet.body.audience === 'self_draft' ? null : 'intake-token',
           publicVisible: false,
           notBefore: null,
         };
@@ -600,12 +605,15 @@ test('#522 address10: deferred token + route retire → 0 POST; auth quarantine 
 
   // (c) Unchanged legitimate fresh private/public dispatch still works with post-token fence.
   const legitKeys: string[] = [];
-  const legit = new PostgameCoordinator({
+  const legit: PostgameCoordinator = new PostgameCoordinator({
     ...idlePort({
-      send: async (packet) => {
+      send: async (packet): Promise<unknown> => {
         const permit = legit.dispatchPermit(packet);
         assert.ok(permit.freshVenue);
         assert.equal(legit.mayDispatchRetention(packet, permit), true);
+        if (!isVenueExperienceCreatePacket(packet)) {
+          assert.fail(`unexpected kind ${packet.kind}`);
+        }
         legitKeys.push(packet.key);
         return {
           id: '55555555-5555-4555-8555-555555555555',
@@ -641,7 +649,8 @@ test('#522 address10: deferred token + route retire → 0 POST; auth quarantine 
   assert.equal(legit.getSnapshot().venueReceipt?.status, 'submitted_waiting');
 });
 
-test('#522 address10: real AuthCoordinator+PostgameCoordinator deferred token authority fence', async () => {
+/** Bounded real AuthCoordinator+createNativeApi harness — same send adapter, no fake Port mirror. */
+function createRealAuthVenueHarness() {
   const now0 = Date.parse('2026-11-14T00:00:00Z');
   let nowMs = now0;
   const token = (s: string) => s.repeat(43);
@@ -752,20 +761,43 @@ test('#522 address10: real AuthCoordinator+PostgameCoordinator deferred token au
     challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'),
     now: () => nowMs,
   });
-  await auth.hydrate();
-  const owner = auth.postgame;
+
+  return {
+    now0,
+    credentials,
+    auth,
+    get nowMs() { return nowMs; },
+    set nowMs(value: number) { nowMs = value; },
+    get eligCalls() { return eligCalls; },
+    set eligCalls(value: number) { eligCalls = value; },
+    get mutationPosts() { return mutationPosts; },
+    set mutationPosts(value: number) { mutationPosts = value; },
+    get refreshHeld() { return refreshHeld; },
+    set refreshHeld(value: boolean) { refreshHeld = value; },
+    get expireAfterSubmitElig() { return expireAfterSubmitElig; },
+    set expireAfterSubmitElig(value: boolean) { expireAfterSubmitElig = value; },
+    resetRefreshGate() {
+      refreshGate = new Promise<unknown>(r => { releaseRefresh = r; });
+    },
+    releaseRefresh: (value: unknown) => releaseRefresh(value),
+  };
+}
+
+test('#522 address10: real AuthCoordinator+PostgameCoordinator deferred token authority fence', async () => {
+  const h = createRealAuthVenueHarness();
+  await h.auth.hydrate();
+  const owner = h.auth.postgame;
 
   // Real AuthCoordinator send adapter: access expires after eligibility; deferred refresh
   // hydrates null→same account while token held → 0 autoPOST; consent false; UNKNOWN
   // packet/key/body/age preserved; close/reopen alone never retries; explicit original
-  // retry after stable auth → 1 POST. Route retire/close covered by simulated adapter above
-  // using the same dispatchPermit/mayDispatchRetention fence.
-  expireAfterSubmitElig = true;
-  refreshHeld = true;
-  refreshGate = new Promise<unknown>(r => { releaseRefresh = r; });
-  nowMs = now0;
-  eligCalls = 0;
-  mutationPosts = 0;
+  // retry after stable auth → 1 POST.
+  h.expireAfterSubmitElig = true;
+  h.refreshHeld = true;
+  h.resetRefreshGate();
+  h.nowMs = h.now0;
+  h.eligCalls = 0;
+  h.mutationPosts = 0;
   owner.openVenueExperience(gameId, venueId);
   await tick();
   owner.patchVenueDraft({ audience: 'public_venue', text: 'Реальный адаптер согласие', topics: ['lighting'] });
@@ -773,46 +805,46 @@ test('#522 address10: real AuthCoordinator+PostgameCoordinator deferred token au
   assert.equal(owner.getSnapshot().venueDraft?.consent, true);
   const quarantinePending = owner.submitVenueExperience();
   await tick();
-  releaseRefresh(credentials);
+  h.releaseRefresh(h.credentials);
   await quarantinePending;
   await tick();
-  assert.equal(mutationPosts, 0, 'same-account restore must not autoPOST fresh venue');
+  assert.equal(h.mutationPosts, 0, 'same-account restore must not autoPOST fresh venue');
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
   const keyB = owner.getSnapshot().command!.packet.key;
   const bodyB = structuredClone(owner.getSnapshot().command!.packet.body);
   const ageB = owner.getSnapshot().command!.firstDispatchedAt!;
   assert.equal(owner.getSnapshot().venueDraft?.consent, false);
 
-  const beforeClose = mutationPosts;
+  const beforeClose = h.mutationPosts;
   owner.closeVenueExperience();
   owner.openVenueExperience(gameId, venueId);
   await tick();
-  assert.equal(mutationPosts, beforeClose);
+  assert.equal(h.mutationPosts, beforeClose);
   assert.equal(owner.getSnapshot().command!.packet.key, keyB);
   assert.deepEqual(owner.getSnapshot().command!.packet.body, bodyB);
   assert.equal(owner.getSnapshot().command!.firstDispatchedAt, ageB);
 
-  expireAfterSubmitElig = false;
-  refreshHeld = false;
-  nowMs = now0 + 570_000 + 1;
+  h.expireAfterSubmitElig = false;
+  h.refreshHeld = false;
+  h.nowMs = h.now0 + 570_000 + 1;
   await owner.reconcileVenueExperience();
   await tick();
-  assert.equal(mutationPosts, 1);
+  assert.equal(h.mutationPosts, 1);
   assert.equal(owner.getSnapshot().command, null);
 
   // Legitimate fresh private/public dispatch through real adapter still posts.
-  expireAfterSubmitElig = false;
-  refreshHeld = false;
-  nowMs = now0 + 570_000 + 1;
-  eligCalls = 0;
-  mutationPosts = 0;
+  h.expireAfterSubmitElig = false;
+  h.refreshHeld = false;
+  h.nowMs = h.now0 + 570_000 + 1;
+  h.eligCalls = 0;
+  h.mutationPosts = 0;
   owner.closeVenueExperience();
   owner.openVenueExperience(gameId, venueId);
   await tick();
   owner.patchVenueDraft({ audience: 'self_draft', text: 'Легитимный через AuthCoordinator', topics: ['amenities'] });
   await owner.submitVenueExperience();
   await tick();
-  assert.equal(mutationPosts, 1);
+  assert.equal(h.mutationPosts, 1);
   assert.equal(owner.getSnapshot().command, null);
   assert.equal(owner.getSnapshot().venueReceipt?.status, 'self_draft');
 
@@ -823,7 +855,145 @@ test('#522 address10: real AuthCoordinator+PostgameCoordinator deferred token au
   await owner.ensureVenueConsentPreview();
   await owner.submitVenueExperience();
   await tick();
-  assert.equal(mutationPosts, 2);
+  assert.equal(h.mutationPosts, 2);
   assert.equal(owner.getSnapshot().command, null);
   assert.equal(owner.getSnapshot().venueReceipt?.status, 'submitted_waiting');
+});
+
+test('#522 address11: real AuthCoordinator deferred token close/retire/newread → 0 POST; explicit retry', async () => {
+  // Stable valid access (no refresh): show('sending') schedules queueMicrotask before
+  // participationRead's awaited token() resumes — real send adapter unchanged.
+  const h = createRealAuthVenueHarness();
+  await h.auth.hydrate();
+  const owner = h.auth.postgame;
+  h.expireAfterSubmitElig = false;
+  h.refreshHeld = false;
+  h.nowMs = h.now0;
+
+  // (a) close while token await pending → 0 mutation POST; UNKNOWN key/body/age; explicit retry → 1 POST.
+  {
+    h.eligCalls = 0;
+    h.mutationPosts = 0;
+    let armed = false;
+    const unsub = owner.subscribe(() => {
+      if (armed) return;
+      if (owner.getSnapshot().command?.status !== 'sending') return;
+      armed = true;
+      queueMicrotask(() => { owner.closeVenueExperience(); });
+    });
+    owner.openVenueExperience(gameId, venueId);
+    await tick();
+    owner.patchVenueDraft({ audience: 'self_draft', text: 'Close при токене Auth', topics: ['surface'] });
+    const pending = owner.submitVenueExperience();
+    await pending;
+    await tick();
+    unsub();
+    assert.equal(h.mutationPosts, 0, 'route close before token resume must not POST');
+    assert.equal(owner.getSnapshot().command?.status, 'unknown');
+    const closePacket = owner.getSnapshot().command!.packet;
+    assert.equal(isVenueExperienceCreatePacket(closePacket), true);
+    if (!isVenueExperienceCreatePacket(closePacket)) assert.fail(`unexpected kind ${closePacket.kind}`);
+    const key = closePacket.key;
+    const body = structuredClone(closePacket.body);
+    const age = owner.getSnapshot().command!.firstDispatchedAt!;
+    assert.equal(typeof age, 'number');
+    assert.equal(body.audience, 'self_draft');
+    assert.equal(owner.getSnapshot().venueExperience, null);
+
+    await owner.reconcileVenueExperience();
+    await tick();
+    assert.equal(h.mutationPosts, 1);
+    assert.equal(owner.getSnapshot().command, null);
+    assert.equal(key.length > 0, true);
+  }
+
+  // (b) retire captured surface gen while token await pending → 0 POST; UNKNOWN preserved; retry → 1 POST.
+  {
+    h.eligCalls = 0;
+    h.mutationPosts = 0;
+    let armed = false;
+    const unsub = owner.subscribe(() => {
+      if (armed) return;
+      const snap = owner.getSnapshot();
+      if (snap.command?.status !== 'sending' || !snap.venueExperience || !snap.actor) return;
+      armed = true;
+      const expected = {
+        gen: snap.venueExperience.gen,
+        gameId: snap.venueExperience.gameId,
+        venueId: snap.venueExperience.venueId,
+        actorId: snap.actor.actorId,
+        sessionId: snap.actor.sessionId,
+      };
+      queueMicrotask(() => { owner.retireVenueExperienceSurface(expected); });
+    });
+    owner.openVenueExperience(gameId, venueId);
+    await tick();
+    owner.patchVenueDraft({ audience: 'self_draft', text: 'Retire при токене Auth', topics: ['lighting'] });
+    const pending = owner.submitVenueExperience();
+    await pending;
+    await tick();
+    unsub();
+    assert.equal(h.mutationPosts, 0, 'route retire before token resume must not POST');
+    assert.equal(owner.getSnapshot().command?.status, 'unknown');
+    const retirePacket = owner.getSnapshot().command!.packet;
+    assert.equal(isVenueExperienceCreatePacket(retirePacket), true);
+    if (!isVenueExperienceCreatePacket(retirePacket)) assert.fail(`unexpected kind ${retirePacket.kind}`);
+    const key = retirePacket.key;
+    const body = structuredClone(retirePacket.body);
+    const age = owner.getSnapshot().command!.firstDispatchedAt!;
+    assert.equal(typeof age, 'number');
+    assert.equal(body.audience, 'self_draft');
+    assert.equal(body.text, 'Retire при токене Auth');
+    assert.equal(owner.getSnapshot().venueExperience, null);
+
+    await owner.reconcileVenueExperience();
+    await tick();
+    assert.equal(h.mutationPosts, 1);
+    assert.equal(owner.getSnapshot().command, null);
+    assert.equal(key.length > 0, true);
+  }
+
+  // (c) new authority read increments gen before token resume → retires fresh dispatch; 0 POST; latest read wins.
+  {
+    h.eligCalls = 0;
+    h.mutationPosts = 0;
+    let armed = false;
+    const unsub = owner.subscribe(() => {
+      if (armed) return;
+      if (owner.getSnapshot().command?.status !== 'sending') return;
+      armed = true;
+      queueMicrotask(() => { void owner.loadVenueEligibility(); });
+    });
+    owner.openVenueExperience(gameId, venueId);
+    await tick();
+    const eligBeforeSubmit = h.eligCalls;
+    owner.patchVenueDraft({ audience: 'self_draft', text: 'Newread при токене Auth', topics: ['amenities'] });
+    const pending = owner.submitVenueExperience();
+    await pending;
+    await tick();
+    unsub();
+    assert.equal(h.mutationPosts, 0, 'competing eligibility read must retire fresh dispatch before POST');
+    assert.equal(owner.getSnapshot().command?.status, 'unknown');
+    const readPacket = owner.getSnapshot().command!.packet;
+    assert.equal(isVenueExperienceCreatePacket(readPacket), true);
+    if (!isVenueExperienceCreatePacket(readPacket)) assert.fail(`unexpected kind ${readPacket.kind}`);
+    const key = readPacket.key;
+    const body = structuredClone(readPacket.body);
+    const age = owner.getSnapshot().command!.firstDispatchedAt!;
+    assert.equal(typeof age, 'number');
+    assert.equal(body.audience, 'self_draft');
+    // Latest eligibility load must have run (open + submit recheck + microtask reread).
+    assert.equal(h.eligCalls > eligBeforeSubmit, true);
+    assert.equal(
+      owner.getSnapshot().venueEligibility.status === 'ready'
+        || owner.getSnapshot().venueEligibility.status === 'loading',
+      true,
+    );
+
+    await owner.reconcileVenueExperience();
+    await tick();
+    assert.equal(h.mutationPosts, 1);
+    assert.equal(owner.getSnapshot().command, null);
+    assert.equal(key.length > 0, true);
+  }
 });
