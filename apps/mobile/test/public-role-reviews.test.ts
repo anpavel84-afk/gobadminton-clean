@@ -2005,3 +2005,207 @@ test('#522 address1: deferred reply ACK v1 after typed v2 does not paint receipt
   assert.equal(owner.getSnapshot().publicReplyReceipt, null);
   assert.notEqual(owner.getSnapshot().publicNotice, 'Ответ принят.');
 });
+
+test('#522 address2: same-row report repress preserves draft; in-flight cancel does not erase packet', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const actorItem = {
+    reviewHandle,
+    role: 'organization' as const,
+    text: 'Текст',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision: 2,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: null,
+    allowedActions: { canReport: true, canReply: false },
+  };
+  let releaseSend: (value: unknown) => void = () => {};
+  const sendGate = new Promise(resolve => { releaseSend = resolve; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => ({
+        roleHandle: handle,
+        role: 'organization',
+        subjectDisplayName: 'Org',
+        heldGamesCount: 1,
+        countScope: 'confirmed_history',
+        historyMayBeIncomplete: true,
+        publishedReviewCount: 1,
+        projectionVersion: 'q'.repeat(32),
+        items: [actorItem],
+        nextCursor: null,
+        availability: 'available',
+      }),
+      send: async (packet) => {
+        assert.equal(packet.kind, 'public-role-report');
+        return sendGate;
+      },
+    }),
+  }, () => 'report-inflight');
+  owner.setActor(actor);
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  owner.beginPublicReport(actorItem);
+  owner.patchPublicReportDraft({ reasonCode: 'spam', explanation: 'Уже набрано' });
+  assert.equal(owner.getSnapshot().publicReportDraft?.reasonCode, 'spam');
+  assert.equal(owner.getSnapshot().publicReportDraft?.explanation, 'Уже набрано');
+  owner.beginPublicReport(actorItem);
+  assert.equal(owner.getSnapshot().publicReportDraft?.reasonCode, 'spam');
+  assert.equal(owner.getSnapshot().publicReportDraft?.explanation, 'Уже набрано');
+
+  const submit = owner.submitPublicReport();
+  for (let i = 0; i < 20 && !owner.getSnapshot().command; i++) await tick();
+  const packet = owner.getSnapshot().command?.packet;
+  assert.equal(packet?.kind, 'public-role-report');
+  if (!packet || packet.kind !== 'public-role-report') throw new Error('expected public-role-report');
+  const originalKey = packet.key;
+  const originalBody = { ...packet.body };
+  owner.cancelPublicReport();
+  assert.equal(owner.getSnapshot().publicReportDraft?.reasonCode, 'spam');
+  assert.equal(owner.getSnapshot().publicReportDraft?.explanation, 'Уже набрано');
+  assert.equal(owner.getSnapshot().command?.packet.key, originalKey);
+  assert.equal(owner.getSnapshot().command?.packet.kind, 'public-role-report');
+  if (owner.getSnapshot().command?.packet.kind === 'public-role-report') {
+    assert.deepEqual(owner.getSnapshot().command.packet.body, originalBody);
+  }
+  releaseSend({
+    reportId: '88888888-8888-4888-8888-888888888888',
+    receiptToken: 'r-keep',
+    status: 'submitted',
+  });
+  await submit;
+  await tick();
+  assert.equal(owner.getSnapshot().publicReportReceipt?.status, 'submitted');
+  assert.equal(owner.getSnapshot().publicReportDraft, null);
+});
+
+test('#522 address2: append failure keeps prior rows and retries same cursor', async () => {
+  const h1 = 'd'.repeat(32);
+  const h2 = 'e'.repeat(32);
+  const mk = (reviewHandle: string) => ({
+    reviewHandle,
+    role: 'organization' as const,
+    text: 'Текст',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision: 1,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: null as null | { status: string; version: number; pendingRevision: number | null },
+    allowedActions: { canReport: true, canReply: true },
+  });
+  const cursors: Array<string | undefined> = [];
+  let appendFails = true;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async (_a, _h, query) => {
+        cursors.push(query.cursor);
+        if (query.cursor === 'page-2') {
+          if (appendFails) throw new PostgameError('network', 503);
+          return {
+            roleHandle: handle,
+            role: 'organization',
+            subjectDisplayName: 'Org',
+            heldGamesCount: 1,
+            countScope: 'confirmed_history',
+            historyMayBeIncomplete: true,
+            publishedReviewCount: 2,
+            projectionVersion: 'q'.repeat(32),
+            items: [mk(h2)],
+            nextCursor: null,
+            availability: 'available',
+          };
+        }
+        return {
+          roleHandle: handle,
+          role: 'organization',
+          subjectDisplayName: 'Org',
+          heldGamesCount: 1,
+          countScope: 'confirmed_history',
+          historyMayBeIncomplete: true,
+          publishedReviewCount: 2,
+          projectionVersion: 'q'.repeat(32),
+          items: [mk(h1)],
+          nextCursor: 'page-2',
+          availability: 'available',
+        };
+      },
+    }),
+  }, () => 'append-retry');
+  owner.setActor(actor);
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'ready');
+  assert.equal(owner.getSnapshot().publicReader.data?.items.length, 1);
+  assert.equal(owner.getSnapshot().publicReader.data?.nextCursor, 'page-2');
+  owner.patchPublicReplyDraft(h1, { text: 'Черновик на первой странице' });
+  await owner.loadPublicReader({ cursor: 'page-2', append: true });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.status, 'ready');
+  assert.equal(owner.getSnapshot().publicReaderMoreError, true);
+  assert.equal(owner.getSnapshot().publicReaderLoadingMore, false);
+  assert.equal(owner.getSnapshot().publicReader.data?.items.length, 1);
+  assert.equal(owner.getSnapshot().publicReader.data?.items[0]?.reviewHandle, h1);
+  assert.equal(owner.getSnapshot().publicReader.data?.nextCursor, 'page-2');
+  assert.equal(owner.getSnapshot().publicReplyDrafts[h1]?.text, 'Черновик на первой странице');
+  assert.equal(owner.getSnapshot().publicSurface?.reader?.origin.kind, 'profile');
+
+  appendFails = false;
+  await owner.loadPublicReader({ cursor: 'page-2', append: true });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReaderMoreError, false);
+  assert.equal(owner.getSnapshot().publicReader.data?.items.length, 2);
+  assert.equal(owner.getSnapshot().publicReader.data?.items[0]?.reviewHandle, h1);
+  assert.equal(owner.getSnapshot().publicReader.data?.items[1]?.reviewHandle, h2);
+  assert.equal(owner.getSnapshot().publicReader.data?.nextCursor, null);
+  assert.equal(owner.getSnapshot().publicReplyDrafts[h1]?.text, 'Черновик на первой странице');
+  assert.deepEqual(cursors.filter(c => c === 'page-2'), ['page-2', 'page-2']);
+
+  // Auth denial retires rows/forms rather than keeping stale append state.
+  const denied = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async (_a, _h, query) => {
+        if (query.cursor) throw new PostgameError('private', 403);
+        return {
+          roleHandle: handle,
+          role: 'organization',
+          subjectDisplayName: 'Org',
+          heldGamesCount: 1,
+          countScope: 'confirmed_history',
+          historyMayBeIncomplete: true,
+          publishedReviewCount: 1,
+          projectionVersion: 'q'.repeat(32),
+          items: [mk(h1)],
+          nextCursor: 'deny-next',
+          availability: 'available',
+        };
+      },
+    }),
+  }, () => 'append-deny');
+  denied.setActor(actor);
+  denied.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  denied.beginPublicReport(mk(h1));
+  denied.patchPublicReplyDraft(h1, { text: 'Скроется при denial' });
+  await denied.loadPublicReader({ cursor: 'deny-next', append: true });
+  await tick();
+  assert.equal(denied.getSnapshot().publicReader.status, 'unavailable');
+  assert.equal(denied.getSnapshot().publicReaderMoreError, false);
+  assert.equal(denied.getSnapshot().publicReportDraft, null);
+  assert.equal(denied.getSnapshot().publicReplyDrafts[h1]?.consent, false);
+});

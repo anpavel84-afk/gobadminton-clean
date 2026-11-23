@@ -97,12 +97,14 @@ export function ScreenFrame({ children, header, purple = false, keyboard = false
     <View style={{ flex: 1, overflow: Platform.OS === 'ios' ? 'visible' : 'hidden' }}>{children}</View>
   </KeyboardAvoidingView>;
 }
-export function Page({ children, purple = false, keyboard = false, header }: PropsWithChildren<{
+export function Page({ children, purple = false, keyboard = false, header, scrollRef }: PropsWithChildren<{
   purple?: boolean; keyboard?: boolean; header?: ReactNode;
+  /** Optional caller ref to the existing page ScrollView — reveal without duplicating scroll/safe-area layout. */
+  scrollRef?: RefObject<ComponentRef<typeof ScrollView> | null>;
 }>) {
   const insets = useSafeAreaInsets();
   return <ScreenFrame purple={purple} keyboard={keyboard} header={header}>
-    <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
+    <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
       contentContainerStyle={{ flexGrow: 1, paddingTop: 16, paddingBottom: insets.bottom + 24, paddingHorizontal: purple ? 20 : 16, gap: 16 }}>
       {children}
     </ScrollView>

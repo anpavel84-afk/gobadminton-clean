@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
-import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
@@ -309,13 +309,56 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
   const auth = useAuth(), owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const heading = useRef<ComponentRef<typeof Text>>(null);
+  const pageScrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  const reportHeadingRef = useRef<ComponentRef<typeof Text>>(null);
+  const reportFormRef = useRef<ComponentRef<typeof View>>(null);
+  const reportTriggerRefs = useRef(new Map<string, FocusTarget | null>());
+  const reportRevealedKey = useRef<string | null>(null);
   const reader = s.publicSurface?.mode === 'reader' ? s.publicSurface.reader : null;
+  const surfaceGen = s.publicSurface?.mode === 'reader' ? s.publicSurface.gen : 0;
   const command = s.command;
   const publicBusy = command && isPublicRolePacketKind(command.packet.kind) ? command : null;
+  const report = s.publicReportDraft;
+  const reportRowKey = report ? `${report.reviewHandle}:${report.publishedRevision}` : null;
+  const reportInFlight = publicBusy?.packet.kind === 'public-role-report';
   useEffect(() => {
     const node = findNodeHandle(heading.current);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   }, [reader?.roleHandle]);
+  useEffect(() => {
+    if (!reportRowKey) reportRevealedKey.current = null;
+  }, [reportRowKey]);
+  const revealSelectedReport = () => {
+    if (!reportRowKey || reportRevealedKey.current === reportRowKey) return;
+    const expectedSurfaceGen = surfaceGen;
+    const expectedKey = reportRowKey;
+    // After layout only — no TextInput focus / keyboard.
+    Keyboard.dismiss();
+    const surface = owner.getSnapshot().publicSurface;
+    if (!surface || surface.mode !== 'reader' || surface.gen !== expectedSurfaceGen) return;
+    const draft = owner.getSnapshot().publicReportDraft;
+    if (!draft || `${draft.reviewHandle}:${draft.publishedRevision}` !== expectedKey) return;
+    reportRevealedKey.current = expectedKey;
+    const node = findNodeHandle(reportHeadingRef.current);
+    if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    const content = pageScrollRef.current?.getInnerViewRef?.();
+    const form = reportFormRef.current;
+    if (content && form) {
+      form.measureLayout(
+        content,
+        (_x, y) => {
+          const live = owner.getSnapshot();
+          if (live.publicSurface?.mode !== 'reader' || live.publicSurface.gen !== expectedSurfaceGen) return;
+          if (!live.publicReportDraft
+            || `${live.publicReportDraft.reviewHandle}:${live.publicReportDraft.publishedRevision}` !== expectedKey) {
+            return;
+          }
+          pageScrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: false });
+        },
+        () => undefined,
+      );
+    }
+  };
   const close = () => {
     onClose();
     restorePublicTriggerFocus();
@@ -326,12 +369,28 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
   const title = reader.role === 'training'
     ? (count > 0 ? `Отзывы о тренировках · ${count}` : 'Отзывы о тренировках')
     : (count > 0 ? `Отзывы об организации · ${count}` : 'Отзывы об организации');
-  const report = s.publicReportDraft;
   const replyAckHandle = s.publicReplyReceipt?.reviewHandle ?? null;
   const reportAckHandle = s.publicReportReceipt?.reviewHandle ?? null;
   const threadBusy = !!publicBusy;
+  const cancelReport = () => {
+    if (reportInFlight) return;
+    const key = reportRowKey;
+    const expectedGen = surfaceGen;
+    owner.cancelPublicReport();
+    if (!key) return;
+    requestAnimationFrame(() => {
+      const surface = owner.getSnapshot().publicSurface;
+      if (!surface || surface.mode !== 'reader' || surface.gen !== expectedGen) return;
+      if (owner.getSnapshot().publicReportDraft) return;
+      const trigger = reportTriggerRefs.current.get(key);
+      if (!trigger) return;
+      trigger.focus();
+      const node = findNodeHandle(trigger);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+  };
   return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
-    <Page keyboard header={<View style={{ gap: 8 }}>
+    <Page keyboard scrollRef={pageScrollRef} header={<View style={{ gap: 8 }}>
       <TextButton title="Закрыть" onPress={close} />
       {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
     </View>}>
@@ -355,6 +414,11 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
             const rowDisabled = threadBusy
               || replyAckHandle === item.reviewHandle
               || reportAckHandle === item.reviewHandle;
+            const itemReportKey = `${item.reviewHandle}:${item.publishedRevision}`;
+            const showReport = !!report
+              && report.reviewHandle === item.reviewHandle
+              && report.publishedRevision === item.publishedRevision;
+            const reportDisabled = threadBusy || reportAckHandle === item.reviewHandle;
             return <View key={item.reviewHandle} style={styles.card} accessibilityLabel={item.authorLabel}>
               <Label style={{ fontWeight: '700' }}>{item.authorLabel}</Label>
               <Label>✓ Участие подтверждено</Label>
@@ -371,12 +435,85 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                 <Label accessibilityLiveRegion="polite">Ответ принят.</Label>
               ) : null}
               {item.allowedActions.canReport ? (
-                <OutlineButton
-                  title="Сообщить о нарушении"
+                <Pressable
+                  ref={node => {
+                    if (node) reportTriggerRefs.current.set(itemReportKey, node);
+                    else reportTriggerRefs.current.delete(itemReportKey);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: rowDisabled }}
                   disabled={rowDisabled}
                   onPress={() => owner.beginPublicReport(item, s.actor, s.publicSurface!.gen)}
-                />
+                  style={({ pressed }) => [{
+                    alignSelf: 'flex-start' as const,
+                    minHeight: 48,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: colors.lineDark,
+                    backgroundColor: pressed ? colors.paper : colors.card,
+                    justifyContent: 'center' as const,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    opacity: rowDisabled ? 0.5 : 1,
+                  }]}
+                >
+                  <Label style={{ fontWeight: '700', textAlign: 'left' }}>Сообщить о нарушении</Label>
+                </Pressable>
               ) : null}
+              {showReport ? <View
+                ref={reportFormRef}
+                onLayout={revealSelectedReport}
+                style={{ gap: 12 }}
+                accessibilityLabel="Жалоба на отзыв"
+              >
+                <Text
+                  ref={reportHeadingRef}
+                  accessibilityRole="header"
+                  accessibilityLiveRegion="polite"
+                  allowFontScaling
+                  style={[styles.text, { fontWeight: '700' }]}
+                >
+                  Жалоба на отзыв
+                </Text>
+                <Label>Причина</Label>
+                {PUBLIC_ROLE_REPORT_REASONS.map(r => (
+                  <Pressable
+                    key={r.code}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: report!.reasonCode === r.code, disabled: reportDisabled }}
+                    disabled={reportDisabled}
+                    onPress={() => owner.patchPublicReportDraft({ reasonCode: r.code as PublicRoleReportReason })}
+                    style={[styles.chip, { opacity: reportDisabled ? 0.45 : 1 }]}
+                  >
+                    <Label>{report!.reasonCode === r.code ? '✓ ' : ''}{r.label}</Label>
+                  </Pressable>
+                ))}
+                <Label>Пояснение</Label>
+                <TextInput
+                  editable={!reportDisabled}
+                  multiline
+                  scrollEnabled
+                  textAlignVertical="top"
+                  accessibilityLabel="Пояснение к жалобе"
+                  value={report!.explanation}
+                  onChangeText={explanation => owner.patchPublicReportDraft({ explanation })}
+                  maxLength={500}
+                  style={[styles.input, { minHeight: 96, maxHeight: 180 }]}
+                />
+                <PrimaryButton
+                  title="Отправить жалобу"
+                  disabled={reportDisabled}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    void owner.submitPublicReport(s.actor, s.publicSurface!.gen);
+                  }}
+                />
+                <OutlineButton
+                  title="Отмена"
+                  disabled={!!reportInFlight || reportAckHandle === report!.reviewHandle}
+                  onPress={cancelReport}
+                />
+              </View> : null}
               {item.allowedActions.canReply ? <>
                 <Label>Ваш ответ</Label>
                 <TextInput
@@ -410,52 +547,23 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
               </> : null}
             </View>;
           })}
-          {summary.nextCursor ? (
+          {s.publicReaderMoreError && summary.nextCursor ? <>
+            <Label accessibilityRole="alert">Не удалось загрузить следующие отзывы. Уже загруженные сохранены.</Label>
             <OutlineButton
-              title="Ещё отзывы"
-              disabled={threadBusy || s.publicReader.status !== 'ready'}
+              title="Повторить"
+              disabled={threadBusy || s.publicReaderLoadingMore}
               onPress={() => void owner.loadPublicReader({ cursor: summary.nextCursor, append: true })}
             />
+          </> : summary.nextCursor ? (
+            s.publicReaderLoadingMore
+              ? <Label>Загружаем ещё отзывы…</Label>
+              : <OutlineButton
+                title="Ещё отзывы"
+                disabled={threadBusy}
+                onPress={() => void owner.loadPublicReader({ cursor: summary.nextCursor, append: true })}
+              />
           ) : null}
         </> : null}
-        {report ? <View style={styles.card} accessibilityLabel="Жалоба на отзыв">
-          <Label style={{ fontWeight: '700' }}>Жалоба на отзыв</Label>
-          <Label>Причина</Label>
-          {PUBLIC_ROLE_REPORT_REASONS.map(r => {
-            const reportDisabled = threadBusy || reportAckHandle === report.reviewHandle;
-            return <Pressable
-              key={r.code}
-              accessibilityRole="button"
-              accessibilityState={{ selected: report.reasonCode === r.code, disabled: reportDisabled }}
-              disabled={reportDisabled}
-              onPress={() => owner.patchPublicReportDraft({ reasonCode: r.code as PublicRoleReportReason })}
-              style={[styles.chip, { opacity: reportDisabled ? 0.45 : 1 }]}
-            >
-              <Label>{report.reasonCode === r.code ? '✓ ' : ''}{r.label}</Label>
-            </Pressable>;
-          })}
-          <Label>Пояснение</Label>
-          <TextInput
-            editable={!(threadBusy || reportAckHandle === report.reviewHandle)}
-            multiline
-            scrollEnabled
-            textAlignVertical="top"
-            accessibilityLabel="Пояснение к жалобе"
-            value={report.explanation}
-            onChangeText={explanation => owner.patchPublicReportDraft({ explanation })}
-            maxLength={500}
-            style={[styles.input, { minHeight: 96, maxHeight: 180 }]}
-          />
-          <PrimaryButton
-            title="Отправить жалобу"
-            disabled={threadBusy || reportAckHandle === report.reviewHandle}
-            onPress={() => {
-              Keyboard.dismiss();
-              void owner.submitPublicReport(s.actor, s.publicSurface!.gen);
-            }}
-          />
-          <TextButton title="Отмена" onPress={() => owner.cancelPublicReport()} />
-        </View> : null}
         {s.publicNotice ? <Label accessibilityRole="alert">{s.publicNotice}</Label> : null}
         {publicBusy?.status === 'sending' ? <Loading title="Отправляем…" /> : null}
       </View>

@@ -150,6 +150,10 @@ type Snapshot = {
   publicEligibility: Source<OwnEligibility>;
   publicOwn: Source<OwnPublicRoleReviewsPage>;
   publicReader: Source<ActorAwareRoleReputationSummary>;
+  /** Append-only next-page in flight — root page stays ready with prior rows. */
+  publicReaderLoadingMore: boolean;
+  /** Transient next-page failure — prior rows stay; retry uses the same nextCursor. */
+  publicReaderMoreError: boolean;
   publicDraft: PublicRoleDraft | null;
   publicReplyDrafts: Record<string, PublicRoleReplyDraft>;
   publicReportDraft: PublicRoleReportDraft | null;
@@ -201,6 +205,7 @@ const empty = (actor: Actor | null): Snapshot => ({
   review:null, command:null, notice:null,
   publicSurface: null, publicEligibility: { status: 'idle' }, publicOwn: { status: 'idle' },
   publicReader: { status: 'idle' },
+  publicReaderLoadingMore: false, publicReaderMoreError: false,
   publicDraft: null, publicReplyDrafts: {}, publicReportDraft: null,
   publicConsentHash: null, publicReceipt: null, publicReplyReceipt: null, publicReportReceipt: null,
   publicNotice: null,
@@ -419,6 +424,8 @@ export class PostgameCoordinator {
       publicReplyReceipt: null,
       publicReportReceipt: null,
       publicReader: { status: 'idle' },
+      publicReaderLoadingMore: false,
+      publicReaderMoreError: false,
       publicNotice: saved.command && isPublicRolePacketKind(saved.command.packet.kind)
         ? unknownNotice
         : saved.publicNotice,
@@ -1238,6 +1245,8 @@ export class PostgameCoordinator {
       },
       publicEligibility: { status: 'idle' },
       publicReader: { status: 'idle' },
+      publicReaderLoadingMore: false,
+      publicReaderMoreError: false,
       publicDraft: draft,
       publicReplyDrafts: {},
       publicReportDraft: null,
@@ -1256,6 +1265,8 @@ export class PostgameCoordinator {
       publicSurface: { mode: 'history', target: null, reader: null, gen: this.publicSurfaceGen },
       publicOwn: { status: 'idle' },
       publicReader: { status: 'idle' },
+      publicReaderLoadingMore: false,
+      publicReaderMoreError: false,
       publicReplyDrafts: {},
       publicReportDraft: null,
       publicReceipt: null,
@@ -1281,6 +1292,8 @@ export class PostgameCoordinator {
         gen: this.publicSurfaceGen,
       },
       publicReader: { status: 'idle' },
+      publicReaderLoadingMore: false,
+      publicReaderMoreError: false,
       publicReplyDrafts: {},
       publicReportDraft: null,
       publicConsentHash: null,
@@ -1300,6 +1313,8 @@ export class PostgameCoordinator {
       publicEligibility: { status: 'idle' },
       publicOwn: { status: 'idle' },
       publicReader: { status: 'idle' },
+      publicReaderLoadingMore: false,
+      publicReaderMoreError: false,
       publicDraft: null,
       publicReplyDrafts: {},
       publicReportDraft: null,
@@ -1334,11 +1349,25 @@ export class PostgameCoordinator {
     const priorNotice = this.snapshot.publicNotice;
     const append = opts?.append === true;
     const cursor = opts?.cursor ?? null;
+    if (append) {
+      const prior = this.snapshot.publicReader;
+      if (prior.status !== 'ready' || !prior.data?.nextCursor) return;
+      if (!cursor || cursor !== prior.data.nextCursor) return;
+      if (this.snapshot.publicReaderLoadingMore) return;
+    }
     const gen = ++this.publicReaderGen;
     const surfaceGen = this.publicSurfaceGen;
-    if (!append) {
+    if (append) {
+      this.show({
+        publicReaderLoadingMore: true,
+        publicReaderMoreError: false,
+        ...(preserveNotice ? {} : { publicNotice: null }),
+      });
+    } else {
       this.show({
         publicReader: { status: 'loading', data: this.snapshot.publicReader.data },
+        publicReaderLoadingMore: false,
+        publicReaderMoreError: false,
         ...(preserveNotice ? {} : { publicNotice: null }),
       });
     }
@@ -1363,7 +1392,9 @@ export class PostgameCoordinator {
       }
       if (parsed.roleHandle !== reader.roleHandle || parsed.role !== reader.role) {
         this.show({
-          publicReader: { status: 'error' },
+          publicReader: append ? this.snapshot.publicReader : { status: 'error' },
+          publicReaderLoadingMore: false,
+          publicReaderMoreError: append,
           publicNotice: preserveNotice && priorNotice ? priorNotice : 'Не удалось загрузить отзывы.',
         });
         return;
@@ -1371,6 +1402,8 @@ export class PostgameCoordinator {
       if (parsed.availability !== 'available') {
         this.show({
           publicReader: { status: 'unavailable', data: parsed },
+          publicReaderLoadingMore: false,
+          publicReaderMoreError: false,
           publicNotice: preserveNotice ? priorNotice : null,
           publicReplyDrafts: {},
           publicReportDraft: null,
@@ -1440,6 +1473,8 @@ export class PostgameCoordinator {
             nextCursor: parsed.nextCursor,
           },
         },
+        publicReaderLoadingMore: false,
+        publicReaderMoreError: false,
         publicNotice: preserveNotice ? priorNotice : null,
         ...(retireConsentAuthority ? {
           publicReplyDrafts: replyDrafts,
@@ -1458,18 +1493,36 @@ export class PostgameCoordinator {
       const denied = error instanceof PostgameError && error.kind === 'private';
       const auth = error instanceof PostgameError && error.status === 401;
       if (denied || auth) this.publicPreviewGen++;
-      this.show({
-        publicReader: denied || auth ? { status: 'unavailable' } : { status: 'error', data: append ? this.snapshot.publicReader.data : undefined },
-        publicNotice: preserveNotice && priorNotice
-          ? priorNotice
-          : (auth ? 'Войдите снова, чтобы ответить или пожаловаться.' : 'Не удалось загрузить отзывы.'),
-        ...(denied || auth ? {
+      if (denied || auth) {
+        this.show({
+          publicReader: { status: 'unavailable' },
+          publicReaderLoadingMore: false,
+          publicReaderMoreError: false,
+          publicNotice: preserveNotice && priorNotice
+            ? priorNotice
+            : (auth ? 'Войдите снова, чтобы ответить или пожаловаться.' : 'Не удалось загрузить отзывы.'),
           publicReplyDrafts: Object.fromEntries(
             Object.entries(this.snapshot.publicReplyDrafts).map(([k, d]) => [k, { text: d.text, consent: false }]),
           ),
           publicReportDraft: null,
           publicConsentHash: null,
-        } : {}),
+        });
+        return;
+      }
+      if (append) {
+        // Transient next-page failure: keep prior rows/ready authority and the failed cursor.
+        this.show({
+          publicReaderLoadingMore: false,
+          publicReaderMoreError: true,
+          publicNotice: preserveNotice && priorNotice ? priorNotice : 'Не удалось загрузить отзывы.',
+        });
+        return;
+      }
+      this.show({
+        publicReader: { status: 'error' },
+        publicReaderLoadingMore: false,
+        publicReaderMoreError: false,
+        publicNotice: preserveNotice && priorNotice ? priorNotice : 'Не удалось загрузить отзывы.',
       });
     }
   };
@@ -1508,6 +1561,14 @@ export class PostgameCoordinator {
     const live = this.currentReaderItem(item.reviewHandle);
     if (!live?.allowedActions.canReport) return;
     if (live.publishedRevision !== item.publishedRevision) return;
+    const open = this.snapshot.publicReportDraft;
+    // Same-row repress keeps reason/explanation the user already edited.
+    if (open
+      && open.reviewHandle === live.reviewHandle
+      && open.publishedRevision === live.publishedRevision) {
+      this.show({ publicNotice: null });
+      return;
+    }
     this.show({
       publicReportDraft: {
         reviewHandle: live.reviewHandle,
@@ -1525,6 +1586,9 @@ export class PostgameCoordinator {
     this.show({ publicReportDraft: { ...draft, ...patch } });
   };
   cancelPublicReport = () => {
+    // Dispatched report may still reach the server — do not present Cancel as erasure.
+    const cmd = this.snapshot.command;
+    if (cmd?.packet.kind === 'public-role-report') return;
     this.show({ publicReportDraft: null });
   };
   submitPublicReply = async (
