@@ -5,9 +5,11 @@ import { URL } from 'node:url';
 import { API_ORIGIN, createPublicApi, PublicApiError } from '../src/public-api.ts';
 import {
   RoleReputationCoordinator,
+  actorAwareRoleReputationPath,
   compactHistoryLabel,
   gameRoleReputationPath,
   heldHistoryLabel,
+  parseActorAwareRoleReputationSummary,
   parseRoleReputationSummary,
   playerRoleReputationPath,
   publishedReviewsLabel,
@@ -51,6 +53,44 @@ function review(handle: string, role: 'organization' | 'training', text = 'Ок'
     allowedActions: { canReport: false, canReply: false },
   };
 }
+
+test('guest parse strips private fields; actor-aware parse requires typed actions', () => {
+  const guest = parseRoleReputationSummary(summary({
+    role: 'organization',
+    roleHandle: orgHandle,
+    publishedReviewCount: 1,
+    items: [review(orgHandle.replace(/a/g, 'c'), 'organization')],
+  }));
+  assert.equal('allowedActions' in guest.items[0]!, false);
+  assert.equal('subjectOwnReply' in guest.items[0]!, false);
+
+  const actorPage = parseActorAwareRoleReputationSummary(summary({
+    role: 'organization',
+    roleHandle: orgHandle,
+    publishedReviewCount: 1,
+    items: [review(orgHandle.replace(/a/g, 'c'), 'organization')],
+  }));
+  assert.equal(actorPage.items[0]?.allowedActions.canReport, false);
+  assert.equal(actorPage.items[0]?.subjectOwnReply, null);
+  assert.throws(() => parseActorAwareRoleReputationSummary(summary({
+    role: 'organization',
+    roleHandle: orgHandle,
+    publishedReviewCount: 1,
+    items: [{
+      reviewHandle: orgHandle.replace(/a/g, 'c'),
+      role: 'organization',
+      text: 'Ок',
+      topics: ['flow'],
+      authorLabel: 'Участник игры',
+      experienceState: 'published',
+      publishedRevision: 1,
+      replyAggregateVersion: 0,
+      reply: null,
+    }],
+  })), PublicApiError);
+  assert.match(actorAwareRoleReputationPath(orgHandle, { gameId }), /gameId=/);
+  assert.doesNotMatch(actorAwareRoleReputationPath(orgHandle, {}), /gameId=/);
+});
 
 test('role-reputation parser keeps availability vs zero distinct and rejects malformed bodies', () => {
   const available = parseRoleReputationSummary(summary({
@@ -671,14 +711,17 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(disclosure, /paddingVertical:\s*8/);
   assert.match(disclosure, /rotate:\s*'180deg'/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
-  // Author entry now wired on game disclosure; recipient reply/report remain unimplemented.
+  // Author entry + actor-aware reader entry on game disclosure; guest list stays private-field-free.
   assert.match(disclosure, /Поделиться опытом/);
   assert.match(disclosure, /openPublicComposer|beginPublicAuthorEntry|rememberPendingPublicAuthor/);
-  assert.doesNotMatch(disclosure, /Сообщить о нарушении|canReply|canReport/);
+  assert.match(disclosure, /Ответить или пожаловаться|beginPublicReaderEntry|openPublicReader/);
+  assert.match(disclosure, /canReply|canReport|Сообщить о нарушении/);
   assert.match(profile, /PlayerRoleReputation/);
   assert.match(profile, /bindPlayer/);
   assert.match(profile, /playerRoleReputation/);
-  assert.doesNotMatch(profile, /gameId|Отзывы и история|Поделиться опытом|canReply|canReport/);
+  assert.match(profile, /publicPlayerId/);
+  assert.doesNotMatch(profile, /Отзывы и история|Поделиться опытом/);
+  assert.match(module, /parseActorAwareRoleReputationSummary|actorAwareRoleReputationPath/);
   assert.match(detail, /PlayerRoleReputation/);
   assert.match(detail, /NativeContactAction[\s\S]*PlayerRoleReputation[\s\S]*NativeSafety/);
   assert.match(api, /gameRoleReputation/);
@@ -699,5 +742,5 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(nav, /flexBasis: 'auto'/);
   assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
   assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 34);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 35);
 });

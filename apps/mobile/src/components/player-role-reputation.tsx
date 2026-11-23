@@ -36,11 +36,13 @@ export function PlayerRoleReputation({ publicPlayerId }: { publicPlayerId: strin
   return <View style={styles.wrap} accessibilityLabel="Репутация ролей">
     <RoleLaneView
       lane={state.organization}
+      publicPlayerId={publicPlayerId}
       onRetry={() => coordinator.retry('organization')}
       onMore={() => coordinator.loadMore('organization')}
     />
     <RoleLaneView
       lane={state.training}
+      publicPlayerId={publicPlayerId}
       onRetry={() => coordinator.retry('training')}
       onMore={() => coordinator.loadMore('training')}
     />

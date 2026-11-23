@@ -1639,11 +1639,11 @@ run("#394 role reputation — disposable", () => {
     expect(cookieNoCsrf.statusCode).toBe(403);
     expect(cookieNoCsrf.json().code).toBe("CSRF_REQUIRED");
 
-    // Recipient reply/report remain cookie-only — native bearer denied.
-    const replyDenied = await app.inject({
+    // Recipient reply/report now NativeBearer-capable — invalid/mixed authority stay fail-closed.
+    const replyMissingKey = await app.inject({
       method: "POST",
       url: `/v1/role-reviews/${"c".repeat(32)}/reply-commands`,
-      headers: { ...(await nativeBearer(org.userId, randomUUID())), "content-type": "application/json" },
+      headers: { ...(await nativeBearer(org.userId)), "content-type": "application/json" },
       payload: {
         action: "submit_revision",
         expectedVersion: 0,
@@ -1652,15 +1652,225 @@ run("#394 role reputation — disposable", () => {
         consentProjectionHash: "0".repeat(64),
       },
     });
-    expect(replyDenied.statusCode).toBe(403);
-    expect(replyDenied.json().code).toBe("CREDENTIALS_CONFLICT");
-    const reportDenied = await app.inject({
+    expect(replyMissingKey.statusCode).toBeGreaterThanOrEqual(400);
+    const replyMixed = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${"c".repeat(32)}/reply-commands`,
+      headers: {
+        ...(await nativeBearer(org.userId, randomUUID())),
+        cookie: org.cookie,
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: 0,
+        expectedReviewRevision: 1,
+        text: "denied",
+        consentProjectionHash: "0".repeat(64),
+      },
+    });
+    expect(replyMixed.statusCode).toBe(403);
+    expect(replyMixed.json().code).toBe("CREDENTIALS_CONFLICT");
+    const reportMixed = await app.inject({
       method: "POST",
       url: `/v1/role-reviews/${"c".repeat(32)}/reports`,
-      headers: { ...(await nativeBearer(author.userId, randomUUID())), "content-type": "application/json" },
-      payload: { reasonCode: "harassment", detail: null },
+      headers: {
+        ...(await nativeBearer(author.userId, randomUUID())),
+        cookie: author.cookie,
+        "content-type": "application/json",
+      },
+      payload: {
+        targetKind: "review",
+        expectedRevision: 1,
+        reasonCode: "harassment",
+      },
     });
-    expect(reportDenied.statusCode).toBe(403);
-    expect(reportDenied.json().code).toBe("CREDENTIALS_CONFLICT");
+    expect(reportMixed.statusCode).toBe(403);
+    expect(reportMixed.json().code).toBe("CREDENTIALS_CONFLICT");
+  });
+
+  it("native bearer subject reply + outsider report on published review (game origin)", async () => {
+    const past = new Date("2026-09-15T18:00:00.000Z");
+    const org = await actor(`native-reply-org-${randomUUID()}`);
+    const participant = await actor(`native-reply-part-${randomUUID()}`);
+    const outsider = await actor(`native-reply-out-${randomUUID()}`);
+    const seeded = await seedHeldGame({
+      organizerId: org.userId,
+      participantId: participant.userId,
+      endsAt: past,
+      outcome: "held",
+    });
+    const partBearer = await nativeBearer(participant.userId);
+    const text = "Организация была ровной\nВсё по времени";
+    const preview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: { ...partBearer, "content-type": "application/json" },
+      payload: {
+        role: "organization",
+        subjectRoleHandle: seeded.roleHandle,
+        text,
+        topics: ["flow"],
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: { ...partBearer, "idempotency-key": randomUUID(), "content-type": "application/json" },
+      payload: {
+        gameId: seeded.gameId,
+        role: "organization",
+        expectedBasisVersions: { proofVersion: 2, outcomeVersion: 1, attendanceVersion: 1 },
+        text,
+        topics: ["flow"],
+        consentProjectionHash: preview.json().consentProjectionHash,
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    const reviewHandle = created.json().reviewHandle as string;
+    const pending = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [created.json().id],
+      )
+    ).rows[0]!;
+    await humanApprovePending(pending.id, pending.version);
+
+    const orgBearer = await nativeBearer(org.userId);
+    const actorPage = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}?gameId=${seeded.gameId}`,
+      headers: orgBearer,
+    });
+    expect(actorPage.statusCode).toBe(200);
+    const item = actorPage.json().items.find((i: { reviewHandle: string }) => i.reviewHandle === reviewHandle);
+    expect(item.allowedActions.canReply).toBe(true);
+    expect(item.allowedActions.canReport).toBe(true);
+    // No reply tip yet — subjectOwnReply stays null until a reply row exists.
+    expect(item.subjectOwnReply).toBeNull();
+
+    const outBearer = await nativeBearer(outsider.userId);
+    const outsiderPage = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}?gameId=${seeded.gameId}`,
+      headers: outBearer,
+    });
+    const outItem = outsiderPage.json().items.find((i: { reviewHandle: string }) => i.reviewHandle === reviewHandle);
+    expect(outItem.allowedActions.canReply).toBe(false);
+    expect(outItem.allowedActions.canReport).toBe(true);
+    expect(outItem.subjectOwnReply).toBeNull();
+
+    const replyText = "Спасибо за отзыв\nУчтём";
+    const replyPreview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: { ...orgBearer, "content-type": "application/json" },
+      payload: { targetKind: "reply", reviewHandle, text: replyText },
+    });
+    expect(replyPreview.statusCode).toBe(200);
+    const replyKey = randomUUID();
+    const reply = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: { ...orgBearer, "idempotency-key": replyKey, "content-type": "application/json" },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: item.replyAggregateVersion,
+        expectedReviewRevision: item.publishedRevision,
+        text: replyText,
+        consentProjectionHash: replyPreview.json().consentProjectionHash,
+      },
+    });
+    expect(reply.statusCode).toBe(200);
+    expect(reply.json()).toEqual({
+      version: item.replyAggregateVersion + 1,
+      status: "submitted",
+      receiptToken: expect.any(String),
+    });
+    expect(reply.json()).not.toHaveProperty("pendingIntakeStatus");
+    expect(reply.json()).not.toHaveProperty("id");
+
+    const replyReplay = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: { ...orgBearer, "idempotency-key": replyKey, "content-type": "application/json" },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: item.replyAggregateVersion,
+        expectedReviewRevision: item.publishedRevision,
+        text: replyText,
+        consentProjectionHash: replyPreview.json().consentProjectionHash,
+      },
+    });
+    expect(replyReplay.statusCode).toBe(200);
+    expect(replyReplay.json().receiptToken).toBe(reply.json().receiptToken);
+
+    const afterReply = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}?gameId=${seeded.gameId}`,
+      headers: orgBearer,
+    });
+    const tip = afterReply.json().items.find((i: { reviewHandle: string }) => i.reviewHandle === reviewHandle);
+    expect(tip.subjectOwnReply?.status).toMatch(/submitted|revision_waiting/);
+    expect(tip.subjectOwnReply?.pendingRevision).toBeTruthy();
+    // Submitted acknowledgement is not published public reply text.
+    expect(tip.reply).toBeNull();
+
+    const staleAgg = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: { ...(await nativeBearer(org.userId, randomUUID())), "content-type": "application/json" },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: item.replyAggregateVersion,
+        expectedReviewRevision: item.publishedRevision,
+        text: replyText,
+        consentProjectionHash: replyPreview.json().consentProjectionHash,
+      },
+    });
+    expect(staleAgg.statusCode).toBe(409);
+
+    const reportKey = randomUUID();
+    const report = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reports?gameId=${seeded.gameId}`,
+      headers: { ...outBearer, "idempotency-key": reportKey, "content-type": "application/json" },
+      payload: {
+        targetKind: "review",
+        expectedRevision: item.publishedRevision,
+        reasonCode: "harassment",
+        explanation: "Оскорбительный тон",
+      },
+    });
+    expect(report.statusCode).toBe(200);
+    expect(report.json()).toEqual({
+      reportId: expect.any(String),
+      receiptToken: expect.any(String),
+      status: "submitted",
+    });
+    const reportDedupe = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reports?gameId=${seeded.gameId}`,
+      headers: { ...outBearer, "idempotency-key": reportKey, "content-type": "application/json" },
+      payload: {
+        targetKind: "review",
+        expectedRevision: item.publishedRevision,
+        reasonCode: "harassment",
+        explanation: "Оскорбительный тон",
+      },
+    });
+    expect(reportDedupe.statusCode).toBe(200);
+    expect(reportDedupe.json().reportId).toBe(report.json().reportId);
+
+    const afterReport = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}?gameId=${seeded.gameId}`,
+      headers: outBearer,
+    });
+    const stillVisible = afterReport.json().items.find((i: { reviewHandle: string }) => i.reviewHandle === reviewHandle);
+    expect(stillVisible.text).toBe(text);
+    expect(stillVisible.allowedActions.canReport).toBe(true);
   });
 });

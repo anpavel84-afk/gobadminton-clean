@@ -23,6 +23,19 @@ export type PublicRoleReviewItem = {
   reply: PublicRoleReply | null;
 };
 
+/** Subject-only tip — status/version/pendingRevision; never pending body text. */
+export type SubjectOwnReplyTip = {
+  status: string;
+  version: number;
+  pendingRevision: number | null;
+};
+
+/** Actor-aware item from signed-in by-handle GET — typed actions required; never from anonymous list. */
+export type ActorAwarePublicRoleReviewItem = PublicRoleReviewItem & {
+  subjectOwnReply: SubjectOwnReplyTip | null;
+  allowedActions: { canReport: boolean; canReply: boolean };
+};
+
 export type RoleReputationSummary = {
   roleHandle: string;
   role: RoleKind;
@@ -35,6 +48,10 @@ export type RoleReputationSummary = {
   items: PublicRoleReviewItem[];
   nextCursor: string | null;
   availability: RoleAvailability;
+};
+
+export type ActorAwareRoleReputationSummary = Omit<RoleReputationSummary, 'items'> & {
+  items: ActorAwarePublicRoleReviewItem[];
 };
 
 export type RoleLaneState = {
@@ -165,6 +182,7 @@ function parseItem(value: unknown, expectedRole: RoleKind): PublicRoleReviewItem
   for (const topic of row.topics) {
     if (!text(topic) || !allowed.has(topic) || !ALL_TOPICS.has(topic)) throw new PublicApiError('invalid');
   }
+  // Guest/public projection stays private-field-free — discard action/tip if present on wire.
   return {
     reviewHandle: roleHandle(row.reviewHandle),
     role,
@@ -178,11 +196,39 @@ function parseItem(value: unknown, expectedRole: RoleKind): PublicRoleReviewItem
   };
 }
 
-/** Closed parser for public role-reputation summaries — never invents zero history from null. */
-export function parseRoleReputationSummary(value: unknown, expected?: {
+function parseSubjectOwnReply(value: unknown): SubjectOwnReplyTip | null {
+  if (value === null) return null;
+  const tip = object(value);
+  if (!text(tip.status) || !tip.status || tip.status.length > 64) throw new PublicApiError('invalid');
+  return {
+    status: tip.status,
+    version: nonNegInt(tip.version),
+    pendingRevision: tip.pendingRevision === null ? null : posInt(tip.pendingRevision),
+  };
+}
+
+function parseActorAwareItem(value: unknown, expectedRole: RoleKind): ActorAwarePublicRoleReviewItem {
+  const base = parseItem(value, expectedRole);
+  const row = object(value);
+  const actions = object(row.allowedActions);
+  if (typeof actions.canReport !== 'boolean' || typeof actions.canReply !== 'boolean') {
+    throw new PublicApiError('invalid');
+  }
+  return {
+    ...base,
+    subjectOwnReply: parseSubjectOwnReply(row.subjectOwnReply),
+    allowedActions: { canReport: actions.canReport, canReply: actions.canReply },
+  };
+}
+
+function parseSummaryShell(value: unknown, expected?: {
   roleHandle?: string;
   role?: RoleKind;
-}): RoleReputationSummary {
+}): {
+  handle: string;
+  role: RoleKind;
+  row: Record<string, unknown>;
+} {
   const row = object(value);
   const handle = roleHandle(row.roleHandle);
   if (expected?.roleHandle && handle !== expected.roleHandle.toLowerCase()) throw new PublicApiError('invalid');
@@ -202,10 +248,19 @@ export function parseRoleReputationSummary(value: unknown, expected?: {
   }
   if (!Array.isArray(row.items)) throw new PublicApiError('invalid');
   if (row.items.length > 50) throw new PublicApiError('invalid');
-  const items = row.availability === 'available'
-    ? row.items.map(item => parseItem(item, role))
-    : [];
   if (row.availability === 'unavailable' && row.items.length > 0) throw new PublicApiError('invalid');
+  return { handle, role, row };
+}
+
+/** Closed parser for public role-reputation summaries — never invents zero history from null. */
+export function parseRoleReputationSummary(value: unknown, expected?: {
+  roleHandle?: string;
+  role?: RoleKind;
+}): RoleReputationSummary {
+  const { handle, role, row } = parseSummaryShell(value, expected);
+  const items = row.availability === 'available'
+    ? (row.items as unknown[]).map(item => parseItem(item, role))
+    : [];
   return {
     roleHandle: handle,
     role,
@@ -214,10 +269,37 @@ export function parseRoleReputationSummary(value: unknown, expected?: {
     countScope: 'confirmed_history',
     historyMayBeIncomplete: true,
     publishedReviewCount: nonNegInt(row.publishedReviewCount),
-    projectionVersion: row.projectionVersion,
+    projectionVersion: row.projectionVersion as string,
     items,
     nextCursor: cursor(row.nextCursor),
-    availability: row.availability,
+    availability: row.availability as RoleAvailability,
+  };
+}
+
+/**
+ * Signed-in by-handle page — requires typed allowedActions + subjectOwnReply on every item.
+ * Never used for anonymous PublicApi lanes; denial must not fall back to guest parse.
+ */
+export function parseActorAwareRoleReputationSummary(value: unknown, expected?: {
+  roleHandle?: string;
+  role?: RoleKind;
+}): ActorAwareRoleReputationSummary {
+  const { handle, role, row } = parseSummaryShell(value, expected);
+  const items = row.availability === 'available'
+    ? (row.items as unknown[]).map(item => parseActorAwareItem(item, role))
+    : [];
+  return {
+    roleHandle: handle,
+    role,
+    subjectDisplayName: row.subjectDisplayName as string | null,
+    heldGamesCount: row.heldGamesCount as number | null,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: nonNegInt(row.publishedReviewCount),
+    projectionVersion: row.projectionVersion as string,
+    items,
+    nextCursor: cursor(row.nextCursor),
+    availability: row.availability as RoleAvailability,
   };
 }
 
@@ -243,6 +325,30 @@ export function roleReputationPath(
   if (query.cursor) params.set('cursor', query.cursor);
   if (query.limit) params.set('limit', String(query.limit));
   return `/role-reputations/${encodeURIComponent(handle)}?${params}`;
+}
+
+/**
+ * Actor-aware by-handle path for signed-in reader sheet.
+ * Game origin requires real gameId; profile origin omits gameId (never invents one).
+ */
+export function actorAwareRoleReputationPath(
+  roleHandleValue: string,
+  query: { gameId?: string; cursor?: string; limit?: number } = {},
+): string {
+  const handle = roleHandle(roleHandleValue);
+  if (query.gameId !== undefined && !isVenueId(query.gameId)) throw new PublicApiError('invalid');
+  if (query.cursor !== undefined && (!query.cursor || query.cursor.length > 4096)) {
+    throw new PublicApiError('invalid');
+  }
+  if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 50)) {
+    throw new PublicApiError('invalid');
+  }
+  const params = new URLSearchParams();
+  if (query.gameId) params.set('gameId', query.gameId);
+  if (query.cursor) params.set('cursor', query.cursor);
+  if (query.limit) params.set('limit', String(query.limit));
+  const qs = params.toString();
+  return `/role-reputations/${encodeURIComponent(handle)}${qs ? `?${qs}` : ''}`;
 }
 
 const PUBLIC_PLAYER_ID = /^[A-Za-z0-9_-]{1,128}$/;

@@ -100,9 +100,22 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Trigger | Explicit public audience + unchecked consent; consent-preview then create; withdraw at current version only |
 | Expected | Exactly one `PublicRoleReviewHost` under RootLayout `AuthProvider` (not per-card / not PostgameSurface); `resumePendingPublicAuthor` consumes pending once for current actor and opens empty composer (no autosend / no inherited consent); server eligibility `may_submit` bases; PENDING receipt ≠ publication; own list ≤50; consent reset on text/topics/audience/game/role/subject/session; multiline LF public text; original-key UNKNOWN replay; private CommandReview never opens for public packets; same `PostgameCoordinator` mutation owner; per-review withdraw version/status fences; late create receipt owned by surface/editor generation; shared focus remember/clear for catalog+MyGames; Russian actionable notices (no raw server CODE) |
 | Unfinished | App-kill / cold interrupted guest pending persistence not implemented — not claimed working |
-| Non-scope | Public recipient reply/report authoring; private→public promotion; score/public skill; new backend design; PROD |
+| Non-scope | Private→public promotion; score/public skill; new backend design; PROD |
 | Evidence | Mobile unit `public-role-reviews.test.ts` (coordinator resume + Root `_layout` source wiring) / my-games / role-reputation author-entry; API disposable native bearer case; source APK counter 34 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 public author source slice + address3 root host; not VERIFIED_SOURCE / not device PASS / not product acceptance |
+
+
+## R-08 · Native PUBLIC role recipient reply/report (#522)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `RoleReviewsDialog` + Astra High #522 parity; `GET /role-reputations/:handle`, `POST .../reply-commands`, `POST .../reports`; Root `PublicRoleReviewHost` + same `PostgameCoordinator` journal |
+| Entry | Game/profile role lane «Ответить или пожаловаться» (guest → sign-in); signed-in actor-aware by-handle sheet; profile binds `publicPlayerId` (no invented gameId) |
+| Trigger | Explicit reply consent + preview/submit; explicit report reason/submit; cancel sends nothing; UNKNOWN same-account reconcile only |
+| Expected | Typed `canReply`/`canReport`/`subjectOwnReply` from current actor page only; reply ACK without private id/pendingIntake; report private ACK; published text stays visible; generation/account/origin fences; guest projection private-field-free |
+| Non-scope | Reply-withdraw UI; report-on-reply UI; cold-start pending; PROD; OTA; C5 |
+| Evidence | Mobile unit `public-role-reviews.test.ts` / `role-reputation.test.ts`; API disposable native bearer reply/report; source APK counter 35 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 public reply/report source slice; not VERIFIED_SOURCE / not device PASS / not product acceptance |
 
 ## S-01 · Swipe bounded next-card media warmup (#522)
 

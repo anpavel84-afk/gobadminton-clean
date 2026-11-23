@@ -8,6 +8,11 @@ import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, hist
 import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
 import { parseConsentPreview, parseOwnEligibility, parseOwnPublicRoleReviewsPage } from './public-role-reviews.ts';
 import type { ConsentPreview } from './public-role-reviews.ts';
+import {
+  actorAwareRoleReputationPath,
+  parseActorAwareRoleReputationSummary,
+} from './role-reputation.ts';
+import type { ActorAwareRoleReputationSummary, RoleKind } from './role-reputation.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
 import { RadarError, RADAR_WIRE, resultProof } from './radar.ts';
@@ -336,9 +341,20 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       );
     },
     publicRoleOwn: async (access: string) => parseOwnPublicRoleReviewsPage(await postgameRequest('/me/role-reviews', access)),
-    publicRoleConsentPreview: async (access: string, body: {
-      role: 'organization' | 'training'; subjectRoleHandle: string; text: string; topics: string[];
-    }): Promise<ConsentPreview> => {
+    /** Actor-aware by-handle GET — signed-in sheet only; never falls back to anonymous PublicApi. */
+    publicRoleByHandle: async (
+      access: string,
+      roleHandle: string,
+      query: { gameId?: string; cursor?: string; limit?: number } = {},
+      expected?: { roleHandle?: string; role?: RoleKind },
+    ): Promise<ActorAwareRoleReputationSummary> => {
+      const path = actorAwareRoleReputationPath(roleHandle, query);
+      return parseActorAwareRoleReputationSummary(await postgameRequest(path, access), expected);
+    },
+    publicRoleConsentPreview: async (access: string, body:
+      | { role: 'organization' | 'training'; subjectRoleHandle: string; text: string; topics: string[] }
+      | { targetKind: 'reply'; reviewHandle: string; text: string }
+    ): Promise<ConsentPreview> => {
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
       try {
         const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/role-reviews/consent-preview`, {

@@ -22203,7 +22203,7 @@
           "Games"
         ],
         "summary": "Public organizer/trainer role reputation summary",
-        "description": "#394. Outsider-readable when surface permits. Opaque roleHandle; re-check visibility. Optional gameId for game-context projection. No private IDs/dates/roster. No-store.",
+        "description": "#394 + #522. Outsider-readable when surface permits. Opaque roleHandle; re-check visibility. Optional gameId for game-context projection. No private IDs/dates/roster. No-store. Anonymous, cookie, or NativeBearer: explicit Authorization uses requirePrincipal (invalid/mixed never fall back to anonymous); absent Authorization keeps optional cookie/guest. Actor-aware allowedActions/subjectOwnReply only for authenticated viewer.",
         "parameters": [
           {
             "name": "roleHandle",
@@ -22267,7 +22267,16 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {},
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/role-reviews/eligibility": {
@@ -23068,6 +23077,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -23109,8 +23121,64 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": true
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "expectedVersion",
+                      "expectedReviewRevision",
+                      "text",
+                      "consentProjectionHash"
+                    ],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "submit_revision"
+                        ]
+                      },
+                      "expectedVersion": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "expectedReviewRevision": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "consentProjectionHash": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "expectedVersion"
+                    ],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "withdraw"
+                        ]
+                      },
+                      "expectedVersion": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -23132,7 +23200,25 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": false,
+                  "required": [
+                    "version",
+                    "status",
+                    "receiptToken"
+                  ],
+                  "properties": {
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "receiptToken": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
                 }
               }
             }
@@ -23141,7 +23227,7 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "#394 + #506 B1b. Reply submit uses role_reply_body gate with candidate binding to exact reply revision; human approval required. Soft flags → pendingreview. 422/503 retain prior approved reply tip. Withdraw is provider-independent."
+        "description": "#394 + #506 B1b + #522. Reply submit uses role_reply_body gate with candidate binding to exact reply revision; human approval required. Soft flags → pendingreview. 422/503 retain prior approved reply tip. Withdraw is provider-independent. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/role-reviews/{reviewHandle}/reports": {
@@ -23151,10 +23237,13 @@
           "Games"
         ],
         "summary": "Report exact public role review/reply revision by public reviewHandle (does not auto-hide)",
-        "description": "#394. Separate from private peer game_review reports. Report never hides published text.",
+        "description": "#394 + #522. Separate from private peer game_review reports. Report never hides published text. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -23264,7 +23353,28 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": false,
+                  "required": [
+                    "reportId",
+                    "receiptToken",
+                    "status"
+                  ],
+                  "properties": {
+                    "reportId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "receiptToken": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "submitted"
+                      ]
+                    }
+                  }
                 }
               }
             }

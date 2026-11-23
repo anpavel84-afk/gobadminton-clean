@@ -8,14 +8,19 @@ import {
   currentPublicRoleFocusTarget,
   eligibleBases,
   mayWithdrawOwnPublic,
+  PUBLIC_ROLE_REPORT_REASONS,
   publicRoleLabel,
   publicRoleStatusLabel,
   rememberPublicRoleFocusTarget,
+  subjectOwnReplyLabel,
   topicOptionsForRole,
   usableOwnRoleHandle,
   type PublicRoleAuthorTarget,
   type PublicRoleFocusHandle,
+  type PublicRoleReaderTarget,
+  type PublicRoleReportReason,
 } from '../public-role-reviews.ts';
+import { ROLE_TOPIC_LABEL, reviewReplyLabel } from '../role-reputation.ts';
 import { colors } from '../theme.ts';
 import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
@@ -299,8 +304,152 @@ export function PublicRoleComposerSheet({ onClose, onOpenHistory }: {
   </Modal>;
 }
 
+/** Actor-aware public reviews sheet — reply/report with consent; no anonymous fallback. */
+export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
+  const auth = useAuth(), owner = auth.postgame;
+  const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const heading = useRef<ComponentRef<typeof Text>>(null);
+  const reader = s.publicSurface?.mode === 'reader' ? s.publicSurface.reader : null;
+  const command = s.command;
+  const publicBusy = command && isPublicRolePacketKind(command.packet.kind) ? command : null;
+  useEffect(() => {
+    const node = findNodeHandle(heading.current);
+    if (node) AccessibilityInfo.setAccessibilityFocus(node);
+  }, [reader?.roleHandle]);
+  const close = () => {
+    onClose();
+    restorePublicTriggerFocus();
+  };
+  if (!reader) return null;
+  const summary = s.publicReader.status === 'ready' ? s.publicReader.data : null;
+  const count = summary?.publishedReviewCount ?? 0;
+  const title = reader.role === 'training'
+    ? (count > 0 ? `Отзывы о тренировках · ${count}` : 'Отзывы о тренировках')
+    : (count > 0 ? `Отзывы об организации · ${count}` : 'Отзывы об организации');
+  const report = s.publicReportDraft;
+  const disabled = !!publicBusy || !!s.publicReplyReceipt || !!s.publicReportReceipt;
+  return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
+    <Page keyboard header={<View style={{ gap: 8 }}>
+      <TextButton title="Закрыть" onPress={close} />
+      {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
+    </View>}>
+      <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
+        <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
+          {title}
+        </Text>
+        <Label>Опыт участников. Отрицательные впечатления тоже важны. Читать можно без прошлого участия.</Label>
+        {s.publicReader.status === 'idle' || s.publicReader.status === 'loading' ? <Loading title="Загружаем отзывы…" /> : null}
+        {s.publicReader.status === 'error' ? <>
+          <Label accessibilityRole="alert">Не удалось загрузить.</Label>
+          <OutlineButton title="Обновить" onPress={() => void owner.loadPublicReader()} />
+        </> : null}
+        {s.publicReader.status === 'unavailable' ? (
+          <Label>Публичные отзывы по этой роли сейчас недоступны.</Label>
+        ) : null}
+        {s.publicReader.status === 'ready' && summary ? <>
+          {!summary.items.length ? <Label>Пока нет опубликованных отзывов.</Label> : null}
+          {summary.items.map(item => {
+            const draft = s.publicReplyDrafts[item.reviewHandle] ?? { text: '', consent: false };
+            return <View key={item.reviewHandle} style={styles.card} accessibilityLabel={item.authorLabel}>
+              <Label style={{ fontWeight: '700' }}>{item.authorLabel}</Label>
+              <Label>✓ Участие подтверждено</Label>
+              {item.experienceState === 'basis_under_review' ? <Label>Основание на проверке</Label> : null}
+              <Label>{item.text}</Label>
+              {item.topics.length ? (
+                <Label>{item.topics.map(t => ROLE_TOPIC_LABEL[t] ?? t).join(', ')}</Label>
+              ) : null}
+              {item.reply ? <Label>{reviewReplyLabel(item.role, item.reply.text)}</Label> : null}
+              {item.subjectOwnReply ? (
+                <Label accessibilityLiveRegion="polite">{subjectOwnReplyLabel(item.subjectOwnReply)}</Label>
+              ) : null}
+              {item.allowedActions.canReport ? (
+                <OutlineButton
+                  title="Сообщить о нарушении"
+                  disabled={disabled}
+                  onPress={() => owner.beginPublicReport(item)}
+                />
+              ) : null}
+              {item.allowedActions.canReply ? <>
+                <Label>Ваш ответ</Label>
+                <TextInput
+                  editable={!disabled}
+                  multiline
+                  scrollEnabled
+                  textAlignVertical="top"
+                  accessibilityLabel="Ваш ответ"
+                  value={draft.text}
+                  onChangeText={text => owner.patchPublicReplyDraft(item.reviewHandle, { text })}
+                  maxLength={500}
+                  style={[styles.input, { minHeight: 96, maxHeight: 180 }]}
+                />
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                  <Switch
+                    disabled={disabled}
+                    accessibilityLabel="Публикую ответ от своего имени по этой роли"
+                    value={draft.consent}
+                    onValueChange={consent => owner.patchPublicReplyDraft(item.reviewHandle, { consent })}
+                  />
+                  <Label style={{ flex: 1 }}>Публикую ответ от своего имени по этой роли</Label>
+                </View>
+                <PrimaryButton
+                  title="Отправить ответ"
+                  disabled={disabled || !draft.text.trim()}
+                  onPress={() => { Keyboard.dismiss(); void owner.submitPublicReply(item.reviewHandle); }}
+                />
+              </> : null}
+            </View>;
+          })}
+          {summary.nextCursor ? (
+            <OutlineButton
+              title="Ещё отзывы"
+              disabled={disabled || s.publicReader.status !== 'ready'}
+              onPress={() => void owner.loadPublicReader({ cursor: summary.nextCursor, append: true })}
+            />
+          ) : null}
+        </> : null}
+        {report ? <View style={styles.card} accessibilityLabel="Жалоба на отзыв">
+          <Label style={{ fontWeight: '700' }}>Жалоба на отзыв</Label>
+          <Label>Причина</Label>
+          {PUBLIC_ROLE_REPORT_REASONS.map(r => (
+            <Pressable
+              key={r.code}
+              accessibilityRole="button"
+              accessibilityState={{ selected: report.reasonCode === r.code, disabled }}
+              disabled={disabled}
+              onPress={() => owner.patchPublicReportDraft({ reasonCode: r.code as PublicRoleReportReason })}
+              style={[styles.chip, { opacity: disabled ? 0.45 : 1 }]}
+            >
+              <Label>{report.reasonCode === r.code ? '✓ ' : ''}{r.label}</Label>
+            </Pressable>
+          ))}
+          <Label>Пояснение</Label>
+          <TextInput
+            editable={!disabled}
+            multiline
+            scrollEnabled
+            textAlignVertical="top"
+            accessibilityLabel="Пояснение к жалобе"
+            value={report.explanation}
+            onChangeText={explanation => owner.patchPublicReportDraft({ explanation })}
+            maxLength={500}
+            style={[styles.input, { minHeight: 96, maxHeight: 180 }]}
+          />
+          <PrimaryButton
+            title="Отправить жалобу"
+            disabled={disabled}
+            onPress={() => { Keyboard.dismiss(); void owner.submitPublicReport(); }}
+          />
+          <TextButton title="Отмена" onPress={() => owner.cancelPublicReport()} />
+        </View> : null}
+        {s.publicNotice ? <Label accessibilityRole="alert">{s.publicNotice}</Label> : null}
+        {publicBusy?.status === 'sending' ? <Loading title="Отправляем…" /> : null}
+      </View>
+    </Page>
+  </Modal>;
+}
+
 /**
- * Single persistent host under AuthProvider (RootLayout) — opens composer/history from
+ * Single persistent host under AuthProvider (RootLayout) — opens composer/history/reader from
  * PostgameCoordinator surface ownership; resumes bounded guest pending once when actor is current.
  */
 export function PublicRoleReviewHost() {
@@ -326,6 +475,9 @@ export function PublicRoleReviewHost() {
   if (surface.mode === 'history') {
     return <PublicRoleOwnHistorySheet onClose={() => owner.closePublicSurface()} />;
   }
+  if (surface.mode === 'reader') {
+    return <PublicRoleReaderSheet onClose={() => owner.closePublicSurface()} />;
+  }
   return <PublicRoleComposerSheet
     onClose={() => owner.closePublicSurface()}
     onOpenHistory={() => {
@@ -333,6 +485,20 @@ export function PublicRoleReviewHost() {
       owner.openOwnPublicHistory();
     }}
   />;
+}
+
+export function beginPublicReaderEntry(args: {
+  authenticated: boolean;
+  target: PublicRoleReaderTarget;
+  signIn: (returnPath: string | null) => void;
+  open: (target: PublicRoleReaderTarget) => void;
+  returnPath: string | null;
+}) {
+  if (!args.authenticated) {
+    args.signIn(args.returnPath);
+    return;
+  }
+  args.open(args.target);
 }
 
 export function beginPublicAuthorEntry(args: {

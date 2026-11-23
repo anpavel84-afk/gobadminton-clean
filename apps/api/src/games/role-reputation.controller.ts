@@ -38,7 +38,10 @@ export class RoleReputationController {
     @Query("limit") limit?: string,
     @Query("gameId") gameId?: string,
   ) {
-    const consumer = await this.auth.optionalSession(request);
+    // Explicit Authorization → requirePrincipal (fail-closed); otherwise optional cookie/guest.
+    const consumer = request.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(request)
+      : await this.auth.optionalSession(request);
     return this.reputation.getByRoleHandle(consumer?.userId ?? null, roleHandle, {
       cursor,
       limit,
@@ -156,7 +159,7 @@ export class RoleReputationController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("reviewHandle") reviewHandle: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.reputation.replyCommand(
       actor.userId,
       actor.sessionId,
@@ -176,7 +179,7 @@ export class RoleReputationController {
     @Param("reviewHandle") reviewHandle: string,
     @Query("gameId") gameId?: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.reputation.report(
       actor.userId,
       actor.sessionId,

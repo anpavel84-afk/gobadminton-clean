@@ -896,7 +896,7 @@ test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-ac
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 
-test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK34 root-host source wiring', () => {
+test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK35 root-host source wiring', () => {
   const createPacket = {
     kind: 'public-role-create' as const,
     gameId,
@@ -941,7 +941,8 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(disclosure, /PublicRoleAuthorEntryButton|rememberPublicRoleFocusTarget/);
   assert.doesNotMatch(disclosure, /consumePendingPublicAuthor|resumePendingPublicAuthor/);
   assert.doesNotMatch(disclosure, /PublicRoleReviewHost/);
-  assert.doesNotMatch(disclosure, /canReply|canReport|Сообщить о нарушении/);
+  assert.match(disclosure, /Ответить или пожаловаться|beginPublicReaderEntry|openPublicReader/);
+  assert.match(disclosure, /canReply|canReport|Сообщить о нарушении/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
 
   const host = read('../src/components/public-role-reviews.tsx');
@@ -951,6 +952,9 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(host, /clearPublicRoleFocusTarget/);
   assert.match(host, /resumePendingPublicAuthor/);
   assert.match(host, /PublicRoleAuthorEntryButton/);
+  assert.match(host, /PublicRoleReaderSheet/);
+  assert.match(host, /submitPublicReply|submitPublicReport/);
+  assert.match(host, /Публикую ответ от своего имени по этой роли/);
   assert.match(host, /withdrawOwnPublic\(item,\s*s\.actor,\s*surface\.gen\)/);
   assert.doesNotMatch(host, /без выдуманного исполнителя/);
   assert.match(host, /срок и исполнитель не обещаются/);
@@ -962,26 +966,37 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
 
   const coordinator = read('../src/postgame-coordinator.ts');
   assert.match(coordinator, /resumePendingPublicAuthor/);
+  assert.match(coordinator, /openPublicReader/);
+  assert.match(coordinator, /submitPublicReply/);
+  assert.match(coordinator, /submitPublicReport/);
+  assert.match(coordinator, /public-role-reply/);
+  assert.match(coordinator, /public-role-report/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /publicRoleEligibility/);
   assert.match(api, /publicRoleConsentPreview/);
   assert.match(api, /publicRoleOwn/);
+  assert.match(api, /publicRoleByHandle/);
   assert.match(api, /\/me\/role-reviews\/eligibility/);
   assert.match(api, /\/me\/role-reviews\/consent-preview/);
+  assert.match(api, /actorAwareRoleReputationPath|role-reputations\//);
 
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /publicEligibility/);
   assert.match(auth, /publicConsentPreview/);
   assert.match(auth, /publicOwnReviews/);
+  assert.match(auth, /publicRoleByHandle/);
 
   const controller = read('../../api/src/games/role-reputation.controller.ts');
   assert.match(controller, /requirePrincipal/);
   assert.match(controller, /requirePrincipalMutation/);
-  assert.match(controller, /replyCommand[\s\S]*requireCookieMutation/);
-  assert.match(controller, /report[\s\S]*requireCookieMutation/);
+  assert.match(controller, /getByHandle[\s\S]*authorization[\s\S]*requirePrincipal[\s\S]*optionalSession/);
+  assert.match(controller, /replyCommand[\s\S]*requirePrincipalMutation/);
+  assert.match(controller, /report[\s\S]*requirePrincipalMutation/);
+  assert.doesNotMatch(controller, /replyCommand[\s\S]*requireCookieMutation/);
+  assert.doesNotMatch(controller, /report[\s\S]*requireCookieMutation/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 34);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 35);
   assert.equal(draftEditorKey(emptyPublicRoleDraft(gameId), handle, 'organization').includes(gameId), true);
 });
 
@@ -1522,4 +1537,102 @@ test('#522 QA4: withdraw 409 VERSION_CONFLICT notice survives owning follow-up o
   await owner.loadOwnPublicReviews();
   await tick();
   assert.equal(owner.getSnapshot().publicNotice, null);
+});
+
+test('#522 reader report cancel + profile origin omits game query; reply UNKNOWN keeps key', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const actorItem = {
+    reviewHandle,
+    role: 'organization' as const,
+    text: 'Текст',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision: 2,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: { status: 'submitted', version: 0, pendingRevision: 1 },
+    allowedActions: { canReport: true, canReply: true },
+  };
+  const page = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'q'.repeat(32),
+    items: [actorItem],
+    nextCursor: 'next-1',
+    availability: 'available',
+  };
+  const keys: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async (_a, _h, query) => {
+        if (query.cursor) {
+          return { ...page, items: [{ ...actorItem, reviewHandle: 'e'.repeat(32) }], nextCursor: null };
+        }
+        // Profile origin must not invent gameId.
+        assert.equal(query.gameId, undefined);
+        return page;
+      },
+      publicConsentPreview: async () => ({ consentProjectionHash: 'b'.repeat(64) }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        if (packet.kind === 'public-role-reply') throw new PostgameError('network', 503);
+        if (packet.kind === 'public-role-report') {
+          assert.equal(packet.gameQuery, null);
+          return { reportId: '88888888-8888-4888-8888-888888888888', receiptToken: 'r2', status: 'submitted' };
+        }
+        throw new PostgameError('invalid');
+      },
+    }),
+  }, () => `prof-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.data?.nextCursor, 'next-1');
+  await owner.loadPublicReader({ cursor: 'next-1', append: true });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReader.data?.items.length, 2);
+
+  owner.beginPublicReport(actorItem);
+  assert.equal(owner.getSnapshot().publicReportDraft?.reasonCode, 'harassment');
+  owner.cancelPublicReport();
+  assert.equal(owner.getSnapshot().publicReportDraft, null);
+  assert.equal(keys.length, 0);
+
+  owner.beginPublicReport(actorItem);
+  owner.patchPublicReportDraft({ reasonCode: 'spam', explanation: 'Пояснение' });
+  await owner.submitPublicReport();
+  await tick();
+  assert.equal(owner.getSnapshot().publicReportReceipt?.status, 'submitted');
+  assert.equal(keys.length, 1);
+
+  owner.patchPublicReplyDraft(reviewHandle, { text: 'Ответ субъекта', consent: true });
+  await owner.submitPublicReply(reviewHandle);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.kind, 'public-role-reply');
+  const unknownKey = owner.getSnapshot().command!.packet.key;
+  assert.equal(keys.length, 2);
+  // Late surface replace must not inherit authority to autosend.
+  owner.closePublicSurface();
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  });
+  await tick();
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(isPublicRolePacketKind('public-role-reply'), true);
+  assert.equal(isPublicRolePacketKind('public-role-report'), true);
 });

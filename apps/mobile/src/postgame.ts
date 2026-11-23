@@ -19,11 +19,17 @@ import {
 } from './postgame-feedback.ts';
 import {
   parsePublicRoleMutationReceipt,
+  parsePublicRoleReplyReceipt,
+  parsePublicRoleReportReceipt,
   publicRoleReviewText,
   publicRoleTopics,
   type PublicCommandBody,
   type PublicCreateBody,
+  type PublicReplyCommandBody,
+  type PublicReportBody,
   type PublicRoleMutationReceipt,
+  type PublicRoleReplyReceipt,
+  type PublicRoleReportReceipt,
 } from './public-role-reviews.ts';
 export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage, ReviewKind } from './postgame-feedback.ts';
 export {
@@ -40,7 +46,10 @@ export {
   parseReviewReportReceipt, reviewsQuery, reviewComment, reviewReplyText, reportDetailText,
 } from './postgame-feedback.ts';
 export type { PeerSubjectOption, FeedbackUiMode, RoleDiscrepancyPresentation } from './postgame-feedback.ts';
-export type { PublicCommandBody, PublicCreateBody, PublicRoleMutationReceipt } from './public-role-reviews.ts';
+export type {
+  PublicCommandBody, PublicCreateBody, PublicRoleMutationReceipt,
+  PublicReplyCommandBody, PublicReportBody, PublicRoleReplyReceipt, PublicRoleReportReceipt,
+} from './public-role-reviews.ts';
 
 export class PostgameError extends Error {
   readonly kind: 'invalid' | 'network' | 'business' | 'private' | 'stale';
@@ -156,11 +165,15 @@ export type Intent =
     } }
   /** Public role-review author loop — mutations owned by PostgameCoordinator; UI sheet confirms (no private CommandReview). */
   | { kind: 'public-role-create'; gameId: string; roleHandle: string; body: PublicCreateBody }
-  | { kind: 'public-role-command'; gameId: string; reviewId: string; body: PublicCommandBody };
+  | { kind: 'public-role-command'; gameId: string; reviewId: string; body: PublicCommandBody }
+  /** Public recipient reply — opaque reviewHandle; gameId is origin bind or 'public-role-profile'. */
+  | { kind: 'public-role-reply'; gameId: string; reviewHandle: string; body: PublicReplyCommandBody }
+  /** Private report on published public review — gameId query only for game origin. */
+  | { kind: 'public-role-report'; gameId: string; reviewHandle: string; body: PublicReportBody; gameQuery: string | null };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
-export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | PublicRoleMutationReceipt | { items: Attendance[] } | Reminders;
+export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | PublicRoleMutationReceipt | PublicRoleReplyReceipt | PublicRoleReportReceipt | { items: Attendance[] } | Reminders;
 const invalid = (): never => { throw new PostgameError('invalid'); };
 export function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function str(v: unknown): string { return typeof v === 'string' ? v : invalid(); }
@@ -419,6 +432,55 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
       return { method: 'POST', path: `/me/role-reviews/${reviewId}/commands`, body: packet.body };
     }
     return invalid();
+  }
+  if (packet.kind === 'public-role-reply') {
+    const reviewHandle = str(packet.reviewHandle);
+    if (!/^[0-9a-f]{32}$/i.test(reviewHandle)) invalid();
+    postgameId(packet.gameId);
+    const body = object(packet.body);
+    exact(body, ['action', 'expectedVersion', 'expectedReviewRevision', 'text', 'consentProjectionHash']);
+    if (body.action !== 'submit_revision') invalid();
+    num(body.expectedVersion);
+    num(body.expectedReviewRevision, 1);
+    publicRoleReviewText(str(body.text));
+    const hash = str(body.consentProjectionHash);
+    if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
+    return {
+      method: 'POST',
+      path: `/role-reviews/${reviewHandle.toLowerCase()}/reply-commands`,
+      body: packet.body,
+    };
+  }
+  if (packet.kind === 'public-role-report') {
+    const reviewHandle = str(packet.reviewHandle);
+    if (!/^[0-9a-f]{32}$/i.test(reviewHandle)) invalid();
+    const body = object(packet.body);
+    exact(body, ['targetKind', 'expectedRevision', 'reasonCode', 'explanation']);
+    if (body.targetKind !== 'review') invalid();
+    num(body.expectedRevision, 1);
+    choice(body.reasonCode, ['harassment', 'spam', 'inappropriate', 'pii', 'threat', 'fabrication', 'other'] as const);
+    // explanation key always present on wire body: string when set, else omitted via exact optional pattern —
+    // accept missing key by allowing only listed keys when present.
+    if (Object.prototype.hasOwnProperty.call(body, 'explanation') && body.explanation !== undefined) {
+      publicRoleReviewText(str(body.explanation));
+    }
+    const gameQuery = packet.gameQuery;
+    if (gameQuery !== null) {
+      const gameId = postgameId(gameQuery);
+      if (postgameId(packet.gameId) !== gameId) invalid();
+      return {
+        method: 'POST',
+        path: `/role-reviews/${reviewHandle.toLowerCase()}/reports?gameId=${encodeURIComponent(gameId)}`,
+        body: packet.body,
+      };
+    }
+    // Profile origin omits gameId query; packet.gameId is synthetic bind only.
+    postgameId(packet.gameId);
+    return {
+      method: 'POST',
+      path: `/role-reviews/${reviewHandle.toLowerCase()}/reports`,
+      body: packet.body,
+    };
   }
   if (packet.kind === 'peer-create') {
     const gameId = postgameId(packet.gameId), body = object(packet.body);
@@ -712,6 +774,16 @@ export function validateReceipt(raw: unknown, p: Packet): Receipt {
       return r;
     }
     if (r.id !== p.reviewId) invalid();
+    return r;
+  }
+  if (p.kind === 'public-role-reply') {
+    const r = parsePublicRoleReplyReceipt(raw);
+    // ACK binds to frozen packet: expectedVersion+1 for submitted tip; no public text from ACK.
+    if (r.version !== p.body.expectedVersion + 1) invalid();
+    return r;
+  }
+  if (p.kind === 'public-role-report') {
+    const r = parsePublicRoleReportReceipt(raw);
     return r;
   }
   if (p.kind === 'peer-create') {

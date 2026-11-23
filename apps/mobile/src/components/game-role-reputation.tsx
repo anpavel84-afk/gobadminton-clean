@@ -17,6 +17,7 @@ import type { RoleKind, RoleLaneState } from '../role-reputation.ts';
 import { publicAuthorReturnPath } from '../public-role-reviews.ts';
 import {
   beginPublicAuthorEntry,
+  beginPublicReaderEntry,
   PublicRoleAuthorEntryButton,
 } from './public-role-reviews.tsx';
 import { colors } from '../theme.ts';
@@ -82,12 +83,15 @@ export function RoleLaneView({
   onRetry,
   onMore,
   gameId,
+  publicPlayerId,
 }: {
   lane: RoleLaneState;
   onRetry: () => void;
   onMore: () => void;
   /** When set, shows public author entry for this game+role handle. Profile read-only omits it. */
   gameId?: string;
+  /** Profile origin for actor-aware reader sheet — mutually exclusive with inventing a gameId. */
+  publicPlayerId?: string;
 }) {
   const role: RoleKind = lane.role;
   return <View style={styles.section} accessibilityLabel={roleSectionTitle(role)}>
@@ -103,12 +107,19 @@ export function RoleLaneView({
       встречи — подтверждённая история может отсутствовать.
     </Label> : null}
     {lane.phase === 'ready' && lane.summary ? (
-      <ReadyRoleBody lane={lane} gameId={gameId} onMore={onMore} />
+      <ReadyRoleBody lane={lane} gameId={gameId} publicPlayerId={publicPlayerId} onMore={onMore} />
     ) : null}
   </View>;
 }
 
-function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: () => void; gameId?: string }) {
+function ReadyRoleBody({
+  lane, onMore, gameId, publicPlayerId,
+}: {
+  lane: RoleLaneState;
+  onMore: () => void;
+  gameId?: string;
+  publicPlayerId?: string;
+}) {
   const summary = lane.summary!;
   const auth = useAuth();
   const history = lane.role === 'organization'
@@ -116,6 +127,7 @@ function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: 
       ?? heldHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete))
     : null;
   const canAuthor = !!gameId && !!summary.roleHandle;
+  const canOpenReader = !!summary.roleHandle && (!!gameId || !!publicPlayerId);
   return <>
     {history ? <Label style={styles.history}>{history}</Label> : null}
     <Label style={styles.secondary}>{publishedReviewsLabel(summary.publishedReviewCount)}</Label>
@@ -136,6 +148,28 @@ function ReadyRoleBody({ lane, onMore, gameId }: { lane: RoleLaneState; onMore: 
             open: t => auth.postgame.openPublicComposer(t),
             signIn: path => { void auth.signIn(path); },
             returnPath: publicAuthorReturnPath(gameId!),
+          });
+        }}
+      />
+    ) : null}
+    {canOpenReader ? (
+      <PublicRoleAuthorEntryButton
+        title="Ответить или пожаловаться"
+        onPress={() => {
+          const target = {
+            roleHandle: summary.roleHandle,
+            role: lane.role,
+            subjectDisplayName: summary.subjectDisplayName,
+            origin: gameId
+              ? { kind: 'game' as const, gameId }
+              : { kind: 'profile' as const, publicPlayerId: publicPlayerId! },
+          };
+          beginPublicReaderEntry({
+            authenticated: auth.status === 'authenticated',
+            target,
+            open: t => auth.postgame.openPublicReader(t),
+            signIn: path => { void auth.signIn(path); },
+            returnPath: gameId ? publicAuthorReturnPath(gameId) : null,
           });
         }}
       />
