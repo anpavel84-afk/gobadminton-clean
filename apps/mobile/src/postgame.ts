@@ -198,8 +198,9 @@ export type Intent =
   /**
    * Owner Profile venue command — submit_revision (selected revision) or withdraw (no game admission).
    * Distinct from create; gameId is persisted revision game for revise, or 'own-venue' for withdraw.
+   * `reviewHandle` is local ACK metadata from the selected/list DTO — never a wire body field.
    */
-  | { kind: 'venue-experience-command'; gameId: string; venueId: string; reviewId: string; body: VenueExperienceCommandBody };
+  | { kind: 'venue-experience-command'; gameId: string; venueId: string; reviewId: string; reviewHandle: string; body: VenueExperienceCommandBody };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
@@ -444,6 +445,9 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
   if (packet.kind === 'venue-experience-command') {
     const reviewId = postgameId(packet.reviewId);
     if (!isVenueId(packet.venueId)) invalid();
+    // Local expected handle from owning DTO — validated here, omitted from wire body.
+    const reviewHandle = str(packet.reviewHandle);
+    if (!/^[0-9a-f]{32}$/i.test(reviewHandle)) invalid();
     const body = object(packet.body);
     const action = str(body.action);
     if (action === 'withdraw') {
@@ -862,20 +866,21 @@ export function validateReceipt(raw: unknown, p: Packet): Receipt {
     if (p.body.action === 'withdraw') {
       if (!isWithdrawVenueReviewReceipt(r, {
         id: p.reviewId,
-        reviewHandle: r.reviewHandle,
+        reviewHandle: p.reviewHandle,
         version: p.body.expectedVersion,
-      })) invalid();
+      })) return invalid();
       return r;
     }
     if (p.body.action === 'submit_revision') {
       if (!isSubmitVenueReviewReceipt(r, {
         id: p.reviewId,
-        reviewHandle: r.reviewHandle,
+        reviewHandle: p.reviewHandle,
         version: p.body.expectedVersion,
-      }, p.body.audience)) invalid();
+      }, p.body.audience)) return invalid();
       return r;
     }
-    invalid();
+    // Retire owner-command branch explicitly — never fall through into attendance decoding.
+    return invalid();
   }
   if (p.kind === 'public-role-create' || p.kind === 'public-role-command') {
     const r = parsePublicRoleMutationReceipt(raw);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
-import { PostgameError, wire } from '../src/postgame.ts';
+import { PostgameError, validateReceipt, wire } from '../src/postgame.ts';
 import {
   buildVenueExperienceSubmitRevisionBody,
   buildVenueExperienceWithdrawBody,
@@ -15,6 +15,7 @@ import {
   isWithdrawVenueReviewReceipt,
   mayEditOwnVenue,
   mayWithdrawOwnVenue,
+  ownVenueWithdrawConfirmFlags,
   parseOwnVenueReviewsPage,
   parseSelectedOwnVenueReview,
   postgameIdempotencyReplayBlocked,
@@ -140,10 +141,13 @@ test('parsers: own list/selected/withdraw/revision receipts; create packet remai
     gameId: 'own-venue',
     venueId,
     reviewId,
+    reviewHandle: handle,
     body: withdrawBody,
   });
   assert.equal(withdrawWire.path, `/me/venue-reviews/${reviewId}/commands`);
   assert.deepEqual(Object.keys(withdrawWire.body as object).sort(), ['action', 'expectedVersion']);
+  // Local expected handle is ACK metadata only — absent from wire body keys.
+  assert.equal('reviewHandle' in (withdrawWire.body as object), false);
 });
 
 test('Profile history → selected edit/withdraw; conflict fences; create competition blocked', async () => {
@@ -276,7 +280,7 @@ test('Profile history → selected edit/withdraw; conflict fences; create compet
 });
 
 test('24h UNKNOWN owner packet: retention blocks replay; GET does not settle', async () => {
-  let now = 1_000_000;
+  const now = 1_000_000;
   const owner = new PostgameCoordinator({
     ...idlePort({
       send: async () => { throw new PostgameError('network', 503); },
@@ -304,6 +308,258 @@ test('24h UNKNOWN owner packet: retention blocks replay; GET does not settle', a
   assert.equal(postgameIdempotencyReplayBlocked(now, now + 23 * 60 * 60 * 1000), false);
 });
 
+test('owner ACK expected handle from packet metadata; wrong-handle leaves UNKNOWN', async () => {
+  const wrongHandle = 'ffffffffffffffffffffffffffffffff';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      send: async (packet) => {
+        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        assert.equal(packet.reviewHandle, handle);
+        if (packet.body.action === 'withdraw') {
+          return {
+            id: reviewId,
+            version: packet.body.expectedVersion + 1,
+            status: 'withdrawn',
+            reviewHandle: wrongHandle,
+            receiptToken: null,
+            publicVisible: false,
+            notBefore: null,
+          };
+        }
+        return {
+          id: reviewId,
+          version: packet.body.expectedVersion + 1,
+          status: 'revision_waiting',
+          reviewHandle: wrongHandle,
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => 'wrong-handle-key');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.beginOwnVenueWithdraw(ownRow(2));
+  await owner.confirmOwnVenueWithdraw();
+  await tick();
+  const cmd = owner.getSnapshot().command;
+  assert.equal(cmd?.status, 'unknown');
+  assert.equal(cmd?.packet.key, 'wrong-handle-key');
+  assert.equal(isVenueExperienceCommandPacket(cmd!.packet), true);
+  assert.equal(cmd!.packet.reviewHandle, handle);
+  assert.deepEqual(cmd!.packet.body, { action: 'withdraw', expectedVersion: 2 });
+  const first = cmd!.firstDispatchedAt;
+  assert.equal(typeof first, 'number');
+
+  // Packet-level validateReceipt rejects tautology-safe wrong handle; private null-token shape alone is insufficient.
+  assert.throws(() => validateReceipt({
+    id: reviewId,
+    version: 3,
+    status: 'withdrawn',
+    reviewHandle: wrongHandle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  }, cmd!.packet));
+  assert.doesNotThrow(() => validateReceipt({
+    id: reviewId,
+    version: 3,
+    status: 'withdrawn',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  }, cmd!.packet));
+
+  // Closing/hiding withdraw confirm must not discard UNKNOWN journal.
+  owner.cancelOwnVenueWithdraw();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, 'wrong-handle-key');
+  assert.equal(owner.getSnapshot().command?.firstDispatchedAt, first);
+
+  // submit_revision wrong-handle likewise retains original key/body/age.
+  const reviseOwner = new PostgameCoordinator({
+    ...idlePort({
+      send: async (packet) => ({
+        id: reviewId,
+        version: packet.body.expectedVersion + 1,
+        status: 'revision_waiting',
+        reviewHandle: wrongHandle,
+        receiptToken: null,
+        publicVisible: false,
+        notBefore: null,
+      }),
+    }),
+  }, () => 'wrong-revise-key');
+  reviseOwner.setActor(actor);
+  reviseOwner.openOwnVenueHistory();
+  await tick();
+  reviseOwner.openOwnVenueEdit(ownRow());
+  await tick();
+  reviseOwner.patchVenueDraft({ text: 'Редакция с неверным ACK handle', topics: ['surface'] });
+  await reviseOwner.submitVenueExperience();
+  await tick();
+  const reviseCmd = reviseOwner.getSnapshot().command;
+  assert.equal(reviseCmd?.status, 'unknown');
+  assert.equal(reviseCmd?.packet.key, 'wrong-revise-key');
+  assert.equal(isVenueExperienceCommandPacket(reviseCmd!.packet), true);
+  assert.equal(reviseCmd!.packet.reviewHandle, handle);
+  assert.equal(reviseCmd!.packet.body.action, 'submit_revision');
+  const reviseFirst = reviseCmd!.firstDispatchedAt;
+  reviseOwner.closeVenueExperience();
+  assert.equal(reviseOwner.getSnapshot().command?.status, 'unknown');
+  assert.equal(reviseOwner.getSnapshot().command?.packet.key, 'wrong-revise-key');
+  assert.equal(reviseOwner.getSnapshot().command?.firstDispatchedAt, reviseFirst);
+
+  // Correct private revision_waiting + null token still validates against expected packet handle.
+  const goodRevisePacket = {
+    ...reviseCmd!.packet,
+    body: {
+      action: 'submit_revision' as const,
+      expectedVersion: 1,
+      gameId,
+      audience: 'self_draft' as const,
+      expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+      text: 'ok',
+      topics: ['surface' as const],
+    },
+  };
+  assert.doesNotThrow(() => validateReceipt({
+    id: reviewId,
+    version: 2,
+    status: 'revision_waiting',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  }, goodRevisePacket));
+});
+
+test('WithdrawConfirm: UNKNOWN is pending not busy; Retry actionable; hide preserves journal', async () => {
+  let attempts = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      send: async (packet) => {
+        attempts += 1;
+        if (attempts === 1) throw new PostgameError('network', 503);
+        assert.equal(packet.key, 'withdraw-retry-key');
+        assert.deepEqual(packet.body, { action: 'withdraw', expectedVersion: 1 });
+        return {
+          id: reviewId,
+          version: 2,
+          status: 'withdrawn',
+          reviewHandle: handle,
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => 'withdraw-retry-key');
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.beginOwnVenueWithdraw(ownRow());
+  await owner.confirmOwnVenueWithdraw();
+  await tick();
+  const cmd = owner.getSnapshot().command;
+  assert.equal(cmd?.status, 'unknown');
+  assert.equal(attempts, 1);
+  const flags = ownVenueWithdrawConfirmFlags({ command: cmd });
+  assert.equal(flags.busy, false);
+  assert.equal(flags.pending, true);
+  assert.equal(flags.hideWindow, true);
+  assert.deepEqual(
+    ownVenueWithdrawConfirmFlags({
+      command: { status: 'sending', packet: cmd!.packet },
+    }),
+    { busy: true, pending: false, hideWindow: true },
+  );
+
+  const frozenKey = cmd!.packet.key;
+  const frozenBody = { ...cmd!.packet.body };
+  const frozenAge = cmd!.firstDispatchedAt;
+  owner.cancelOwnVenueWithdraw();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, frozenKey);
+  assert.equal(owner.getSnapshot().command?.firstDispatchedAt, frozenAge);
+
+  await owner.reconcileVenueExperience();
+  await tick();
+  assert.equal(attempts, 2);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueNotice?.includes('отозван'), true);
+  assert.deepEqual(frozenBody, { action: 'withdraw', expectedVersion: 1 });
+  assert.equal(typeof frozenAge, 'number');
+});
+
+test('edit 409 → explicit selected GET preserves draft/reconsent; selected-read error stays fenced', async () => {
+  let detailVersion = 1;
+  let detailFail = false;
+  const posts: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnDetail: async () => {
+        if (detailFail) throw new PostgameError('network', 503);
+        return selected(detailVersion);
+      },
+      send: async (packet) => {
+        posts.push(packet.key);
+        throw new PostgameError('business', 409, 'VERSION_CONFLICT');
+      },
+    }),
+  }, () => `edit409-${posts.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.openOwnVenueEdit(ownRow());
+  await tick();
+  owner.patchVenueDraft({
+    text: 'Неотправленный конфликтный черновик',
+    topics: ['lighting'],
+    audience: 'self_draft',
+  });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Неотправленный конфликтный черновик');
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, ['lighting']);
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  // No auto-authorize: selected version still the pre-conflict open (v1) until explicit reread.
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, 1);
+
+  detailVersion = 3;
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, false);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, 3);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Неотправленный конфликтный черновик');
+  assert.deepEqual(owner.getSnapshot().venueDraft?.topics, ['lighting']);
+  assert.equal(owner.getSnapshot().venueDraft?.audience, 'self_draft');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+
+  // Selected-read error after fence remains fenced — does not clear readRequired falsely.
+  owner.patchVenueDraft({ text: 'Ещё правка', topics: ['amenities'] });
+  detailVersion = 4;
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  detailFail = true;
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Ещё правка');
+});
+
 test('source wiring: Profile entry + controller bearer + APK38 + fixture owner coverage', () => {
   const profile = read('../app/profile.tsx');
   assert.match(profile, /OwnVenueReviewsEntry/);
@@ -315,7 +571,15 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(host, /Перечитать выбранный отзыв/);
   assert.match(host, /Отозвать отзыв/);
   assert.match(host, /experienceReviews/);
+  assert.match(host, /ownVenueWithdrawConfirmFlags/);
+  assert.match(host, /Скрыть окно/);
   assert.doesNotMatch(host, /game.?picker|новый выбор игры/i);
+
+  const venueReviews = read('../src/venue-reviews.ts');
+  assert.match(venueReviews, /export function ownVenueWithdrawConfirmFlags/);
+
+  const composer = read('../src/components/venue-experience-composer.tsx');
+  assert.match(composer, /showSelectedReread/);
 
   const controller = read('../../api/src/venues/venue-reviews.controller.ts');
   assert.match(controller, /listMine[\s\S]*requirePrincipal/);
@@ -325,7 +589,8 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(controller, /requireCookieMutation/);
 
   const fixture = read('../../api/test/integration/venue-reviews.disposable.test.ts');
-  assert.match(fixture, /Owner bearer list\/detail \+ submit_revision\/withdraw/);
+  assert.match(fixture, /genuine native owner venue history/);
+  assert.match(fixture, /Narrow auth update: owner list\/detail admitted/);
   assert.match(fixture, /Native appeal остаётся cookie-only/);
   assert.doesNotMatch(fixture, /Cookie-only siblings: listMine\/getMine/);
 

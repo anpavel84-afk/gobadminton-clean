@@ -770,6 +770,8 @@ export class PostgameCoordinator {
     if (packet.actor.actorId !== fresh.actorId) return false;
     const surface = this.snapshot.venueExperience;
     if (!surface || surface.gen !== fresh.surfaceGen) return false;
+    // Narrow before venueId — Packet union includes kinds without venueId.
+    if (!isVenueExperienceCreatePacket(packet) && !isVenueExperienceCommandPacket(packet)) return false;
     if (surface.venueId !== packet.venueId) return false;
     const draft = this.snapshot.venueDraft;
     if (!draft || draft.audience !== fresh.audience || draft.consent !== fresh.consent) return false;
@@ -2843,6 +2845,33 @@ export class PostgameCoordinator {
         ? list.map(row => row.id === selected.id ? selected : row)
         : list;
       if (opts?.clearConflict) {
+        const editingSame = this.snapshot.venueExperience?.reviewId === selected.id
+          && this.snapshot.venueDraft;
+        if (editingSame) {
+          // Explicit selected reread after edit conflict — keep unsent text/topics/audience;
+          // clear consent/preview; update authority; require deliberate reconfirm.
+          const liveDraft = this.snapshot.venueDraft!;
+          this.show({
+            ownVenue: this.snapshot.ownVenue.status === 'ready'
+              ? { status: 'ready', data: { items } }
+              : this.snapshot.ownVenue,
+            ownVenueSelected: selected,
+            ownVenueReadRequired: false,
+            venueEligibility: selected.editContext
+              ? { status: 'ready', data: { bases: [selected.editContext.basis] } }
+              : { status: 'ready', data: { bases: [] } },
+            venueConsentHash: null,
+            venueDraft: {
+              audience: liveDraft.audience,
+              text: liveDraft.text,
+              topics: [...liveDraft.topics],
+              consent: false,
+            },
+            venueReceipt: null,
+            venueNotice: 'Отзыв перечитан. Проверьте текст и подтвердите отправку заново.',
+          });
+          return;
+        }
         this.show({
           ownVenue: this.snapshot.ownVenue.status === 'ready'
             ? { status: 'ready', data: { items } }
@@ -2963,6 +2992,7 @@ export class PostgameCoordinator {
         gameId: 'own-venue',
         venueId: live.venueId,
         reviewId: live.id,
+        reviewHandle: live.reviewHandle,
         body,
       };
       const transport = wire(intent);
@@ -3518,6 +3548,7 @@ export class PostgameCoordinator {
         gameId: fresh.editContext!.gameId,
         venueId: fresh.venueId,
         reviewId: fresh.id,
+        reviewHandle: fresh.reviewHandle,
         body,
       };
       const transport = wire(intent);
@@ -4286,9 +4317,10 @@ export class PostgameCoordinator {
         if (paintEdit && venueBusiness && isVenueExperienceCreatePacket(packet)) {
           void this.loadVenueEligibility({ preserveNotice: true });
         }
+        // Edit 409: fence with ownVenueReadRequired; do not auto-GET authorize — explicit selected reread.
         if (paintEdit && venueBusiness && isVenueExperienceCommandPacket(packet)
-          && packet.body.action === 'submit_revision') {
-          void this.loadOwnVenueSelected(packet.reviewId, { clearConflict: conflict });
+          && packet.body.action === 'submit_revision' && !conflict) {
+          void this.loadOwnVenueSelected(packet.reviewId);
         }
         if (paintHistory && venueBusiness && isVenueExperienceCommandPacket(packet)) {
           void this.loadOwnVenueReviews({ preserveNotice: true });

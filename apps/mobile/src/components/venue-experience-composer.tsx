@@ -57,6 +57,8 @@ export function VenueExperienceComposer({
   const busy = command?.status === 'sending';
   const unknown = command?.status === 'unknown';
   const retentionBlocked = unknown && postgameIdempotencyReplayBlocked(command?.firstDispatchedAt);
+  // Explicit selected reread after edit conflict — usable without receipt; fenced while sending/UNKNOWN.
+  const showSelectedReread = editing && s.ownVenueReadRequired && !!surface?.reviewId && !busy && !unknown;
   const previewHash = open ? s.venueConsentHash : null;
   const canSubmit = open && !locked && !!basis && !!draft
     && !s.ownVenueReadRequired
@@ -266,6 +268,12 @@ export function VenueExperienceComposer({
           </> : null}
           {/* Success copy lives only on the receipt card — avoid duplicate/contradictory notice. */}
           {s.venueNotice && !s.venueReceipt ? <Label accessibilityRole="status">{s.venueNotice}</Label> : null}
+          {showSelectedReread && !s.venueReceipt ? (
+            <OutlineButton
+              title="Перечитать выбранный отзыв"
+              onPress={() => void owner.loadOwnVenueSelected(surface!.reviewId!, { clearConflict: true })}
+            />
+          ) : null}
           {s.venueReceipt && receiptSummary ? (
             <View style={styles.card}>
               <Label>{receiptSummary.primary}</Label>
@@ -274,10 +282,10 @@ export function VenueExperienceComposer({
                 ? <Label>Квитанция: {s.venueReceipt.receiptToken}</Label>
                 : null}
               <Label>Актуальный статус отзыва о площадке можно посмотреть на сайте.</Label>
-              {editing && s.ownVenueReadRequired && surface?.reviewId ? (
+              {showSelectedReread ? (
                 <OutlineButton
                   title="Перечитать выбранный отзыв"
-                  onPress={() => void owner.loadOwnVenueSelected(surface.reviewId!, { clearConflict: true })}
+                  onPress={() => void owner.loadOwnVenueSelected(surface!.reviewId!, { clearConflict: true })}
                 />
               ) : null}
             </View>

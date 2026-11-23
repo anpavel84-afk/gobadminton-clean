@@ -1356,130 +1356,22 @@ run("#394 venue experience — disposable", () => {
         assessSpy.mockRestore();
       }
 
-      // Owner bearer list/detail + submit_revision/withdraw; report + appeal stay cookie-only.
-      const mine = await nativeApp.inject({
+      // Narrow auth update: owner list/detail admitted for native bearer (was cookie-denied).
+      // Full genuine owner lifecycle lives in the dedicated case below — keep create positives here.
+      const mineSmoke = await nativeApp.inject({
         method: "GET",
         url: "/v1/me/venue-reviews",
         headers: bearer(),
       });
-      expect(mine.statusCode, mine.body).toBe(200);
-      expect(mine.headers["cache-control"]).toBe("no-store");
-      const mineItems = mine.json().items as Array<{ id: string; reviewHandle: string; version: number }>;
-      expect(Array.isArray(mineItems)).toBe(true);
-      expect(mineItems.length).toBeLessThanOrEqual(50);
-      const privateOwn = mineItems.find((row) => row.id === privateCreate.json().id);
-      expect(privateOwn).toMatchObject({
-        id: privateCreate.json().id,
-        reviewHandle: privateCreate.json().reviewHandle,
-      });
-
-      const detail = await nativeApp.inject({
+      expect(mineSmoke.statusCode, mineSmoke.body).toBe(200);
+      expect(mineSmoke.headers["cache-control"]).toBe("no-store");
+      const detailSmoke = await nativeApp.inject({
         method: "GET",
         url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
         headers: bearer(),
       });
-      expect(detail.statusCode, detail.body).toBe(200);
-      expect(detail.headers["cache-control"]).toBe("no-store");
-      expect(detail.json()).toMatchObject({
-        id: privateCreate.json().id,
-        reviewHandle: privateCreate.json().reviewHandle,
-        venueId: seeded.venueId,
-        status: "self_draft",
-        editContext: {
-          gameId: seeded.gameId,
-          basis: { gameId: seeded.gameId, admission: "may_submit" },
-        },
-        editUnavailableReason: null,
-      });
-
-      const foreignDetail = await nativeApp.inject({
-        method: "GET",
-        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
-        headers: { authorization: `Bearer ${outsiderIssued.accessToken}` },
-      });
-      expect(foreignDetail.statusCode).toBe(404);
-      expect(foreignDetail.json().code).toBe("RESOURCE_UNAVAILABLE");
-      const absentDetail = await nativeApp.inject({
-        method: "GET",
-        url: `/v1/me/venue-reviews/${randomUUID()}`,
-        headers: bearer(),
-      });
-      expect(absentDetail.statusCode).toBe(404);
-      expect(absentDetail.json().code).toBe("RESOURCE_UNAVAILABLE");
-
-      const reviseText = "Личная редакция через native bearer — только себе.";
-      const revise = await nativeApp.inject({
-        method: "POST",
-        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
-        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
-        payload: {
-          action: "submit_revision",
-          expectedVersion: detail.json().version,
-          gameId: seeded.gameId,
-          audience: "self_draft",
-          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
-          text: reviseText,
-          topics: ["surface"],
-        },
-      });
-      expect(revise.statusCode, revise.body).toBe(200);
-      expect(revise.json()).toMatchObject({
-        id: privateCreate.json().id,
-        reviewHandle: privateCreate.json().reviewHandle,
-        version: detail.json().version + 1,
-        status: "revision_waiting",
-        receiptToken: null,
-        publicVisible: false,
-        notBefore: null,
-      });
-
-      const afterRevise = await nativeApp.inject({
-        method: "GET",
-        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
-        headers: bearer(),
-      });
-      expect(afterRevise.statusCode, afterRevise.body).toBe(200);
-      expect(afterRevise.json().text).toBe(reviseText);
-      expect(afterRevise.json().version).toBe(detail.json().version + 1);
-
-      const withdraw = await nativeApp.inject({
-        method: "POST",
-        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
-        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
-        payload: { action: "withdraw", expectedVersion: afterRevise.json().version },
-      });
-      expect(withdraw.statusCode, withdraw.body).toBe(200);
-      expect(withdraw.json()).toMatchObject({
-        id: privateCreate.json().id,
-        reviewHandle: privateCreate.json().reviewHandle,
-        version: afterRevise.json().version + 1,
-        status: "withdrawn",
-        receiptToken: null,
-        publicVisible: false,
-        notBefore: null,
-      });
-
-      const appealClosed = await nativeApp.inject({
-        method: "POST",
-        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
-        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
-        payload: {
-          action: "appeal",
-          expectedVersion: withdraw.json().version,
-          explanation: "Native appeal остаётся cookie-only.",
-        },
-      });
-      expect(appealClosed.statusCode).toBe(403);
-      expect(appealClosed.json().code).toBe("CREDENTIALS_CONFLICT");
-
-      const report = await nativeApp.inject({
-        method: "POST",
-        url: `/v1/venue-reviews/${publicCreate.json().reviewHandle}/reports`,
-        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
-        payload: { reasonCode: "other", detail: "Synthetic native report reject" },
-      });
-      expect(report.statusCode).toBe(403);
-      expect(report.json().code).toBe("CREDENTIALS_CONFLICT");
+      expect(detailSmoke.statusCode, detailSmoke.body).toBe(200);
+      expect(detailSmoke.headers["cache-control"]).toBe("no-store");
 
       // Public GET stays credential-free; no private provenance leakage.
       const publicList = await nativeApp.inject({
@@ -1785,6 +1677,461 @@ run("#394 venue experience — disposable", () => {
         const disabled = await disabledApp.inject({
           method: "GET",
           url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+          headers: bearer(),
+        });
+        expect([401, 404]).toContain(disabled.statusCode);
+      } finally {
+        await disabledApp.close();
+      }
+    } finally {
+      await nativeApp.close();
+    }
+  }, 120000);
+
+  it("genuine native owner venue history: list/selected/revise/withdraw + guards (separate HTTPS harness)", async () => {
+    const { NativeSessionService } = await import("../../src/auth/native-session.service");
+    const { ActorFenceService } = await import("../../src/common/actor-fence.service");
+    const nativeClientId = "native.venue.owner.fixture";
+    const nativeRedirect = "https://app.example.test/auth/callback";
+    const nativeOrigin = "https://127.0.0.1:3001";
+    const nativeApiOrigin = "https://127.0.0.1:3000";
+    const envNative = loadEnv({
+      NODE_ENV: "test",
+      APP_ENV: "local",
+      DATABASE_URL: env.DATABASE_URL,
+      PUBLIC_API_ORIGIN: nativeApiOrigin,
+      PUBLIC_WEB_ORIGIN: nativeOrigin,
+      ALLOWED_WEB_ORIGINS: nativeOrigin,
+      COOKIE_SECURE: "true",
+      AUTH_PEPPER: env.AUTH_PEPPER,
+      CONTENT_MODERATION_PROVIDER: "fake",
+      CONTENT_MODERATION_FINGERPRINT_SECRET: "venue-rev-synthetic-fingerprint!!!!!",
+      POST_GAME_INTERNAL_ENABLED: "1",
+      SOCIAL_DIRECTORY_ENABLED: "1",
+      ADMIN_INTERNAL_ENABLED: "1",
+      CASES_INTERNAL_ENABLED: "1",
+      ADMIN_ORIGIN: adminOrigin,
+      ADMIN_AUTH_PEPPER: pepper,
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([
+        { clientId: nativeClientId, redirectUris: [nativeRedirect] },
+      ]),
+    });
+    const refNative = await Test.createTestingModule({
+      imports: [
+        buildTestCoreModule(envNative, pool),
+        GamesModule,
+        VenuesModule,
+        ProfilesModule,
+        AdminModule,
+      ],
+    }).compile();
+    const nativeApp = refNative.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter({ logger: false }),
+    );
+    try {
+      await nativeApp.register(cookie);
+      nativeApp.setGlobalPrefix("v1");
+      nativeApp.useGlobalFilters(new ProblemExceptionFilter());
+      await nativeApp.init();
+      await nativeApp.getHttpAdapter().getInstance().ready();
+      const native = refNative.get(NativeSessionService);
+      const fence = refNative.get(ActorFenceService);
+
+      const author = await actor(`native-owner-${randomUUID()}`);
+      const org = await actor(`native-owner-org-${randomUUID()}`);
+      const seeded = await seedHeldGame({
+        organizerId: org.userId,
+        participantId: author.userId,
+        endsAt: new Date(Date.now() - 3 * 86400_000),
+        venueCreatedBy: outsider.userId,
+      });
+
+      const issued = await native.transaction(async (client) => {
+        await fence.assertActiveConsumerInTransaction(client, {
+          actorId: author.userId,
+          sessionId: author.sessionId,
+        });
+        return native.issue(client, author.userId, nativeClientId);
+      });
+      const bearer = (idem?: string) => ({
+        authorization: `Bearer ${issued.accessToken}`,
+        ...(idem ? { "idempotency-key": idem } : {}),
+      });
+
+      // Seed owned private + public rows via native create (owned DB only — no fake principal).
+      const privateCreate = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          venueId: seeded.venueId,
+          gameId: seeded.gameId,
+          audience: "self_draft",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: "Owner private seed — только себе.",
+          topics: ["surface"],
+        },
+      });
+      expect(privateCreate.statusCode, privateCreate.body).toBe(200);
+
+      const publicText = "Owner public seed — покрытие и свет для ревизии.";
+      const topics = ["surface", "lighting"] as const;
+      const hash = projectionHash({
+        canonicalVenueId: seeded.venueId,
+        audience: "public_venue",
+        text: publicText,
+        topics: [...topics],
+      });
+      const preview = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews/consent-preview",
+        headers: { ...bearer(), "content-type": "application/json" },
+        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+      });
+      expect(preview.statusCode, preview.body).toBe(200);
+      expect(preview.json().consentProjectionHash).toBe(hash);
+      const publicCreate = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          venueId: seeded.venueId,
+          gameId: seeded.gameId,
+          audience: "public_venue",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: publicText,
+          topics: [...topics],
+          consentProjectionHash: hash,
+        },
+      });
+      expect(publicCreate.statusCode, publicCreate.body).toBe(200);
+
+      // Own list + selected.
+      const mine = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews",
+        headers: bearer(),
+      });
+      expect(mine.statusCode, mine.body).toBe(200);
+      expect(mine.headers["cache-control"]).toBe("no-store");
+      const mineItems = mine.json().items as Array<{ id: string; reviewHandle: string; version: number }>;
+      expect(Array.isArray(mineItems)).toBe(true);
+      expect(mineItems.length).toBeLessThanOrEqual(50);
+      const privateOwn = mineItems.find((row) => row.id === privateCreate.json().id);
+      expect(privateOwn).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+      });
+
+      const detail = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
+        headers: bearer(),
+      });
+      expect(detail.statusCode, detail.body).toBe(200);
+      expect(detail.headers["cache-control"]).toBe("no-store");
+      expect(detail.json()).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+        venueId: seeded.venueId,
+        status: "self_draft",
+        editContext: {
+          gameId: seeded.gameId,
+          basis: { gameId: seeded.gameId, admission: "may_submit" },
+        },
+        editUnavailableReason: null,
+      });
+
+      const outsiderNative = await actor(`native-owner-foreign-${randomUUID()}`);
+      const outsiderIssued = await native.transaction(async (client) => {
+        await fence.assertActiveConsumerInTransaction(client, {
+          actorId: outsiderNative.userId,
+          sessionId: outsiderNative.sessionId,
+        });
+        return native.issue(client, outsiderNative.userId, nativeClientId);
+      });
+      const foreignDetail = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
+        headers: { authorization: `Bearer ${outsiderIssued.accessToken}` },
+      });
+      expect(foreignDetail.statusCode).toBe(404);
+      expect(foreignDetail.json().code).toBe("RESOURCE_UNAVAILABLE");
+
+      const absentDetail = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${randomUUID()}`,
+        headers: bearer(),
+      });
+      expect(absentDetail.statusCode).toBe(404);
+      expect(absentDetail.json().code).toBe("RESOURCE_UNAVAILABLE");
+
+      const malformedSelected = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews/not-a-uuid",
+        headers: bearer(),
+      });
+      expect([400, 404]).toContain(malformedSelected.statusCode);
+
+      // Private submit_revision + expectedVersion replay / mismatch.
+      const reviseText = "Личная редакция через native bearer — только себе.";
+      const reviseKey = randomUUID();
+      const revisePayload = {
+        action: "submit_revision" as const,
+        expectedVersion: detail.json().version,
+        gameId: seeded.gameId,
+        audience: "self_draft" as const,
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: reviseText,
+        topics: ["surface"],
+      };
+      const revise = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(reviseKey), "content-type": "application/json" },
+        payload: revisePayload,
+      });
+      expect(revise.statusCode, revise.body).toBe(200);
+      expect(revise.json()).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+        version: detail.json().version + 1,
+        status: "revision_waiting",
+        receiptToken: null,
+        publicVisible: false,
+        notBefore: null,
+      });
+      const reviseReplay = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(reviseKey), "content-type": "application/json" },
+        payload: revisePayload,
+      });
+      expect(reviseReplay.statusCode, reviseReplay.body).toBe(200);
+      expect(reviseReplay.json()).toEqual(revise.json());
+      const reviseMismatch = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(reviseKey), "content-type": "application/json" },
+        payload: { ...revisePayload, text: "Другое тело при том же ключе команды." },
+      });
+      expect(reviseMismatch.statusCode).toBe(409);
+      expect(reviseMismatch.json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+
+      const afterRevise = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}`,
+        headers: bearer(),
+      });
+      expect(afterRevise.statusCode, afterRevise.body).toBe(200);
+      expect(afterRevise.json().text).toBe(reviseText);
+      expect(afterRevise.json().version).toBe(detail.json().version + 1);
+
+      // Public submit_revision via actual preview/consent on the public-owned slot.
+      const publicDetail = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/${publicCreate.json().id}`,
+        headers: bearer(),
+      });
+      expect(publicDetail.statusCode, publicDetail.body).toBe(200);
+      const publicReviseText = "Публичная редакция owner — после consent-preview.";
+      const publicReviseTopics = ["amenities"] as const;
+      const publicReviseHash = projectionHash({
+        canonicalVenueId: seeded.venueId,
+        audience: "public_venue",
+        text: publicReviseText,
+        topics: [...publicReviseTopics],
+      });
+      const publicRevisePreview = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews/consent-preview",
+        headers: { ...bearer(), "content-type": "application/json" },
+        payload: {
+          venueId: seeded.venueId,
+          text: publicReviseText,
+          topics: [...publicReviseTopics],
+        },
+      });
+      expect(publicRevisePreview.statusCode, publicRevisePreview.body).toBe(200);
+      expect(publicRevisePreview.json().consentProjectionHash).toBe(publicReviseHash);
+      const publicRevise = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${publicCreate.json().id}/commands`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          action: "submit_revision",
+          expectedVersion: publicDetail.json().version,
+          gameId: seeded.gameId,
+          audience: "public_venue",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: publicReviseText,
+          topics: [...publicReviseTopics],
+          consentProjectionHash: publicReviseHash,
+        },
+      });
+      expect(publicRevise.statusCode, publicRevise.body).toBe(200);
+      expect(publicRevise.json()).toMatchObject({
+        id: publicCreate.json().id,
+        reviewHandle: publicCreate.json().reviewHandle,
+        version: publicDetail.json().version + 1,
+      });
+      expect(publicRevise.json().receiptToken).toBeTruthy();
+
+      // Confirmed withdraw — no game admission / edit-window dependency (action+expectedVersion only).
+      const withdraw = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: { action: "withdraw", expectedVersion: afterRevise.json().version },
+      });
+      expect(withdraw.statusCode, withdraw.body).toBe(200);
+      expect(withdraw.json()).toMatchObject({
+        id: privateCreate.json().id,
+        reviewHandle: privateCreate.json().reviewHandle,
+        version: afterRevise.json().version + 1,
+        status: "withdrawn",
+        receiptToken: null,
+        publicVisible: false,
+        notBefore: null,
+      });
+
+      const appealClosed = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          action: "appeal",
+          expectedVersion: withdraw.json().version,
+          explanation: "Native appeal остаётся cookie-only.",
+        },
+      });
+      expect(appealClosed.statusCode).toBe(403);
+      expect(appealClosed.json().code).toBe("CREDENTIALS_CONFLICT");
+
+      const resubmitClosed = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${privateCreate.json().id}/commands`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          action: "resubmit",
+          expectedVersion: withdraw.json().version,
+          gameId: seeded.gameId,
+          audience: "self_draft",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: "Resubmit закрыт для native owner.",
+          topics: ["surface"],
+        },
+      });
+      expect([400, 403, 422]).toContain(resubmitClosed.statusCode);
+
+      const report = await nativeApp.inject({
+        method: "POST",
+        url: `/v1/venue-reviews/${publicCreate.json().reviewHandle}/reports`,
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: { reasonCode: "other", detail: "Synthetic native report reject" },
+      });
+      expect(report.statusCode).toBe(403);
+      expect(report.json().code).toBe("CREDENTIALS_CONFLICT");
+
+      // Mixed / invalid / revoked owner guards.
+      const mixedCookieBearer = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews",
+        headers: { ...bearer(), cookie: author.cookie },
+      });
+      expect(mixedCookieBearer.statusCode).toBe(403);
+      expect(mixedCookieBearer.json().code).toBe("CREDENTIALS_CONFLICT");
+
+      const malformed = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews",
+        headers: { authorization: "Bearer not-a-token" },
+      });
+      expect(malformed.statusCode).toBe(401);
+      expect(malformed.json().code).toBe("INVALID_AUTHORIZATION");
+
+      const unknownOpaque = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews",
+        headers: { authorization: `Bearer ${"y".repeat(43)}` },
+      });
+      expect(unknownOpaque.statusCode).toBe(401);
+
+      const revokedIssued = await native.transaction(async (client) => {
+        await fence.assertActiveConsumerInTransaction(client, {
+          actorId: author.userId,
+          sessionId: author.sessionId,
+        });
+        return native.issue(client, author.userId, nativeClientId);
+      });
+      await native.logout({ accessToken: revokedIssued.accessToken, clientId: nativeClientId });
+      const revoked = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews",
+        headers: { authorization: `Bearer ${revokedIssued.accessToken}` },
+      });
+      expect(revoked.statusCode).toBe(401);
+
+      // Cookie Origin/CSRF fences remain on original HTTP app (owner mutation path).
+      const cookieWithdrawNoOrigin = await app.inject({
+        method: "POST",
+        url: `/v1/me/venue-reviews/${publicCreate.json().id}/commands`,
+        headers: {
+          cookie: author.cookie,
+          "x-csrf-token": author.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        payload: { action: "withdraw", expectedVersion: publicRevise.json().version },
+      });
+      expect(cookieWithdrawNoOrigin.statusCode).toBe(403);
+      expect(cookieWithdrawNoOrigin.json().code).toBe("ORIGIN_REJECTED");
+
+      // Disabled native transport on a separate app over the same pool.
+      const envDisabled = loadEnv({
+        NODE_ENV: "test",
+        APP_ENV: "local",
+        DATABASE_URL: env.DATABASE_URL,
+        PUBLIC_API_ORIGIN: nativeApiOrigin,
+        PUBLIC_WEB_ORIGIN: nativeOrigin,
+        ALLOWED_WEB_ORIGINS: nativeOrigin,
+        COOKIE_SECURE: "true",
+        AUTH_PEPPER: env.AUTH_PEPPER,
+        CONTENT_MODERATION_PROVIDER: "fake",
+        CONTENT_MODERATION_FINGERPRINT_SECRET: "venue-rev-synthetic-fingerprint!!!!!",
+        POST_GAME_INTERNAL_ENABLED: "1",
+        SOCIAL_DIRECTORY_ENABLED: "1",
+        ADMIN_INTERNAL_ENABLED: "1",
+        CASES_INTERNAL_ENABLED: "1",
+        ADMIN_ORIGIN: adminOrigin,
+        ADMIN_AUTH_PEPPER: pepper,
+        NATIVE_AUTH_ENABLED: "0",
+        NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([
+          { clientId: nativeClientId, redirectUris: [nativeRedirect] },
+        ]),
+      });
+      const refDisabled = await Test.createTestingModule({
+        imports: [
+          buildTestCoreModule(envDisabled, pool),
+          GamesModule,
+          VenuesModule,
+          ProfilesModule,
+          AdminModule,
+        ],
+      }).compile();
+      const disabledApp = refDisabled.createNestApplication<NestFastifyApplication>(
+        new FastifyAdapter({ logger: false }),
+      );
+      try {
+        await disabledApp.register(cookie);
+        disabledApp.setGlobalPrefix("v1");
+        disabledApp.useGlobalFilters(new ProblemExceptionFilter());
+        await disabledApp.init();
+        await disabledApp.getHttpAdapter().getInstance().ready();
+        const disabled = await disabledApp.inject({
+          method: "GET",
+          url: "/v1/me/venue-reviews",
           headers: bearer(),
         });
         expect([401, 404]).toContain(disabled.statusCode);

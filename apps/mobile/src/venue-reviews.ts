@@ -817,9 +817,25 @@ export function isVenueExperienceCommandPacket<T extends { readonly kind: string
   readonly gameId: string;
   readonly venueId: string;
   readonly reviewId: string;
+  readonly reviewHandle: string;
   readonly body: VenueExperienceCommandBody;
 } {
   return packet.kind === 'venue-experience-command';
+}
+
+/**
+ * Withdraw confirm view flags — sending is busy; UNKNOWN is pending/actionable, not busy.
+ * Hide (not cancel) while sending or UNKNOWN so closing preserves the journal.
+ */
+export function ownVenueWithdrawConfirmFlags(input: {
+  command: { status: string; packet: { readonly kind: string } } | null | undefined;
+}): { busy: boolean; pending: boolean; hideWindow: boolean } {
+  const owner = input.command && isVenueExperienceCommandPacket(input.command.packet)
+    ? input.command
+    : null;
+  const busy = owner?.status === 'sending';
+  const pending = owner?.status === 'unknown';
+  return { busy: !!busy, pending: !!pending, hideWindow: !!busy || !!pending };
 }
 
 export function venueExperienceIdempotencyExpired(firstDispatchedAt: number, now = Date.now()): boolean {

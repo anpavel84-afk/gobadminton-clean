@@ -8,6 +8,7 @@ import {
   isVenueExperiencePacketKind,
   mayWithdrawOwnVenue,
   ownVenueStatusLabel,
+  ownVenueWithdrawConfirmFlags,
   postgameIdempotencyReplayBlocked,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   type OwnVenueReview,
@@ -63,11 +64,16 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
   const heading = useRef<ComponentRef<typeof Text>>(null);
   const command = s.command && isVenueExperiencePacketKind(s.command.packet.kind) ? s.command : null;
   const venueOwnerBusy = command && isVenueExperienceCommandPacket(command.packet) ? command : null;
-  const retentionBlocked = venueOwnerBusy?.status === 'unknown'
-    && postgameIdempotencyReplayBlocked(venueOwnerBusy.firstDispatchedAt);
+  const withdrawFlags = ownVenueWithdrawConfirmFlags({ command: venueOwnerBusy });
+  const ownerSending = withdrawFlags.busy;
+  const ownerUnknown = withdrawFlags.pending;
+  const retentionBlocked = !!ownerUnknown
+    && postgameIdempotencyReplayBlocked(venueOwnerBusy!.firstDispatchedAt);
   const items = s.ownVenue.status === 'ready' ? s.ownVenue.data?.items ?? [] : [];
   const locked = !!command || !!s.venueExperience?.reviewId;
   const editOpen = !!s.venueExperience?.reviewId;
+  // Card reread stays usable on editReadRequired; sending/UNKNOWN/non-ready still fence it.
+  const cardRereadDisabled = !!command || s.ownVenue.status !== 'ready';
 
   useEffect(() => {
     const node = findNodeHandle(heading.current);
@@ -89,7 +95,7 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
       onRequestClose={close}>
       <Page keyboard header={<View style={{ gap: 8 }}>
         <TextButton title={editOpen ? 'К списку' : 'Закрыть'} onPress={close} />
-        {venueOwnerBusy?.status === 'unknown' && !retentionBlocked ? (
+        {ownerUnknown && !retentionBlocked ? (
           <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcileVenueExperience()} />
         ) : null}
       </View>}>
@@ -104,8 +110,8 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
           </Label>
           {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
           {s.venueNotice ? <Label accessibilityRole="status">{s.venueNotice}</Label> : null}
-          {venueOwnerBusy?.status === 'sending' ? <Loading title="Отправляем…" /> : null}
-          {venueOwnerBusy?.status === 'unknown' && !retentionBlocked ? (
+          {ownerSending ? <Loading title="Отправляем…" /> : null}
+          {ownerUnknown && !retentionBlocked ? (
             <Label accessibilityRole="status">
               Результат отправки не подтверждён. Новые операции заблокированы; обновление списка не подтвердит эту отправку.
             </Label>
@@ -139,6 +145,7 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
               key={row.id}
               row={row}
               locked={locked || s.ownVenueReadRequired || s.ownVenue.status !== 'ready'}
+              rereadDisabled={cardRereadDisabled}
               onOpenVenue={() => {
                 onClose();
                 router.push(`/venues/${encodeURIComponent(row.venueId)}`);
@@ -161,10 +168,10 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
       {s.ownVenueWithdraw ? (
         <WithdrawConfirm
           row={s.ownVenueWithdraw}
-          busy={!!venueOwnerBusy}
+          busy={!!ownerSending}
           readRequired={s.ownVenueReadRequired}
           notice={s.venueNotice}
-          pending={venueOwnerBusy?.status === 'unknown'}
+          pending={!!ownerUnknown}
           retentionBlocked={retentionBlocked}
           onCancel={() => owner.cancelOwnVenueWithdraw()}
           onConfirm={() => void owner.confirmOwnVenueWithdraw()}
@@ -178,6 +185,7 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
 function OwnVenueReviewCard({
   row,
   locked,
+  rereadDisabled,
   onOpenVenue,
   onEdit,
   onReread,
@@ -186,6 +194,7 @@ function OwnVenueReviewCard({
 }: {
   row: OwnVenueReview;
   locked: boolean;
+  rereadDisabled: boolean;
   onOpenVenue: () => void;
   onEdit: () => void;
   onReread: () => void;
@@ -218,7 +227,7 @@ function OwnVenueReviewCard({
           </Label>
           <OutlineButton title="Изменить отзыв" disabled={locked} onPress={onEdit} />
           {showReread ? (
-            <OutlineButton title="Перечитать выбранный отзыв" disabled={locked} onPress={onReread} />
+            <OutlineButton title="Перечитать выбранный отзыв" disabled={rereadDisabled} onPress={onReread} />
           ) : null}
           {mayWithdrawOwnVenue(row) ? (
             <PrimaryButton title="Отозвать отзыв" disabled={locked} onPress={onWithdraw} />
@@ -312,6 +321,8 @@ function WithdrawConfirm({
     const node = findNodeHandle(heading.current);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   }, []);
+  // Hide (not cancel) while sending or UNKNOWN — closing preserves the journal, does not undo remote effect.
+  const hideWindow = busy || pending;
   return (
     <Modal visible animationType="none" presentationStyle="fullScreen"
       supportedOrientations={iosModalOrientations}
@@ -321,7 +332,7 @@ function WithdrawConfirm({
         if (node) AccessibilityInfo.setAccessibilityFocus(node);
       }}>
       <Page keyboard header={<View style={{ gap: 8 }}>
-        <TextButton title={busy ? 'Скрыть окно' : 'Отмена'} onPress={onCancel} />
+        <TextButton title={hideWindow ? 'Скрыть окно' : 'Отмена'} onPress={onCancel} />
       </View>}>
         <View accessibilityViewIsModal onAccessibilityEscape={onCancel} style={{ gap: 16 }}>
           <Text ref={heading} accessibilityRole="header" allowFontScaling
@@ -340,17 +351,17 @@ function WithdrawConfirm({
           {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
           {pending && !busy && !retentionBlocked ? (
             <Label>
-              Исходный запрос сохранён в этой сессии. Повтор отправит тот же запрос с тем же ключом; закрытие окна не отменяет операцию.
+              Исходный запрос сохранён в этой сессии. Повтор отправит тот же запрос с тем же ключом; скрытие окна не отменяет операцию.
             </Label>
           ) : null}
           <View style={{ gap: 8 }}>
-            <OutlineButton title={busy ? 'Скрыть окно' : 'Отмена'} onPress={onCancel} />
+            <OutlineButton title={hideWindow ? 'Скрыть окно' : 'Отмена'} onPress={onCancel} />
             {pending && !retentionBlocked ? (
               <PrimaryButton title="Повторить исходный запрос" disabled={busy} onPress={onRetry} />
             ) : (
               <PrimaryButton
                 title="Да, отозвать"
-                disabled={readRequired || busy || retentionBlocked}
+                disabled={readRequired || busy || retentionBlocked || pending}
                 onPress={onConfirm}
               />
             )}
