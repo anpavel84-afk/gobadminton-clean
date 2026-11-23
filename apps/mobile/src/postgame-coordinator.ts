@@ -1735,6 +1735,11 @@ export class PostgameCoordinator {
       });
     } catch (error) {
       if (previewGen !== this.publicPreviewGen || surfaceGen !== this.publicSurfaceGen || !sameActor(actor, this.snapshot.actor)) return;
+      // Same private-port hard denial as mutation: cannot leave typed write authority after confirmed access loss.
+      if (this.isHardAuthorizationDenial(error)) {
+        this.retireOwnedPublicReaderAuthority(error);
+        return;
+      }
       const business = error instanceof PostgameError && error.kind === 'business';
       this.show({
         publicConsentHash: null,
@@ -1831,6 +1836,42 @@ export class PostgameCoordinator {
       ...patch,
       publicDraft: draft ? { ...draft, consent: false } : draft ?? null,
       publicConsentHash: null,
+    });
+  }
+  /** Port private or HTTP 401/403/404 — hard authorization denial (not ordinary business 409/422). */
+  private isHardAuthorizationDenial(error: unknown): boolean {
+    return error instanceof PostgameError
+      && (error.kind === 'private'
+        || error.status === 401
+        || error.status === 403
+        || error.status === 404);
+  }
+  private hardAuthorizationPublicNotice(error: unknown): string {
+    return error instanceof PostgameError && error.status === 401
+      ? 'Войдите снова, чтобы ответить или пожаловаться.'
+      : 'Не удалось загрузить отзывы.';
+  }
+  /**
+   * Hard auth denial on reply/report (or matching consent-preview): retire only the currently
+   * owned reader private projection/write authority. Caller keeps UNKNOWN journal separately.
+   * Bumps reader gen so a late pending GET cannot resurrect denied private page/permissions.
+   */
+  private retireOwnedPublicReaderAuthority(error: unknown, patch: Partial<Snapshot> = {}) {
+    this.publicPreviewGen++;
+    this.publicReaderGen++;
+    this.show({
+      publicReader: { status: 'unavailable' },
+      publicReaderLoadingMore: false,
+      publicReaderMoreError: false,
+      publicNotice: this.hardAuthorizationPublicNotice(error),
+      publicReplyDrafts: Object.fromEntries(
+        Object.entries(this.snapshot.publicReplyDrafts).map(([k, d]) => [k, { text: d.text, consent: false }]),
+      ),
+      publicReportDraft: null,
+      publicConsentHash: null,
+      publicReplyReceipt: null,
+      publicReportReceipt: null,
+      ...patch,
     });
   }
   /**
@@ -2721,27 +2762,39 @@ export class PostgameCoordinator {
       // Journal settles once; notice/hash/preview/follow-up GET only on original dispatch surface+origin.
       if (isPublicRolePacketKind(packet.kind)) {
         const paintUi = this.publicMutationUiCurrent(packet);
-        if (definite) this.publicMutationBind = null;
-        if (paintUi) this.publicPreviewGen++;
-        this.show({
-          command: definite ? null : {
-            packet,
-            status: 'unknown',
-          },
-          notice: null,
-          ...(paintUi ? {
-            publicConsentHash: definite ? null : this.snapshot.publicConsentHash,
-            publicNotice: notice,
-          } : {}),
-        });
-        if (paintUi && publicBusiness && packet.kind === 'public-role-create') {
-          void this.loadPublicEligibility({ preserveNotice: true });
-        }
-        if (paintUi && publicBusiness && packet.kind === 'public-role-command') {
-          void this.loadOwnPublicReviews({ preserveNotice: true });
-        }
-        if (paintUi && publicBusiness && (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report')) {
-          void this.loadPublicReader({ preserveNotice: true });
+        // Hard auth on reply/report: keep immutable UNKNOWN packet (no definite free-key); retire owned reader only.
+        const hardAuthReplyReport = (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report')
+          && this.isHardAuthorizationDenial(error);
+        const settleJournal = definite && !hardAuthReplyReport;
+        if (settleJournal) this.publicMutationBind = null;
+        if (paintUi && hardAuthReplyReport) {
+          this.retireOwnedPublicReaderAuthority(error, {
+            command: { packet, status: 'unknown' },
+            notice: null,
+          });
+        } else {
+          if (paintUi) this.publicPreviewGen++;
+          this.show({
+            command: settleJournal ? null : {
+              packet,
+              status: 'unknown',
+            },
+            notice: null,
+            ...(paintUi ? {
+              publicConsentHash: settleJournal ? null : this.snapshot.publicConsentHash,
+              publicNotice: notice,
+            } : {}),
+          });
+          if (paintUi && publicBusiness && packet.kind === 'public-role-create') {
+            void this.loadPublicEligibility({ preserveNotice: true });
+          }
+          if (paintUi && publicBusiness && packet.kind === 'public-role-command') {
+            void this.loadOwnPublicReviews({ preserveNotice: true });
+          }
+          if (paintUi && publicBusiness && !hardAuthReplyReport
+            && (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report')) {
+            void this.loadPublicReader({ preserveNotice: true });
+          }
         }
       } else {
         this.show({
