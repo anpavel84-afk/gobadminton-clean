@@ -370,11 +370,17 @@ export class PostgameCoordinator {
     const { actor, valid } = this.start(`note:${key}`); if (!actor) return;
     const noteGen = this.reads.get(`note:${key}`) ?? 0;
     const put = (source: Source<PersonalNote>) => this.show({ notes: { ...this.snapshot.notes, [key]: source } });
-    put({ ...old, status: 'loading' });
+    // Confirmed delete / definitive unavailable must stay fenced through select/refresh + pending GET.
+    // Replacing with loading/error lets collectNotes re-render stale results.myNotes private text.
+    const tombFenced = old.status === 'unavailable' || this.noteTombs.has(key);
+    if (!tombFenced) put({ ...old, status: 'loading' });
     try {
       const data = await this.port.note(actor, gameId, contextId); if (!valid()) return;
       if (data.gameId !== gameId || data.contextId !== contextId) throw new PostgameError('invalid');
-      if (this.noteTombs.has(key)) return;
+      if (this.noteTombs.has(key)) {
+        put({ status: 'unavailable' });
+        return;
+      }
       // Monotonic apply first — never put ready before floor/gen comparison (reverse race).
       this.rememberOwnedNotes([data], noteGen, true);
       const cur = this.snapshot.notes[key];
@@ -399,6 +405,11 @@ export class PostgameCoordinator {
       if (denied && known) {
         // Definitive private 404 of a known/tombstoned own note: shadow stale myNotes; never turn into create.
         this.shadowKnownNoteAbsence(gameId, contextId);
+        put({ status: 'unavailable' });
+        return;
+      }
+      // Tombstone display fence persists through read error — no stale myNotes resurrection.
+      if (tombFenced || this.noteTombs.has(key)) {
         put({ status: 'unavailable' });
         return;
       }

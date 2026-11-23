@@ -1,12 +1,12 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { Platform, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
-import { normalizeFormReason, notesSectionVisible } from '../postgame.ts';
+import { collectNotes, normalizeFormReason, noteSubjectOptions, notesSectionVisible } from '../postgame.ts';
 import type { PersonalNote, Results } from '../postgame.ts';
 import { Choice, ReviewButton } from './postgame.tsx';
 import { Label, Loading, TextButton, styles } from './ui.tsx';
 
-export { notesSectionVisible };
+export { collectNotes, notesSectionVisible, noteSubjectOptions };
 
 function useOwner() {
   const owner = useAuth().postgame;
@@ -15,25 +15,6 @@ function useOwner() {
 function useBlocked() {
   const { s } = useOwner();
   return !!(s.command || s.review);
-}
-
-function collectNotes(gameId: string, data: Results | undefined, notes: Record<string, { status: string; data?: PersonalNote }>, known: Record<string, { gameId: string; contextId: string }>): PersonalNote[] {
-  const byContext = new Map<string, PersonalNote>();
-  for (const note of data?.feedback?.myNotes ?? []) {
-    const direct = notes[`${gameId}:${note.contextId}`];
-    // Definitive unavailable/denied shadows stale bounded myNotes for that context.
-    if (direct?.status === 'unavailable') continue;
-    byContext.set(note.contextId, note);
-  }
-  for (const ref of Object.values(known)) {
-    if (ref.gameId !== gameId) continue;
-    const source = notes[`${ref.gameId}:${ref.contextId}`];
-    // Ready is authoritative; loading/error may retain private text for display only (no write grant).
-    if (source?.data && (source.status === 'ready' || source.status === 'loading' || source.status === 'error')) {
-      byContext.set(source.data.contextId, source.data);
-    }
-  }
-  return [...byContext.values()];
 }
 
 function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote; writes: boolean }) {
@@ -99,9 +80,7 @@ export function NotesSection({ gameId, data }: { gameId: string; data?: Results 
   const selectedId = createDraft.selectedContextId ?? '';
   const createText = createDraft.createText ?? '';
   const createTrimmed = normalizeFormReason(createText);
-  const subjects = feedback?.capabilities.peerSubjects?.length
-    ? feedback.capabilities.peerSubjects
-    : (data?.attendance?.roster ?? []).map(r => ({ contextId: r.contextId, displayName: r.displayName }));
+  const subjects = noteSubjectOptions(data);
   const selectedKey = selectedId ? `${gameId}:${selectedId}` : '';
   const selectedSource = selectedKey ? s.notes[selectedKey] : undefined;
   const selectedExisting = selectedSource?.status === 'ready' ? selectedSource.data : undefined;

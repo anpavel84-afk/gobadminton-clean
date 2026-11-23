@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createNativeApi } from '../src/native-api.ts';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
-  PostgameError, parseResults, parsePersonalNote, wire, validateReceipt, noteText, notesSectionVisible,
+  PostgameError, parseResults, parsePersonalNote, wire, validateReceipt, noteText,
+  notesSectionVisible, noteSubjectOptions, collectNotes,
 } from '../src/postgame.ts';
 import type { Intent, Packet, PersonalNote, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
@@ -661,4 +662,180 @@ test('same-version rights refresh only under newer read gen; stale earlier read 
   c.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 4 } });
   await c.confirm();
   assert.equal(sent.length, 0, 'stale earlier read must not regrant delete');
+});
+
+test('same-actor reauth with denied results mounts recovery via visibility selector and direct GET', async () => {
+  const s = setup();
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.ok(s.coordinator.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`]);
+
+  // Manager revocation: results denied; known owned note still GET-able.
+  s.port.results = async () => { throw new PostgameError('private', 403); };
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().games[game.id]?.status, 'unavailable');
+
+  // Same-account logout → new session: refs restore, notes projection clears.
+  s.coordinator.setActor(null);
+  s.coordinator.setActor({ ...actor, sessionId: 'session-reauth', generation: 4 });
+  const snap = s.coordinator.getSnapshot();
+  assert.ok(snap.knownNoteRefs[`${game.id}:${contextA}`]);
+  assert.deepEqual(snap.notes, {});
+  // Actual visibility selector must mount recovery lane for missing/idle known refs.
+  assert.equal(
+    notesSectionVisible(game.id, undefined, snap.notes, snap.knownNoteRefs),
+    true,
+    'denied results + restored known refs must mount notes recovery lane',
+  );
+
+  // Effect path: idle/missing → actual loadNote direct GET restores private text.
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'Личная заметка');
+  assert.equal(
+    notesSectionVisible(
+      game.id, undefined,
+      s.coordinator.getSnapshot().notes,
+      s.coordinator.getSnapshot().knownNoteRefs,
+    ),
+    true,
+  );
+});
+
+test('note subject selector prefers roster over nonempty narrower peerSubjects', () => {
+  const absent = 'context-absent';
+  const disputed = 'context-disputed';
+  const peerOnly = 'context-peer';
+  const rosterRows = [
+    {
+      contextId: contextA, value: 'present' as const, version: 1, late: false,
+      assertion: { actorDisplay: 'Org', source: 'manager_explicit' as const, at: date },
+      acknowledgedVersion: null, dispute: null, displayName: 'Анна',
+      allowedActions: {
+        canSetAttendance: true, canAcknowledge: false, canDispute: false,
+        canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+      },
+    },
+    {
+      contextId: absent, value: 'absent' as const, version: 1, late: false,
+      assertion: { actorDisplay: 'Org', source: 'manager_explicit' as const, at: date },
+      acknowledgedVersion: null, dispute: null, displayName: 'Отсутствует',
+      allowedActions: {
+        canSetAttendance: true, canAcknowledge: false, canDispute: false,
+        canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+      },
+    },
+    {
+      contextId: disputed, value: 'present' as const, version: 2, late: false,
+      assertion: { actorDisplay: 'Org', source: 'manager_explicit' as const, at: date },
+      acknowledgedVersion: null,
+      dispute: { id: 'dispute-1', status: 'open' as const, challengedVersion: 1, version: 1 },
+      displayName: 'Спор',
+      allowedActions: {
+        canSetAttendance: false, canAcknowledge: false, canDispute: false,
+        canWithdrawDispute: false, canRespondDispute: true, canRequestHelp: false,
+      },
+    },
+  ];
+  // Narrower peerSubjects (one eligible peer) must not replace full roster for personal notes.
+  const data: Results = {
+    ...result,
+    attendance: {
+      ...result.attendance!,
+      roster: rosterRows,
+      rosterNextCursor: 'page-2',
+      summary: { rosterCount: 3, marked: 3, unknown: 0, underClarification: 1, agreed: 1 },
+    },
+    feedback: {
+      ...feedbackReady,
+      myNotes: [],
+      capabilities: {
+        canCreateNote: true,
+        peerSubjects: [{ contextId: peerOnly, displayName: 'Только peer' }],
+      },
+    },
+  };
+  const subjects = noteSubjectOptions(data);
+  assert.deepEqual(
+    subjects.map(s => s.contextId),
+    [contextA, absent, disputed],
+    'roster-first: absent/disputed roster contexts remain selectable',
+  );
+  assert.ok(!subjects.some(s => s.contextId === peerOnly), 'peerSubjects must not replace roster');
+  // Empty roster falls back to peerSubjects; pagination cursor presence does not change selector.
+  assert.deepEqual(
+    noteSubjectOptions({
+      ...data,
+      attendance: { ...data.attendance!, roster: [], rosterNextCursor: 'page-2' },
+    }).map(s => s.contextId),
+    [peerOnly],
+  );
+});
+
+test('tombstone fence persists through select/pending GET/error — collectNotes hides deleted text', async () => {
+  const deletedText = 'SECRET-DELETED-TEXT';
+  const s = setup({
+    note: { ...note, text: deletedText },
+    results: {
+      ...result,
+      feedback: { ...feedbackReady, myNotes: [{ ...note, text: deletedText }] },
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, deletedText);
+
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await s.coordinator.confirm();
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`], undefined);
+
+  // Results refresh retains prior myNotes on failure (stale private text still in projection).
+  const staleResults = s.coordinator.getSnapshot().games[game.id]!.data!;
+  assert.equal(staleResults.feedback?.myNotes[0]?.text, deletedText);
+  s.port.results = async () => { throw new PostgameError('network', 503); };
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().games[game.id]?.status, 'error');
+  assert.equal(s.coordinator.getSnapshot().games[game.id]?.data?.feedback?.myNotes[0]?.text, deletedText);
+
+  // Same UI composition: fence must suppress stale myNotes after confirmed DELETE.
+  assert.deepEqual(
+    collectNotes(game.id, s.coordinator.getSnapshot().games[game.id]?.data, s.coordinator.getSnapshot().notes, s.coordinator.getSnapshot().knownNoteRefs),
+    [],
+  );
+
+  // Select deleted context starts deferred GET — fence stays through pending + error.
+  let failGet!: (error: PostgameError) => void;
+  const getGate = new Promise<PersonalNote>((_, reject) => { failGet = reject; });
+  s.port.note = async () => getGate;
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA });
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable',
+    'must not replace tombstone with loading');
+  assert.deepEqual(
+    collectNotes(game.id, s.coordinator.getSnapshot().games[game.id]?.data, s.coordinator.getSnapshot().notes, s.coordinator.getSnapshot().knownNoteRefs),
+    [],
+    'no deleted text during pending GET',
+  );
+  assert.equal(s.sent.length, 1, 'no new create/edit/delete while fenced');
+
+  const pending = getGate.then(() => {}, () => {});
+  failGet(new PostgameError('network', 503));
+  await pending;
+  await Promise.resolve();
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable',
+    'tombstone fence persists after read error');
+  const listed = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.deepEqual(listed, []);
+  assert.ok(!listed.some(n => n.text === deletedText), 'no text resurrection after GET error');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 0, text: 'resurrect' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'no create after tombstone');
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'no further delete without ready authority');
 });

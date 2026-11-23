@@ -399,6 +399,7 @@ export function attendanceHistoryLanes(
 /**
  * Notes section: installed=false shows honest disable; canCreateNote or own notes
  * (results list or known direct GET) show the lane. Absent feedback stays hidden.
+ * Missing/idle known own refs must still mount so the recovery effect can direct-GET.
  */
 export function notesSectionVisible(
   gameId: string,
@@ -415,8 +416,51 @@ export function notesSectionVisible(
     const source = notes[`${ref.gameId}:${ref.contextId}`];
     if (source?.status === 'ready' && source.data) return true;
     if (source?.status === 'loading' || source?.status === 'error') return true;
+    // Same-account reauth restores refs with notes{}; mount recovery before GET settles.
+    if (!source || source.status === 'idle') return true;
   }
   return false;
+}
+/**
+ * Own-note subject choices: prefer current attendance roster (accepted web parity).
+ * peerSubjects stay peer-review eligibility — nonempty peers must not hide absent/disputed roster rows.
+ * Empty roster falls back to peerSubjects; does not widen server create/review caps.
+ */
+export function noteSubjectOptions(
+  data: Results | undefined,
+): { contextId: string; displayName: string }[] {
+  const roster = data?.attendance?.roster ?? [];
+  if (roster.length > 0) {
+    return roster.map(r => ({ contextId: r.contextId, displayName: r.displayName }));
+  }
+  return data?.feedback?.capabilities.peerSubjects ?? [];
+}
+/**
+ * Display composition for NotesSection — definitive unavailable shadows stale myNotes;
+ * ready/loading/error direct data may show retained private text (writes still typed-ready only).
+ */
+export function collectNotes(
+  gameId: string,
+  data: Results | undefined,
+  notes: Record<string, { status: string; data?: PersonalNote }>,
+  known: Record<string, { gameId: string; contextId: string }>,
+): PersonalNote[] {
+  const byContext = new Map<string, PersonalNote>();
+  for (const note of data?.feedback?.myNotes ?? []) {
+    const direct = notes[`${gameId}:${note.contextId}`];
+    // Definitive unavailable/denied shadows stale bounded myNotes for that context.
+    if (direct?.status === 'unavailable') continue;
+    byContext.set(note.contextId, note);
+  }
+  for (const ref of Object.values(known)) {
+    if (ref.gameId !== gameId) continue;
+    const source = notes[`${ref.gameId}:${ref.contextId}`];
+    // Ready is authoritative; loading/error may retain private text for display only (no write grant).
+    if (source?.data && (source.status === 'ready' || source.status === 'loading' || source.status === 'error')) {
+      byContext.set(source.data.contextId, source.data);
+    }
+  }
+  return [...byContext.values()];
 }
 export function validateReceipt(raw: unknown, p: Packet): Receipt {
   if (p.kind === 'note-upsert') {
