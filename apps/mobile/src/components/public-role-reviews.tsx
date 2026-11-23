@@ -7,6 +7,9 @@ import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
   bindPublicRoleFocusRef,
   clearPublicRoleFocusTarget,
+  coldClaimStillOwnsNavigation,
+  coldPendingResumeEventualLive,
+  coldPendingResumePathPhase,
   currentPublicRoleFocusTarget,
   eligibleBases,
   mayWithdrawOwnPublic,
@@ -621,16 +624,27 @@ export function PublicRoleReviewHost() {
   const pathname = usePathname();
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const claimGen = useRef(0);
+  const navGen = useRef(0);
   const pathnameRef = useRef(pathname);
+  const prevPathnameRef = useRef(pathname);
+  if (pathname !== prevPathnameRef.current) {
+    prevPathnameRef.current = pathname;
+    navGen.current++;
+  }
   pathnameRef.current = pathname;
   /** After claim+replace: wait for actual pathname to match before eventual open. */
   const pendingResume = useRef<null | {
     gen: number;
     path: string;
+    waitFromPath: string;
     goal: PublicRoleLocalGoal;
     matched: boolean;
     opening: boolean;
   }>(null);
+  const retirePendingResume = (pending: NonNullable<typeof pendingResume.current>) => {
+    pendingResume.current = null;
+    if (claimGen.current === pending.gen) claimGen.current++;
+  };
   const tryOpenPendingResume = () => {
     const pending = pendingResume.current;
     if (!pending) return;
@@ -642,40 +656,48 @@ export function PublicRoleReviewHost() {
       pendingResume.current = null;
       return;
     }
-    if (pathnameRef.current === pending.path) {
-      if (pending.opening) return;
-      pending.matched = true;
-      pending.opening = true;
-      const isLive = () => pendingResume.current === pending
-        && pending.gen === claimGen.current
-        && !owner.getSnapshot().publicSurface;
-      void (async () => {
-        const { goal } = pending;
-        try {
-          if (goal.mode === 'author' && goal.origin.kind === 'game') {
-            await owner.openResumedPublicComposer({
-              roleHandle: goal.roleHandle,
-              role: goal.role,
-              gameId: goal.origin.gameId,
-            }, { isLive });
-          } else if (goal.mode === 'reader') {
-            await owner.openResumedPublicReader({
-              roleHandle: goal.roleHandle,
-              role: goal.role,
-              origin: goal.origin,
-            }, { isLive });
-          }
-        } finally {
-          if (pendingResume.current === pending) pendingResume.current = null;
-        }
-      })();
+    const phase = coldPendingResumePathPhase({
+      pendingPath: pending.path,
+      waitFromPath: pending.waitFromPath,
+      currentPath: pathnameRef.current,
+      matched: pending.matched,
+    });
+    if (phase === 'wait') return;
+    if (phase === 'retire') {
+      // Unrelated pathname before or after first match — retire consumed goal (no later revival).
+      retirePendingResume(pending);
       return;
     }
-    // Navigated away after the restored origin had already matched — retire without presentation.
-    if (pending.matched) {
-      pendingResume.current = null;
-      if (claimGen.current === pending.gen) claimGen.current++;
-    }
+    if (pending.opening) return;
+    pending.matched = true;
+    pending.opening = true;
+    const isLive = () => coldPendingResumeEventualLive({
+      pendingStillCurrent: pendingResume.current === pending,
+      genMatches: pending.gen === claimGen.current,
+      hasPublicSurface: !!owner.getSnapshot().publicSurface,
+      currentPath: pathnameRef.current,
+      pendingPath: pending.path,
+    });
+    void (async () => {
+      const { goal } = pending;
+      try {
+        if (goal.mode === 'author' && goal.origin.kind === 'game') {
+          await owner.openResumedPublicComposer({
+            roleHandle: goal.roleHandle,
+            role: goal.role,
+            gameId: goal.origin.gameId,
+          }, { isLive });
+        } else if (goal.mode === 'reader') {
+          await owner.openResumedPublicReader({
+            roleHandle: goal.roleHandle,
+            role: goal.role,
+            origin: goal.origin,
+          }, { isLive });
+        }
+      } finally {
+        if (pendingResume.current === pending) pendingResume.current = null;
+      }
+    })();
   };
   useEffect(() => {
     if (auth.status !== 'authenticated') {
@@ -690,6 +712,9 @@ export function PublicRoleReviewHost() {
     }
     if (pendingResume.current) return;
     const gen = ++claimGen.current;
+    // Capture navigation lifetime before SecureStore claim await — pathname is not an effect dep.
+    const pathAtClaim = pathnameRef.current;
+    const navGenAtClaim = navGen.current;
     void (async () => {
       const goal = await auth.claimPublicRoleGoal();
       if (gen !== claimGen.current) return;
@@ -697,10 +722,25 @@ export function PublicRoleReviewHost() {
         const path = publicRoleGoalPath(goal);
         // Bare origin must be restored before sheet handoff — route-only safe fallback cannot authorize.
         if (!path) return;
-        router.replace(path as '/games');
-        if (gen !== claimGen.current) return;
+        if (!coldClaimStillOwnsNavigation({
+          pathAtClaim,
+          navGenAtClaim,
+          currentPath: pathnameRef.current,
+          currentNavGen: navGen.current,
+          goalPath: path,
+        })) {
+          // Intervening unrelated navigation while claim awaited — drop without old-origin replace.
+          return;
+        }
+        const waitFromPath = pathnameRef.current;
+        if (waitFromPath !== path) {
+          router.replace(path as '/games');
+          if (gen !== claimGen.current) return;
+        }
         // replace is an async route commit — do not open until pathname matches.
-        pendingResume.current = { gen, path, goal, matched: false, opening: false };
+        pendingResume.current = {
+          gen, path, waitFromPath, goal, matched: false, opening: false,
+        };
         tryOpenPendingResume();
         return;
       }

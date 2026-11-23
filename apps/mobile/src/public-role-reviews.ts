@@ -798,6 +798,58 @@ export function mayPaintPublicReportReceipt(
   return !!typed && typed.publishedRevision === expectedRevision;
 }
 
+/**
+ * Host claim-phase navigation fence (PublicRoleReviewHost).
+ * Capture path+navGen before awaiting SecureStore claim; after claim, restore/replace only while
+ * ownership holds. Own expected goal path already committed stays live; intervening unrelated
+ * navigation — including ABA back to the claim-start path — drops without forcing old origin.
+ */
+export function coldClaimStillOwnsNavigation(args: {
+  pathAtClaim: string;
+  navGenAtClaim: number;
+  currentPath: string;
+  currentNavGen: number;
+  goalPath: string;
+}): boolean {
+  if (args.currentPath === args.goalPath) return true;
+  return args.currentNavGen === args.navGenAtClaim
+    && args.currentPath === args.pathAtClaim;
+}
+
+/**
+ * Pending origin restore before/after first pathname match.
+ * Wait while still on the pre-replace path; retire on intervening unrelated pathname
+ * (matched or not) so a later ordinary visit cannot reopen a consumed goal; open once on match.
+ */
+export function coldPendingResumePathPhase(args: {
+  pendingPath: string;
+  waitFromPath: string;
+  currentPath: string;
+  matched: boolean;
+}): 'open' | 'wait' | 'retire' {
+  if (args.currentPath === args.pendingPath) return 'open';
+  if (args.matched) return 'retire';
+  if (args.currentPath !== args.waitFromPath) return 'retire';
+  return 'wait';
+}
+
+/**
+ * Eventual-open isLive fence: pending identity + claim gen + no surface + current pathname
+ * still equals the restored origin (sync; must not wait for passive cleanup).
+ */
+export function coldPendingResumeEventualLive(args: {
+  pendingStillCurrent: boolean;
+  genMatches: boolean;
+  hasPublicSurface: boolean;
+  currentPath: string;
+  pendingPath: string;
+}): boolean {
+  return args.pendingStillCurrent
+    && args.genMatches
+    && !args.hasPublicSurface
+    && args.currentPath === args.pendingPath;
+}
+
 /** Stable guest return uses existing game path only — role destination is admitted with the login envelope. */
 export function publicAuthorReturnPath(gameId: string): string | null {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(gameId)) return null;
