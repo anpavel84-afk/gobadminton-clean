@@ -292,8 +292,9 @@ export class PostgameCoordinator {
   private quarantine: {
     actorId: string;
     snapshot: Snapshot;
-    /** Original dispatch ownership — never rebuilt from a replacement surface after reopen. */
-    publicMutationBind: PublicMutationBind;
+    /** Original dispatch ownership — never rebuilt from a replacement surface after reopen.
+     * Legitimately null when there was no original dispatch, or after close/invalidation. */
+    publicMutationBind: PublicMutationBind | null;
   } | null = null;
   private serial = 0;
   private reads = new Map<string,number>();

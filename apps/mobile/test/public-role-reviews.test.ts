@@ -1644,7 +1644,7 @@ test('#522 reader report cancel + profile origin omits game query; reply UNKNOWN
   assert.equal(keys.length, 1);
 
   // Text edit resets consent — drive real separate edit → toggle → submit.
-  owner.patchPublicReplyDraft(reviewHandle, { text: 'Ответ субъекта', consent: true });
+  owner.patchPublicReplyDraft(reviewHandle, { text: 'Ответ субъекта' });
   assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, false);
   owner.patchPublicReplyDraft(reviewHandle, { consent: true });
   assert.equal(owner.getSnapshot().publicReplyDrafts[reviewHandle]?.consent, true);
@@ -3001,7 +3001,8 @@ test('#522 address10: deferred reply/report 409 on A does not paint or refresh B
   assert.equal(ownerReply.getSnapshot().publicReader.data?.items.length, 2);
   assert.equal(ownerReply.getSnapshot().publicReader.data?.nextCursor, null);
   const getsAfterAppend = replyGets;
-  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Ответ A', consent: true });
+  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Ответ A' });
+  ownerReply.patchPublicReplyDraft(reviewHandle, { consent: true });
   const replySubmit = ownerReply.submitPublicReply(reviewHandle);
   for (let i = 0; i < 20 && !ownerReply.getSnapshot().command; i++) await tick();
   assert.equal(ownerReply.getSnapshot().command?.packet.kind, 'public-role-reply');
@@ -3018,7 +3019,7 @@ test('#522 address10: deferred reply/report 409 on A does not paint or refresh B
   await ownerReply.loadPublicReader({ cursor: 'cursor-a', append: true });
   await tick();
   const getsOnB = replyGets;
-  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Черновик B', consent: true });
+  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Черновик B' });
   // Drive a consent hash on B so rejection must not clear it.
   // Preview path needs canReply; use patch only — hash stays null until preview; seed via submit gate already open.
   assert.equal(ownerReply.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик B');
@@ -3060,7 +3061,8 @@ test('#522 address10: deferred reply/report 409 on A does not paint or refresh B
   });
   await tick();
   const getsReady = stayGets;
-  ownerStay.patchPublicReplyDraft(reviewHandle, { text: 'Остаёмся', consent: true });
+  ownerStay.patchPublicReplyDraft(reviewHandle, { text: 'Остаёмся' });
+  ownerStay.patchPublicReplyDraft(reviewHandle, { consent: true });
   const staySubmit = ownerStay.submitPublicReply(reviewHandle);
   for (let i = 0; i < 20 && !ownerStay.getSnapshot().command; i++) await tick();
   releaseStay(new PostgameError('business', 409, 'VERSION_CONFLICT'));
@@ -3193,7 +3195,8 @@ test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen can
     origin: { kind: 'game', gameId },
   });
   await tick();
-  owner.patchPublicReplyDraft(reviewHandle, { text: 'UNKNOWN game', consent: true });
+  owner.patchPublicReplyDraft(reviewHandle, { text: 'UNKNOWN game' });
+  owner.patchPublicReplyDraft(reviewHandle, { consent: true });
   await owner.submitPublicReply(reviewHandle);
   await tick();
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
@@ -3252,6 +3255,7 @@ test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen can
       publicConsentPreview: async () => ({ consentProjectionHash: 'f'.repeat(64) }),
       send: async (packet) => {
         if (mode === 'unknown') throw new PostgameError('network', 503);
+        if (packet.kind !== 'public-role-reply') throw new PostgameError('invalid');
         return { version: packet.body.expectedVersion + 1, status: 'submitted', receiptToken: 'id' };
       },
     }),
@@ -3263,7 +3267,8 @@ test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen can
     origin: { kind: 'game', gameId },
   });
   await tick();
-  ownerIdent.patchPublicReplyDraft(reviewHandle, { text: 'Ident', consent: true });
+  ownerIdent.patchPublicReplyDraft(reviewHandle, { text: 'Ident' });
+  ownerIdent.patchPublicReplyDraft(reviewHandle, { consent: true });
   await ownerIdent.submitPublicReply(reviewHandle);
   await tick();
   ownerIdent.closePublicSurface();
@@ -3297,6 +3302,7 @@ test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen can
             status: 'submitted',
           };
         }
+        if (packet.kind !== 'public-role-reply') throw new PostgameError('invalid');
         return { version: packet.body.expectedVersion + 1, status: 'submitted', receiptToken: 'legit' };
       },
     }),
@@ -3308,7 +3314,8 @@ test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen can
     origin: { kind: 'game', gameId },
   });
   await tick();
-  ownerLegit.patchPublicReplyDraft(reviewHandle, { text: 'Legit recover', consent: true });
+  ownerLegit.patchPublicReplyDraft(reviewHandle, { text: 'Legit recover' });
+  ownerLegit.patchPublicReplyDraft(reviewHandle, { consent: true });
   await ownerLegit.submitPublicReply(reviewHandle);
   await tick();
   assert.equal(ownerLegit.getSnapshot().command?.status, 'unknown');
