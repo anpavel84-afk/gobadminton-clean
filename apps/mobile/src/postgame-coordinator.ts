@@ -159,6 +159,11 @@ export class PostgameCoordinator {
   private reviewHistoryOwned = new Set<string>();
   /** Hard-denied own-history directions — results/receipts must not resurrect private projection. */
   private reviewDirectionDenied = new Set<ReviewDirection>();
+  /** Per-direction coalesce: one fresh root history GET after mutation while a GET is in flight. */
+  private reviewsBusy: Record<ReviewDirection, boolean> = { sent: false, received: false };
+  private reviewsFollowup: Record<ReviewDirection, boolean> = { sent: false, received: false };
+  /** Generation that owns busy/followup per direction; stale finally must not clear a newer actor/read. */
+  private reviewsBusyGen: Record<ReviewDirection, number> = { sent: 0, received: 0 };
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -185,6 +190,8 @@ export class PostgameCoordinator {
     this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear();
     this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear();
     this.reviewDirectionDenied.clear();
+    this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false};
+    this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1};
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
@@ -203,7 +210,7 @@ export class PostgameCoordinator {
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -628,14 +635,40 @@ export class PostgameCoordinator {
       if (source !== 'history' && this.reviewDirectionDenied.has(row.direction)) continue;
       if (source === 'results' && this.reviewAwaitingTyped.has(row.id)) continue;
       const floor = this.reviewVersionFloor.get(row.id) ?? 0;
-      if (row.version < floor) continue;
+      const prior = byId[row.id];
+      const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
+      const replyVer = row.reply?.version ?? 0;
+      if (row.version < floor) {
+        // Older parent must not regress content/permissions/read-gen/consent.
+        // Typed history/receipt may still raise the independent reply floor onto the kept parent.
+        if ((source === 'history' || source === 'receipt') && prior && replyVer > replyFloor && row.reply) {
+          let next: PrivateReview = { ...prior, reply: row.reply };
+          if (source === 'receipt') {
+            next = {
+              ...next,
+              allowedActions: {
+                canEdit: false,
+                canReply: false,
+                canReport: next.allowedActions.canReport,
+              },
+            };
+            this.reviewAwaitingTyped.add(row.id);
+            this.reviewHistoryOwned.delete(row.id);
+          }
+          if (source === 'history') {
+            this.reviewAwaitingTyped.delete(row.id);
+            this.reviewHistoryOwned.add(row.id);
+          }
+          byId[row.id] = next;
+          this.replyVersionFloor.set(row.id, replyVer);
+          changed = true;
+        }
+        continue;
+      }
       // Typed history owns the current floor — later results cannot same-version regress rights/text.
       if (source === 'results' && this.reviewHistoryOwned.has(row.id) && row.version <= floor) continue;
       const applied = this.reviewAppliedGen.get(row.id) ?? 0;
       if (row.version === floor && gen < applied) continue;
-      const prior = byId[row.id];
-      const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
-      const replyVer = row.reply?.version ?? 0;
       let next: PrivateReview = row;
       // Reply revisions are independent of parent review version — keep highest accepted reply.
       if (prior && replyVer < replyFloor) {
@@ -729,12 +762,24 @@ export class PostgameCoordinator {
   /** Own directional history — independent of denied results; honest cursor/empty/error. */
   loadReviews = async (direction: ReviewDirection, more = false) => {
     if (direction !== 'sent' && direction !== 'received') return;
+    // Mutation refresh during in-flight initial/load-more: invalidate the stale page and
+    // coalesce exactly one fresh authoritative root GET. Busy (not status) gates re-entry
+    // so a queued followup can start after invalidation while UI status is still loading.
+    // Queued work is read-only — never autosend writes.
+    if (this.reviewsBusy[direction]) {
+      if (!more) {
+        this.reviewsFollowup[direction] = true;
+        this.reads.set(`reviews:${direction}`, ++this.serial);
+      }
+      return;
+    }
     const old = this.snapshot.reviewHistory[direction];
-    if (old.status === 'loading') return;
     const cursor = more ? old.data?.nextCursor : undefined;
     if (more && !cursor) return;
     const { actor, valid } = this.start(`reviews:${direction}`);
     if (!actor) return;
+    const busyGen = ++this.reviewsBusyGen[direction];
+    this.reviewsBusy[direction] = true;
     const historyGen = this.reads.get(`reviews:${direction}`) ?? 0;
     const put = (source: Source<MeReviewsPage>) => this.show({
       reviewHistory: { ...this.snapshot.reviewHistory, [direction]: source },
@@ -760,6 +805,14 @@ export class PostgameCoordinator {
       const denied = error instanceof PostgameError && error.kind === 'private';
       put(this.failure(error, old));
       if (denied) this.retireReviewDirection(direction);
+    } finally {
+      if (this.reviewsBusyGen[direction] === busyGen) {
+        this.reviewsBusy[direction] = false;
+        if (this.reviewsFollowup[direction]) {
+          this.reviewsFollowup[direction] = false;
+          if (actor && sameActor(actor, this.snapshot.actor)) void this.loadReviews(direction, false);
+        }
+      }
     }
   };
   private currentNote(gameId: string, contextId: string): PersonalNote | null {

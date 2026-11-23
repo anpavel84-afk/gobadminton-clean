@@ -358,6 +358,30 @@ test('mergeReviewPages keeps highest reply across parent review-version advances
   const advanced = mergeReviewPages(merged, [v2Reply2], 'received');
   assert.equal(advanced[0]?.reply?.version, 2);
   assert.equal(advanced[0]?.reply?.text, 'reply-v2');
+
+  // Reverse arrival: older parent with independently newer reply must not drop reply v2.
+  const priorV2Reply1 = peerReview({
+    id: 'merge-reverse', direction: 'received', version: 2, comment: 'comment-new',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const incomingV1Reply2 = peerReview({
+    id: 'merge-reverse', direction: 'received', version: 1, comment: 'comment-old',
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  });
+  const reversed = mergeReviewPages([priorV2Reply1], [incomingV1Reply2], 'received');
+  assert.equal(reversed[0]?.version, 2);
+  assert.equal(reversed[0]?.comment, 'comment-new');
+  assert.equal(reversed[0]?.allowedActions.canReply, true);
+  assert.equal(reversed[0]?.reply?.version, 2);
+  assert.equal(reversed[0]?.reply?.text, 'reply-v2');
+  // Opposite order still keeps parent v2 + highest reply.
+  const forward = mergeReviewPages([incomingV1Reply2], [priorV2Reply1], 'received');
+  assert.equal(forward[0]?.version, 2);
+  assert.equal(forward[0]?.comment, 'comment-new');
+  assert.equal(forward[0]?.reply?.version, 2);
+  assert.equal(forward[0]?.reply?.text, 'reply-v2');
 });
 
 test('mergeReviewPages is monotonic; UNKNOWN retry keeps original packet; reauth does not autosend', async () => {
@@ -863,4 +887,138 @@ test('reply revision floor survives parent review v2/null and advances on reply 
   await s.coordinator.loadReviews('received');
   assert.equal(s.coordinator.getSnapshot().reviewsById['recv-reply-floor']?.reply?.version, 2);
   assert.equal(s.coordinator.getSnapshot().reviewsById['recv-reply-floor']?.reply?.text, 'reply-v2');
+});
+
+test('deferred create ACK while sent GET pending queues one fresh root GET', async () => {
+  const tick = () => new Promise<void>(r => setImmediate(r));
+  let resolveEmpty!: (v: { items: PrivateReview[]; nextCursor: null }) => void;
+  const emptyPromise = new Promise<{ items: PrivateReview[]; nextCursor: null }>(r => { resolveEmpty = r; });
+  let sentGets = 0;
+  const s = setup({
+    results: {
+      ...result,
+      feedback: {
+        ...feedbackReady,
+        gameReviews: [],
+        capabilities: { ...feedbackReady.capabilities, canCreatePeer: true, peerSubjects: [{ contextId: contextB, displayName: 'Илья' }] },
+      },
+    },
+    reviews: { received: [], sent: [] },
+  });
+  s.port.reviews = async (_a, direction) => {
+    if (direction !== 'sent') return { items: [], nextCursor: null };
+    sentGets++;
+    if (sentGets === 1) return emptyPromise;
+    return { items: structuredClone(s.reviews.sent), nextCursor: null };
+  };
+  await s.coordinator.loadResults(game.id);
+  const initialSent = s.coordinator.loadReviews('sent');
+  await tick();
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.sent.status, 'loading');
+  assert.equal(sentGets, 1);
+  s.coordinator.setFeedbackDraft(game.id, { peerRating: 'play_again', subjectContextId: contextB });
+  s.coordinator.review({
+    kind: 'peer-create', gameId: game.id,
+    body: {
+      kind: 'peer', subjectContextId: contextB, peerRating: 'play_again',
+      experienceAssertion: 'i_experienced_this_game',
+    },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-create');
+  await s.coordinator.confirm();
+  assert.equal(s.sentPkts.filter(p => p.kind === 'peer-create').length, 1);
+  assert.equal(sentGets, 1, 'coalesce: mutation refresh waits for in-flight GET');
+  // Extra refresh while busy still coalesces to one followup.
+  void s.coordinator.loadReviews('sent');
+  resolveEmpty({ items: [], nextCursor: null });
+  await initialSent;
+  await tick();
+  assert.equal(sentGets, 2, 'exactly one fresh root GET after pre-mutation flight');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.sent.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.sent.data?.items[0]?.id, 'review-new');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['review-new']?.id, 'review-new');
+  assert.equal(s.sentPkts.filter(p => p.kind === 'peer-create').length, 1, 'queued refresh is GET-only');
+
+  // Actor ABA: queued followup must not leak after logout.
+  let resolveLogout!: (v: { items: PrivateReview[]; nextCursor: null }) => void;
+  const logoutPromise = new Promise<{ items: PrivateReview[]; nextCursor: null }>(r => { resolveLogout = r; });
+  let logoutGets = 0;
+  const fenced = setup({ reviews: { received: [], sent: [] } });
+  fenced.port.reviews = async (_a, direction) => {
+    if (direction !== 'sent') return { items: [], nextCursor: null };
+    logoutGets++;
+    return logoutPromise;
+  };
+  const logoutFlight = fenced.coordinator.loadReviews('sent');
+  await tick();
+  void fenced.coordinator.loadReviews('sent');
+  fenced.coordinator.setActor(null);
+  resolveLogout({ items: [], nextCursor: null });
+  await logoutFlight;
+  await tick();
+  assert.equal(logoutGets, 1, 'actor fence drops queued sent history followup');
+  assert.equal(fenced.coordinator.getSnapshot().reviewHistory.sent.status, 'idle');
+});
+
+test('reverse parent/reply floor: both orders keep parent v2 and reply v2; consent stays on parent revision', async () => {
+  const v2Reply1 = peerReview({
+    id: 'recv-reverse', direction: 'received', version: 2, comment: 'comment-new',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [v2Reply1] } },
+    reviews: { received: [v2Reply1], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  s.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: 'recv-reverse', reportConsent: true, reportConsentVersion: 2, reportDetail: 'keep',
+  });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 2);
+
+  // Reverse typed history: older parent + independently newer reply.
+  const v1Reply2 = peerReview({
+    id: 'recv-reverse', direction: 'received', version: 1, comment: 'comment-old',
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  });
+  s.reviews.received = [v1Reply2];
+  await s.coordinator.loadReviews('received');
+  const kept = s.coordinator.getSnapshot().reviewsById['recv-reverse'];
+  assert.equal(kept?.version, 2);
+  assert.equal(kept?.comment, 'comment-new');
+  assert.equal(kept?.allowedActions.canReply, true);
+  assert.equal(kept?.reply?.version, 2);
+  assert.equal(kept?.reply?.text, 'reply-v2');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 2);
+  // Next reply expectedVersion must be reply floor 2, not 0/1.
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-reverse',
+    body: { expectedVersion: 1, text: 'stale reply floor' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review, null, 'expectedVersion:1 must not arm after reply v2');
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-reverse',
+    body: { expectedVersion: 2, text: 'advance from floor 2' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-reply');
+  s.coordinator.cancelReview();
+
+  // Forward order (newer parent after older reply bearer) still converges.
+  const t = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [v1Reply2] } },
+    reviews: { received: [v1Reply2], sent: [] },
+  });
+  await t.coordinator.loadResults(game.id);
+  await t.coordinator.loadReviews('received');
+  t.reviews.received = [v2Reply1];
+  await t.coordinator.loadReviews('received');
+  const forward = t.coordinator.getSnapshot().reviewsById['recv-reverse'];
+  assert.equal(forward?.version, 2);
+  assert.equal(forward?.comment, 'comment-new');
+  assert.equal(forward?.reply?.version, 2);
+  assert.equal(forward?.reply?.text, 'reply-v2');
 });

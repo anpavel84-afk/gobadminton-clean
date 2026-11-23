@@ -302,6 +302,8 @@ export function feedbackSectionVisible(
 /**
  * Monotonic merge: same id keeps higher review version; reply revision is independent —
  * adopt legitimate newer review content while preserving the highest accepted reply/text.
+ * Both arrival orders: never regress parent content/permissions from an older parent;
+ * still adopt an independently newer reply onto the kept parent.
  */
 export function mergeReviewPages(
   prior: PrivateReview[],
@@ -320,9 +322,13 @@ export function mergeReviewPages(
       byId.set(row.id, row);
       continue;
     }
-    if (row.version < old.version) continue;
     const oldReply = old.reply?.version ?? 0;
     const nextReply = row.reply?.version ?? 0;
+    if (row.version < old.version) {
+      // Older parent must not win content/permissions; may still raise reply floor.
+      if (nextReply > oldReply) byId.set(row.id, { ...old, reply: row.reply });
+      continue;
+    }
     // Across review-version advances and same-version refreshes: keep highest reply.
     if (nextReply < oldReply) {
       byId.set(row.id, { ...row, reply: old.reply });
