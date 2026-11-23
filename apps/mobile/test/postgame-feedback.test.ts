@@ -4,8 +4,9 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
   PostgameError, parseResults, parsePrivateReview, parseMeReviewsPage, parseReviewReportReceipt,
   wire, validateReceipt, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
-  feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
-  displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
+  privateReviewsOnly, privateReviewsForGame, privateReviewHeadline, reviewKindModeLabel,
+  shouldOmitRoleDiscrepancy, feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore,
+  reviewCommandsOpen, displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
 } from '../src/postgame.ts';
 import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
@@ -45,6 +46,9 @@ const feedbackReady = {
   capabilities: {
     canCreateNote: false,
     canCreatePeer: true,
+    canCreateOrganization: true,
+    canCreateTraining: false,
+    organizationRecipientDisplay: 'PG3 manager' as string | null,
     peerCreateReason: null as null,
     peerSubjects: [{ contextId: contextB, displayName: 'Илья' }],
   },
@@ -95,6 +99,38 @@ function setup(opts: {
           peerRating: p.body.peerRating,
           comment: p.body.comment ?? null,
           tags: p.body.tags ?? [],
+          version: 1,
+        });
+        reviews.sent.push(row);
+        return row;
+      }
+      if (p.kind === 'organization-create') {
+        const row = peerReview({
+          id: 'org-new',
+          kind: 'organization',
+          subjectContextId: null,
+          peerRating: null,
+          organizationScore: p.body.organizationScore ?? null,
+          comment: p.body.comment ?? null,
+          tags: [],
+          discrepancyExplanation: p.body.discrepancyExplanation ?? null,
+          recipientDisplay: 'PG3 manager',
+          version: 1,
+        });
+        reviews.sent.push(row);
+        return row;
+      }
+      if (p.kind === 'training-create') {
+        const row = peerReview({
+          id: 'train-new',
+          kind: 'training',
+          subjectContextId: null,
+          peerRating: null,
+          organizationScore: null,
+          comment: p.body.comment,
+          tags: [],
+          discrepancyExplanation: p.body.discrepancyExplanation ?? null,
+          recipientDisplay: 'Тренер',
           version: 1,
         });
         reviews.sent.push(row);
@@ -195,6 +231,8 @@ test('wire peer create/reply/report and validate receipts; reply uses reply.vers
 test('results parse keeps peer caps + gameReviews; feedback visible when history ready and results denied', () => {
   const parsed = parseResults(result);
   assert.equal(parsed.feedback?.capabilities.canCreatePeer, true);
+  assert.equal(parsed.feedback?.capabilities.canCreateOrganization, true);
+  assert.equal(parsed.feedback?.capabilities.organizationRecipientDisplay, 'PG3 manager');
   assert.equal(parsed.feedback?.gameReviews?.length, 1);
   assert.equal(feedbackSectionVisible(game.id, parsed.feedback, {
     received: { status: 'ready', data: { items: [], nextCursor: null } },
@@ -1297,4 +1335,309 @@ test('ROOT older-generation history may carry newer independent reply without st
   assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.comment, 'history refresh');
   assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.allowedActions.canReply, true);
   assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 2);
+});
+test('#522 private organization/training: wire whitelist, receipts, kind drafts, discrepancy omit, report peer-only', async () => {
+  const orgIntent: Intent = {
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      organizationScore: 4, comment: 'Организация ок',
+    },
+  };
+  assert.deepEqual(wire(orgIntent), {
+    method: 'POST', path: `/games/${game.id}/reviews`, body: orgIntent.body,
+  });
+  assert.throws(() => wire({
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      organizationScore: 3, subjectContextId: contextB,
+    },
+  } as unknown as Intent));
+  assert.throws(() => wire({
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      organizationScore: 3, peerRating: 'play_again',
+    },
+  } as unknown as Intent));
+  const orgReceipt = peerReview({
+    id: 'org-r', kind: 'organization', subjectContextId: null, peerRating: null,
+    organizationScore: 4, comment: 'Организация ок', tags: [], direction: 'sent',
+  });
+  assert.equal((validateReceipt(orgReceipt, packet(orgIntent)) as PrivateReview).kind, 'organization');
+
+  const trainIntent: Intent = {
+    kind: 'training-create', gameId: game.id,
+    body: {
+      kind: 'training', experienceAssertion: 'i_experienced_this_game',
+      comment: 'Тренировка прошла хорошо',
+    },
+  };
+  assert.equal(wire(trainIntent).path, `/games/${game.id}/reviews`);
+  assert.throws(() => wire({
+    kind: 'training-create', gameId: game.id,
+    body: { kind: 'training', experienceAssertion: 'i_experienced_this_game', comment: '' },
+  }));
+  const trainReceipt = peerReview({
+    id: 'train-r', kind: 'training', subjectContextId: null, peerRating: null,
+    organizationScore: null, comment: 'Тренировка прошла хорошо', tags: [], direction: 'sent',
+  });
+  assert.equal((validateReceipt(trainReceipt, packet(trainIntent)) as PrivateReview).kind, 'training');
+
+  assert.equal(reviewKindModeLabel('organization'), 'Организатору лично');
+  assert.equal(reviewKindModeLabel('training'), 'Тренировка');
+  assert.equal(privateReviewHeadline(orgReceipt), 'Оценка организации: 4 из 5');
+  assert.equal(privateReviewHeadline(peerReview({
+    kind: 'organization', subjectContextId: null, peerRating: null, organizationScore: null,
+  })), 'Организатору лично');
+  assert.equal(privateReviewHeadline(trainReceipt), 'Тренировка');
+
+  const heldPresent: Results = {
+    ...result,
+    attendance: {
+      installed: true, writesEnabled: true,
+      myAttendance: {
+        contextId: 'me', value: 'present', version: 1, late: false,
+        assertion: { actorDisplay: null, source: 'self_attested', at: date },
+        acknowledgedVersion: null, dispute: null, displayName: 'Я',
+        allowedActions: {
+          canSetAttendance: false, canAcknowledge: false, canDispute: false,
+          canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+        },
+      },
+      roster: null, rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  };
+  assert.equal(shouldOmitRoleDiscrepancy(heldPresent), true);
+  assert.equal(shouldOmitRoleDiscrepancy({
+    ...heldPresent, outcome: { ...heldPresent.outcome, value: 'not_held' },
+  }), false);
+  assert.equal(shouldOmitRoleDiscrepancy(undefined), false);
+  assert.equal(shouldOmitRoleDiscrepancy({
+    ...result,
+    attendance: {
+      installed: true, writesEnabled: true, myAttendance: null, roster: null,
+      rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  }), true);
+
+  const org = peerReview({
+    id: 'org-hist', kind: 'organization', subjectContextId: null, peerRating: null,
+    organizationScore: 5, direction: 'sent',
+  });
+  const train = peerReview({
+    id: 'train-hist', kind: 'training', subjectContextId: null, peerRating: null,
+    organizationScore: null, comment: 'ok', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: false },
+  });
+  assert.deepEqual(privateReviewsOnly([peerReview(), org, train]).map(r => r.id), ['review-1', 'org-hist', 'train-hist']);
+  assert.deepEqual(privateReviewsForGame([org, peerReview({ id: 'x', gameId: 'other' })], game.id).map(r => r.id), ['org-hist']);
+  assert.equal(feedbackSectionVisible(game.id, {
+    installed: true,
+    capabilities: {
+      canCreateOrganization: true, organizationRecipientDisplay: 'Host', canCreateTraining: false,
+    },
+  }, { received: { status: 'idle' }, sent: { status: 'idle' } }), true);
+
+  // Coordinator: organization score-or-comment; training requires comment; kind drafts stay separated.
+  const s = setup({
+    results: {
+      ...heldPresent,
+      feedback: {
+        ...feedbackReady,
+        capabilities: {
+          ...feedbackReady.capabilities,
+          canCreatePeer: false,
+          canCreateOrganization: true,
+          canCreateTraining: true,
+          organizationRecipientDisplay: 'PG3 manager',
+          peerSubjects: [],
+        },
+      },
+    },
+    reviews: { received: [train], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  s.coordinator.setFeedbackDraft(game.id, {
+    mode: 'organization', organizationScore: 5, organizationComment: '',
+    trainingComment: 'не переносить',
+  });
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: { kind: 'organization', experienceAssertion: 'i_experienced_this_game', organizationScore: 5 },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'organization-create');
+  await s.coordinator.confirm();
+  assert.equal(s.sentPkts.filter(p => p.kind === 'organization-create').length, 1);
+  assert.equal(s.sentPkts.at(-1)?.body.kind, 'organization');
+  assert.ok(!('subjectContextId' in (s.sentPkts.at(-1)?.body ?? {})));
+  assert.ok(!('peerRating' in (s.sentPkts.at(-1)?.body ?? {})));
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.trainingComment, 'не переносить');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationScore, null);
+
+  s.coordinator.setFeedbackDraft(game.id, { mode: 'training', trainingComment: 'Как прошла тренировка' });
+  s.coordinator.review({
+    kind: 'training-create', gameId: game.id,
+    body: {
+      kind: 'training', experienceAssertion: 'i_experienced_this_game',
+      comment: 'Как прошла тренировка',
+    },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sentPkts.filter(p => p.kind === 'training-create').length, 1);
+
+  // Empty training intentionally rejected before confirm.
+  s.coordinator.setFeedbackDraft(game.id, { trainingComment: '' });
+  s.coordinator.review({
+    kind: 'training-create', gameId: game.id,
+    body: { kind: 'training', experienceAssertion: 'i_experienced_this_game', comment: '   ' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review, null);
+
+  // Non-peer report blocked even if canReport wrongly set.
+  await s.coordinator.loadReviews('received');
+  const orgRecv = peerReview({
+    id: 'org-recv', kind: 'organization', subjectContextId: null, peerRating: null,
+    organizationScore: 3, direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  s.reviews.received = [orgRecv];
+  s.port.reviews = async () => ({ items: structuredClone(s.reviews.received), nextCursor: null });
+  await s.coordinator.loadReviews('received');
+  s.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: orgRecv.id, reportConsent: true, reportConsentVersion: 1,
+  });
+  s.coordinator.review({
+    kind: 'peer-report', gameId: game.id, reviewId: orgRecv.id,
+    body: {
+      expectedVersion: 1, reasonCode: 'spam', detail: null,
+      shareReviewWithSupport: true, gameId: game.id,
+    },
+  });
+  assert.equal(s.coordinator.getSnapshot().review, null);
+
+  // Reply works for organization/training when canReply + typed history.
+  s.coordinator.setFeedbackDraft(game.id, { replyText: { [orgRecv.id]: 'Спасибо за отзыв' } });
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: orgRecv.id,
+    body: { expectedVersion: 0, text: 'Спасибо за отзыв' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-reply');
+  await s.coordinator.confirm();
+  assert.equal(s.sentPkts.filter(p => p.kind === 'peer-reply').length, 1);
+});
+
+test('#522 private role: discrepancy REQUIRED/UNEXPECTED preserve draft; writes-off blocks create; denied history still lists kinds', async () => {
+  const heldPresent: Results = {
+    ...result,
+    feedback: {
+      ...feedbackReady,
+      capabilities: {
+        ...feedbackReady.capabilities,
+        canCreatePeer: false,
+        canCreateOrganization: true,
+        canCreateTraining: true,
+        peerSubjects: [],
+      },
+    },
+    attendance: {
+      installed: true, writesEnabled: true,
+      myAttendance: {
+        contextId: 'me', value: 'absent', version: 1, late: false,
+        assertion: { actorDisplay: 'Org', source: 'manager_explicit', at: date },
+        acknowledgedVersion: null, dispute: null, displayName: 'Я',
+        allowedActions: {
+          canSetAttendance: false, canAcknowledge: false, canDispute: false,
+          canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+        },
+      },
+      roster: null, rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  };
+  assert.equal(shouldOmitRoleDiscrepancy(heldPresent), false);
+
+  const s = setup({ results: heldPresent, reviews: { received: [], sent: [] } });
+  await s.coordinator.loadResults(game.id);
+  s.port.send = async (p: Packet) => {
+    s.sentPkts.push(p);
+    if (p.kind === 'organization-create' && !('discrepancyExplanation' in p.body && p.body.discrepancyExplanation)) {
+      throw new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_REQUIRED');
+    }
+    if (p.kind === 'organization-create' && p.body.discrepancyExplanation === 'лишнее') {
+      throw new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_UNEXPECTED');
+    }
+    return peerReview({
+      id: 'org-ok', kind: 'organization', subjectContextId: null, peerRating: null,
+      organizationScore: p.kind === 'organization-create' ? (p.body.organizationScore ?? null) : null,
+      comment: p.kind === 'organization-create' ? (p.body.comment ?? null) : null,
+      discrepancyExplanation: p.kind === 'organization-create' ? (p.body.discrepancyExplanation ?? null) : null,
+      tags: [], direction: 'sent',
+    });
+  };
+  s.coordinator.setFeedbackDraft(game.id, {
+    mode: 'organization', organizationScore: 3, organizationComment: 'черновик',
+  });
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: { kind: 'organization', experienceAssertion: 'i_experienced_this_game', organizationScore: 3, comment: 'черновик' },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'черновик');
+  assert.equal(
+    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyFieldError,
+    'Поясните расхождение с отметкой или итогом игры',
+  );
+  assert.match(s.coordinator.getSnapshot().notice ?? '', /пояснение расхождения/i);
+
+  s.coordinator.setFeedbackDraft(game.id, {
+    organizationDiscrepancy: 'лишнее', discrepancyFieldError: null,
+  });
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      organizationScore: 3, comment: 'черновик', discrepancyExplanation: 'лишнее',
+    },
+  });
+  await s.coordinator.confirm();
+  assert.equal(
+    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyFieldError,
+    'Пояснение для этой встречи не требуется',
+  );
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'черновик');
+
+  // Writes-off: create blocked; historical ACK path not opened.
+  const off = setup({
+    results: {
+      ...heldPresent,
+      feedback: { ...heldPresent.feedback!, writesEnabled: false },
+    },
+  });
+  await off.coordinator.loadResults(game.id);
+  off.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: { kind: 'organization', experienceAssertion: 'i_experienced_this_game', organizationScore: 2 },
+  });
+  assert.equal(off.coordinator.getSnapshot().review, null);
+
+  // Denied results still surface private org/training history.
+  const orgHist = peerReview({
+    id: 'org-deny', kind: 'organization', subjectContextId: null, peerRating: null,
+    organizationScore: 4, direction: 'sent',
+  });
+  const denied = setup({ results: 'deny', reviews: { received: [], sent: [orgHist] } });
+  await denied.coordinator.loadReviews('sent');
+  assert.equal(denied.coordinator.getSnapshot().reviewHistory.sent.status, 'ready');
+  assert.deepEqual(
+    privateReviewsForGame(denied.coordinator.getSnapshot().reviewHistory.sent.data?.items ?? [], game.id).map(r => r.id),
+    ['org-deny'],
+  );
+  assert.equal(feedbackSectionVisible(game.id, undefined, {
+    received: { status: 'idle' },
+    sent: { status: 'ready', data: { items: [orgHist], nextCursor: null } },
+  }), true);
 });

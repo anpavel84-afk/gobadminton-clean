@@ -8,11 +8,14 @@ import {
   peerCreateReasonLabel,
   peerHistoryEmptyText,
   peerRatingLabel,
-  peerReviewsForGame,
-  peerReviewsOnly,
+  privateReviewHeadline,
+  privateReviewsForGame,
+  privateReviewsOnly,
   projectReviewsFromStore,
   resolvePeerDraftSubject,
   reviewCommandsOpen,
+  reviewKindModeLabel,
+  shouldOmitRoleDiscrepancy,
   PEER_OPTIONS,
   REPORT_REASONS,
   TAG_OPTIONS,
@@ -45,14 +48,19 @@ function ReviewCard({
   // canReply already reflects writesEnabled on the server — do not AND missing Results.
   const commandsOpen = reviewCommandsOpen(s.reviewHistory[review.direction]?.status);
   const canReply = commandsOpen && review.allowedActions.canReply && !otherGame;
-  const canReport = commandsOpen && review.allowedActions.canReport;
+  // Exact-revision Support report remains received peer only.
+  const canReport = commandsOpen && review.kind === 'peer' && review.allowedActions.canReport;
   const reporting = draft.reportReviewId === review.id;
-  return <View style={styles.card} accessibilityLabel={`Отзыв · ${peerRatingLabel(review.peerRating)}`}>
+  const kindLabel = reviewKindModeLabel(review.kind);
+  return <View style={styles.card} accessibilityLabel={`Отзыв · ${kindLabel} · ${privateReviewHeadline(review)}`}>
     {otherGame ? <Label>Другая игра · отзыв из личной истории</Label> : null}
-    <Label style={{ fontWeight: '700' }}>{peerRatingLabel(review.peerRating)}</Label>
+    <Label style={{ fontWeight: '700' }}>{kindLabel}</Label>
+    <Label style={{ fontWeight: '700' }}>{privateReviewHeadline(review)}</Label>
     {review.direction === 'sent' ? <Label>Для {review.recipientDisplay}</Label> : null}
     {review.comment ? <Label>{review.comment}</Label> : null}
-    {review.tags.length ? <Label>{review.tags.map(t => TAG_OPTIONS.find(o => o.value === t)?.label ?? t).join(' · ')}</Label> : null}
+    {review.kind === 'peer' && review.tags.length ? (
+      <Label>{review.tags.map(t => TAG_OPTIONS.find(o => o.value === t)?.label ?? t).join(' · ')}</Label>
+    ) : null}
     {review.reply ? <Label>Ответ{review.reply.editedAt ? ' (изменён)' : ''}: {review.reply.text}</Label> : null}
     {canReply ? <>
       <Label>Ответ адресата</Label>
@@ -140,8 +148,33 @@ function ReportForm({ draftGameId, review }: { draftGameId: string; review: Priv
   </View>;
 }
 
+function DiscrepancyField({
+  gameId, value, blocked, writes, fieldError,
+}: {
+  gameId: string; value: string; blocked: boolean; writes: boolean; fieldError: string | null | undefined;
+}) {
+  const { owner } = useOwner();
+  const mode = (owner.getSnapshot().feedbackDrafts[gameId] ?? {}).mode;
+  return <>
+    <Label>Пояснение расхождения при необходимости</Label>
+    {fieldError ? <Label accessibilityRole="alert">{fieldError}</Label> : null}
+    <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
+      accessibilityLabel="Пояснение расхождения при необходимости"
+      value={value}
+      onChangeText={text => {
+        if (mode === 'organization') {
+          owner.setFeedbackDraft(gameId, { organizationDiscrepancy: text, discrepancyFieldError: null });
+        } else if (mode === 'training') {
+          owner.setFeedbackDraft(gameId, { trainingDiscrepancy: text, discrepancyFieldError: null });
+        }
+      }}
+      maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
+      style={[styles.input, { minHeight: 60, maxHeight: 120 }]} />
+  </>;
+}
+
 /**
- * Private peer feedback after attendance/clarification.
+ * Private feedback after attendance/clarification: peer + organization + training.
  * History lane works when full results/roster denied; notes stay a separate section.
  */
 export function FeedbackSection({ gameId, data }: { gameId: string; data?: Results }) {
@@ -151,17 +184,34 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const installed = feedback?.installed !== false;
   const writes = !!(feedback?.installed && feedback.writesEnabled);
   const caps = feedback?.capabilities;
-  const canCreate = !!(caps?.canCreatePeer && writes);
+  const canCreatePeer = !!(caps?.canCreatePeer && writes);
+  const canCreateOrganization = !!(caps?.canCreateOrganization && writes);
+  const canCreateTraining = !!(caps?.canCreateTraining && writes);
+  const showOrganization = !!(caps?.canCreateOrganization || caps?.organizationRecipientDisplay);
+  const showTraining = !!caps?.canCreateTraining;
+  const showPeer = !!(caps?.canCreatePeer || (caps?.peerSubjects?.length ?? 0) > 0 || caps?.peerCreateReason);
   const subjects = caps?.peerSubjects ?? [];
   const draft = s.feedbackDrafts[gameId] ?? {};
-  const mode = draft.mode ?? (canCreate || subjects.length || caps?.peerCreateReason ? 'peer' : 'received');
+  const defaultMode = showPeer ? 'peer' as const
+    : showOrganization ? 'organization' as const
+      : showTraining ? 'training' as const
+        : 'received' as const;
+  const mode = draft.mode ?? defaultMode;
   const { selected, needsReselect } = resolvePeerDraftSubject(subjects, draft.subjectContextId);
   const peerRating = draft.peerRating;
   const comment = draft.comment ?? '';
   const tags = draft.tags ?? [];
+  const orgScore = draft.organizationScore;
+  const orgComment = draft.organizationComment ?? '';
+  const orgDiscrepancy = draft.organizationDiscrepancy ?? '';
+  const trainingComment = draft.trainingComment ?? '';
+  const trainingDiscrepancy = draft.trainingDiscrepancy ?? '';
+  const discrepancyError = draft.discrepancyFieldError;
+  const omitDiscrepancy = shouldOmitRoleDiscrepancy(data);
   const received = s.reviewHistory.received;
   const sent = s.reviewHistory.sent;
   const visible = feedbackSectionVisible(gameId, feedback, { received, sent });
+  const orgRecipient = caps?.organizationRecipientDisplay;
 
   useEffect(() => {
     void owner.loadReviews('received');
@@ -181,36 +231,77 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const laneRows = (direction: 'received' | 'sent', history: typeof received) => {
     const byId = s.reviewsById;
     if (history.status === 'ready') {
-      return peerReviewsForGame(projectReviewsFromStore(history.data?.items ?? [], byId), gameId);
+      return privateReviewsForGame(projectReviewsFromStore(history.data?.items ?? [], byId), gameId);
     }
     if (history.status === 'unavailable') return [];
     if (history.status === 'loading' || history.status === 'error') {
       // Retain approved display only — strip write actions; never resurrect via Results fallback.
-      const retained = peerReviewsOnly(Object.values(byId)).filter(r => r.direction === direction && r.gameId === gameId);
+      const retained = privateReviewsOnly(Object.values(byId)).filter(r => r.direction === direction && r.gameId === gameId);
       return retained.map(displayOnlyReview);
     }
     // Idle bootstrap from same-game results until the first history GET settles.
-    return peerReviewsForGame(
-      peerReviewsOnly(feedback?.gameReviews?.filter(r => r.direction === direction) ?? []),
+    return privateReviewsForGame(
+      privateReviewsOnly(feedback?.gameReviews?.filter(r => r.direction === direction) ?? []),
       gameId,
     );
   };
-  const receivedPeer = laneRows('received', received);
-  const sentPeer = laneRows('sent', sent);
+  const receivedRows = laneRows('received', received);
+  const sentRows = laneRows('sent', sent);
   const historyReceivedOther = received.status === 'ready'
-    ? peerReviewsOnly(projectReviewsFromStore(received.data?.items ?? [], s.reviewsById)).filter(r => r.gameId !== gameId)
+    ? privateReviewsOnly(projectReviewsFromStore(received.data?.items ?? [], s.reviewsById)).filter(r => r.gameId !== gameId)
     : [];
   const historySentOther = sent.status === 'ready'
-    ? peerReviewsOnly(projectReviewsFromStore(sent.data?.items ?? [], s.reviewsById)).filter(r => r.gameId !== gameId)
+    ? privateReviewsOnly(projectReviewsFromStore(sent.data?.items ?? [], s.reviewsById)).filter(r => r.gameId !== gameId)
     : [];
+
+  const submitOrganization = () => {
+    if (!canCreateOrganization) return;
+    const trimmed = normalizeFormReason(orgComment);
+    if (orgScore == null && !trimmed) return;
+    const discrepancy = normalizeFormReason(orgDiscrepancy);
+    owner.review({
+      kind: 'organization-create', gameId,
+      body: {
+        kind: 'organization',
+        experienceAssertion: 'i_experienced_this_game',
+        ...(orgScore != null ? { organizationScore: orgScore } : {}),
+        ...(trimmed ? { comment: trimmed } : {}),
+        ...(!omitDiscrepancy && discrepancy ? { discrepancyExplanation: discrepancy } : {}),
+      },
+    });
+  };
+
+  const submitTraining = () => {
+    if (!canCreateTraining) return;
+    const trimmed = normalizeFormReason(trainingComment);
+    if (!trimmed) return;
+    const discrepancy = normalizeFormReason(trainingDiscrepancy);
+    owner.review({
+      kind: 'training-create', gameId,
+      body: {
+        kind: 'training',
+        experienceAssertion: 'i_experienced_this_game',
+        comment: trimmed,
+        ...(!omitDiscrepancy && discrepancy ? { discrepancyExplanation: discrepancy } : {}),
+      },
+    });
+  };
 
   return <View style={{ gap: 12 }}>
     <Label style={{ fontSize: 20, fontWeight: '700' }}>Как вам встреча?</Label>
     <Label>Без публичного рейтинга</Label>
     <Label>Отзыв приватный и отделён от посещения. Нет публичного рейтинга и смены навыка.</Label>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {(canCreate || subjects.length > 0 || caps?.peerCreateReason) ? (
+      {showPeer ? (
         <Choice title="Игроку" selected={mode === 'peer'} onPress={() => owner.setFeedbackDraft(gameId, { mode: 'peer' })} />
+      ) : null}
+      {showOrganization ? (
+        <Choice title="Организатору лично" selected={mode === 'organization'}
+          onPress={() => owner.setFeedbackDraft(gameId, { mode: 'organization' })} />
+      ) : null}
+      {showTraining ? (
+        <Choice title="Тренировка" selected={mode === 'training'}
+          onPress={() => owner.setFeedbackDraft(gameId, { mode: 'training' })} />
       ) : null}
       <Choice title="Полученные" selected={mode === 'received'} onPress={() => owner.setFeedbackDraft(gameId, { mode: 'received' })} />
       <Choice title="Отправленные" selected={mode === 'sent'} onPress={() => owner.setFeedbackDraft(gameId, { mode: 'sent' })} />
@@ -243,7 +334,7 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         ))}
       </View>
       <Label>Комментарий (необязательно)</Label>
-      <TextInput editable={!blocked && canCreate} multiline scrollEnabled textAlignVertical="top"
+      <TextInput editable={!blocked && canCreatePeer} multiline scrollEnabled textAlignVertical="top"
         accessibilityLabel="Комментарий к отзыву"
         value={comment}
         onChangeText={text => owner.setFeedbackDraft(gameId, { comment: text })}
@@ -261,8 +352,8 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         ))}
       </View>
       <Label>Отправляя отзыв, вы подтверждаете, что играли вместе</Label>
-      <ReviewButton title="Отправить игроку" disabled={!canCreate || !peerRating || !selected} onPress={() => {
-        if (!canCreate || !peerRating || !selected) return;
+      <ReviewButton title="Отправить игроку" disabled={!canCreatePeer || !peerRating || !selected} onPress={() => {
+        if (!canCreatePeer || !peerRating || !selected) return;
         const trimmed = normalizeFormReason(comment);
         owner.review({
           kind: 'peer-create', gameId,
@@ -278,12 +369,61 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       }} />
     </View> : null}
 
+    {mode === 'organization' ? <View style={styles.card}>
+      <Label>
+        {orgRecipient
+          ? `Ваш отзыв увидит организатор этой встречи — ${orgRecipient}`
+          : 'Ваш отзыв увидит организатор этой встречи'}
+      </Label>
+      <Label>Адресат лично. Видно только вам и адресату — это не отзыв организации-компании.</Label>
+      <Label>Оценка организации (1–5, необязательно если есть комментарий)</Label>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        <Choice title="Без оценки" selected={orgScore == null}
+          onPress={() => owner.setFeedbackDraft(gameId, { organizationScore: null })} />
+        {([1, 2, 3, 4, 5] as const).map(n => (
+          <Choice key={n} title={String(n)} selected={orgScore === n}
+            onPress={() => owner.setFeedbackDraft(gameId, { organizationScore: n })} />
+        ))}
+      </View>
+      <Label>Комментарий</Label>
+      <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
+        accessibilityLabel="Комментарий организатору"
+        value={orgComment}
+        onChangeText={text => owner.setFeedbackDraft(gameId, { organizationComment: text })}
+        maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
+        style={[styles.input, { minHeight: 80, maxHeight: 160 }]} />
+      <DiscrepancyField gameId={gameId} value={orgDiscrepancy} blocked={blocked} writes={writes}
+        fieldError={discrepancyError} />
+      <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
+      <ReviewButton title="Отправить организатору лично"
+        disabled={!canCreateOrganization || (orgScore == null && !normalizeFormReason(orgComment))}
+        onPress={submitOrganization} />
+    </View> : null}
+
+    {mode === 'training' ? <View style={styles.card}>
+      <Label>Ваш отзыв увидит тренер этой встречи</Label>
+      <Label>Только для подтверждённой тренировки с тренером. Без оценки навыка.</Label>
+      <Label>Как прошла тренировка</Label>
+      <TextInput editable={!blocked && canCreateTraining} multiline scrollEnabled textAlignVertical="top"
+        accessibilityLabel="Как прошла тренировка"
+        value={trainingComment}
+        onChangeText={text => owner.setFeedbackDraft(gameId, { trainingComment: text })}
+        maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
+        style={[styles.input, { minHeight: 100, maxHeight: 180 }]} />
+      <DiscrepancyField gameId={gameId} value={trainingDiscrepancy} blocked={blocked} writes={writes}
+        fieldError={discrepancyError} />
+      <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
+      <ReviewButton title="Отправить"
+        disabled={!canCreateTraining || !normalizeFormReason(trainingComment)}
+        onPress={submitTraining} />
+    </View> : null}
+
     {mode === 'received' ? <>
       <SourceLane title="Полученные" status={received.status}
         retry={() => void owner.loadReviews('received')}
-        empty={received.status === 'ready' && receivedPeer.length === 0}
+        empty={received.status === 'ready' && receivedRows.length === 0}
         emptyText={peerHistoryEmptyText('received', received.data?.nextCursor)} />
-      {receivedPeer.map(review => <ReviewCard key={review.id} review={review} />)}
+      {receivedRows.map(review => <ReviewCard key={review.id} review={review} />)}
       {received.status === 'ready' && received.data?.nextCursor ? (
         <TextButton title="Ещё полученные" onPress={() => void owner.loadReviews('received', true)} />
       ) : null}
@@ -298,9 +438,9 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
     {mode === 'sent' ? <>
       <SourceLane title="Отправленные" status={sent.status}
         retry={() => void owner.loadReviews('sent')}
-        empty={sent.status === 'ready' && sentPeer.length === 0}
+        empty={sent.status === 'ready' && sentRows.length === 0}
         emptyText={peerHistoryEmptyText('sent', sent.data?.nextCursor)} />
-      {sentPeer.map(review => <ReviewCard key={review.id} review={review} />)}
+      {sentRows.map(review => <ReviewCard key={review.id} review={review} />)}
       {sent.status === 'ready' && sent.data?.nextCursor ? (
         <TextButton title="Ещё отправленные" onPress={() => void owner.loadReviews('sent', true)} />
       ) : null}

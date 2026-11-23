@@ -6,6 +6,7 @@ import {
   reviewComment,
   reviewReplyText,
   reportDetailText,
+  organizationScoreValue,
   PEER_RATINGS,
   PEER_TAGS,
   REPORT_REASONS,
@@ -16,10 +17,12 @@ import {
   type ReviewReportReason,
   type ReviewReportReceipt,
 } from './postgame-feedback.ts';
-export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage } from './postgame-feedback.ts';
+export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage, ReviewKind } from './postgame-feedback.ts';
 export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
   peerRatingLabel, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
+  privateReviewsOnly, privateReviewsForGame, reviewKindModeLabel, privateReviewHeadline,
+  shouldOmitRoleDiscrepancy, organizationScoreValue,
   feedbackSectionVisible, mergeReviewPages, projectReviewsFromStore, reviewCommandsOpen,
   displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
   parsePrivateReview, parseMeReviewsPage,
@@ -78,12 +81,15 @@ export type PersonalNote = {
   allowedActions: { canEdit: boolean; canDelete: boolean };
 };
 export type NoteDeleteReceipt = { gameId: string; contextId: string; version: number; deleted: true };
-/** Feedback slice: notes + peer create caps; gameReviews optional same-game projection. */
+/** Feedback slice: notes + private create caps; gameReviews optional same-game projection. */
 export type FeedbackNotes = {
   installed: boolean; writesEnabled: boolean;
   capabilities: {
     canCreateNote: boolean;
     canCreatePeer: boolean;
+    canCreateOrganization: boolean;
+    canCreateTraining: boolean;
+    organizationRecipientDisplay: string | null;
     peerCreateReason: PeerCreateReason | null;
     peerSubjects: { contextId: string; displayName: string }[];
   };
@@ -122,6 +128,14 @@ export type Intent =
   | { kind: 'peer-create'; gameId: string; body: {
       kind: 'peer'; subjectContextId: string; peerRating: PeerRating;
       experienceAssertion: 'i_experienced_this_game'; comment?: string; tags?: PeerTag[];
+    } }
+  | { kind: 'organization-create'; gameId: string; body: {
+      kind: 'organization'; experienceAssertion: 'i_experienced_this_game';
+      organizationScore?: number; comment?: string; discrepancyExplanation?: string;
+    } }
+  | { kind: 'training-create'; gameId: string; body: {
+      kind: 'training'; experienceAssertion: 'i_experienced_this_game';
+      comment: string; discrepancyExplanation?: string;
     } }
   | { kind: 'peer-reply'; gameId: string; reviewId: string; body: { expectedVersion: number; text: string } }
   | { kind: 'peer-report'; gameId: string; reviewId: string; body: {
@@ -266,11 +280,22 @@ function parseFeedbackNotes(v: unknown, gameId: string): FeedbackNotes {
     : choice(caps.peerCreateReason, [
       'game_not_confirmed', 'attendance_unmarked', 'attendance_clarifying', 'no_eligible_peers',
     ] as const);
+  const organizationRecipientDisplay = caps.organizationRecipientDisplay === undefined
+    || caps.organizationRecipientDisplay === null
+    ? null
+    : (() => {
+      const display = str(caps.organizationRecipientDisplay);
+      if (!display.trim() || display.length > 80) invalid();
+      return display;
+    })();
   const result: FeedbackNotes = {
     installed: bool(r.installed), writesEnabled: bool(r.writesEnabled),
     capabilities: {
       canCreateNote: bool(caps.canCreateNote),
       canCreatePeer: bool(caps.canCreatePeer ?? false),
+      canCreateOrganization: bool(caps.canCreateOrganization ?? false),
+      canCreateTraining: bool(caps.canCreateTraining ?? false),
+      organizationRecipientDisplay,
       peerCreateReason,
       peerSubjects: array(caps.peerSubjects ?? [], item => {
         const s = object(item);
@@ -347,6 +372,26 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
       const seen = new Set<string>();
       for (const tag of tags) { if (seen.has(tag)) invalid(); seen.add(tag); }
     }
+    return { method: 'POST', path: `/games/${gameId}/reviews`, body: packet.body };
+  }
+  if (packet.kind === 'organization-create') {
+    const gameId = postgameId(packet.gameId), body = object(packet.body);
+    exact(body, ['kind', 'experienceAssertion', 'organizationScore', 'comment', 'discrepancyExplanation']);
+    if (body.kind !== 'organization') invalid();
+    if (body.experienceAssertion !== 'i_experienced_this_game') invalid();
+    if (body.organizationScore !== undefined) organizationScoreValue(body.organizationScore);
+    if (body.comment !== undefined) reviewComment(body.comment);
+    if (body.discrepancyExplanation !== undefined) reviewComment(body.discrepancyExplanation);
+    if (body.organizationScore === undefined && body.comment === undefined) invalid();
+    return { method: 'POST', path: `/games/${gameId}/reviews`, body: packet.body };
+  }
+  if (packet.kind === 'training-create') {
+    const gameId = postgameId(packet.gameId), body = object(packet.body);
+    exact(body, ['kind', 'experienceAssertion', 'comment', 'discrepancyExplanation']);
+    if (body.kind !== 'training') invalid();
+    if (body.experienceAssertion !== 'i_experienced_this_game') invalid();
+    reviewComment(body.comment);
+    if (body.discrepancyExplanation !== undefined) reviewComment(body.discrepancyExplanation);
     return { method: 'POST', path: `/games/${gameId}/reviews`, body: packet.body };
   }
   if (packet.kind === 'peer-reply') {
@@ -599,6 +644,25 @@ export function validateReceipt(raw: unknown, p: Packet): Receipt {
     if ((p.body.comment ?? null) !== r.comment) invalid();
     const wanted = p.body.tags ?? [];
     if (wanted.length !== r.tags.length || wanted.some((t, i) => r.tags[i] !== t)) invalid();
+    return r;
+  }
+  if (p.kind === 'organization-create') {
+    const r = parsePrivateReview(raw);
+    if (r.gameId !== p.gameId || r.kind !== 'organization' || r.direction !== 'sent') invalid();
+    if (r.experienceAssertion !== 'i_experienced_this_game') invalid();
+    if ((p.body.organizationScore ?? null) !== r.organizationScore) invalid();
+    if ((p.body.comment ?? null) !== r.comment) invalid();
+    if ((p.body.discrepancyExplanation ?? null) !== r.discrepancyExplanation) invalid();
+    if (r.peerRating !== null || r.tags.length > 0 || r.subjectContextId !== null) invalid();
+    return r;
+  }
+  if (p.kind === 'training-create') {
+    const r = parsePrivateReview(raw);
+    if (r.gameId !== p.gameId || r.kind !== 'training' || r.direction !== 'sent') invalid();
+    if (r.experienceAssertion !== 'i_experienced_this_game') invalid();
+    if (r.comment !== p.body.comment) invalid();
+    if ((p.body.discrepancyExplanation ?? null) !== r.discrepancyExplanation) invalid();
+    if (r.organizationScore !== null || r.peerRating !== null || r.tags.length > 0 || r.subjectContextId !== null) invalid();
     return r;
   }
   if (p.kind === 'peer-reply') {

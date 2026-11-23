@@ -181,6 +181,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `postgame-feedback.test.ts` / notes·postgame; API `game-feedback.disposable` 7th native peer lifecycle; source APK counter 32 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native peer feedback source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-07 · Postgame private organization/training feedback (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameFeedbackPanel` organization/training + Astra High UX; same `POST /games/{id}/reviews` (`kind=organization\|training`), `GET /me/reviews`, `PUT /reviews/{id}/reply`; native same root `PostgameCoordinator` + `postgame-feedback` |
+| Entry | Authenticated `/my-games/[gameId]/results` «Как вам встреча?» — modes Организатору лично / Тренировка beside peer; history Полученные/Отправленные show all three private kinds |
+| Trigger | Explicit create (CommandReview + `experienceAssertion=i_experienced_this_game`); no public consent; no auto-write on mount/reauth/login; UNKNOWN exact packet retry only |
+| Expected | Caps from current `canCreateOrganization`/`canCreateTraining`/`organizationRecipientDisplay` + `writesEnabled`; org score1–5 unset initially or comment≤500; training comment required, no score/peerRating/tags; recipient server-derived; kind-separated drafts; discrepancy omit when present/not_participant_manager, optional otherwise; FEEDBACK_DISCREPANCY_REQUIRED/UNEXPECTED preserve draft + Russian field message + re-review; reply reply.version\|0 all kinds; report remains received peer only; no public reputation/skill copy |
+| Accessibility | Named mode/recipient/score/comment/discrepancy; keyboard-safe scroll; busy/UNKNOWN announced; existing tokens/safe areas |
+| Non-scope | Public role authoring/consent; PATCH edit UI; backend/OpenAPI/schema; PROD; APK33 binary/device/iOS/OTA claim |
+| Evidence | Mobile unit `postgame-feedback.test.ts`; API `game-feedback.disposable` 8th native organization/training lifecycle (cases 1–7 bodies exact); source APK counter 33 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private role feedback source; full app still PARTIAL; public role authoring unfinished; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
 | Field | Content |

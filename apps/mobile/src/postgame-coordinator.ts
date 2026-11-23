@@ -28,13 +28,22 @@ export type NoteDraft = {
   createDirty?: boolean;
 };
 export type OwnNoteRef = { gameId: string; contextId: string };
-/** Actor-bound peer feedback drafts — wiped on logout / different actor. */
+/** Actor-bound private feedback drafts — wiped on logout / different actor; fields separated by kind. */
 export type FeedbackDraft = {
-  mode?: 'peer' | 'received' | 'sent';
+  mode?: 'peer' | 'organization' | 'training' | 'received' | 'sent';
   subjectContextId?: string;
   peerRating?: PeerRating;
+  /** Peer comment only — never shared into organization/training drafts. */
   comment?: string;
   tags?: PeerTag[];
+  /** Organization score 1–5; null/undefined means «Без оценки». */
+  organizationScore?: number | null;
+  organizationComment?: string;
+  organizationDiscrepancy?: string;
+  trainingComment?: string;
+  trainingDiscrepancy?: string;
+  /** Server FEEDBACK_DISCREPANCY_* field message; cleared on mode switch / successful ACK. */
+  discrepancyFieldError?: string | null;
   replyText?: Record<string, string>;
   reportReviewId?: string;
   reportReason?: ReviewReportReason;
@@ -111,6 +120,8 @@ function freezeIntent(intent: Intent): Intent {
     case 'note-upsert': copy={...intent,body:{...intent.body}}; break;
     case 'note-delete': copy={...intent,body:{...intent.body}}; break;
     case 'peer-create': copy={...intent,body:{...intent.body,...(intent.body.tags ? {tags:[...intent.body.tags]} : {})}}; break;
+    case 'organization-create': copy={...intent,body:{...intent.body}}; break;
+    case 'training-create': copy={...intent,body:{...intent.body}}; break;
     case 'peer-reply': copy={...intent,body:{...intent.body}}; break;
     case 'peer-report': copy={...intent,body:{...intent.body}}; break;
   }
@@ -593,6 +604,8 @@ export class PostgameCoordinator {
     const prior = this.snapshot.feedbackDrafts[gameId] ?? {};
     const next: FeedbackDraft = { ...prior, ...patch };
     if (patch.replyText) next.replyText = { ...(prior.replyText ?? {}), ...patch.replyText };
+    // Mode switch clears discrepancy field error; kind-separated draft fields stay intact.
+    if (patch.mode !== undefined && patch.mode !== prior.mode) next.discrepancyFieldError = null;
     // Opening/changing report target resets consent; keep known version from the open patch.
     if (patch.reportReviewId !== undefined && patch.reportReviewId !== prior.reportReviewId) {
       next.reportConsent = false;
@@ -875,6 +888,21 @@ export class PostgameCoordinator {
       if (intent.body.kind !== 'peer' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
       return feedback.capabilities.peerSubjects.some(s => s.contextId === intent.body.subjectContextId);
     }
+    if (intent.kind === 'organization-create') {
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreateOrganization) return false;
+      if (intent.body.kind !== 'organization' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
+      if (intent.body.organizationScore === undefined && intent.body.comment === undefined) return false;
+      return true;
+    }
+    if (intent.kind === 'training-create') {
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreateTraining) return false;
+      if (intent.body.kind !== 'training' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
+      return !!intent.body.comment;
+    }
     if (intent.kind === 'peer-reply') {
       const review = this.currentReviewForWrite(intent.reviewId);
       if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
@@ -891,7 +919,8 @@ export class PostgameCoordinator {
     if (intent.kind === 'peer-report') {
       const review = this.currentReviewForWrite(intent.reviewId);
       if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
-      if (review.direction !== 'received' || !review.allowedActions.canReport) return false;
+      // Exact-revision Support report remains received peer only — no org/training by analogy.
+      if (review.kind !== 'peer' || review.direction !== 'received' || !review.allowedActions.canReport) return false;
       // Report is independent of writesEnabled / create experience.
       if (review.version !== intent.body.expectedVersion) return false;
       if (intent.body.gameId !== intent.gameId || intent.body.shareReviewWithSupport !== true) return false;
@@ -1055,6 +1084,27 @@ export class PostgameCoordinator {
         };
         this.show({ feedbackDrafts: drafts });
       }
+      if ((packet.kind === 'organization-create' || packet.kind === 'training-create')
+        && 'kind' in receipt && 'direction' in receipt) {
+        this.rememberReviews([receipt], ++this.serial, 'receipt');
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = packet.kind === 'organization-create'
+          ? {
+            ...prior,
+            organizationScore: null,
+            organizationComment: '',
+            organizationDiscrepancy: '',
+            discrepancyFieldError: null,
+          }
+          : {
+            ...prior,
+            trainingComment: '',
+            trainingDiscrepancy: '',
+            discrepancyFieldError: null,
+          };
+        this.show({ feedbackDrafts: drafts });
+      }
       if (packet.kind === 'peer-reply' && 'reply' in receipt && 'direction' in receipt) {
         // ACK display-only until typed received history refresh; do not grant another reply from receipt.
         this.rememberReviews([receipt], ++this.serial, 'receipt');
@@ -1099,7 +1149,9 @@ export class PostgameCoordinator {
       if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
       // After upsert ACK: typed GET reestablishes rights/version; GET failure is retryable READ, not write success.
       if (noteWrite && packet.kind === 'note-upsert') void this.loadNote(packet.gameId, packet.contextId);
-      if (packet.kind === 'peer-create') void this.loadReviews('sent');
+      if (packet.kind === 'peer-create' || packet.kind === 'organization-create' || packet.kind === 'training-create') {
+        void this.loadReviews('sent');
+      }
       if (packet.kind === 'peer-reply' || packet.kind === 'peer-report') void this.loadReviews('received');
     } catch(error) {
       if(!valid()) return;
@@ -1107,8 +1159,14 @@ export class PostgameCoordinator {
       const noteConflict = definite && packet.kind.startsWith('note-') && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
       const peerConflict = definite && (packet.kind === 'peer-reply' || packet.kind === 'peer-report')
         && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
+      const roleDiscrepancy = definite && (packet.kind === 'organization-create' || packet.kind === 'training-create')
+        && error instanceof PostgameError
+        && (error.code === 'FEEDBACK_DISCREPANCY_REQUIRED' || error.code === 'FEEDBACK_DISCREPANCY_UNEXPECTED');
       const noteUnknown = !definite && (packet.kind === 'note-upsert' || packet.kind === 'note-delete');
-      const peerUnknown = !definite && (packet.kind === 'peer-create' || packet.kind === 'peer-reply' || packet.kind === 'peer-report');
+      const peerUnknown = !definite && (
+        packet.kind === 'peer-create' || packet.kind === 'organization-create' || packet.kind === 'training-create'
+        || packet.kind === 'peer-reply' || packet.kind === 'peer-report'
+      );
       if (peerConflict && packet.kind === 'peer-report') {
         // Preserve detail draft; reset consent after revision change.
         const drafts = { ...this.snapshot.feedbackDrafts };
@@ -1121,6 +1179,19 @@ export class PostgameCoordinator {
         void this.loadReviews('received');
         void this.loadResults(packet.gameId);
       }
+      if (roleDiscrepancy && error instanceof PostgameError) {
+        // Preserve kind draft; surface Russian field message and require explicit re-review (no autosend).
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = {
+          ...prior,
+          discrepancyFieldError: error.code === 'FEEDBACK_DISCREPANCY_REQUIRED'
+            ? 'Поясните расхождение с отметкой или итогом игры'
+            : 'Пояснение для этой встречи не требуется',
+        };
+        this.show({ feedbackDrafts: drafts });
+        void this.loadResults(packet.gameId);
+      }
       const notice = definite
         ? (noteConflict
           ? 'Версия заметки изменилась. Обновите заметку и сохраните снова.'
@@ -1128,7 +1199,9 @@ export class PostgameCoordinator {
             ? (packet.kind === 'peer-report'
               ? 'Версия отзыва изменилась. Проверьте новую редакцию и снова подтвердите согласие.'
               : 'Версия ответа изменилась. Обновите отзыв и сохраните снова.')
-            : 'Изменение отклонено. Обновите данные и проверьте условия.')
+            : roleDiscrepancy
+              ? 'Проверьте пояснение расхождения и подтвердите отправку снова.'
+              : 'Изменение отклонено. Обновите данные и проверьте условия.')
         : (noteUnknown
           ? (packet.kind === 'note-delete'
             ? 'Пока не удалось подтвердить удаление. Проверьте исходное действие.'

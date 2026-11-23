@@ -31,6 +31,9 @@ const feedbackReady = {
   capabilities: {
     canCreateNote: true,
     canCreatePeer: false,
+    canCreateOrganization: false,
+    canCreateTraining: false,
+    organizationRecipientDisplay: null as string | null,
     peerCreateReason: null as null,
     peerSubjects: [
       { contextId: contextA, displayName: 'Анна' },
@@ -126,6 +129,9 @@ test('parse personal note + feedback peer caps; reject nested wrong-game; reject
   });
   assert.equal(parsed.feedback?.capabilities.canCreateNote, true);
   assert.equal(parsed.feedback?.capabilities.canCreatePeer, true);
+  assert.equal(parsed.feedback?.capabilities.canCreateOrganization, false);
+  assert.equal(parsed.feedback?.capabilities.canCreateTraining, false);
+  assert.equal(parsed.feedback?.capabilities.organizationRecipientDisplay, null);
   assert.equal(parsed.feedback?.myNotes.length, 1);
   assert.ok(!('gameReviews' in (parsed.feedback as object)));
   assert.throws(() => parseResults({
@@ -343,7 +349,7 @@ test('same-account reauth restores known refs and UNKNOWN without autowrite; ins
   const disabled = setup({
     results: {
       ...result,
-      feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, canCreatePeer: false, peerCreateReason: null, peerSubjects: [] }, myNotes: [] },
+      feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, canCreatePeer: false, canCreateOrganization: false, canCreateTraining: false, organizationRecipientDisplay: null, peerCreateReason: null, peerSubjects: [] }, myNotes: [] },
     },
   });
   await disabled.coordinator.loadResults(game.id);
@@ -829,6 +835,9 @@ test('note subject selector prefers roster over nonempty narrower peerSubjects',
       capabilities: {
         canCreateNote: true,
         canCreatePeer: false,
+        canCreateOrganization: false,
+        canCreateTraining: false,
+        organizationRecipientDisplay: null,
         peerCreateReason: null,
         peerSubjects: [{ contextId: peerOnly, displayName: 'Только peer' }],
       },

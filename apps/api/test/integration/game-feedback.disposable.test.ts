@@ -1522,5 +1522,263 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     expect(mixed.statusCode).toBe(403);
     expect(mixed.json().code).toBe("CREDENTIALS_CONFLICT");
   });
+
+  it("native bearer private organization/training: score-or-comment, trainer_led binding, discrepancy, history/reply, writes-off", async () => {
+    const { gameId, annaContext } = await createEndedGameWithPlayers();
+
+    const caps = await nativeGet(anna, `/v1/games/${gameId}/results`);
+    expect(caps.statusCode).toBe(200);
+    expect(caps.json().feedback.capabilities.canCreateOrganization).toBe(true);
+    expect(caps.json().feedback.capabilities.organizationRecipientDisplay).toBeTruthy();
+    expect(caps.json().feedback.capabilities.canCreateTraining).toBe(false);
+
+    const orgKey = key();
+    const orgBody = {
+      kind: "organization" as const,
+      organizationScore: 5,
+      experienceAssertion: "i_experienced_this_game" as const,
+    };
+    const orgCreated = await nativePost(anna, `/v1/games/${gameId}/reviews`, orgBody, orgKey);
+    expect([200, 201]).toContain(orgCreated.statusCode);
+    expect(orgCreated.json().kind).toBe("organization");
+    expect(orgCreated.json().organizationScore).toBe(5);
+    expect(orgCreated.json().direction).toBe("sent");
+    expect(orgCreated.json().peerRating).toBeNull();
+    expect(orgCreated.json().tags).toEqual([]);
+    const orgId = orgCreated.json().id as string;
+
+    const orgReplay = await nativePost(anna, `/v1/games/${gameId}/reviews`, orgBody, orgKey);
+    expect(orgReplay.statusCode).toBe(orgCreated.statusCode);
+    expect(orgReplay.json().id).toBe(orgId);
+
+    const orgCommentOnly = await nativePost(anna, `/v1/games/${gameId}/reviews`, {
+      kind: "organization",
+      comment: "Только комментарий без оценки",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    // Owned duplicate path or second org review — either exact prior receipt or conflict; never peer payload.
+    expect([200, 201, 409]).toContain(orgCommentOnly.statusCode);
+    if (orgCommentOnly.statusCode === 200 || orgCommentOnly.statusCode === 201) {
+      expect(orgCommentOnly.json().kind).toBe("organization");
+      expect(orgCommentOnly.json().peerRating).toBeNull();
+    }
+
+    const selfOrg = await nativePost(manager, `/v1/games/${gameId}/reviews`, {
+      kind: "organization",
+      organizationScore: 4,
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect([404, 422]).toContain(selfOrg.statusCode);
+
+    const outsiderOrg = await nativePost(outsider, `/v1/games/${gameId}/reviews`, {
+      kind: "organization",
+      organizationScore: 3,
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect(outsiderOrg.statusCode).toBe(404);
+
+    const sentOrg = await nativeGet(anna, `/v1/me/reviews?direction=sent`);
+    expect(sentOrg.statusCode).toBe(200);
+    expect(sentOrg.json().items.some((r: { id: string; kind: string }) => r.id === orgId && r.kind === "organization")).toBe(
+      true,
+    );
+
+    const receivedOrg = await nativeGet(manager, `/v1/me/reviews?direction=received`);
+    expect(receivedOrg.statusCode).toBe(200);
+    const orgRow = receivedOrg.json().items.find((r: { id: string }) => r.id === orgId);
+    expect(orgRow).toBeTruthy();
+    expect(orgRow.allowedActions.canReply).toBe(true);
+    expect(orgRow.allowedActions.canReport).toBe(false);
+
+    const orgReplyKey = key();
+    const orgReplied = await nativePut(
+      manager,
+      `/v1/reviews/${orgId}/reply`,
+      { expectedVersion: 0, text: "Спасибо за отзыв организатору" },
+      orgReplyKey,
+    );
+    expect(orgReplied.statusCode).toBe(200);
+    expect(orgReplied.json().reply.text).toBe("Спасибо за отзыв организатору");
+    expect(orgReplied.json().reply.version).toBe(1);
+    const orgReplyReplay = await nativePut(
+      manager,
+      `/v1/reviews/${orgId}/reply`,
+      { expectedVersion: 0, text: "Спасибо за отзыв организатору" },
+      orgReplyKey,
+    );
+    expect(orgReplyReplay.statusCode).toBe(200);
+    expect(orgReplyReplay.json().reply.version).toBe(1);
+
+    // Discrepancy on a fresh game (one organization review per author/game — no ownedPrior collision).
+    const discrep = await createEndedGameWithPlayers({ markBothPresent: false });
+    await markPresent(discrep.gameId, discrep.annaContext);
+    await put(manager, `/v1/games/${discrep.gameId}/attendance/${discrep.annaContext}`, {
+      expectedVersion: 1,
+      value: "absent",
+      correctionReason: "Native role discrepancy check",
+    });
+    const missingDiscrepancy = await nativePost(anna, `/v1/games/${discrep.gameId}/reviews`, {
+      kind: "organization",
+      comment: "после отсутствия",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect(missingDiscrepancy.statusCode).toBe(422);
+    expect(missingDiscrepancy.json().code).toBe("FEEDBACK_DISCREPANCY_REQUIRED");
+    const withDiscrepancy = await nativePost(anna, `/v1/games/${discrep.gameId}/reviews`, {
+      kind: "organization",
+      comment: "после отсутствия",
+      discrepancyExplanation: "Был на площадке, отметка ошибочна",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect([200, 201]).toContain(withDiscrepancy.statusCode);
+    expect(withDiscrepancy.json().kind).toBe("organization");
+    expect(withDiscrepancy.json().discrepancyExplanation).toBe("Был на площадке, отметка ошибочна");
+
+    // trainer_led: manager self-declares trainer, creates bound training game.
+    const trainerProfile = await put(manager, "/v1/me/trainer-profile", {
+      selfDeclared: true,
+      displayName: "PG3 Coach",
+      bio: "Native role feedback trainer",
+    });
+    expect([200, 201]).toContain(trainerProfile.statusCode);
+
+    const venue = await post(manager, "/v1/venues", {
+      cityId: MOSCOW_CITY_ID,
+      name: `PG3 train court ${randomUUID()}`,
+      address: "Synthetic Moscow",
+      timezone: "Europe/Moscow",
+      latitude: 55.75,
+      longitude: 37.62,
+    });
+    expect([200, 201]).toContain(venue.statusCode);
+    const starts = Date.now() + 7 * 86400000;
+    const trainDraft = await post(manager, "/v1/games", {
+      hostDisplayName: "Synthetic host",
+      hostPublicContact: "telegram:@synthetic_private",
+      venueId: venue.json().id,
+      title: "PG3 trainer_led disposable",
+      startsAt: new Date(starts).toISOString(),
+      endsAt: new Date(starts + 7200000).toISOString(),
+      timezone: "Europe/Moscow",
+      applicationDeadlineAt: new Date(starts - 86400000).toISOString(),
+      capacity: 4,
+      externalReservedCount: 0,
+      visibility: "public",
+      formatKey: "doubles",
+      activityKind: "trainer_led",
+      trainingDescription: "Native private training feedback",
+      levelRule: { scaleId: "ntrp", scaleVersion: 1, allowedLevelIds: ["3.0", "3.5"] },
+      settlement: {
+        mode: "external",
+        purpose: "trainer_fee",
+        priceStatus: "by_agreement",
+        priceMinor: null,
+        currency: null,
+        terms: "PRIVATE TERMS SENTINEL",
+      },
+    });
+    expect(trainDraft.statusCode).toBe(201);
+    expect(trainDraft.json().activityKind).toBe("trainer_led");
+    expect(trainDraft.json().trainer?.profileId).toBe(trainerProfile.json().id);
+    const trainPublished = await post(manager, `/v1/games/${trainDraft.json().id}/publish`, {
+      expectedVersion: trainDraft.json().version,
+    });
+    expect(trainPublished.statusCode).toBe(200);
+    const trainGameId = trainPublished.json().id as string;
+    await pool.query(
+      `UPDATE games
+       SET starts_at = clock_timestamp() - interval '3 hours',
+           application_deadline_at = clock_timestamp() - interval '4 hours',
+           ends_at = clock_timestamp() - interval '1 hour'
+       WHERE id = $1`,
+      [trainGameId],
+    );
+    const trainAnna = await confirmWithTransition(trainGameId, anna.userId, -4);
+    await put(manager, `/v1/games/${trainGameId}/outcome`, {
+      expectedVersion: 0,
+      outcome: "held",
+    });
+    await markPresent(trainGameId, trainAnna);
+
+    const trainCaps = await nativeGet(anna, `/v1/games/${trainGameId}/results`);
+    expect(trainCaps.statusCode).toBe(200);
+    expect(trainCaps.json().feedback.capabilities.canCreateTraining).toBe(true);
+    expect(trainCaps.json().feedback.capabilities.canCreateOrganization).toBe(true);
+
+    const trainKey = key();
+    const trainBody = {
+      kind: "training" as const,
+      comment: "Тренировка прошла ясно",
+      experienceAssertion: "i_experienced_this_game" as const,
+    };
+    const trainCreated = await nativePost(anna, `/v1/games/${trainGameId}/reviews`, trainBody, trainKey);
+    expect([200, 201]).toContain(trainCreated.statusCode);
+    expect(trainCreated.json().kind).toBe("training");
+    expect(trainCreated.json().comment).toBe("Тренировка прошла ясно");
+    expect(trainCreated.json().organizationScore).toBeNull();
+    expect(trainCreated.json().peerRating).toBeNull();
+    const trainId = trainCreated.json().id as string;
+
+    const trainReplay = await nativePost(anna, `/v1/games/${trainGameId}/reviews`, trainBody, trainKey);
+    expect(trainReplay.statusCode).toBe(trainCreated.statusCode);
+    expect(trainReplay.json().id).toBe(trainId);
+
+    const selfTrain = await nativePost(manager, `/v1/games/${trainGameId}/reviews`, {
+      kind: "training",
+      comment: "сам себе",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect([404, 422]).toContain(selfTrain.statusCode);
+
+    const outsiderTrain = await nativePost(outsider, `/v1/games/${trainGameId}/reviews`, {
+      kind: "training",
+      comment: "чужой",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect(outsiderTrain.statusCode).toBe(404);
+
+    const trainNoComment = await nativePost(anna, `/v1/games/${trainGameId}/reviews`, {
+      kind: "training",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect(trainNoComment.statusCode).toBe(422);
+
+    const unexpectedDiscrepancy = await nativePost(anna, `/v1/games/${trainGameId}/reviews`, {
+      kind: "training",
+      comment: "с лишним пояснением",
+      discrepancyExplanation: "не нужно при present",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect(unexpectedDiscrepancy.statusCode).toBe(422);
+    expect(unexpectedDiscrepancy.json().code).toBe("FEEDBACK_DISCREPANCY_UNEXPECTED");
+
+    const trainReceived = await nativeGet(manager, `/v1/me/reviews?direction=received`);
+    expect(trainReceived.statusCode).toBe(200);
+    expect(
+      trainReceived.json().items.some((r: { id: string; kind: string }) => r.id === trainId && r.kind === "training"),
+    ).toBe(true);
+
+    env.POST_GAME_INTERNAL_ENABLED = false;
+    try {
+      const orgOff = await nativePost(anna, `/v1/games/${gameId}/reviews`, {
+        kind: "organization",
+        organizationScore: 2,
+        experienceAssertion: "i_experienced_this_game",
+      });
+      expect(orgOff.statusCode).toBe(503);
+      const trainOff = await nativePost(anna, `/v1/games/${trainGameId}/reviews`, {
+        kind: "training",
+        comment: "writes off",
+        experienceAssertion: "i_experienced_this_game",
+      });
+      expect(trainOff.statusCode).toBe(503);
+      const historyOff = await nativeGet(anna, `/v1/me/reviews?direction=sent`);
+      expect(historyOff.statusCode).toBe(200);
+      expect(historyOff.json().items.some((r: { id: string }) => r.id === orgId)).toBe(true);
+      expect(historyOff.json().items.some((r: { id: string }) => r.id === trainId)).toBe(true);
+    } finally {
+      env.POST_GAME_INTERNAL_ENABLED = true;
+    }
+  });
 });
 

@@ -162,7 +162,7 @@ function parseReply(v: unknown): PrivateReviewReply {
   };
 }
 
-/** Parse any private review kind; UI renders peer only. */
+/** Parse any private review kind (peer / organization / training). */
 export function parsePrivateReview(v: unknown): PrivateReview {
   const r = object(v);
   const rights = object(r.allowedActions);
@@ -262,9 +262,53 @@ export function peerReviewsForGame(items: readonly PrivateReview[], gameId: stri
   return peerReviewsOnly(items).filter(r => r.gameId === gameId);
 }
 
+/** All private kinds (peer / organization / training) for own history lanes. */
+export function privateReviewsOnly(items: readonly PrivateReview[]): PrivateReview[] {
+  return items.filter(r => r.kind === 'peer' || r.kind === 'organization' || r.kind === 'training');
+}
+
+export function privateReviewsForGame(items: readonly PrivateReview[], gameId: string): PrivateReview[] {
+  return privateReviewsOnly(items).filter(r => r.gameId === gameId);
+}
+
+export function reviewKindModeLabel(kind: ReviewKind): string {
+  switch (kind) {
+    case 'peer': return 'Игроку';
+    case 'organization': return 'Организатору лично';
+    case 'training': return 'Тренировка';
+  }
+}
+
+/** Card headline: peer rating title, org score line, or training label. */
+export function privateReviewHeadline(review: PrivateReview): string {
+  if (review.kind === 'peer') return peerRatingLabel(review.peerRating);
+  if (review.kind === 'organization') {
+    return review.organizationScore != null
+      ? `Оценка организации: ${review.organizationScore} из 5`
+      : 'Организатору лично';
+  }
+  return 'Тренировка';
+}
+
+/**
+ * When own attendance/outcome is known present or not_participant_manager, omit discrepancy
+ * from the wire body. Outcome not_held always allows the field. Ambiguous (no results) → optional.
+ */
+export function shouldOmitRoleDiscrepancy(results: {
+  outcome: { value: 'unknown' | 'held' | 'not_held' };
+  attendance?: { installed: boolean; myAttendance: { value: string; dispute: { status: string } | null } | null } | null;
+} | undefined): boolean {
+  if (!results) return false;
+  if (results.outcome.value === 'not_held') return false;
+  const my = results.attendance?.installed ? results.attendance.myAttendance : undefined;
+  if (results.attendance?.installed && my === null) return true;
+  if (my && my.value === 'present' && my.dispute?.status !== 'open') return true;
+  return false;
+}
+
 /**
  * Feedback section: installed=false shows honest disable; create rights, peer reason,
- * or own history lane (incl. when results denied) show the surface.
+ * org/training caps, or own history lane (incl. when results denied) show the surface.
  */
 export function feedbackSectionVisible(
   gameId: string,
@@ -272,6 +316,9 @@ export function feedbackSectionVisible(
     installed: boolean;
     capabilities: {
       canCreatePeer?: boolean;
+      canCreateOrganization?: boolean;
+      canCreateTraining?: boolean;
+      organizationRecipientDisplay?: string | null;
       peerCreateReason?: PeerCreateReason | null;
       peerSubjects?: { contextId: string; displayName: string }[];
     };
@@ -284,13 +331,15 @@ export function feedbackSectionVisible(
   if (feedback?.installed === false) return true;
   const caps = feedback?.capabilities;
   if (caps?.canCreatePeer) return true;
+  if (caps?.canCreateOrganization || caps?.organizationRecipientDisplay) return true;
+  if (caps?.canCreateTraining) return true;
   if ((caps?.peerSubjects?.length ?? 0) > 0) return true;
   if (caps?.peerCreateReason) return true;
   for (const lane of [histories.received, histories.sent]) {
     if (!lane) continue;
     if (lane.status === 'loading' || lane.status === 'error' || lane.status === 'idle') return true;
     if (lane.status === 'ready') {
-      if (peerReviewsForGame(lane.data?.items ?? [], gameId).length > 0) return true;
+      if (privateReviewsForGame(lane.data?.items ?? [], gameId).length > 0) return true;
       // Honest empty history is still a visible lane when results denied / create unavailable.
       if (lane.data) return true;
     }
@@ -379,7 +428,7 @@ export function resolvePeerDraftSubject(
   return { selected: undefined, needsReselect: false };
 }
 
-/** Empty copy for same-game peer history; cursor means the page is not definitive. */
+/** Empty copy for same-game private history; cursor means the page is not definitive. */
 export function peerHistoryEmptyText(
   direction: 'received' | 'sent',
   nextCursor: string | null | undefined,
@@ -388,4 +437,9 @@ export function peerHistoryEmptyText(
   return direction === 'received'
     ? 'Пока нет полученных отзывов по этой игре.'
     : 'Пока нет отправленных отзывов по этой игре.';
+}
+
+export function organizationScoreValue(v: unknown): number {
+  const n = num(v, 1);
+  return n >= 1 && n <= 5 ? n : invalid();
 }
