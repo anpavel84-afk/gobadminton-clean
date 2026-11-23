@@ -309,24 +309,24 @@ export function emptyVenueExperienceDraft(): VenueExperienceDraft {
 
 /**
  * Closed Russian copy for known eligibility reasons — never echo raw server codes in product UI.
- * Unknown/unmapped reasons fall back to a neutral sentence without the code.
+ * Own-key Map only: unknown / prototype keys (__proto__, constructor, toString, …) stay neutral null.
  */
-const VENUE_ELIGIBILITY_REASON_COPY: Record<string, string> = {
-  venue_affiliation: 'Площадка связана с вашей организацией, поэтому отзыв недоступен.',
-  lifecycle: 'Площадка сейчас недоступна для отзыва.',
-  outcome_unknown: 'Исход игры ещё не подтверждён.',
-  outcome_dispute: 'По исходу игры идёт уточнение.',
-  window_closed: 'Срок подачи отзыва по этой игре истёк.',
-  wrong_venue: 'Отзыв относится к другой площадке этой игры.',
-  venue_attribution_unavailable: 'Не удалось подтвердить историческую площадку этой игры.',
-  attendance_unmarked: 'Посещение ещё не отмечено.',
-  attendance_unknown: 'Посещение ещё не отмечено.',
-  attendance_dispute: 'По посещению идёт уточнение.',
-};
+const VENUE_ELIGIBILITY_REASON_COPY = new Map<string, string>([
+  ['venue_affiliation', 'Площадка связана с вашей организацией, поэтому отзыв недоступен.'],
+  ['lifecycle', 'Площадка сейчас недоступна для отзыва.'],
+  ['outcome_unknown', 'Исход игры ещё не подтверждён.'],
+  ['outcome_dispute', 'По исходу игры идёт уточнение.'],
+  ['window_closed', 'Срок подачи отзыва по этой игре истёк.'],
+  ['wrong_venue', 'Отзыв относится к другой площадке этой игры.'],
+  ['venue_attribution_unavailable', 'Не удалось подтвердить историческую площадку этой игры.'],
+  ['attendance_unmarked', 'Посещение ещё не отмечено.'],
+  ['attendance_unknown', 'Посещение ещё не отмечено.'],
+  ['attendance_dispute', 'По посещению идёт уточнение.'],
+]);
 
 export function venueEligibilityReasonCopy(reason: string | null | undefined): string | null {
   if (!reason || typeof reason !== 'string') return null;
-  return VENUE_ELIGIBILITY_REASON_COPY[reason] ?? null;
+  return VENUE_ELIGIBILITY_REASON_COPY.get(reason) ?? null;
 }
 
 export function venueReviewEligibilityHelp(basis: OwnVenueEligibilityBasis | undefined | null): string | null {
@@ -401,6 +401,21 @@ export function venueExperienceReceiptSummary(
 
 export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experience-create' {
   return kind === 'venue-experience-create';
+}
+
+/**
+ * Discriminated Packet guard — narrows owning packet/body (kind-string guard alone does not).
+ * Generic intersection keeps actor/key/path from the caller Packet without circular imports.
+ */
+export function isVenueExperienceCreatePacket<T extends { readonly kind: string }>(
+  packet: T,
+): packet is T & {
+  readonly kind: 'venue-experience-create';
+  readonly gameId: string;
+  readonly venueId: string;
+  readonly body: VenueExperienceCreateBody;
+} {
+  return packet.kind === 'venue-experience-create';
 }
 
 export function venueExperienceIdempotencyExpired(firstDispatchedAt: number, now = Date.now()): boolean {

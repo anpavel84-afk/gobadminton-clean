@@ -9,6 +9,7 @@ import {
   buildVenueExperienceCreateBody,
   emptyVenueExperienceDraft,
   exactGameMaySubmitBasis,
+  isVenueExperienceCreatePacket,
   isVenueExperienceCreateReceipt,
   isVenueExperiencePacketKind,
   parseOwnVenueEligibility,
@@ -126,6 +127,10 @@ test('deferred entry/consent: private default, public needs preview; no autosend
   const owner = new PostgameCoordinator({
     ...idlePort({
       send: async (packet) => {
+        assert.equal(isVenueExperienceCreatePacket(packet), true);
+        if (!isVenueExperienceCreatePacket(packet)) {
+          throw new Error(`expected venue-experience-create, got ${packet.kind}`);
+        }
         keys.push(packet.key);
         return {
           id: '55555555-5555-4555-8555-555555555555',
@@ -380,6 +385,10 @@ test('deferred prepare ownership: one fresh POST; stale draft/consent invalidate
         return eligibilityBody();
       },
       send: async (packet) => {
+        assert.equal(isVenueExperienceCreatePacket(packet), true);
+        if (!isVenueExperienceCreatePacket(packet)) {
+          throw new Error(`expected venue-experience-create, got ${packet.kind}`);
+        }
         staleKeys.push(packet.body.text);
         return {
           id: '55555555-5555-4555-8555-555555555555',
@@ -451,6 +460,10 @@ test('private vs public receipt summary + closed eligibility reason copy', () =>
   assert.match(venueEligibilityReasonCopy('outcome_unknown') ?? '', /исход/i);
   assert.match(venueEligibilityReasonCopy('outcome_dispute') ?? '', /уточнен/i);
   assert.equal(venueEligibilityReasonCopy('totally_unknown_code_xyz'), null);
+  for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.equal(venueEligibilityReasonCopy(key), null, key);
+    assert.equal(typeof venueEligibilityReasonCopy(key), 'object');
+  }
 
   const help = venueReviewEligibilityHelp({
     gameId,
@@ -491,10 +504,16 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(composer, /Посмотреть отправку/);
   assert.match(composer, /Повторить исходную отправку/);
   assert.match(composer, /Результат отправки неизвестен/);
+  assert.match(composer, /тот же текст и то же действие/);
+  assert.match(composer, /вернуться к этой отправке позже/);
+  assert.doesNotMatch(composer, /без смены ключа|без новой заявки/);
   assert.match(composer, /venueExperienceReceiptSummary/);
-  assert.match(composer, /recoveryVenueId|pendingCommand/);
+  assert.match(composer, /recoveryVenueId|pendingCommand|pendingPacket/);
+  assert.match(composer, /isVenueExperienceCreatePacket/);
   assert.match(composer, /onAccessibilityEscape/);
   assert.match(composer, /FocusContext/);
+  assert.match(composer, /openerRef|liveRef/);
+  assert.match(composer, /requestAnimationFrame/);
   assert.doesNotMatch(composer, /Публичный отзыв не виден/);
 
   const postgameUi = read('../src/components/postgame.tsx');
@@ -507,10 +526,13 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(helpers, /Ранее опубликованная версия может оставаться видимой|Более ранняя опубликованная версия может оставаться видимой/);
   assert.match(helpers, /venueExperienceReceiptSummary/);
   assert.match(helpers, /venueEligibilityReasonCopy/);
+  assert.match(helpers, /isVenueExperienceCreatePacket/);
+  assert.match(helpers, /new Map/);
   assert.doesNotMatch(helpers, /Причина: \$\{basis\.reason\}/);
 
   const coordinator = read('../src/postgame-coordinator.ts');
   assert.match(coordinator, /venue-experience-create/);
+  assert.match(coordinator, /isVenueExperienceCreatePacket/);
   assert.match(coordinator, /firstDispatchedAt/);
   assert.match(coordinator, /reconcileVenueExperience/);
   assert.match(coordinator, /postgameIdempotencyReplayBlocked|VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS|venueExperienceIdempotencyExpired/);

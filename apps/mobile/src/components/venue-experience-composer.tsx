@@ -1,10 +1,11 @@
-import { useContext, useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
+import { useContext, useEffect, useRef, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Modal, Platform, Pressable, Switch, Text, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import {
   TOPIC_LABEL,
   VENUE_TOPIC_OPTIONS,
   exactGameMaySubmitBasis,
+  isVenueExperienceCreatePacket,
   isVenueExperiencePacketKind,
   postgameIdempotencyReplayBlocked,
   venueExperienceReceiptSummary,
@@ -125,7 +126,7 @@ export function VenueExperienceComposer({
             retentionBlocked
               ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label>
               : <Label accessibilityRole="status">
-                Результат исходной отправки пока неизвестен. «Повторить исходную отправку» снова отправит тот же текст и действие — без новой заявки и без смены ключа.
+                Результат исходной отправки пока неизвестен. «Повторить исходную отправку» снова отправит тот же текст и то же действие. Можно закрыть экран и вернуться к этой отправке позже.
               </Label>
           ) : null}
           {busy ? <Loading title="Отправляем исходное действие…" /> : null}
@@ -285,16 +286,28 @@ function AudienceChoice({
   );
 }
 
-/** Remember invoking control for composer return-focus (same PostgameSurface FocusContext). */
-function VenueRecoveryButton({ title, onPress }: { title: string; onPress: () => void }) {
+/**
+ * Remember invoking control for composer return-focus.
+ * `liveRef` stays owned by Entry so close can focus the remounted control after Composer unmounts.
+ */
+function VenueRecoveryButton({
+  title,
+  onPress,
+  liveRef,
+}: {
+  title: string;
+  onPress: () => void;
+  liveRef: RefObject<FocusTarget | null>;
+}) {
   const trigger = useContext(FocusContext);
-  const ref = useRef<FocusTarget>(null);
   return (
     <Pressable
-      ref={ref}
+      ref={(node) => {
+        liveRef.current = node;
+      }}
       accessibilityRole="button"
       onPress={() => {
-        if (trigger) trigger.current = ref.current;
+        if (trigger) trigger.current = liveRef.current;
         onPress();
       }}
       style={styles.textButton}
@@ -320,12 +333,13 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
   const results = current ? s.games[gameId] : undefined;
   const game = current ? p.games[gameId]?.game : undefined;
   const liveVenueId = game?.venue?.id ?? null;
-  const pendingCommand = current && s.command && isVenueExperiencePacketKind(s.command.packet.kind)
+  const pendingPacket = current && s.command && isVenueExperienceCreatePacket(s.command.packet)
     && s.command.packet.actor.actorId === s.actor?.actorId
     && s.command.packet.gameId === gameId
-    ? s.command
+    ? s.command.packet
     : null;
-  const recoveryVenueId = pendingCommand?.packet.venueId ?? null;
+  const pendingCommand = !!pendingPacket;
+  const recoveryVenueId = pendingPacket?.venueId ?? null;
   const composerVenueId = s.venueExperience?.gameId === gameId ? s.venueExperience.venueId : null;
   const composerOpen = !!composerVenueId
     && !!s.venueExperience
@@ -337,6 +351,11 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
   const basis = exactGameMaySubmitBasis(eligibility, gameId);
   const phase = probeMatch ? s.venueEligibility.status : 'idle';
   const help = venueReviewEligibilityHelp(eligibility?.bases.find(b => b.gameId === gameId));
+  /** Live opener after close commit — Composer unmounts; button remounts with a new native handle. */
+  const openerRef = useRef<FocusTarget | null>(null);
+  const wasComposerOpen = useRef(false);
+  const focusScopeRef = useRef(`${current && s.actor ? `${s.actor.actorId}:${s.actor.sessionId}` : ''}|${gameId}`);
+  const actorKey = current && s.actor ? `${s.actor.actorId}:${s.actor.sessionId}` : null;
 
   useEffect(() => {
     if (!current || !liveVenueId || results?.status !== 'ready') return;
@@ -344,6 +363,29 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     if (pendingCommand) return;
     owner.probeVenueEligibility(gameId, liveVenueId);
   }, [current, liveVenueId, results?.status, results?.data, owner, gameId, pendingCommand]);
+
+  // Return focus to the remounted entry control after Composer unmounts; never cross actor/game.
+  useEffect(() => {
+    const scope = `${actorKey ?? ''}|${gameId}`;
+    if (focusScopeRef.current !== scope) {
+      focusScopeRef.current = scope;
+      wasComposerOpen.current = composerOpen;
+      return;
+    }
+    if (wasComposerOpen.current && !composerOpen) {
+      wasComposerOpen.current = false;
+      if (!actorKey) return;
+      const held = scope;
+      const frame = requestAnimationFrame(() => {
+        if (focusScopeRef.current !== held) return;
+        openerRef.current?.focus();
+        const node = findNodeHandle(openerRef.current);
+        if (node) AccessibilityInfo.setAccessibilityFocus(node);
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    wasComposerOpen.current = composerOpen;
+  }, [composerOpen, actorKey, gameId]);
 
   if (auth.status === 'hydrating') return null;
 
@@ -368,6 +410,7 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
             : (
               <VenueRecoveryButton
                 title="Посмотреть отправку"
+                liveRef={openerRef}
                 onPress={() => owner.openVenueExperience(gameId, recoveryVenueId)}
               />
             )}
@@ -413,6 +456,7 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
               : basis ? (
                 <VenueRecoveryButton
                   title="Оставить отзыв о площадке"
+                  liveRef={openerRef}
                   onPress={() => owner.openVenueExperience(gameId, liveVenueId)}
                 />
               ) : <Label>{help ?? 'Сейчас нельзя оставить отзыв по этой игре.'}</Label>}

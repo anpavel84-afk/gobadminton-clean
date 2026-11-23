@@ -69,6 +69,7 @@ import {
   buildVenueExperienceCreateBody,
   emptyVenueExperienceDraft,
   exactGameMaySubmitBasis,
+  isVenueExperienceCreatePacket,
   isVenueExperiencePacketKind,
   parseOwnVenueEligibility,
   parseVenueConsentPreview,
@@ -2587,16 +2588,17 @@ export class PostgameCoordinator {
     try { postgameId(gameId); } catch { return; }
     const normalized = venueId.toLowerCase();
     const cmd = this.snapshot.command;
-    const pendingSame = !!cmd && isVenueExperiencePacketKind(cmd.packet.kind)
-      && cmd.packet.actor.actorId === actor.actorId
-      && cmd.packet.gameId === gameId
-      && cmd.packet.venueId === normalized;
+    const pendingPacket = cmd && isVenueExperienceCreatePacket(cmd.packet) ? cmd.packet : null;
+    const pendingSame = !!pendingPacket
+      && pendingPacket.actor.actorId === actor.actorId
+      && pendingPacket.gameId === gameId
+      && pendingPacket.venueId === normalized;
     // Competing journal / prepare blocks fresh open; same-origin UNKNOWN/sending may reopen read-only.
     if ((this.snapshot.command || this.inFlight || this.writePrepare) && !pendingSame) return;
     const gen = ++this.venueSurfaceGen;
     this.venuePreviewGen++;
-    if (pendingSame && cmd) {
-      const body = cmd.packet.body;
+    if (pendingSame && pendingPacket) {
+      const body = pendingPacket.body;
       this.show({
         venueProbe: { gameId, venueId: normalized },
         venueExperience: { gameId, venueId: normalized, gen },
@@ -3500,7 +3502,7 @@ export class PostgameCoordinator {
             void this.loadPublicReader({ preserveNotice: true });
           }
         }
-      } else if (isVenueExperiencePacketKind(packet.kind)) {
+      } else if (isVenueExperienceCreatePacket(packet)) {
         const paintUi = !!this.snapshot.venueExperience
           && this.snapshot.venueExperience.gameId === packet.gameId
           && this.snapshot.venueExperience.venueId === packet.venueId;

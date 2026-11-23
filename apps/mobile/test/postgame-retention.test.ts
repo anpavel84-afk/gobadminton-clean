@@ -235,7 +235,7 @@ test('public withdraw UNKNOWN: TTL-1 original packet; after TTL no POST; no key 
   const realNow = Date.now;
   Date.now = clock.now;
   const keys: string[] = [];
-  let mode: 'unknown' | 'ok' = 'unknown';
+  const mode: 'unknown' | 'ok' = 'unknown';
   const item = {
     id: '44444444-4444-4444-8444-444444444444',
     reviewHandle: 'c'.repeat(32),
