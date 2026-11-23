@@ -76,3 +76,17 @@ test('cold Entry retains exact bare venue intent without action/query/hash/encod
     assert.equal(hydratedEntryRoute(emptyPreferences,true,{status:'authenticated',returnPath:value}),'/games');
   }
 });
+
+test('#522 QA1: authenticated cold player-detail return restores same bare path; browse stays distinct', () => {
+  const peer = '/players/public-peer-a';
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'authenticated', returnPath: peer }), peer);
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'guest', returnPath: peer }), peer);
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'signing-in', returnPath: peer }), '/profile');
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'authenticated', returnPath: '/players/browse' }), '/players/browse');
+  for (const bad of [
+    '/players/public-peer-a/', '/players/public-peer-a?x=1', '/players/public-peer-a#x',
+    '/players/public-peer-a\n', '/players/%70ublic-peer-a', '/players/browse/extra',
+  ]) {
+    assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'authenticated', returnPath: bad }), '/games', bad);
+  }
+});

@@ -1266,6 +1266,54 @@ export class PostgameCoordinator {
     });
     void this.loadPublicEligibility();
   };
+  /**
+   * Cold-auth resumed author goal: revalidate the exact origin game/role before opening.
+   * Handle-wide eligibility must not select another basis when the original is unavailable.
+   */
+  openResumedPublicComposer = async (target: PublicRoleAuthorTarget): Promise<boolean> => {
+    const actor = this.snapshot.actor;
+    if (!actor) return false;
+    const gen = ++this.publicEligibilityGen;
+    try {
+      const data = parseOwnEligibility(await this.port.publicEligibility(actor, target.roleHandle), target.roleHandle);
+      if (gen !== this.publicEligibilityGen || !sameActor(actor, this.snapshot.actor)) return false;
+      if (data.role !== target.role) return false;
+      if (!eligibleBases(data).some(basis => basis.gameId === target.gameId)) return false;
+      if (!this.snapshot.actor || !sameActor(actor, this.snapshot.actor)) return false;
+      this.openPublicComposer(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /**
+   * Cold-auth resumed reader goal: require current typed projection for the same role/handle
+   * before blank reader open. Denial or role mismatch suppresses the sheet (no fallback origin).
+   */
+  openResumedPublicReader = async (target: PublicRoleReaderTarget): Promise<boolean> => {
+    const actor = this.snapshot.actor;
+    if (!actor) return false;
+    const gen = ++this.publicReaderGen;
+    try {
+      const page = await this.port.publicRoleByHandle!(
+        actor,
+        target.roleHandle,
+        this.readerQuery(target),
+        { roleHandle: target.roleHandle, role: target.role },
+      );
+      const parsed = parseActorAwareRoleReputationSummary(page, {
+        roleHandle: target.roleHandle,
+        role: target.role,
+      });
+      if (gen !== this.publicReaderGen || !sameActor(actor, this.snapshot.actor)) return false;
+      if (parsed.roleHandle !== target.roleHandle || parsed.role !== target.role) return false;
+      if (!this.snapshot.actor || !sameActor(actor, this.snapshot.actor)) return false;
+      this.openPublicReader(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   openOwnPublicHistory = () => {
     if (!this.snapshot.actor) return;
     this.publicOwnGen++; this.publicSurfaceGen++; this.publicReaderGen++;

@@ -320,6 +320,9 @@ export class AuthCoordinator {
         const raw = await this.deps.store.getItem(SECURE_AUTH_KEY); this.check(epoch);
         this.envelope = parseSecureEnvelope(raw, this.now()) ?? this.empty(null);
         this.show({ returnPath: this.envelope.returnPath });
+        // Cold parse drops expired pending/unclaimed from memory only — persist that retirement
+        // through the existing writer so warm/cold agree. Future/corrupt envelopes stay untouched.
+        if (raw !== null) await this.persistExpiredAuthDrops(raw, epoch);
         if (this.envelope.session) await this.refresh();
         else this.show({ status: this.envelope.pending ? 'signing-in' : 'guest', notice: null });
       } catch (error) {
@@ -331,6 +334,40 @@ export class AuthCoordinator {
     })();
     return this.boot;
   };
+  /** When parse dropped an expired pending/goal, rewrite the cleaned envelope (same returnPath). */
+  private async persistExpiredAuthDrops(raw: string, epoch: number): Promise<void> {
+    if (!this.envelope || !this.writable) return;
+    try {
+      const row = JSON.parse(raw) as Record<string, unknown>;
+      if (row.version !== 1) return;
+      const clock = this.now();
+      const pending = row.pending && typeof row.pending === 'object' ? row.pending as Record<string, unknown> : null;
+      const unclaimed = row.unclaimedPublicRoleGoal && typeof row.unclaimedPublicRoleGoal === 'object'
+        ? row.unclaimedPublicRoleGoal as Record<string, unknown> : null;
+      const droppedPending = !!(pending && typeof pending.expiresAt === 'number' && pending.expiresAt <= clock
+        && !this.envelope.pending);
+      const droppedUnclaimed = !!(unclaimed && typeof unclaimed.expiresAt === 'number' && unclaimed.expiresAt <= clock
+        && !this.envelope.unclaimedPublicRoleGoal);
+      if (!droppedPending && !droppedUnclaimed) return;
+      await this.persist(this.envelope, epoch); this.check(epoch);
+    } catch {
+      // Leave original bytes on inspect/write failure; fail-closed future remains byte-preserved.
+    }
+  }
+  /** Warm expiry: retire matching pending+goal durably; keep safe guest returnPath. */
+  private async retireExpiredPendingLogin(epoch: number): Promise<void> {
+    if (epoch !== this.epoch) return;
+    const pending = this.envelope?.pending;
+    if (!pending || pending.expiresAt > this.now()) return;
+    const next = ++this.epoch;
+    this.clearWarmPublicGoals();
+    this.exchange = null;
+    const envelope = this.empty(this.envelope!.returnPath);
+    this.envelope = envelope;
+    this.show({ status: 'guest', me: null, sessions: [], returnPath: envelope.returnPath, notice: 'signin' });
+    try { await this.persist(envelope, next); }
+    catch { if (next === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); } }
+  }
   private clearWarmPublicGoals() {
     this.postgame.clearPendingPublicGoals();
   }
@@ -475,7 +512,11 @@ export class AuthCoordinator {
     if (!pending) return null;
     let code: string;
     try { code = parseCallback(raw, pending, this.now(), this.envelope!.generation); }
-    catch { this.show({ notice: pending.expiresAt <= this.now() ? 'signin' : this.snapshot.notice }); return null; }
+    catch {
+      if (pending.expiresAt <= this.now()) await this.retireExpiredPendingLogin(epoch);
+      else this.show({ notice: this.snapshot.notice });
+      return null;
+    }
     // Synchronous memory consumption fences duplicate WebBrowser + Linking delivery before the first await.
     const admittedGoal = pending.goal ?? null;
     const consumed = { ...this.envelope! }; delete consumed.pending; this.envelope = consumed;
@@ -493,16 +534,27 @@ export class AuthCoordinator {
   };
   cancelLogin = async (generation?: string) => {
     await this.hydrate();
-    if (!this.envelope?.pending || (generation && generation !== this.envelope.generation)) return;
+    const pending = this.envelope?.pending;
+    const exchange = this.exchange;
+    // Matching cancel must fence in-flight exchange after pending was consumed; obsolete
+    // generation cannot erase a newer pending or a different in-flight exchange.
+    if (generation) {
+      if (pending) {
+        if (generation !== this.envelope!.generation) return;
+      } else if (exchange) {
+        if (generation !== exchange.pending.generation) return;
+      } else return;
+    } else if (!pending && !exchange) return;
     const epoch = ++this.epoch;
     this.clearWarmPublicGoals();
+    this.exchange = null;
     const envelope = this.empty(); this.envelope = envelope;
     this.show({ status: 'guest', me: null, sessions: [], notice: 'cancelled' });
     try { await this.persist(envelope, epoch); } catch (error) { await this.fail(epoch, error); }
   };
   /**
    * Durable at-most-once claim of an unclaimed public-role goal for the current actor/session.
-   * Clears secure storage before returning; failed clear write never opens a sheet.
+   * Synchronous reservation before any await; failed clear write never opens a sheet.
    */
   claimPublicRoleGoal = async (): Promise<PublicRoleLocalGoal | null> => {
     await this.hydrate();
@@ -517,24 +569,32 @@ export class AuthCoordinator {
         || unclaimed.generation !== envelope.generation) {
       return null;
     }
+    // Reserve synchronously — sharing one promise that delivers the same goal is not at-most-once.
+    if (this.envelope !== envelope || this.envelope.unclaimedPublicRoleGoal !== unclaimed) return null;
+    const reserved: SecureEnvelope = { ...envelope };
+    delete reserved.unclaimedPublicRoleGoal;
+    this.envelope = reserved;
     const closed = parsePublicRoleLocalGoal({
       mode: unclaimed.mode, role: unclaimed.role, roleHandle: unclaimed.roleHandle, origin: unclaimed.origin,
     }, envelope.returnPath);
-    const retire = async () => {
-      const cleared: SecureEnvelope = { ...envelope }; delete cleared.unclaimedPublicRoleGoal;
-      await this.persist(cleared, epoch); this.check(epoch); this.envelope = cleared;
+    const deadline = unclaimed.expiresAt;
+    const persistReserved = async () => {
+      await this.persist(reserved, epoch); this.check(epoch);
     };
-    if (!closed || unclaimed.expiresAt <= this.now()) {
-      try { await retire(); } catch { if (epoch === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); } }
+    if (!closed || deadline <= this.now()) {
+      try { await persistReserved(); }
+      catch { if (epoch === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); } }
       return null;
     }
-    try { await retire(); }
+    try { await persistReserved(); }
     catch {
       if (epoch === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); }
       return null;
     }
+    // Recheck epoch / actor / original deadline after durable clearing before handoff.
     if (epoch !== this.epoch || this.snapshot.status !== 'authenticated' || !this.snapshot.me) return null;
     if (this.snapshot.me.id !== unclaimed.actorId || this.snapshot.me.session.id !== unclaimed.sessionId) return null;
+    if (deadline <= this.now()) return null;
     return closed;
   };
   private async token(epoch: number): Promise<string> {
@@ -549,6 +609,11 @@ export class AuthCoordinator {
     const epoch = this.epoch;
     const work = (async () => {
       await this.hydrate();
+      // Foreground warm expiry: retire expired pending/goal without a background timer.
+      if (this.envelope?.pending && this.envelope.pending.expiresAt <= this.now()) {
+        await this.retireExpiredPendingLogin(this.epoch);
+        return;
+      }
       if (!this.envelope?.session) return;
       try {
         const access = await this.token(epoch);

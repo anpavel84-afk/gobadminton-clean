@@ -1584,3 +1584,162 @@ test('#522 family6: legacy v1 / future envelope / adversarial goals fail closed 
   assert.equal(frozen.stored(), JSON.stringify(future));
   assert.equal(await frozen.auth.beginLogin('/games/same-game', gameAuthorGoal), null);
 });
+
+test('#522 QA1: concurrent claims with delayed clear yield exactly one non-null goal', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const first = setup(); await first.auth.hydrate();
+  assert.ok(await first.auth.beginLogin(path, gameAuthorGoal));
+  const pending = parseSecureEnvelope(first.stored(), now)!.pending!;
+  assert.equal(await first.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`), path);
+  const mid = JSON.parse(first.stored()!);
+  assert.ok(mid.unclaimedPublicRoleGoal);
+  const s = setup(mid); await s.auth.hydrate();
+  const gate = deferred<void>();
+  const realSet = s.store.setItem.bind(s.store);
+  s.store.setItem = async (key, value) => { await gate.promise; return realSet(key, value); };
+  const a = s.auth.claimPublicRoleGoal();
+  const b = s.auth.claimPublicRoleGoal();
+  await new Promise(r => setImmediate(r));
+  gate.resolve();
+  const results = await Promise.all([a, b]);
+  assert.equal(results.filter(goal => goal !== null).length, 1);
+  assert.deepEqual(results.find(goal => goal !== null), gameAuthorGoal);
+  assert.equal(parseSecureEnvelope(s.stored(), now)!.unclaimedPublicRoleGoal, undefined);
+  assert.equal(await s.auth.claimPublicRoleGoal(), null);
+});
+
+test('#522 QA1: cancel while exchange/me blocked retires goal; obsolete cancel preserves newer pending', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const blocked = setup(); await blocked.auth.hydrate();
+  assert.ok(await blocked.auth.beginLogin(path, gameAuthorGoal));
+  const login = parseSecureEnvelope(blocked.stored(), now)!.pending!;
+  const generation = login.generation;
+  const meGate = deferred<typeof me>();
+  blocked.setHandler(async p => p === '/me' ? meGate.promise : credentials);
+  const work = blocked.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  await new Promise(r => setImmediate(r));
+  assert.equal(parseSecureEnvelope(blocked.stored(), now)?.pending, undefined);
+  await blocked.auth.cancelLogin(generation);
+  assert.equal(blocked.auth.getSnapshot().status, 'guest');
+  assert.equal(blocked.auth.getSnapshot().notice, 'cancelled');
+  meGate.resolve(me);
+  assert.equal(await work, null);
+  assert.equal(parseSecureEnvelope(blocked.stored(), now)?.unclaimedPublicRoleGoal, undefined);
+  assert.equal(await blocked.auth.claimPublicRoleGoal(), null);
+
+  const race = setup(); await race.auth.hydrate();
+  assert.ok(await race.auth.beginLogin(path, gameAuthorGoal));
+  const oldGen = parseSecureEnvelope(race.stored(), now)!.generation;
+  assert.ok(await race.auth.beginLogin(path, gameAuthorGoal));
+  const newer = parseSecureEnvelope(race.stored(), now)!;
+  assert.notEqual(newer.generation, oldGen);
+  await race.auth.cancelLogin(oldGen);
+  assert.ok(parseSecureEnvelope(race.stored(), now)!.pending);
+  assert.deepEqual(parseSecureEnvelope(race.stored(), now)!.pending!.goal, gameAuthorGoal);
+});
+
+test('#522 QA1: deadline crossing during delayed claim store never hands off', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  let clock = now - 1;
+  let stored: string | null = JSON.stringify({
+    version: 1,
+    generation: token('g'),
+    returnPath: path,
+    session: {
+      refreshToken: credentials.refreshToken, sessionId: me.session.id, actorId: me.id,
+      refreshExpiresAt: credentials.refreshExpiresAt, refreshAbsoluteExpiresAt: credentials.refreshAbsoluteExpiresAt,
+    },
+    unclaimedPublicRoleGoal: {
+      ...gameAuthorGoal, generation: token('g'), expiresAt: now, actorId: me.id, sessionId: me.session.id,
+    },
+  });
+  let serial = 0;
+  let advanceOnWrite = false;
+  const writes: string[] = [];
+  const auth = new AuthCoordinator({
+    api: createNativeApi(async (url) => {
+      const p = String(url).replace('https://dev.gobadminton.ru/v1', '');
+      if (p === '/me') return new Response(JSON.stringify(me));
+      if (p === '/auth/native/refresh') return new Response(JSON.stringify(credentials));
+      return new Response(JSON.stringify(credentials));
+    }),
+    store: {
+      getItem: async () => stored,
+      setItem: async (_key, value) => {
+        if (advanceOnWrite) {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          clock = now + 1;
+        }
+        stored = value;
+        writes.push(value);
+      },
+    },
+    random: () => String.fromCharCode(65 + serial++).repeat(43),
+    challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'),
+    now: () => clock,
+  });
+  await auth.hydrate();
+  assert.equal(auth.getSnapshot().status, 'authenticated');
+  advanceOnWrite = true;
+  assert.equal(await auth.claimPublicRoleGoal(), null);
+  assert.equal(parseSecureEnvelope(stored, clock)?.unclaimedPublicRoleGoal, undefined);
+  assert.equal(auth.getSnapshot().status, 'authenticated');
+});
+
+test('#522 QA1: cold hydrate and warm validate durably retire expired pending goal bytes', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const seeded = setup(); await seeded.auth.hydrate();
+  assert.ok(await seeded.auth.beginLogin(path, gameAuthorGoal));
+  const expired = JSON.parse(seeded.stored()!);
+  expired.pending.expiresAt = now - 1;
+
+  const cold = setup(expired);
+  await cold.auth.hydrate();
+  assert.equal(cold.auth.getSnapshot().status, 'guest');
+  assert.equal(cold.auth.getSnapshot().returnPath, path);
+  const coldBytes = JSON.parse(cold.stored()!);
+  assert.equal(coldBytes.pending, undefined);
+  assert.equal(coldBytes.unclaimedPublicRoleGoal, undefined);
+  assert.equal(coldBytes.returnPath, path);
+
+  let clock = now;
+  let bytes: string | null = null;
+  let serial = 0;
+  const warm = new AuthCoordinator({
+    api: createNativeApi(async (url) => {
+      const p = String(url).replace('https://dev.gobadminton.ru/v1', '');
+      if (p === '/auth/methods') {
+        return new Response(JSON.stringify({ items: [{ method: 'vk', type: 'oauth', available: true }] }));
+      }
+      if (p === '/auth/native/transactions') {
+        return new Response(JSON.stringify({
+          transactionId: token('t'),
+          expiresAt: new Date(clock + 600000).toISOString(),
+          browserStartUrl: `https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`,
+        }));
+      }
+      if (p === '/me') return new Response(JSON.stringify(me));
+      return new Response(JSON.stringify(credentials));
+    }),
+    store: {
+      getItem: async () => bytes,
+      setItem: async (_key, value) => { bytes = value; },
+    },
+    random: () => String.fromCharCode(65 + serial++).repeat(43),
+    challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'),
+    now: () => clock,
+  });
+  await warm.hydrate();
+  assert.ok(await warm.beginLogin(path, gameAuthorGoal));
+  assert.equal(warm.getSnapshot().status, 'signing-in');
+  const pending = parseSecureEnvelope(bytes, clock)!.pending!;
+  assert.deepEqual(pending.goal, gameAuthorGoal);
+  clock = pending.expiresAt + 1;
+  await warm.validate();
+  assert.equal(warm.getSnapshot().status, 'guest');
+  assert.equal(warm.getSnapshot().notice, 'signin');
+  assert.equal(warm.getSnapshot().returnPath, path);
+  const retired = JSON.parse(bytes!);
+  assert.equal(retired.pending, undefined);
+  assert.equal(retired.returnPath, path);
+});

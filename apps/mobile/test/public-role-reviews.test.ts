@@ -964,6 +964,8 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(host, /rememberPublicRoleFocusTarget/);
   assert.match(host, /clearPublicRoleFocusTarget/);
   assert.match(host, /claimPublicRoleGoal/);
+  assert.match(host, /publicRoleGoalPath|router\.replace/);
+  assert.match(host, /openResumedPublicComposer|openResumedPublicReader/);
   assert.match(host, /resumePendingPublicAuthor/);
   assert.match(host, /resumePendingPublicReader/);
   assert.match(host, /PublicRoleAuthorEntryButton/);
@@ -999,6 +1001,8 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(coordinator, /clearPendingPublicGoals/);
   assert.match(coordinator, /rememberPendingPublicReader/);
   assert.match(coordinator, /openPublicReader/);
+  assert.match(coordinator, /openResumedPublicComposer/);
+  assert.match(coordinator, /openResumedPublicReader/);
   assert.match(coordinator, /submitPublicReply/);
   assert.match(coordinator, /submitPublicReport/);
   assert.match(coordinator, /public-role-reply/);
@@ -3934,4 +3938,89 @@ test('#522 address15: empty reply/report ACK keeps immutable UNKNOWN; explicit v
   );
   assert.equal(reportKeys.length, 2);
   assert.equal(reportKeys[1], reportFrozen.key);
+});
+
+test('#522 QA1: resumed author/reader suppress on origin/role denial; no fallback basis opens sheet', async () => {
+  const otherGame = gameB;
+  const authorDenied = new PostgameCoordinator({
+    ...idlePort({
+      publicEligibility: async () => eligibilityBody({
+        bases: [{
+          gameId: otherGame,
+          role: 'organization',
+          endsAt: '2026-10-01T18:00:00.000Z',
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+          projectionHashPreview: null,
+          admission: 'may_submit',
+          reason: null,
+        }],
+      }),
+    }),
+  }, () => 'qa1-author');
+  authorDenied.setActor(actor);
+  assert.equal(await authorDenied.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  }), false);
+  assert.equal(authorDenied.getSnapshot().publicSurface, null);
+  assert.equal(authorDenied.getSnapshot().publicDraft, null);
+
+  const authorOk = new PostgameCoordinator({ ...idlePort() }, () => 'qa1-author-ok');
+  authorOk.setActor(actor);
+  assert.equal(await authorOk.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  }), true);
+  assert.equal(authorOk.getSnapshot().publicSurface?.mode, 'composer');
+  assert.equal(authorOk.getSnapshot().publicSurface?.target?.gameId, gameId);
+  await tick();
+  assert.equal(authorOk.getSnapshot().publicDraft?.gameId, gameId);
+  assert.equal(authorOk.getSnapshot().publicDraft?.consent, false);
+
+  const readerPage = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 0,
+    projectionVersion: 'q'.repeat(32),
+    items: [],
+    nextCursor: null,
+    availability: 'available',
+  };
+  const readerDenied = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => { throw new PostgameError('private', 404); },
+    }),
+  }, () => 'qa1-reader-deny');
+  readerDenied.setActor(actor);
+  assert.equal(await readerDenied.openResumedPublicReader({
+    roleHandle: handle, role: 'organization', origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  }), false);
+  assert.equal(readerDenied.getSnapshot().publicSurface, null);
+
+  const readerMismatch = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => ({ ...readerPage, role: 'training' }),
+    }),
+  }, () => 'qa1-reader-mismatch');
+  readerMismatch.setActor(actor);
+  assert.equal(await readerMismatch.openResumedPublicReader({
+    roleHandle: handle, role: 'organization', origin: { kind: 'game', gameId },
+  }), false);
+  assert.equal(readerMismatch.getSnapshot().publicSurface, null);
+
+  const readerOk = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => readerPage,
+    }),
+  }, () => 'qa1-reader-ok');
+  readerOk.setActor(actor);
+  assert.equal(await readerOk.openResumedPublicReader({
+    roleHandle: handle, role: 'organization', origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  }), true);
+  assert.equal(readerOk.getSnapshot().publicSurface?.mode, 'reader');
+  assert.equal(readerOk.getSnapshot().publicSurface?.reader?.origin.kind, 'profile');
 });

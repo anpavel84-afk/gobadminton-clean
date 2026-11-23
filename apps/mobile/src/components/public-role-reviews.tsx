@@ -1,7 +1,8 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View, type ScrollView } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
-import type { PublicRoleLocalGoal } from '../native-auth-protocol.ts';
+import { publicRoleGoalPath, type PublicRoleLocalGoal } from '../native-auth-protocol.ts';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
   bindPublicRoleFocusRef,
@@ -616,7 +617,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
  * PostgameCoordinator surface ownership; claims durable cold goal once before warm pending resume.
  */
 export function PublicRoleReviewHost() {
-  const auth = useAuth(), owner = auth.postgame;
+  const auth = useAuth(), owner = auth.postgame, router = useRouter();
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const claimGen = useRef(0);
   useEffect(() => {
@@ -628,20 +629,27 @@ export function PublicRoleReviewHost() {
     void (async () => {
       const goal = await auth.claimPublicRoleGoal();
       if (gen !== claimGen.current) return;
-      if (goal?.mode === 'author' && goal.origin.kind === 'game') {
-        owner.openPublicComposer({
-          roleHandle: goal.roleHandle,
-          role: goal.role,
-          gameId: goal.origin.gameId,
-        });
-        return;
-      }
-      if (goal?.mode === 'reader') {
-        owner.openPublicReader({
-          roleHandle: goal.roleHandle,
-          role: goal.role,
-          origin: goal.origin,
-        });
+      if (goal) {
+        const path = publicRoleGoalPath(goal);
+        // Bare origin must be restored before sheet handoff — route-only safe fallback cannot authorize.
+        if (!path) return;
+        router.replace(path as '/games');
+        if (gen !== claimGen.current) return;
+        if (goal.mode === 'author' && goal.origin.kind === 'game') {
+          await owner.openResumedPublicComposer({
+            roleHandle: goal.roleHandle,
+            role: goal.role,
+            gameId: goal.origin.gameId,
+          });
+          return;
+        }
+        if (goal.mode === 'reader') {
+          await owner.openResumedPublicReader({
+            roleHandle: goal.roleHandle,
+            role: goal.role,
+            origin: goal.origin,
+          });
+        }
         return;
       }
       const live = owner.getSnapshot();
@@ -652,12 +660,17 @@ export function PublicRoleReviewHost() {
       }
       if (live.pendingPublicReader) owner.resumePendingPublicReader();
     })();
+    return () => {
+      // Retire stale async claim work on unmount / auth change / surface replacement.
+      if (claimGen.current === gen) claimGen.current++;
+    };
   }, [
     auth.status,
     auth.me?.id,
     auth.me?.session.id,
     auth.claimPublicRoleGoal,
     owner,
+    router,
     s.actor?.actorId,
     s.actor?.sessionId,
     s.pendingPublicAuthor,
