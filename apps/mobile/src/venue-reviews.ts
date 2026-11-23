@@ -462,6 +462,41 @@ export function noteVenueExperienceRouteOwner(
   return next ?? prior;
 }
 
+/** Immutable owner for one focused Profile own-venue history lifetime. */
+export type OwnVenueHistoryRouteOwner = {
+  gen: number;
+  actorId: string;
+  sessionId: string;
+};
+
+/**
+ * Capture THIS Profile route's owned history surface when live actor matches.
+ * Blur/unmount cleanup must retire this capture — never rebuild expected from a later getSnapshot().
+ */
+export function captureOwnVenueHistoryRouteOwner(args: {
+  actor: { actorId: string; sessionId: string } | null | undefined;
+  surface: { mode: 'history'; gen: number } | null | undefined;
+}): OwnVenueHistoryRouteOwner | null {
+  const { actor, surface } = args;
+  if (!actor || !surface || surface.mode !== 'history') return null;
+  return {
+    gen: surface.gen,
+    actorId: actor.actorId,
+    sessionId: actor.sessionId,
+  };
+}
+
+/**
+ * While Profile stays focused, remember the latest matching history owner (open after focus / reopen).
+ * A null next leaves the prior capture unchanged — ordinary close does not clear departure debt.
+ */
+export function noteOwnVenueHistoryRouteOwner(
+  prior: OwnVenueHistoryRouteOwner | null,
+  next: OwnVenueHistoryRouteOwner | null,
+): OwnVenueHistoryRouteOwner | null {
+  return next ?? prior;
+}
+
 /**
  * Production gate for VenueExperienceEntry eligibility GET.
  * Probe only when THIS route is focused, actor/session verified, live venue + ready results,
@@ -829,6 +864,39 @@ export function isVenueExperienceCommandPacket<T extends { readonly kind: string
   readonly body: VenueExperienceCommandBody;
 } {
   return packet.kind === 'venue-experience-command';
+}
+
+/**
+ * Production pending-recovery navigation target for venue packets.
+ * Create keeps immutable results gameId; owner command never uses a game URL (incl. sentinel own-venue).
+ */
+export function venueExperiencePendingRecoveryTarget(packet: {
+  readonly kind: string;
+  readonly gameId: string;
+}): { kind: 'create-results'; gameId: string } | { kind: 'owner-history' } | null {
+  if (isVenueExperienceCreatePacket(packet)) {
+    return { kind: 'create-results', gameId: packet.gameId };
+  }
+  if (isVenueExperienceCommandPacket(packet)) {
+    return { kind: 'owner-history' };
+  }
+  return null;
+}
+
+/**
+ * Selected own-detail must match the requested id and current own row handle/venue when known.
+ * A valid different row fails closed — never retargets the editor or clears a selected-read fence.
+ */
+export function ownVenueSelectedMatchesRequest(
+  selected: { id: string; venueId: string; reviewHandle: string },
+  request: { id: string; venueId?: string; reviewHandle?: string },
+): boolean {
+  if (!selected || selected.id !== request.id) return false;
+  if (request.venueId !== undefined && selected.venueId !== request.venueId) return false;
+  if (request.reviewHandle !== undefined && selected.reviewHandle !== request.reviewHandle) {
+    return false;
+  }
+  return true;
 }
 
 /**

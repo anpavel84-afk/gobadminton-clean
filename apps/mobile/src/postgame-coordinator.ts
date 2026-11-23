@@ -77,6 +77,7 @@ import {
   isVenueExperiencePacketKind,
   mayEditOwnVenue,
   mayWithdrawOwnVenue,
+  ownVenueSelectedMatchesRequest,
   parseOwnVenueEligibility,
   parseOwnVenueReviewsPage,
   parseSelectedOwnVenueReview,
@@ -283,7 +284,11 @@ type Snapshot = {
   ownVenueSelected: SelectedOwnVenueReview | null;
   /** Row pending explicit withdraw confirm (history sheet). */
   ownVenueWithdraw: OwnVenueReview | null;
-  /** Version conflict fence — successful list or selected GET clears. */
+  /**
+   * Version conflict / selected-edit fence.
+   * Active selected editor: only successful matching selected GET clears.
+   * Withdraw-row conflict: successful list GET may clear (fresh confirm required).
+   */
   ownVenueReadRequired: boolean;
 };
 type Port = {
@@ -496,6 +501,16 @@ export class PostgameCoordinator {
   private ownVenueListGen = 0;
   private ownVenueSelectedGen = 0;
   /**
+   * One-shot Profile focus open for owner pending recovery — actor-fenced, GET only, zero POST.
+   * Set before navigating to /profile; consumed once on verified Profile focus; discarded on logout/switch.
+   */
+  private ownVenueHistoryNavIntent: null | { actorId: string; sessionId: string } = null;
+  /**
+   * List GET demanded while inFlight/sending — flushed once after inFlight cleanup when surface gen still current.
+   * Cleared on close/retire/account switch; never a timer/poll.
+   */
+  private ownVenueListDeferred: null | { surfaceGen: number; preserveNotice: boolean } = null;
+  /**
    * Fresh venue create post-token authority — cleared on settle/UNKNOWN path end/setActor/forget.
    * Distinct from writePrepare (pre-dispatch) and from UNKNOWN reconcile (no fresh bind).
    */
@@ -551,6 +566,8 @@ export class PostgameCoordinator {
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     this.writePrepare = null;
     this.venueFreshDispatchBind = null;
+    this.ownVenueHistoryNavIntent = null;
+    this.ownVenueListDeferred = null;
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
@@ -706,7 +723,7 @@ export class PostgameCoordinator {
     }
     if (actor && saved?.ownVenueSurface?.mode === 'history') void this.loadOwnVenueReviews();
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.writePrepare=null; this.venueFreshDispatchBind=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.ownVenueSurfaceGen++; this.ownVenueListGen++; this.ownVenueSelectedGen++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.writePrepare=null; this.venueFreshDispatchBind=null; this.ownVenueHistoryNavIntent=null; this.ownVenueListDeferred=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.ownVenueSurfaceGen++; this.ownVenueListGen++; this.ownVenueSelectedGen++; this.snapshot=empty(null); this.show({}); };
   /** Local permit captured before AuthCoordinator token await — never on the API wire. */
   dispatchPermit = (packet: Packet): PostgameDispatchPermit => {
     const cmd = this.snapshot.command;
@@ -2756,12 +2773,39 @@ export class PostgameCoordinator {
     });
     void this.loadVenueEligibility();
   };
+  /**
+   * Actor-scoped read-only intent for owner pending recovery — set before /profile navigation.
+   * Consumed once on verified Profile focus; never opens history here (survives route commit).
+   */
+  requestOwnVenueHistoryNavIntent = () => {
+    const actor = this.snapshot.actor;
+    if (!actor) return;
+    this.ownVenueHistoryNavIntent = {
+      actorId: actor.actorId,
+      sessionId: actor.sessionId,
+    };
+  };
+  /**
+   * Consume one-shot Profile history nav intent when actor/session still match.
+   * Returns true only when caller should open history (GET only, zero POST).
+   */
+  consumeOwnVenueHistoryNavIntent = (): boolean => {
+    const intent = this.ownVenueHistoryNavIntent;
+    this.ownVenueHistoryNavIntent = null;
+    if (!intent) return false;
+    const actor = this.snapshot.actor;
+    if (!actor || actor.actorId !== intent.actorId || actor.sessionId !== intent.sessionId) {
+      return false;
+    }
+    return true;
+  };
   /** Profile entry — private own venue history (at most 50). Not a game-results CTA. */
   openOwnVenueHistory = () => {
     if (!this.snapshot.actor) return;
     this.ownVenueSurfaceGen++;
     this.ownVenueListGen++;
     this.ownVenueSelectedGen++;
+    this.ownVenueListDeferred = null;
     this.show({
       ownVenueSurface: { mode: 'history', gen: this.ownVenueSurfaceGen },
       ownVenue: { status: 'idle' },
@@ -2775,6 +2819,7 @@ export class PostgameCoordinator {
     this.ownVenueSurfaceGen++;
     this.ownVenueListGen++;
     this.ownVenueSelectedGen++;
+    this.ownVenueListDeferred = null;
     this.show({
       ownVenueSurface: null,
       ownVenue: { status: 'idle' },
@@ -2782,15 +2827,66 @@ export class PostgameCoordinator {
       ownVenueReadRequired: false,
     });
   };
+  /**
+   * Profile blur/unmount retirement — only the Host-captured history gen + actor/session.
+   * Never rebuilds expected from a live getSnapshot at cleanup. Preserves UNKNOWN journal.
+   * Does not close exact-game create (no reviewId). Stale cleanup cannot close a newer generation.
+   */
+  retireOwnVenueHistorySurface = (expected: {
+    gen: number;
+    actorId: string;
+    sessionId: string;
+  }) => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.ownVenueSurface;
+    if (!surface || surface.mode !== 'history' || surface.gen !== expected.gen) return;
+    if (!actor || actor.actorId !== expected.actorId || actor.sessionId !== expected.sessionId) return;
+    this.ownVenueSurfaceGen++;
+    this.ownVenueListGen++;
+    this.ownVenueSelectedGen++;
+    this.ownVenueListDeferred = null;
+    const edit = this.snapshot.venueExperience;
+    const retireEdit = !!edit?.reviewId;
+    if (retireEdit) {
+      this.venueSurfaceGen++;
+      this.venuePreviewGen++;
+      if (this.writePrepare?.origin === 'venue-experience'
+        && this.writePrepare.surfaceGen === edit!.gen
+        && this.writePrepare.gen === this.writePrepareGen) {
+        this.writePrepare = null;
+      }
+    }
+    this.show({
+      ownVenueSurface: null,
+      ownVenue: { status: 'idle' },
+      ownVenueWithdraw: null,
+      ownVenueReadRequired: false,
+      ...(retireEdit ? {
+        venueExperience: null,
+        venueDraft: null,
+        venueConsentHash: null,
+        venueReceipt: null,
+        venueNotice: null,
+      } : {}),
+    });
+  };
   loadOwnVenueReviews = async (opts?: { preserveNotice?: boolean }) => {
     const actor = this.snapshot.actor;
     const surface = this.snapshot.ownVenueSurface;
-    if (!actor || !surface || surface.mode !== 'history') return;
+    if (!actor || !surface || surface.mode !== 'history') {
+      this.ownVenueListDeferred = null;
+      return;
+    }
     // List GET never settles UNKNOWN; block only while a fresh write is preparing/sending.
     if (this.inFlight || this.writePrepare
       || (this.snapshot.command && this.snapshot.command.status === 'sending')) {
+      this.ownVenueListDeferred = {
+        surfaceGen: surface.gen,
+        preserveNotice: opts?.preserveNotice === true,
+      };
       return;
     }
+    this.ownVenueListDeferred = null;
     const preserveNotice = opts?.preserveNotice === true;
     const priorNotice = this.snapshot.venueNotice;
     const request = ++this.ownVenueListGen;
@@ -2800,10 +2896,13 @@ export class PostgameCoordinator {
       const page = parseOwnVenueReviewsPage(await this.port.venueExperienceOwnList(actor));
       if (request !== this.ownVenueListGen || !sameActor(actor, this.snapshot.actor)) return;
       if (this.snapshot.ownVenueSurface?.gen !== surfaceGen) return;
+      // Active selected editor: only matching selected GET clears the fence; list may clear withdraw-row conflict.
+      const keepSelectedReadFence = !!this.snapshot.venueExperience?.reviewId
+        && this.snapshot.ownVenueReadRequired;
       this.show({
         ownVenue: { status: 'ready', data: page },
         ownVenueWithdraw: null,
-        ownVenueReadRequired: false,
+        ownVenueReadRequired: keepSelectedReadFence,
         venueNotice: preserveNotice ? (this.snapshot.venueNotice ?? priorNotice) : null,
       });
     } catch (error) {
@@ -2817,6 +2916,27 @@ export class PostgameCoordinator {
           : 'Не удалось загрузить ваши отзывы. Последнее подтверждённое состояние сохранено; действия недоступны до успешного чтения.',
       });
     }
+  };
+  /**
+   * After inFlight cleanup — one deferred own-history list GET when the same surface gen still demands it.
+   * Closed history / account switch already cleared the deferred marker → zero late GET.
+   */
+  private flushDeferredOwnVenueList = () => {
+    const deferred = this.ownVenueListDeferred;
+    if (!deferred) return;
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.ownVenueSurface;
+    if (!actor || !surface || surface.mode !== 'history' || surface.gen !== deferred.surfaceGen) {
+      this.ownVenueListDeferred = null;
+      return;
+    }
+    if (this.inFlight || this.writePrepare
+      || (this.snapshot.command && this.snapshot.command.status === 'sending')) {
+      return;
+    }
+    const preserveNotice = deferred.preserveNotice;
+    this.ownVenueListDeferred = null;
+    void this.loadOwnVenueReviews({ preserveNotice });
   };
   /**
    * Selected owner GET — edit open or conflict recovery. Never proves UNKNOWN settled.
@@ -2841,6 +2961,25 @@ export class PostgameCoordinator {
       if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
       if (historyGen !== undefined && this.snapshot.ownVenueSurface?.gen !== historyGen) return;
       const list = this.snapshot.ownVenue.data?.items ?? [];
+      const currentOwn = list.find(row => row.id === reviewId)
+        ?? (this.snapshot.ownVenueSelected?.id === reviewId ? this.snapshot.ownVenueSelected : null)
+        ?? (this.snapshot.ownVenueWithdraw?.id === reviewId ? this.snapshot.ownVenueWithdraw : null);
+      const editorVenueId = this.snapshot.venueExperience?.reviewId === reviewId
+        ? this.snapshot.venueExperience.venueId
+        : undefined;
+      const bindOk = ownVenueSelectedMatchesRequest(selected, {
+        id: reviewId,
+        ...(currentOwn ? { venueId: currentOwn.venueId, reviewHandle: currentOwn.reviewHandle } : {}),
+        ...(editorVenueId && !currentOwn ? { venueId: editorVenueId } : {}),
+      }) && (!currentOwn || isSelectedOwnVenueReview(selected, currentOwn));
+      if (!bindOk) {
+        // Fail closed — do not retarget editor or clear selected-read fence.
+        this.show({
+          venueNotice: 'Не удалось перечитать выбранный отзыв. Действия остаются заблокированы.',
+          ownVenueReadRequired: true,
+        });
+        return;
+      }
       const items = list.some(row => row.id === selected.id)
         ? list.map(row => row.id === selected.id ? selected : row)
         : list;
@@ -3463,7 +3602,11 @@ export class PostgameCoordinator {
       if (selectedRequest !== this.ownVenueSelectedGen) return;
       if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
       if (this.snapshot.command || this.inFlight) return;
-      if (!isSelectedOwnVenueReview(fresh, prior)) {
+      if (!ownVenueSelectedMatchesRequest(fresh, {
+        id: surface.reviewId,
+        venueId: surface.venueId,
+        reviewHandle: prior.reviewHandle,
+      }) || !isSelectedOwnVenueReview(fresh, prior)) {
         this.show({ venueNotice: 'Не удалось перечитать отзыв.', ownVenueReadRequired: true });
         return;
       }
@@ -4339,6 +4482,8 @@ export class PostgameCoordinator {
     } finally {
       if (this.inFlight === packet) this.inFlight = null;
       if (this.venueFreshDispatchBind?.key === packet.key) this.venueFreshDispatchBind = null;
+      // After inFlight clear: one deferred own-history GET when still demanded for the same surface gen.
+      this.flushDeferredOwnVenueList();
     }
   }
 }

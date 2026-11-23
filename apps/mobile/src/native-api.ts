@@ -411,9 +411,13 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
         throw new PostgameError('invalid');
       }
-      return parseSelectedOwnVenueReview(
-        await postgameRequest(`/me/venue-reviews/${id.toLowerCase()}`, access),
+      const requested = id.toLowerCase();
+      const selected = parseSelectedOwnVenueReview(
+        await postgameRequest(`/me/venue-reviews/${requested}`, access),
       );
+      // Bind response id to the requested own row — a valid different row fails closed.
+      if (selected.id !== requested) throw new PostgameError('invalid');
+      return selected;
     },
     venueExperienceConsentPreview: async (
       access: string,

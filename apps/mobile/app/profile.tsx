@@ -116,8 +116,9 @@ export default function Profile() {
             <Label>Этот список видите только вы.</Label>
             <OwnVenueReviewsEntry onOpen={() => auth.postgame.openOwnVenueHistory()} />
           </View>
-          <OwnVenueReviewsHost />
         </>}
+        {/* Host stays mounted across Profile edit toggle — retire only on route blur/unmount. */}
+        <OwnVenueReviewsHost />
         {editing && <>
           <Pressable accessibilityRole="button" accessibilityLabel="Мой профиль" onPress={() => setEditing(false)}
             style={({ pressed }) => [{ alignSelf: 'flex-start', minHeight: 44, minWidth: 44, justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>

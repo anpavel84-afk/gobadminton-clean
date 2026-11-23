@@ -7,6 +7,7 @@ import { PostgameError, validateReceipt, wire } from '../src/postgame.ts';
 import {
   buildVenueExperienceSubmitRevisionBody,
   buildVenueExperienceWithdrawBody,
+  captureOwnVenueHistoryRouteOwner,
   isSelectedOwnVenueReview,
   isSubmitVenueReviewReceipt,
   isVenueExperienceCommandPacket,
@@ -15,11 +16,14 @@ import {
   isWithdrawVenueReviewReceipt,
   mayEditOwnVenue,
   mayWithdrawOwnVenue,
+  noteOwnVenueHistoryRouteOwner,
+  ownVenueSelectedMatchesRequest,
   ownVenueStatusLabel,
   ownVenueWithdrawConfirmFlags,
   parseOwnVenueReviewsPage,
   parseSelectedOwnVenueReview,
   postgameIdempotencyReplayBlocked,
+  venueExperiencePendingRecoveryTarget,
   type OwnVenueReview,
   type SelectedOwnVenueReview,
 } from '../src/venue-reviews.ts';
@@ -605,6 +609,328 @@ test('edit 409 → explicit selected GET preserves draft/reconsent; selected-rea
   assert.equal(owner.getSnapshot().venueDraft?.text, 'Ещё правка');
 });
 
+test('address5: create recovery unchanged; owner withdraw sentinel never game URL; intent zero POST', async () => {
+  const createPacket = {
+    kind: 'venue-experience-create' as const,
+    gameId,
+    venueId,
+  };
+  const withdrawPacket = {
+    kind: 'venue-experience-command' as const,
+    gameId: 'own-venue',
+    venueId,
+    reviewId,
+    reviewHandle: handle,
+    body: { action: 'withdraw' as const, expectedVersion: 1 },
+  };
+  const revisePacket = {
+    kind: 'venue-experience-command' as const,
+    gameId,
+    venueId,
+    reviewId,
+    reviewHandle: handle,
+    body: { action: 'submit_revision' as const, expectedVersion: 1 },
+  };
+  assert.deepEqual(venueExperiencePendingRecoveryTarget(createPacket), {
+    kind: 'create-results',
+    gameId,
+  });
+  assert.deepEqual(venueExperiencePendingRecoveryTarget(withdrawPacket), {
+    kind: 'owner-history',
+  });
+  assert.deepEqual(venueExperiencePendingRecoveryTarget(revisePacket), {
+    kind: 'owner-history',
+  });
+  assert.equal(venueExperiencePendingRecoveryTarget({ kind: 'later', gameId }), null);
+
+  const posts: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      send: async (packet) => {
+        posts.push(packet.key);
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => 'owner-intent-key');
+  owner.setActor(actor);
+  // Nav intent alone must not POST or open history — Profile focus consumes it.
+  owner.requestOwnVenueHistoryNavIntent();
+  assert.equal(owner.getSnapshot().ownVenueSurface, null);
+  assert.equal(posts.length, 0);
+  assert.equal(owner.consumeOwnVenueHistoryNavIntent(), true);
+  assert.equal(owner.getSnapshot().ownVenueSurface, null);
+  assert.equal(posts.length, 0);
+
+  // Owner UNKNOWN journal unchanged across view-only history open (zero automatic POST).
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.beginOwnVenueWithdraw(ownRow());
+  await owner.confirmOwnVenueWithdraw();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const frozenKey = owner.getSnapshot().command!.packet.key;
+  const frozenAge = owner.getSnapshot().command!.firstDispatchedAt;
+  assert.equal(isVenueExperienceCommandPacket(owner.getSnapshot().command!.packet), true);
+  assert.equal(owner.getSnapshot().command!.packet.gameId, 'own-venue');
+  owner.closeOwnVenueHistory();
+  owner.requestOwnVenueHistoryNavIntent();
+  assert.equal(owner.consumeOwnVenueHistoryNavIntent(), true);
+  owner.openOwnVenueHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, frozenKey);
+  assert.equal(owner.getSnapshot().command?.firstDispatchedAt, frozenAge);
+  assert.equal(posts.length, 1);
+});
+
+test('address5: edit409 + list GET keeps selected-read fence until matching selected GET', async () => {
+  let detailVersion = 1;
+  let listCalls = 0;
+  let detailCalls = 0;
+  const posts: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => {
+        listCalls += 1;
+        return { items: [ownRow(detailVersion)] };
+      },
+      venueExperienceOwnDetail: async (_actor, id) => {
+        detailCalls += 1;
+        assert.equal(id, reviewId);
+        return selected(detailVersion);
+      },
+      send: async (packet) => {
+        posts.push(packet.key);
+        throw new PostgameError('business', 409, 'VERSION_CONFLICT');
+      },
+    }),
+  }, () => `fence-list-${posts.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.openOwnVenueEdit(ownRow());
+  await tick();
+  owner.patchVenueDraft({ text: 'Черновик под selected fence', topics: ['surface'] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Черновик под selected fence');
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+
+  const listsBefore = listCalls;
+  await owner.loadOwnVenueReviews();
+  await tick();
+  assert.equal(listCalls, listsBefore + 1);
+  // List success must not authorize selected editor — fence + unsent draft stay.
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Черновик под selected fence');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(posts.length, 1);
+
+  detailVersion = 4;
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.ok(detailCalls >= 2);
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, false);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, 4);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Черновик под selected fence');
+  assert.equal(posts.length, 1);
+});
+
+test('address5: open history while sending → settle → one deferred GET; close/switch → zero late GET', async () => {
+  let listCalls = 0;
+  let releaseSend!: (value: unknown) => void;
+  const sendGate = new Promise<unknown>(resolve => { releaseSend = resolve; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => {
+        listCalls += 1;
+        return { items: [ownRow()] };
+      },
+      send: async () => sendGate,
+    }),
+  }, () => 'deferred-hist-key');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  const listsAfterOpen = listCalls;
+  assert.ok(listsAfterOpen >= 1);
+  owner.beginOwnVenueWithdraw(ownRow());
+  const pending = owner.confirmOwnVenueWithdraw();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+
+  // Open (or re-open) history while inFlight — stays idle; no extra GET yet.
+  owner.openOwnVenueHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueSurface?.mode, 'history');
+  assert.equal(owner.getSnapshot().ownVenue.status, 'idle');
+  assert.equal(listCalls, listsAfterOpen);
+
+  releaseSend!({
+    id: reviewId,
+    version: 2,
+    status: 'withdrawn',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  });
+  await pending;
+  await tick();
+  // One deferred GET after inFlight cleanup for the still-current history demand.
+  assert.equal(owner.getSnapshot().ownVenue.status, 'ready');
+  assert.equal(listCalls, listsAfterOpen + 1);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // Close then account switch: deferred must not fire a late GET.
+  const listsReady = listCalls;
+  owner.closeOwnVenueHistory();
+  owner.setActor({
+    actorId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    generation: 1,
+  });
+  await tick();
+  assert.equal(listCalls, listsReady);
+  assert.equal(owner.getSnapshot().ownVenueSurface, null);
+});
+
+test('address5: Profile history lifetime — stale retire cannot close newer gen; nav intent actor-fenced', async () => {
+  let listCalls = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => {
+        listCalls += 1;
+        return { items: [ownRow()] };
+      },
+    }),
+  }, () => 'lifetime-key');
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  const first = captureOwnVenueHistoryRouteOwner({
+    actor,
+    surface: owner.getSnapshot().ownVenueSurface,
+  });
+  assert.ok(first);
+  const noted = noteOwnVenueHistoryRouteOwner(null, first);
+  assert.equal(noted?.gen, first!.gen);
+
+  owner.openOwnVenueHistory();
+  await tick();
+  const second = captureOwnVenueHistoryRouteOwner({
+    actor,
+    surface: owner.getSnapshot().ownVenueSurface,
+  });
+  assert.ok(second);
+  assert.notEqual(second!.gen, first!.gen);
+  // Stale cleanup of the first generation must not close the newer surface.
+  owner.retireOwnVenueHistorySurface(first!);
+  assert.equal(owner.getSnapshot().ownVenueSurface?.gen, second!.gen);
+  assert.equal(owner.getSnapshot().ownVenue.status, 'ready');
+
+  owner.requestOwnVenueHistoryNavIntent();
+  // Wrong actor discards intent without opening.
+  owner.setActor({
+    actorId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    generation: 1,
+  });
+  assert.equal(owner.consumeOwnVenueHistoryNavIntent(), false);
+  assert.equal(owner.getSnapshot().ownVenueSurface, null);
+
+  owner.setActor(actor);
+  owner.requestOwnVenueHistoryNavIntent();
+  assert.equal(owner.consumeOwnVenueHistoryNavIntent(), true);
+  // Second consume is empty — at-most-once.
+  assert.equal(owner.consumeOwnVenueHistoryNavIntent(), false);
+  assert.equal(listCalls >= 2, true);
+});
+
+test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fence kept', async () => {
+  const otherId = '66666666-6666-4666-8666-666666666666';
+  const otherHandle = 'ffffffffffffffffffffffffffffffff';
+  let detailMode: 'ok' | 'wrong-id' | 'wrong-handle' = 'ok';
+  const posts: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnDetail: async (_actor, id) => {
+        if (detailMode === 'wrong-id') {
+          return { ...selected(2), id: otherId };
+        }
+        if (detailMode === 'wrong-handle') {
+          return { ...selected(2), reviewHandle: otherHandle };
+        }
+        assert.equal(id, reviewId);
+        return selected(2);
+      },
+      send: async (packet) => {
+        posts.push(packet.key);
+        throw new PostgameError('business', 409, 'VERSION_CONFLICT');
+      },
+    }),
+  }, () => `bind-${posts.length + 1}`);
+
+  assert.equal(ownVenueSelectedMatchesRequest(selected(), {
+    id: reviewId,
+    venueId,
+    reviewHandle: handle,
+  }), true);
+  assert.equal(ownVenueSelectedMatchesRequest(selected(), {
+    id: otherId,
+    venueId,
+    reviewHandle: handle,
+  }), false);
+  assert.equal(ownVenueSelectedMatchesRequest({ ...selected(), reviewHandle: otherHandle }, {
+    id: reviewId,
+    venueId,
+    reviewHandle: handle,
+  }), false);
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.openOwnVenueEdit(ownRow());
+  await tick();
+  owner.patchVenueDraft({ text: 'Не менять таргет', topics: ['lighting'] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(posts.length, 1);
+
+  detailMode = 'wrong-id';
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, 1);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Не менять таргет');
+  assert.equal(posts.length, 1);
+
+  detailMode = 'wrong-handle';
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, reviewId);
+  assert.equal(posts.length, 1);
+
+  detailMode = 'ok';
+  await owner.loadOwnVenueSelected(reviewId, { clearConflict: true });
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, false);
+  assert.equal(owner.getSnapshot().ownVenueSelected?.version, 2);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Не менять таргет');
+  assert.equal(posts.length, 1);
+
+  const api = read('../src/native-api.ts');
+  assert.match(api, /selected\.id !== requested/);
+});
+
 test('source wiring: Profile entry + controller bearer + APK38 + fixture owner coverage', () => {
   const profile = read('../app/profile.tsx');
   assert.match(profile, /OwnVenueReviewsEntry/);
@@ -612,6 +938,8 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(profile, /openOwnVenueHistory/);
   assert.match(profile, /Отзывы о площадках/);
   assert.match(profile, /Этот список видите только вы\./);
+  // Host mounted outside editing gate so Profile edit toggle does not retire history.
+  assert.match(profile, /retire only on route blur\/unmount/);
 
   const host = read('../src/components/own-venue-reviews.tsx');
   assert.match(host, /Перечитать выбранный отзыв/);
@@ -624,13 +952,37 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(host, /Повторить запрос на снятие/);
   assert.match(host, /Повторить сохранение/);
   assert.match(host, /Отозвать отзыв можно и после окончания срока редактирования\./);
+  assert.match(host, /useFocusEffect/);
+  assert.match(host, /captureOwnVenueHistoryRouteOwner/);
+  assert.match(host, /retireOwnVenueHistorySurface/);
+  assert.match(host, /consumeOwnVenueHistoryNavIntent/);
+  assert.match(host, /const expected = ownedRouteRef\.current/);
+  assert.doesNotMatch(host, /return \(\) => \{[\s\S]*getSnapshot\(\)[\s\S]*retireOwnVenueHistorySurface/);
   assert.doesNotMatch(host, /game.?picker|новый выбор игры/i);
   assert.doesNotMatch(host, /Ожидает обработки|модерац/i);
 
+  const postgameUi = read('../src/components/postgame.tsx');
+  assert.match(postgameUi, /venueExperiencePendingRecoveryTarget/);
+  assert.match(postgameUi, /requestOwnVenueHistoryNavIntent/);
+  assert.match(postgameUi, /venuePendingOtherGame/);
+  assert.match(postgameUi, /Посмотреть отправку/);
+  assert.match(postgameUi, /router\.push\('\/profile'\)/);
+  assert.doesNotMatch(postgameUi, /params:\s*\{\s*gameId:\s*command\.packet\.gameId\s*\}/);
+
   const venueReviews = read('../src/venue-reviews.ts');
   assert.match(venueReviews, /export function ownVenueWithdrawConfirmFlags/);
+  assert.match(venueReviews, /export function venueExperiencePendingRecoveryTarget/);
+  assert.match(venueReviews, /export function ownVenueSelectedMatchesRequest/);
+  assert.match(venueReviews, /export function captureOwnVenueHistoryRouteOwner/);
   assert.match(venueReviews, /Личный черновик/);
   assert.match(venueReviews, /На проверке/);
+
+  const coordinator = read('../src/postgame-coordinator.ts');
+  assert.match(coordinator, /flushDeferredOwnVenueList/);
+  assert.match(coordinator, /keepSelectedReadFence/);
+  assert.match(coordinator, /ownVenueSelectedMatchesRequest/);
+  assert.match(coordinator, /retireOwnVenueHistorySurface/);
+  assert.match(coordinator, /requestOwnVenueHistoryNavIntent/);
 
   const composer = read('../src/components/venue-experience-composer.tsx');
   assert.match(composer, /showSelectedReread/);

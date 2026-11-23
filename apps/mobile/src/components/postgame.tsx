@@ -8,6 +8,7 @@ import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
   isVenueExperiencePacketKind,
   postgameIdempotencyReplayBlocked,
+  venueExperiencePendingRecoveryTarget,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
 } from '../venue-reviews.ts';
 import { sameActor } from '../participation.ts';
@@ -101,12 +102,22 @@ export function CommandReview({gameId}: {gameId?:string}) {
     && postgameIdempotencyReplayBlocked(command.firstDispatchedAt);
   // Venue/public own their sheets — never a dead private-modal reopen CTA.
   const showPrivatePendingCta = !!command && !publicRole && !venueExperience;
-  const venuePendingOtherGame = !!command && venueExperience
-    && (!gameId || command.packet.gameId !== gameId);
+  // Create recovery keeps immutable results gameId; owner command never uses a game URL (sentinel own-venue).
+  const venuePendingRecovery = command && venueExperience
+    ? venueExperiencePendingRecoveryTarget(command.packet)
+    : null;
+  const venuePendingOtherGame = venuePendingRecovery?.kind === 'create-results'
+    && (!gameId || venuePendingRecovery.gameId !== gameId);
+  const venuePendingOwnerHistory = venuePendingRecovery?.kind === 'owner-history';
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {showPrivatePendingCta && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
-    {venuePendingOtherGame && <TextButton title={command.status === 'sending' ? 'Сохраняем… Открыть игру отправки' : 'Посмотреть отправку'} onPress={()=>router.push({pathname:'/my-games/[gameId]/results',params:{gameId:command.packet.gameId}})} />}
+    {venuePendingOtherGame && venuePendingRecovery?.kind === 'create-results' && <TextButton title={command.status === 'sending' ? 'Сохраняем… Открыть игру отправки' : 'Посмотреть отправку'} onPress={()=>router.push({pathname:'/my-games/[gameId]/results',params:{gameId:venuePendingRecovery.gameId}})} />}
+    {venuePendingOwnerHistory && <TextButton title={command.status === 'sending' ? 'Сохраняем… Посмотреть отправку' : 'Посмотреть отправку'} onPress={()=>{
+      // Intent survives route commit — do not open history before navigation (blur would retire it).
+      owner.requestOwnVenueHistoryNavIntent();
+      router.push('/profile');
+    }} />}
     <Modal visible={visible} animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}
       onShow={()=>{const node=findNodeHandle(heading.current);if(node) AccessibilityInfo.setAccessibilityFocus(node);}}>
       <Page keyboard header={<View style={{gap:8}}>

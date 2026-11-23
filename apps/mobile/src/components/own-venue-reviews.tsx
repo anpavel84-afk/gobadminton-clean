@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { AccessibilityInfo, findNodeHandle, Modal, Pressable, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { publicApi } from '../public-api.ts';
 import {
+  captureOwnVenueHistoryRouteOwner,
   isVenueExperienceCommandPacket,
   isVenueExperiencePacketKind,
   mayWithdrawOwnVenue,
+  noteOwnVenueHistoryRouteOwner,
   ownVenueStatusLabel,
   ownVenueWithdrawConfirmFlags,
   postgameIdempotencyReplayBlocked,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
+  type OwnVenueHistoryRouteOwner,
   type OwnVenueReview,
 } from '../venue-reviews.ts';
 import { VenueExperienceComposer } from './venue-experience-composer.tsx';
@@ -52,6 +55,74 @@ export function OwnVenueReviewsHost() {
   const auth = useAuth();
   const owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const ownedRouteRef = useRef<OwnVenueHistoryRouteOwner | null>(null);
+  const routeFocused = useRef(false);
+  const authIdentityRef = useRef({
+    status: auth.status,
+    actorId: auth.me?.id as string | undefined,
+    sessionId: auth.me?.session.id as string | undefined,
+  });
+  authIdentityRef.current = {
+    status: auth.status,
+    actorId: auth.me?.id,
+    sessionId: auth.me?.session.id,
+  };
+
+  // While Profile stays focused, remember latest matching history owner (open after focus / reopen).
+  useEffect(() => {
+    if (!routeFocused.current) return;
+    const me = authIdentityRef.current;
+    const actorMatch = me.status === 'authenticated'
+      && !!s.actor
+      && s.actor.actorId === me.actorId
+      && s.actor.sessionId === me.sessionId;
+    ownedRouteRef.current = noteOwnVenueHistoryRouteOwner(
+      ownedRouteRef.current,
+      captureOwnVenueHistoryRouteOwner({
+        actor: actorMatch ? s.actor : null,
+        surface: s.ownVenueSurface,
+      }),
+    );
+  }, [s.actor, s.ownVenueSurface]);
+
+  // Profile focus/blur: consume one-shot owner recovery intent; retire only THIS focused lifetime.
+  // Stable deps — ordinary rerender / Profile edit toggle must not retire a newer generation.
+  useFocusEffect(useCallback(() => {
+    routeFocused.current = true;
+    const snap = owner.getSnapshot();
+    const me = authIdentityRef.current;
+    const actorMatch = me.status === 'authenticated'
+      && !!snap.actor
+      && snap.actor.actorId === me.actorId
+      && snap.actor.sessionId === me.sessionId;
+    ownedRouteRef.current = noteOwnVenueHistoryRouteOwner(
+      ownedRouteRef.current,
+      captureOwnVenueHistoryRouteOwner({
+        actor: actorMatch ? snap.actor : null,
+        surface: snap.ownVenueSurface,
+      }),
+    );
+    // Read-only intent: open history once on verified focus (GET only, zero POST).
+    if (actorMatch && owner.consumeOwnVenueHistoryNavIntent()) {
+      owner.openOwnVenueHistory();
+      const after = owner.getSnapshot();
+      ownedRouteRef.current = noteOwnVenueHistoryRouteOwner(
+        ownedRouteRef.current,
+        captureOwnVenueHistoryRouteOwner({
+          actor: after.actor,
+          surface: after.ownVenueSurface,
+        }),
+      );
+    }
+    return () => {
+      routeFocused.current = false;
+      const expected = ownedRouteRef.current;
+      ownedRouteRef.current = null;
+      if (!expected) return;
+      owner.retireOwnVenueHistorySurface(expected);
+    };
+  }, [owner]));
+
   if (!s.ownVenueSurface || s.ownVenueSurface.mode !== 'history') return null;
   return <OwnVenueReviewsSheet onClose={() => owner.closeOwnVenueHistory()} />;
 }
