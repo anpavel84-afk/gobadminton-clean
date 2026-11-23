@@ -846,7 +846,11 @@ export class PostgameCoordinator {
     return gen;
   }
   private releaseWritePrepare(gen: number) {
-    if (this.writePrepare?.gen === gen) this.writePrepare = null;
+    if (this.writePrepare?.gen !== gen) return;
+    this.writePrepare = null;
+    // Deferred own-history list may have been queued while prepare still owned the write lane;
+    // dispatch.finally can run before this release and must not be the last flush chance.
+    this.flushDeferredOwnVenueList();
   }
   private writePrepareOwns(gen: number, editor?: string): boolean {
     const prep = this.writePrepare;
@@ -2854,6 +2858,8 @@ export class PostgameCoordinator {
         && this.writePrepare.surfaceGen === edit!.gen
         && this.writePrepare.gen === this.writePrepareGen) {
         this.writePrepare = null;
+        // History retire already cleared deferred; flush is a no-op when marker is null.
+        this.flushDeferredOwnVenueList();
       }
     }
     this.show({
@@ -2960,6 +2966,8 @@ export class PostgameCoordinator {
       if (request !== this.ownVenueSelectedGen || !sameActor(actor, this.snapshot.actor)) return;
       if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
       if (historyGen !== undefined && this.snapshot.ownVenueSurface?.gen !== historyGen) return;
+      // Competing accepted mutation (withdraw/revision) already owns newer state — stale selected cannot regress.
+      if (this.snapshot.command || this.inFlight || this.writePrepare) return;
       const list = this.snapshot.ownVenue.data?.items ?? [];
       const currentOwn = list.find(row => row.id === reviewId)
         ?? (this.snapshot.ownVenueSelected?.id === reviewId ? this.snapshot.ownVenueSelected : null)
@@ -2972,8 +2980,12 @@ export class PostgameCoordinator {
         ...(currentOwn ? { venueId: currentOwn.venueId, reviewHandle: currentOwn.reviewHandle } : {}),
         ...(editorVenueId && !currentOwn ? { venueId: editorVenueId } : {}),
       }) && (!currentOwn || isSelectedOwnVenueReview(selected, currentOwn));
-      if (!bindOk) {
-        // Fail closed — do not retarget editor or clear selected-read fence.
+      const mutationAhead = !!currentOwn && (
+        selected.version < currentOwn.version
+        || (currentOwn.status === 'withdrawn' && selected.status !== 'withdrawn')
+      );
+      if (!bindOk || mutationAhead) {
+        // Fail closed — do not retarget editor, restore withdrawn text, or clear selected-read fence.
         this.show({
           venueNotice: 'Не удалось перечитать выбранный отзыв. Действия остаются заблокированы.',
           ownVenueReadRequired: true,
@@ -3143,6 +3155,8 @@ export class PostgameCoordinator {
         key: this.random(),
       }) as Packet;
       this.venueFreshDispatchBind = null;
+      // Fence outstanding selected GETs at mutation begin — late detail must not reopen withdrawn text.
+      this.ownVenueSelectedGen++;
       await this.dispatch(packet, actor, false);
     } catch {
       this.show({ venueNotice: 'Не удалось отозвать. Обновите список.' });
@@ -3206,6 +3220,7 @@ export class PostgameCoordinator {
       && this.writePrepare.surfaceGen === priorSurfaceGen
       && this.writePrepare.gen === this.writePrepareGen) {
       this.writePrepare = null;
+      this.flushDeferredOwnVenueList();
     }
     this.show({
       venueExperience: null,
@@ -3244,6 +3259,7 @@ export class PostgameCoordinator {
       && this.writePrepare.surfaceGen === expected.gen
       && this.writePrepare.gen === this.writePrepareGen) {
       this.writePrepare = null;
+      this.flushDeferredOwnVenueList();
     }
     this.show({
       venueExperience: null,
@@ -4070,6 +4086,8 @@ export class PostgameCoordinator {
         const paintHistory = !!this.snapshot.ownVenueSurface
           && this.snapshot.ownVenueSurface.mode === 'history';
         if (packet.body.action === 'withdraw') {
+          // ACK invalidates outstanding selected reads — accepted withdrawn state must not regress.
+          this.ownVenueSelectedGen++;
           const items = (this.snapshot.ownVenue.data?.items ?? []).map(row => (
             row.id === packet.reviewId
               ? {
@@ -4095,6 +4113,8 @@ export class PostgameCoordinator {
           return;
         }
         // submit_revision — fence next action on selected re-read; receipt on edit surface only.
+        // ACK invalidates outstanding selected reads older than the accepted revision.
+        this.ownVenueSelectedGen++;
         this.show({
           command: null,
           ownVenueReadRequired: true,

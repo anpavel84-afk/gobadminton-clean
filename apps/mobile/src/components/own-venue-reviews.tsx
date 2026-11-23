@@ -151,8 +151,8 @@ function OwnVenueReviewsSheet({ onClose }: { onClose: () => void }) {
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   }, []);
 
+  // Close/Back/escape always hide the sheet (and edit → list); immutable sending/UNKNOWN journal stays.
   const close = () => {
-    if (s.command?.status === 'sending') return;
     if (editOpen) {
       owner.closeVenueExperience();
       return;

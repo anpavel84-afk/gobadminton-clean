@@ -970,6 +970,180 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
   assert.equal(bound.version, 2);
 });
 
+test('address8: deferred selected GET → withdraw dispatch/ACK cannot restore old text/editor/row', async () => {
+  let releaseDetail!: (value: SelectedOwnVenueReview) => void;
+  const detailGate = new Promise<SelectedOwnVenueReview>(resolve => { releaseDetail = resolve; });
+  let detailCalls = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnDetail: async () => {
+        detailCalls += 1;
+        if (detailCalls === 1) return detailGate;
+        return selected(2);
+      },
+      send: async (packet) => {
+        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        assert.equal(packet.body.action, 'withdraw');
+        return {
+          id: reviewId,
+          version: 2,
+          status: 'withdrawn',
+          reviewHandle: handle,
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => 'addr8-wd-race-key');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  // Tap Edit — selected GET stays pending.
+  owner.openOwnVenueEdit(ownRow(1));
+  await tick();
+  assert.equal(detailCalls, 1);
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
+
+  owner.beginOwnVenueWithdraw(ownRow(1));
+  const pendingWithdraw = owner.confirmOwnVenueWithdraw();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+
+  // Late pre-withdraw detail must not open composer or replace the row after mutation begins.
+  releaseDetail!(selected(1));
+  await tick();
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
+  assert.equal(owner.getSnapshot().venueDraft, null);
+  assert.notEqual(owner.getSnapshot().ownVenueSelected?.status, 'withdrawn');
+
+  await pendingWithdraw;
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueNotice?.includes('отозван'), true);
+  const withdrawn = owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId);
+  assert.equal(withdrawn?.status, 'withdrawn');
+  assert.equal(withdrawn?.version, 2);
+  assert.equal(withdrawn?.text, null);
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  assert.equal(owner.getSnapshot().venueDraft, null);
+
+  // Explicit post-ACK selected GET of pre-withdraw detail cannot restore editable withdrawn text/row.
+  await owner.loadOwnVenueSelected(reviewId, { forEdit: true });
+  await tick();
+  assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
+  assert.equal(owner.getSnapshot().venueDraft, null);
+  assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.status, 'withdrawn');
+  assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.text, null);
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+});
+
+test('address8: successful revision + open history during send → exactly one follow-up GET after reservation cleanup', async () => {
+  let listCalls = 0;
+  let releaseSend!: (value: unknown) => void;
+  const sendGate = new Promise<unknown>(resolve => { releaseSend = resolve; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceOwnList: async () => {
+        listCalls += 1;
+        return { items: [ownRow(listCalls === 1 ? 1 : 2)] };
+      },
+      send: async (packet) => {
+        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        assert.equal(packet.body.action, 'submit_revision');
+        return sendGate;
+      },
+    }),
+  }, () => 'addr8-rev-defer-key');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  const listsAfterOpen = listCalls;
+  assert.ok(listsAfterOpen >= 1);
+  owner.openOwnVenueEdit(ownRow(1));
+  await tick();
+  owner.patchVenueDraft({ text: 'Редакция во время отправки', topics: ['surface'] });
+  const pending = owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+
+  // Re-open history while revision sending — demand is deferred; no extra GET yet.
+  owner.openOwnVenueHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().ownVenueSurface?.mode, 'history');
+  assert.equal(owner.getSnapshot().ownVenue.status, 'idle');
+  assert.equal(listCalls, listsAfterOpen);
+
+  releaseSend!({
+    id: reviewId,
+    version: 2,
+    status: 'revision_waiting',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  });
+  await pending;
+  await tick();
+  // Exactly one deferred GET after writePrepare release — not stuck idle forever.
+  assert.equal(listCalls, listsAfterOpen + 1);
+  assert.equal(owner.getSnapshot().ownVenue.status, 'ready');
+  assert.equal(owner.getSnapshot().ownVenue.data?.items[0]?.version, 2);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+});
+
+test('address8: history sheet close during sending retains immutable journal key/body/age', async () => {
+  let releaseSend!: (value: unknown) => void;
+  const sendGate = new Promise<unknown>(resolve => { releaseSend = resolve; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      send: async () => sendGate,
+    }),
+  }, () => 'addr8-close-send-key');
+
+  owner.setActor(actor);
+  owner.openOwnVenueHistory();
+  await tick();
+  owner.beginOwnVenueWithdraw(ownRow());
+  const pending = owner.confirmOwnVenueWithdraw();
+  await tick();
+  const cmd = owner.getSnapshot().command;
+  assert.equal(cmd?.status, 'sending');
+  assert.equal(isVenueExperienceCommandPacket(cmd!.packet), true);
+  const frozenKey = cmd!.packet.key;
+  const frozenBody = { ...cmd!.packet.body };
+  const frozenAge = cmd!.firstDispatchedAt;
+  assert.equal(typeof frozenAge, 'number');
+
+  // Hide withdraw confirm, then close history while still sending — journal must survive.
+  owner.cancelOwnVenueWithdraw();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+  assert.equal(owner.getSnapshot().command?.packet.key, frozenKey);
+  owner.closeOwnVenueHistory();
+  assert.equal(owner.getSnapshot().ownVenueSurface, null);
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+  assert.equal(owner.getSnapshot().command?.packet.key, frozenKey);
+  assert.deepEqual(owner.getSnapshot().command?.packet.body, frozenBody);
+  assert.equal(owner.getSnapshot().command?.firstDispatchedAt, frozenAge);
+
+  releaseSend!({
+    id: reviewId,
+    version: 2,
+    status: 'withdrawn',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  });
+  await pending;
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueNotice?.includes('отозван'), true);
+});
+
 test('source wiring: Profile entry + controller bearer + APK38 + fixture owner coverage', () => {
   const profile = read('../app/profile.tsx');
   assert.match(profile, /OwnVenueReviewsEntry/);
@@ -996,6 +1170,9 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(host, /retireOwnVenueHistorySurface/);
   assert.match(host, /consumeOwnVenueHistoryNavIntent/);
   assert.match(host, /const expected = ownedRouteRef\.current/);
+  // History Close/Back/escape usable while sending — journal retained (composer/WithdrawConfirm parity).
+  assert.match(host, /immutable sending\/UNKNOWN journal stays/);
+  assert.doesNotMatch(host, /if \(s\.command\?\.status === 'sending'\) return/);
   assert.doesNotMatch(host, /return \(\) => \{[\s\S]*getSnapshot\(\)[\s\S]*retireOwnVenueHistorySurface/);
   assert.doesNotMatch(host, /game.?picker|новый выбор игры/i);
   assert.doesNotMatch(host, /Ожидает обработки|модерац/i);
@@ -1022,6 +1199,11 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(coordinator, /ownVenueSelectedMatchesRequest/);
   assert.match(coordinator, /retireOwnVenueHistorySurface/);
   assert.match(coordinator, /requestOwnVenueHistoryNavIntent/);
+  // address8: mutation begin+ACK fence selected reads; prepare release flushes deferred list.
+  assert.match(coordinator, /Fence outstanding selected GETs at mutation begin/);
+  assert.match(coordinator, /ACK invalidates outstanding selected reads/);
+  assert.match(coordinator, /dispatch\.finally can run before this release/);
+  assert.match(coordinator, /mutationAhead/);
 
   const composer = read('../src/components/venue-experience-composer.tsx');
   assert.match(composer, /showSelectedReread/);
