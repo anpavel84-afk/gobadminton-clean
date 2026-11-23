@@ -109,14 +109,12 @@ export default function Profile() {
         {auth.status === 'unverifiable' && !busy && <TextButton title="Проверить соединение и сессию" onPress={() => void act(auth.validate)} />}
       </View>}
       {auth.status === 'authenticated' && auth.me && <>
-        {!editing && <>
-          <OwnProfileCard onEdit={() => setEditing(true)} onSettings={toggleSettings} settingsOpen={settingsOpen} />
-          <View style={{ gap: 8 }}>
-            <Label accessibilityRole="header" style={styles.subtitle}>Отзывы о площадках</Label>
-            <Label>Этот список видите только вы.</Label>
-            <OwnVenueReviewsEntry onOpen={() => auth.postgame.openOwnVenueHistory()} />
-          </View>
-        </>}
+        {!editing && <OwnProfileCard onEdit={() => setEditing(true)} onSettings={toggleSettings} settingsOpen={settingsOpen} />}
+        {!editing && <View style={{ gap: 8 }}>
+          <Label accessibilityRole="header" style={styles.subtitle}>Отзывы о площадках</Label>
+          <Label>Этот список видите только вы.</Label>
+          <OwnVenueReviewsEntry onOpen={() => auth.postgame.openOwnVenueHistory()} />
+        </View>}
         {/* Host stays mounted across Profile edit toggle — retire only on route blur/unmount. */}
         <OwnVenueReviewsHost />
         {editing && <>
