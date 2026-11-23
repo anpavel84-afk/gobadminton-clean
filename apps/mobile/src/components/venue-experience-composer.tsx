@@ -11,6 +11,7 @@ import {
   isVenueExperiencePacketKind,
   noteVenueExperienceRouteOwner,
   postgameIdempotencyReplayBlocked,
+  venueExperienceEntryProbeTarget,
   venueExperienceReceiptSummary,
   venueReviewEligibilityHelp,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
@@ -364,15 +365,38 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
   const routeFocused = useRef(false);
   /** Immutable owner for THIS focused route lifetime — cleanup must not read live gen/actor. */
   const ownedRouteRef = useRef<VenueExperienceRouteOwner | null>(null);
+  /** Live auth identity for focus-return probe — never infer me/session from a stale focus closure. */
+  const authIdentityRef = useRef({
+    status: auth.status,
+    actorId: auth.me?.id as string | undefined,
+    sessionId: auth.me?.session.id as string | undefined,
+  });
+  authIdentityRef.current = {
+    status: auth.status,
+    actorId: auth.me?.id,
+    sessionId: auth.me?.session.id,
+  };
 
+  // Focused fresh-admission probe — production gate fences hidden/open/pending; close→idle while focused.
   useEffect(() => {
-    if (!current || !liveVenueId || results?.status !== 'ready') return;
-    // Fresh-admission probe only — pending recovery does not invent new eligibility rights.
-    if (pendingCommand) return;
-    // Composer open owns its eligibility load; close→idle then this dep fires a focused fresh probe.
-    if (composerOpen) return;
-    owner.probeVenueEligibility(gameId, liveVenueId);
-  }, [current, liveVenueId, results?.status, results?.data, owner, gameId, pendingCommand, composerOpen]);
+    const target = venueExperienceEntryProbeTarget({
+      routeFocused: routeFocused.current,
+      authenticated: auth.status === 'authenticated',
+      actor: current ? s.actor : null,
+      meActorId: actor,
+      meSessionId: session,
+      gameId,
+      liveVenueId,
+      resultsStatus: results?.status,
+      composerOpen,
+      pendingVenueJournal: pendingCommand,
+    });
+    if (!target) return;
+    owner.probeVenueEligibility(target.gameId, target.venueId);
+  }, [
+    current, liveVenueId, results?.status, results?.data, owner, gameId,
+    pendingCommand, composerOpen, auth.status, actor, session, s.actor,
+  ]);
 
   // While focused, remember latest matching surface (open after focus / close+reopen); no retire here.
   useEffect(() => {
@@ -387,10 +411,12 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     );
   }, [current, s.actor, s.venueExperience, gameId]);
 
-  // Route blur (kept-mounted) + unmount: retire only THIS Entry's captured owner — never live snapshot.
+  // Route focus/blur: capture owner + fresh probe from CURRENT snapshots on return (stable deps).
+  // Do not put results/composer/eligibility into deps — ordinary rerender must not retire the surface.
   useFocusEffect(useCallback(() => {
     routeFocused.current = true;
     const snap = owner.getSnapshot();
+    const participation = auth.participation.getSnapshot();
     ownedRouteRef.current = noteVenueExperienceRouteOwner(
       ownedRouteRef.current,
       captureVenueExperienceRouteOwner({
@@ -399,6 +425,33 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
         surface: snap.venueExperience,
       }),
     );
+    const me = authIdentityRef.current;
+    const actorMatch = me.status === 'authenticated'
+      && !!snap.actor
+      && snap.actor.actorId === me.actorId
+      && snap.actor.sessionId === me.sessionId;
+    const game = actorMatch ? participation.games[gameId]?.game : undefined;
+    const focusVenueId = game?.venue?.id ?? null;
+    const focusResults = actorMatch ? snap.games[gameId] : undefined;
+    const pendingPacket = actorMatch && snap.command && isVenueExperienceCreatePacket(snap.command.packet)
+      && snap.command.packet.actor.actorId === snap.actor?.actorId
+      && snap.command.packet.gameId === gameId
+      ? snap.command.packet
+      : null;
+    const focusComposerOpen = !!snap.venueExperience && snap.venueExperience.gameId === gameId;
+    const target = venueExperienceEntryProbeTarget({
+      routeFocused: true,
+      authenticated: me.status === 'authenticated',
+      actor: actorMatch ? snap.actor : null,
+      meActorId: me.actorId,
+      meSessionId: me.sessionId,
+      gameId,
+      liveVenueId: focusVenueId,
+      resultsStatus: focusResults?.status,
+      composerOpen: focusComposerOpen,
+      pendingVenueJournal: !!pendingPacket,
+    });
+    if (target) owner.probeVenueEligibility(target.gameId, target.venueId);
     return () => {
       routeFocused.current = false;
       const expected = ownedRouteRef.current;
@@ -406,7 +459,7 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
       if (!expected) return;
       owner.retireVenueExperienceSurface(expected);
     };
-  }, [owner, gameId]));
+  }, [owner, gameId, auth.participation]));
 
   // Return focus to the remounted entry control after Composer unmounts; never cross actor/game.
   useEffect(() => {

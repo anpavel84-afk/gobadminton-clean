@@ -462,6 +462,32 @@ export function noteVenueExperienceRouteOwner(
   return next ?? prior;
 }
 
+/**
+ * Production gate for VenueExperienceEntry eligibility GET.
+ * Probe only when THIS route is focused, actor/session verified, live venue + ready results,
+ * composer closed (open owns its load), and no original venue journal is pending.
+ * Returns null for hidden/blurred, open-composer, pending, or incomplete admission — no target leak.
+ */
+export function venueExperienceEntryProbeTarget(args: {
+  routeFocused: boolean;
+  authenticated: boolean;
+  actor: { actorId: string; sessionId: string } | null | undefined;
+  meActorId: string | null | undefined;
+  meSessionId: string | null | undefined;
+  gameId: string;
+  liveVenueId: string | null | undefined;
+  resultsStatus: string | null | undefined;
+  composerOpen: boolean;
+  pendingVenueJournal: boolean;
+}): { gameId: string; venueId: string } | null {
+  if (!args.routeFocused || args.composerOpen || args.pendingVenueJournal) return null;
+  if (!args.authenticated || !args.actor || !args.meActorId || !args.meSessionId) return null;
+  if (args.actor.actorId !== args.meActorId || args.actor.sessionId !== args.meSessionId) return null;
+  if (!UUID.test(args.gameId) || !args.liveVenueId || !isVenueId(args.liveVenueId)) return null;
+  if (args.resultsStatus !== 'ready') return null;
+  return { gameId: args.gameId.toLowerCase(), venueId: args.liveVenueId.toLowerCase() };
+}
+
 export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experience-create' {
   return kind === 'venue-experience-create';
 }

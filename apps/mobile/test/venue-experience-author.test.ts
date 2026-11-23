@@ -19,6 +19,7 @@ import {
   parseVenueReviewMutationReceipt,
   venueEligibilityReasonCopy,
   venueExperienceBasisAuthority,
+  venueExperienceEntryProbeTarget,
   venueExperienceIdempotencyExpired,
   venueExperienceReceiptSummary,
   venueReviewEligibilityHelp,
@@ -969,11 +970,11 @@ test('#522 address13 P2: close cancels opening eligibility → idle; stale respo
   assert.equal(keys.length, 0);
 
   // Actual Entry lifecycle: after close, focused probe (composerOpen false) starts fresh read.
-  // Mirrors VenueExperienceEntry effect deps including composerOpen — no probe while composer open.
+  // Production gate fences composer-open / hidden; address14 owns focus-return counters.
   const composerSrc = read('../src/components/venue-experience-composer.tsx');
-  assert.match(composerSrc, /if \(composerOpen\) return;/);
-  assert.match(composerSrc, /pendingCommand, composerOpen\]/);
-  assert.match(composerSrc, /probeVenueEligibility\(gameId, liveVenueId\)/);
+  assert.match(composerSrc, /venueExperienceEntryProbeTarget/);
+  assert.match(composerSrc, /pendingCommand, composerOpen/);
+  assert.match(composerSrc, /probeVenueEligibility\(target\.gameId, target\.venueId\)/);
 
   owner.probeVenueEligibility(gameId, venueId);
   await tick();
@@ -1019,6 +1020,100 @@ test('#522 address13 P2: close cancels opening eligibility → idle; stale respo
   // Coordinator close path must reset probe+idle (same honest recoverability as route retire).
   const coordinatorSrc = read('../src/postgame-coordinator.ts');
   assert.match(coordinatorSrc, /closeVenueExperience[\s\S]*venueProbe: null[\s\S]*venueEligibility: \{ status: 'idle' \}/);
+});
+
+test('#522 address14: production probe gate + real GET counts hidden0/refocus1/rerender0/open1; stale fenced', async () => {
+  let releaseOpen!: () => void;
+  const openGate = new Promise<void>(r => { releaseOpen = r; });
+  let eligCalls = 0;
+  const seen: number[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        const call = ++eligCalls;
+        seen.push(call);
+        if (call === 1) await openGate;
+        return eligibilityBody(call === 1 ? 'deny' : 'may_submit');
+      },
+    }),
+  });
+
+  const focusedArgs = {
+    routeFocused: true,
+    authenticated: true,
+    actor,
+    meActorId: actor.actorId,
+    meSessionId: actor.sessionId,
+    gameId,
+    liveVenueId: venueId,
+    resultsStatus: 'ready' as const,
+    composerOpen: false,
+    pendingVenueJournal: false,
+  };
+
+  // Hidden / open-composer / pending / not-ready — no probe target.
+  assert.equal(venueExperienceEntryProbeTarget({ ...focusedArgs, routeFocused: false }), null);
+  assert.equal(venueExperienceEntryProbeTarget({ ...focusedArgs, composerOpen: true }), null);
+  assert.equal(venueExperienceEntryProbeTarget({ ...focusedArgs, pendingVenueJournal: true }), null);
+  assert.equal(venueExperienceEntryProbeTarget({ ...focusedArgs, resultsStatus: 'loading' }), null);
+  assert.equal(venueExperienceEntryProbeTarget({
+    ...focusedArgs,
+    meSessionId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  }), null);
+
+  owner.setActor(actor);
+  // Opening owns its eligibility GET — Entry gate must not double while composer open.
+  owner.openVenueExperience(gameId, venueId);
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'loading');
+  assert.equal(venueExperienceEntryProbeTarget({ ...focusedArgs, composerOpen: true }), null);
+  assert.equal(eligCalls, 1);
+
+  owner.closeVenueExperience();
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'idle');
+  // Hidden close (blur retire): gate rejects — zero additional GET.
+  assert.equal(venueExperienceEntryProbeTarget({ ...focusedArgs, routeFocused: false }), null);
+  assert.equal(eligCalls, 1);
+
+  releaseOpen();
+  await tick();
+  // Stale opening deny must not paint; still idle, still one GET.
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'idle');
+  assert.equal(owner.getSnapshot().venueProbe, null);
+  assert.equal(eligCalls, 1);
+
+  // Focus return: one fresh probe from current gate.
+  const refocus = venueExperienceEntryProbeTarget(focusedArgs);
+  assert.ok(refocus);
+  owner.probeVenueEligibility(refocus!.gameId, refocus!.venueId);
+  await tick();
+  assert.equal(eligCalls, 2);
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'ready');
+  assert.ok(exactGameMaySubmitBasis(owner.getSnapshot().venueEligibility.data!, gameId));
+
+  // Ordinary "rerender" re-eval of the same gate does not itself call probe — counts stay.
+  assert.ok(venueExperienceEntryProbeTarget(focusedArgs));
+  assert.equal(eligCalls, 2);
+
+  // Concurrent focus+effect while loading: coordinator dedup — no third GET for same target.
+  owner.closeVenueExperience();
+  assert.equal(owner.getSnapshot().venueEligibility.status, 'idle');
+  const beforeDup = eligCalls;
+  const again = venueExperienceEntryProbeTarget(focusedArgs)!;
+  owner.probeVenueEligibility(again.gameId, again.venueId);
+  owner.probeVenueEligibility(again.gameId, again.venueId);
+  await tick();
+  assert.equal(eligCalls, beforeDup + 1);
+
+  // Source wiring must actually call the production gate from both normal effect and focus setup.
+  const composer = read('../src/components/venue-experience-composer.tsx');
+  assert.match(composer, /venueExperienceEntryProbeTarget/);
+  assert.match(composer, /auth\.participation\.getSnapshot\(\)/);
+  assert.match(composer, /authIdentityRef/);
+  assert.match(composer, /\[owner, gameId, auth\.participation\]/);
+  assert.doesNotMatch(composer, /useFocusEffect\(useCallback\(\(\) => \{[\s\S]*results\?\.status[\s\S]*\}, \[owner, gameId/);
+  const helpers = read('../src/venue-reviews.ts');
+  assert.match(helpers, /export function venueExperienceEntryProbeTarget/);
+  assert.equal(seen[0], 1);
 });
 
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
@@ -1068,6 +1163,7 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(helpers, /venueExperienceBasisAuthority/);
   assert.match(helpers, /captureVenueExperienceRouteOwner/);
   assert.match(helpers, /noteVenueExperienceRouteOwner/);
+  assert.match(helpers, /venueExperienceEntryProbeTarget/);
   assert.match(helpers, /isVenueExperienceCreatePacket/);
   assert.match(helpers, /new Map/);
   assert.doesNotMatch(helpers, /Причина: \$\{basis\.reason\}/);
