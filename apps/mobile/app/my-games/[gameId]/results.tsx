@@ -7,6 +7,7 @@ import { AttendancePanel, PostgameSurface, CommandReview, OutcomePanel, Roster, 
 import { ClarificationSection } from '../../../src/components/postgame-disputes.tsx';
 import { NotesSection } from '../../../src/components/postgame-notes.tsx';
 import { FeedbackSection } from '../../../src/components/postgame-feedback.tsx';
+import { VenueExperienceEntry } from '../../../src/components/venue-experience-composer.tsx';
 import { feedbackSectionVisible, notesSectionVisible } from '../../../src/postgame.ts';
 import { BackLink, Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
 export default function GameResults() {
@@ -40,6 +41,8 @@ export default function GameResults() {
       </>}
       {/* Peer feedback + own history: available when results denied but /me/reviews permits. */}
       {showFeedback ? <FeedbackSection key={`${actor}:${gameId}:feedback`} gameId={gameId} data={data} /> : null}
+      {/* Exact-game venue experience — may_submit only; no broad venue CTA/picker. */}
+      <VenueExperienceEntry key={`${actor}:${gameId}:venue-experience`} gameId={gameId} />
       {/* Own-note lane outside data&& when results denied but typed GET proves ownership. */}
       {showNotes ? <NotesSection key={`${actor}:${gameId}:notes`} gameId={gameId} data={data} /> : null}
       <SourceNotice title="Напоминания" status={s.reminders.status} retry={()=>void owner.loadReminders()} />

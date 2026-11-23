@@ -25,7 +25,7 @@ export class VenueReviewsController {
   @Get("me/venue-reviews/eligibility")
   @Header("Cache-Control", "no-store")
   async eligibility(@Req() request: FastifyRequest, @Query("venueId") venueId: string) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.reviews.eligibility(actor.userId, venueId);
   }
 
@@ -33,7 +33,7 @@ export class VenueReviewsController {
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
   async consentPreview(@Req() request: FastifyRequest) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     return this.reviews.previewConsent(actor.userId, request.body);
   }
 
@@ -43,7 +43,7 @@ export class VenueReviewsController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.reviews.createReview(
       actor.userId,
       actor.sessionId,

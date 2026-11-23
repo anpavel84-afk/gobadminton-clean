@@ -1048,7 +1048,7 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.doesNotMatch(controller, /replyCommand[\s\S]*requireCookieMutation/);
   assert.doesNotMatch(controller, /report[\s\S]*requireCookieMutation/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 36);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 37);
   assert.equal(draftEditorKey(emptyPublicRoleDraft(gameId), handle, 'organization').includes(gameId), true);
 });
 

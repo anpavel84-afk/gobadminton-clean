@@ -27,6 +27,10 @@ import {
 } from '../public-role-reviews.ts';
 import { ROLE_TOPIC_LABEL, reviewReplyLabel } from '../role-reputation.ts';
 import { colors } from '../theme.ts';
+import {
+  postgameIdempotencyReplayBlocked,
+  POSTGAME_RETENTION_EXPIRED_NOTICE,
+} from '../venue-reviews.ts';
 import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 type FocusTarget = ComponentRef<typeof Pressable>;
@@ -99,16 +103,19 @@ export function PublicRoleOwnHistorySheet({ onClose }: { onClose: () => void }) 
     restorePublicTriggerFocus();
   };
   const items = s.publicOwn.status === 'ready' ? s.publicOwn.data?.items ?? [] : [];
+  const retentionBlocked = publicBusy?.status === 'unknown'
+    && postgameIdempotencyReplayBlocked(publicBusy.firstDispatchedAt);
   return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
     <Page keyboard header={<View style={{ gap: 8 }}>
       <TextButton title="Закрыть" onPress={close} />
-      {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
+      {publicBusy?.status === 'unknown' && !retentionBlocked ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
     </View>}>
       <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
         <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
           Мои публичные отзывы о ролях
         </Text>
         <Label>Адресат, роль и фактический статус. Приватная обратная связь из итогов игры сюда не входит.</Label>
+        {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
         {s.publicOwn.status === 'idle' || s.publicOwn.status === 'loading' ? <Loading title="Загружаем…" /> : null}
         {s.publicOwn.status === 'unavailable' ? <Label>Войдите, чтобы увидеть свои отзывы о ролях.</Label> : null}
         {s.publicOwn.status === 'error' ? <>
@@ -178,15 +185,18 @@ export function PublicRoleComposerSheet({ onClose, onOpenHistory }: {
   const topics = topicOptionsForRole(target.role);
   const receipt = s.publicReceipt;
   const disabled = !!publicBusy || !!receipt;
+  const retentionBlocked = publicBusy?.status === 'unknown'
+    && postgameIdempotencyReplayBlocked(publicBusy.firstDispatchedAt);
   return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
     <Page keyboard header={<View style={{ gap: 8 }}>
       <TextButton title="Закрыть" onPress={close} />
-      {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
+      {publicBusy?.status === 'unknown' && !retentionBlocked ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
     </View>}>
       <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
         <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
           Поделиться опытом · {target.role === 'training' ? 'о тренере' : 'об организаторе'}
         </Text>
+        {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
         <Label>
           {target.subjectDisplayName ? `Адресат · ${target.subjectDisplayName}` : 'Адресат роли'}
         </Label>
@@ -419,16 +429,19 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
       if (node) AccessibilityInfo.setAccessibilityFocus(node);
     });
   };
+  const retentionBlocked = publicBusy?.status === 'unknown'
+    && postgameIdempotencyReplayBlocked(publicBusy.firstDispatchedAt);
   return <Modal visible animationType="none" presentationStyle="fullScreen" onRequestClose={close} supportedOrientations={iosModalOrientations}>
     <Page keyboard scrollRef={pageScrollRef} header={<View style={{ gap: 8 }}>
       <TextButton title="Закрыть" onPress={close} />
-      {publicBusy?.status === 'unknown' ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
+      {publicBusy?.status === 'unknown' && !retentionBlocked ? <TextButton title="Проверить исходное действие" onPress={() => void owner.reconcilePublic()} /> : null}
     </View>}>
       <View accessibilityViewIsModal onAccessibilityEscape={close} style={{ gap: 16 }}>
         <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text, styles.subtitle]}>
           {title}
         </Text>
         <Label>Опыт участников. Отрицательные впечатления тоже важны. Читать можно без прошлого участия.</Label>
+        {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
         {s.publicReader.status === 'idle' || s.publicReader.status === 'loading' ? <Loading title="Загружаем отзывы…" /> : null}
         {s.publicReader.status === 'error' ? <>
           <Label accessibilityRole="alert">Не удалось загрузить.</Label>

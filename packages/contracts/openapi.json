@@ -24018,6 +24018,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -24048,7 +24051,98 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": false,
+                  "required": [
+                    "bases"
+                  ],
+                  "properties": {
+                    "bases": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "gameId",
+                          "gameTitle",
+                          "admission",
+                          "reason",
+                          "outcomeVersion",
+                          "attendanceVersion",
+                          "firstEligibleAt",
+                          "helpHint"
+                        ],
+                        "properties": {
+                          "gameId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "gameTitle": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "admission": {
+                            "type": "string",
+                            "enum": [
+                              "may_submit",
+                              "hold",
+                              "deny",
+                              "missing_history"
+                            ]
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outcomeVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "attendanceVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "firstEligibleAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "helpHint": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "attendance_unmarked",
+                                  "attendance_clarifying",
+                                  "missing_history"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -24056,7 +24150,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Authenticated GET read of own venue-experience eligibility bases. No Idempotency-Key. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie session or bearer; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/me/venue-reviews/consent-preview": {
@@ -24069,25 +24164,29 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookieSession mutations (exact allowed consumer Origin + matching X-CSRF-Token). Not required for NativeBearer; bearer must not supply cookie credentials."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Must match a configured consumer web origin when using cookieSession. Not required for NativeBearer."
           }
         ],
         "requestBody": {
@@ -24145,7 +24244,23 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": false,
+                  "required": [
+                    "consentProjectionHash",
+                    "authorLabel"
+                  ],
+                  "properties": {
+                    "consentProjectionHash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "authorLabel": {
+                      "type": "string",
+                      "enum": [
+                        "Участник игры"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -24154,7 +24269,8 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "x-operation-kind": "authenticated-read"
+        "x-operation-kind": "authenticated-read",
+        "description": "Authenticated consent-preview read (not a create). Does not require Idempotency-Key. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer must not supply cookie credentials. Invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/me/venue-reviews": {
@@ -24202,29 +24318,33 @@
           "Venues"
         ],
         "summary": "Create or update venue experience draft/public submission",
-        "description": "#394 + #506 B1c. Cookie+CSRF+Idempotency. self_draft never calls the classifier. Public-consent submission: authorize experience/consent/versions before text moderation; provider outside DB locks; final write revalidates fences and binds classifier candidate evidence to exact venue_review_revision. Classifier ALLOW still creates real human pending intake — never auto-publishes. Soft/ambiguous flags stay pendingreview (decision=review). Hard-safety → 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE / 429 MODERATION_RATE_LIMITED retain prior approved tip and draft form. Withdraw/appeal/report provider-independent.",
+        "description": "#394 + #506 B1c. Cookie+CSRF+Idempotency. self_draft never calls the classifier. Public-consent submission: authorize experience/consent/versions before text moderation; provider outside DB locks; final write revalidates fences and binds classifier candidate evidence to exact venue_review_revision. Classifier ALLOW still creates real human pending intake — never auto-publishes. Soft/ambiguous flags stay pendingreview (decision=review). Hard-safety → 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE / 429 MODERATION_RATE_LIMITED retain prior approved tip and draft form. Withdraw/appeal/report provider-independent. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404. Create requires Idempotency-Key; eligibility GET and consent-preview do not.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required for cookieSession mutations (exact allowed consumer Origin + matching X-CSRF-Token). Not required for NativeBearer; bearer must not supply cookie credentials."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": "Must match a configured consumer web origin when using cookieSession. Not required for NativeBearer."
           },
           {
             "name": "Idempotency-Key",
@@ -24242,7 +24362,137 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateVenueReviewRequest"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "venueId",
+                      "gameId",
+                      "audience",
+                      "expectedBasisVersions",
+                      "text"
+                    ],
+                    "properties": {
+                      "venueId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "gameId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "audience": {
+                        "type": "string",
+                        "enum": [
+                          "self_draft"
+                        ]
+                      },
+                      "expectedBasisVersions": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "outcomeVersion",
+                          "attendanceVersion"
+                        ],
+                        "properties": {
+                          "outcomeVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "attendanceVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "topics": {
+                        "type": "array",
+                        "maxItems": 3,
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "surface",
+                            "lighting",
+                            "amenities"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "venueId",
+                      "gameId",
+                      "audience",
+                      "expectedBasisVersions",
+                      "text",
+                      "consentProjectionHash"
+                    ],
+                    "properties": {
+                      "venueId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "gameId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "audience": {
+                        "type": "string",
+                        "enum": [
+                          "public_venue"
+                        ]
+                      },
+                      "expectedBasisVersions": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "outcomeVersion",
+                          "attendanceVersion"
+                        ],
+                        "properties": {
+                          "outcomeVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "attendanceVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "topics": {
+                        "type": "array",
+                        "maxItems": 3,
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "surface",
+                            "lighting",
+                            "amenities"
+                          ]
+                        }
+                      },
+                      "consentProjectionHash": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -24264,7 +24514,60 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "version",
+                    "status",
+                    "reviewHandle",
+                    "receiptToken",
+                    "publicVisible",
+                    "notBefore"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "reviewHandle": {
+                      "type": "string",
+                      "minLength": 32,
+                      "maxLength": 32,
+                      "pattern": "^[0-9a-f]{32}$"
+                    },
+                    "receiptToken": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicVisible": {
+                      "type": "boolean"
+                    },
+                    "notBefore": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }

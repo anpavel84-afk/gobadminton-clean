@@ -2,6 +2,7 @@ import { PublicApiError } from './public-api.ts';
 import { isVenueId } from './venues.ts';
 
 export type VenueReviewTopic = 'surface' | 'lighting' | 'amenities';
+export type VenueAudience = 'self_draft' | 'public_venue';
 
 export type PublicVenueReviewItem = {
   reviewHandle: string;
@@ -20,7 +21,66 @@ export type VenueReviewsSummary = {
   canWriteHint: boolean;
 };
 
+export type OwnVenueEligibilityBasis = {
+  gameId: string;
+  gameTitle: string | null;
+  admission: 'may_submit' | 'hold' | 'deny' | 'missing_history';
+  reason: string | null;
+  outcomeVersion: number;
+  attendanceVersion: number;
+  firstEligibleAt: string | null;
+  helpHint: 'attendance_unmarked' | 'attendance_clarifying' | 'missing_history' | null;
+};
+
+export type OwnVenueEligibility = { bases: OwnVenueEligibilityBasis[] };
+
+export type VenueConsentPreview = {
+  consentProjectionHash: string;
+  authorLabel: 'Участник игры';
+};
+
+export type VenueReviewMutationReceipt = {
+  id: string;
+  version: number;
+  status: string;
+  reviewHandle: string;
+  receiptToken: string | null;
+  publicVisible: boolean;
+  notBefore: string | null;
+};
+
+export type VenueExperienceCreateBody = {
+  venueId: string;
+  gameId: string;
+  audience: VenueAudience;
+  expectedBasisVersions: { outcomeVersion: number; attendanceVersion: number };
+  text: string;
+  topics: VenueReviewTopic[];
+  consentProjectionHash?: string;
+};
+
+export type VenueExperienceDraft = {
+  audience: VenueAudience;
+  text: string;
+  topics: VenueReviewTopic[];
+  consent: boolean;
+};
+
+/** Client fence matching server idempotency completed/UNKNOWN TTL (journal-wide). */
+export const VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+/** Same 24h TTL for every Postgame journal packet (private / public / venue). */
+export const POSTGAME_IDEMPOTENCY_TTL_MS = VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS;
+
+/** Honest expired UNKNOWN recovery — result unknown; status on site; no GET-success claim. */
+export const POSTGAME_RETENTION_EXPIRED_NOTICE =
+  'Результат исходной отправки неизвестен. Безопасный повтор того же действия уже недоступен. Актуальный статус можно посмотреть на сайте.';
+
 const TOPICS = new Set<string>(['surface', 'lighting', 'amenities']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HANDLE = /^[0-9a-f]{32}$/i;
+const CONSENT_HASH = /^[0-9a-f]{64}$/i;
+const ADMISSIONS = new Set(['may_submit', 'hold', 'deny', 'missing_history']);
+const HELP = new Set(['attendance_unmarked', 'attendance_clarifying', 'missing_history']);
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new PublicApiError('invalid');
@@ -33,6 +93,30 @@ function text(value: unknown): value is string {
 
 function date(value: unknown): value is string {
   return text(value) && Number.isFinite(Date.parse(value));
+}
+
+function uuid(value: unknown): string {
+  if (!text(value) || !UUID.test(value)) throw new PublicApiError('invalid');
+  return value.toLowerCase();
+}
+
+function int(value: unknown, min = 0): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > 2147483647) {
+    throw new PublicApiError('invalid');
+  }
+  return value;
+}
+
+function venueTopics(value: unknown): VenueReviewTopic[] {
+  if (!Array.isArray(value) || value.length > 3) throw new PublicApiError('invalid');
+  const out: VenueReviewTopic[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!text(item) || !TOPICS.has(item) || seen.has(item)) throw new PublicApiError('invalid');
+    seen.add(item);
+    out.push(item as VenueReviewTopic);
+  }
+  return out;
 }
 
 /** Closed parser for GET /v1/venues/{id}/experience-reviews — public read only. */
@@ -74,8 +158,382 @@ export function parseVenueReviewsSummary(value: unknown, venueId: string): Venue
   };
 }
 
+/** Closed whitelist for GET /me/venue-reviews/eligibility — venue-specific; never role IDs. */
+export function parseOwnVenueEligibility(value: unknown): OwnVenueEligibility {
+  const row = object(value);
+  if (!Array.isArray(row.bases)) throw new PublicApiError('invalid');
+  const bases = row.bases.map(item => {
+    const basis = object(item);
+    const admission = text(basis.admission) && ADMISSIONS.has(basis.admission) ? basis.admission : null;
+    if (!admission) throw new PublicApiError('invalid');
+    if (!(basis.gameTitle === null || text(basis.gameTitle))) throw new PublicApiError('invalid');
+    if (!(basis.reason === null || text(basis.reason))) throw new PublicApiError('invalid');
+    if (!(basis.firstEligibleAt === null || date(basis.firstEligibleAt))) throw new PublicApiError('invalid');
+    const help = basis.helpHint === null ? null
+      : text(basis.helpHint) && HELP.has(basis.helpHint) ? basis.helpHint as OwnVenueEligibilityBasis['helpHint']
+        : (() => { throw new PublicApiError('invalid'); })();
+    return {
+      gameId: uuid(basis.gameId),
+      gameTitle: basis.gameTitle as string | null,
+      admission: admission as OwnVenueEligibilityBasis['admission'],
+      reason: basis.reason as string | null,
+      outcomeVersion: int(basis.outcomeVersion),
+      attendanceVersion: int(basis.attendanceVersion),
+      firstEligibleAt: basis.firstEligibleAt as string | null,
+      helpHint: help,
+    };
+  });
+  return { bases };
+}
+
+/** Exact-game may_submit basis only — canWriteHint/roster/stars confer no rights. */
+export function exactGameMaySubmitBasis(
+  eligibility: OwnVenueEligibility | null | undefined,
+  gameId: string,
+): OwnVenueEligibilityBasis | null {
+  if (!eligibility || !UUID.test(gameId)) return null;
+  const wanted = gameId.toLowerCase();
+  const basis = eligibility.bases.find(b => b.gameId === wanted);
+  // Missing/invalid firstEligibleAt is unusable — do not invent rights from the clock alone.
+  if (!basis || basis.admission !== 'may_submit') return null;
+  if (!basis.firstEligibleAt || !Number.isFinite(Date.parse(basis.firstEligibleAt))) return null;
+  return basis;
+}
+
+/**
+ * Exact surface-game admitted authority fingerprint.
+ * Public preview/consent must renew when identity/version/admission/anchor changes or disappears.
+ */
+export function venueExperienceBasisAuthority(
+  eligibility: OwnVenueEligibility | null | undefined,
+  gameId: string,
+): string | null {
+  if (!eligibility || !UUID.test(gameId)) return null;
+  const wanted = gameId.toLowerCase();
+  const basis = eligibility.bases.find(b => b.gameId === wanted);
+  if (!basis) return null;
+  return [
+    basis.gameId,
+    basis.admission,
+    String(basis.outcomeVersion),
+    String(basis.attendanceVersion),
+    basis.firstEligibleAt ?? '',
+    basis.reason ?? '',
+    basis.helpHint ?? '',
+  ].join('\u0001');
+}
+
+export function parseVenueConsentPreview(value: unknown): VenueConsentPreview {
+  const row = object(value);
+  if (!text(row.consentProjectionHash) || !CONSENT_HASH.test(row.consentProjectionHash)) {
+    throw new PublicApiError('invalid');
+  }
+  if (row.authorLabel !== 'Участник игры') throw new PublicApiError('invalid');
+  return {
+    consentProjectionHash: row.consentProjectionHash.toLowerCase(),
+    authorLabel: 'Участник игры',
+  };
+}
+
+export function parseVenueReviewMutationReceipt(value: unknown): VenueReviewMutationReceipt {
+  const row = object(value);
+  const id = uuid(row.id);
+  if (!text(row.reviewHandle) || !HANDLE.test(row.reviewHandle)) throw new PublicApiError('invalid');
+  if (!text(row.status) || row.status.length < 1 || row.status.length > 64) throw new PublicApiError('invalid');
+  if (typeof row.publicVisible !== 'boolean') throw new PublicApiError('invalid');
+  // Blank/whitespace-only intake token is not a successful receipt (public or otherwise).
+  if (!(row.receiptToken === null
+    || text(row.receiptToken) && row.receiptToken.trim().length >= 1)) {
+    throw new PublicApiError('invalid');
+  }
+  if (!(row.notBefore === null || date(row.notBefore))) throw new PublicApiError('invalid');
+  return {
+    id,
+    version: int(row.version, 1),
+    status: row.status,
+    reviewHandle: row.reviewHandle.toLowerCase(),
+    receiptToken: row.receiptToken as string | null,
+    publicVisible: row.publicVisible,
+    notBefore: row.notBefore as string | null,
+  };
+}
+
+/** Private self_draft|revision_waiting with null token; public submitted_waiting|revision_waiting with intake token. */
+export function isVenueExperienceCreateReceipt(
+  receipt: VenueReviewMutationReceipt,
+  audience: VenueAudience,
+): boolean {
+  if (receipt.publicVisible !== false || receipt.notBefore !== null) return false;
+  if (audience === 'self_draft') {
+    return (receipt.status === 'self_draft' || receipt.status === 'revision_waiting')
+      && receipt.receiptToken === null;
+  }
+  const token = typeof receipt.receiptToken === 'string' ? receipt.receiptToken.trim() : '';
+  return (receipt.status === 'submitted_waiting' || receipt.status === 'revision_waiting')
+    && token.length > 0;
+}
+
+export function venueExperienceText(value: string): string {
+  const s = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (s.length < 1 || s.length > 500) throw new PublicApiError('invalid');
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code === 0x0a) continue;
+    if (code < 0x20 || code === 0x7f) throw new PublicApiError('invalid');
+  }
+  return s;
+}
+
+export function buildVenueExperienceCreateBody(args: {
+  venueId: string;
+  basis: OwnVenueEligibilityBasis;
+  audience: VenueAudience;
+  text: string;
+  topics: VenueReviewTopic[];
+  consentProjectionHash?: string;
+}): VenueExperienceCreateBody {
+  if (!isVenueId(args.venueId)) throw new PublicApiError('invalid');
+  if (args.basis.admission !== 'may_submit') throw new PublicApiError('invalid');
+  const text = venueExperienceText(args.text);
+  const topics = venueTopics(args.topics);
+  if (args.audience === 'public_venue') {
+    const hash = args.consentProjectionHash?.toLowerCase();
+    if (!hash || !CONSENT_HASH.test(hash)) throw new PublicApiError('invalid');
+    return {
+      venueId: args.venueId.toLowerCase(),
+      gameId: args.basis.gameId,
+      audience: 'public_venue',
+      expectedBasisVersions: {
+        outcomeVersion: args.basis.outcomeVersion,
+        attendanceVersion: args.basis.attendanceVersion,
+      },
+      text,
+      topics,
+      consentProjectionHash: hash,
+    };
+  }
+  if (args.consentProjectionHash !== undefined) throw new PublicApiError('invalid');
+  return {
+    venueId: args.venueId.toLowerCase(),
+    gameId: args.basis.gameId,
+    audience: 'self_draft',
+    expectedBasisVersions: {
+      outcomeVersion: args.basis.outcomeVersion,
+      attendanceVersion: args.basis.attendanceVersion,
+    },
+    text,
+    topics,
+  };
+}
+
+export function emptyVenueExperienceDraft(): VenueExperienceDraft {
+  return { audience: 'self_draft', text: '', topics: ['surface'], consent: false };
+}
+
+/**
+ * Closed Russian copy for known eligibility reasons — never echo raw server codes in product UI.
+ * Own-key Map only: unknown / prototype keys (__proto__, constructor, toString, …) stay neutral null.
+ */
+const VENUE_ELIGIBILITY_REASON_COPY = new Map<string, string>([
+  ['venue_affiliation', 'Площадка связана с вашей организацией, поэтому отзыв недоступен.'],
+  ['lifecycle', 'Площадка сейчас недоступна для отзыва.'],
+  ['outcome_unknown', 'Исход игры ещё не подтверждён.'],
+  ['outcome_dispute', 'По исходу игры идёт уточнение.'],
+  ['window_closed', 'Срок подачи отзыва по этой игре истёк.'],
+  ['wrong_venue', 'Отзыв относится к другой площадке этой игры.'],
+  ['venue_attribution_unavailable', 'Не удалось подтвердить историческую площадку этой игры.'],
+  ['attendance_unmarked', 'Посещение ещё не отмечено.'],
+  ['attendance_unknown', 'Посещение ещё не отмечено.'],
+  ['attendance_dispute', 'По посещению идёт уточнение.'],
+]);
+
+export function venueEligibilityReasonCopy(reason: string | null | undefined): string | null {
+  if (!reason || typeof reason !== 'string') return null;
+  return VENUE_ELIGIBILITY_REASON_COPY.get(reason) ?? null;
+}
+
+export function venueReviewEligibilityHelp(basis: OwnVenueEligibilityBasis | undefined | null): string | null {
+  if (!basis) return 'Не удалось подтвердить возможность отзыва по этой игре.';
+  if (basis.helpHint === 'attendance_unmarked') {
+    return 'Посещение ещё не отмечено. Можно попросить уточнение в итогах игры — без самостоятельной отметки.';
+  }
+  if (basis.helpHint === 'attendance_clarifying') {
+    return 'Уточняем посещение. Пока спор или отсутствие не закрыты, отзыв о площадке недоступен.';
+  }
+  if (basis.helpHint === 'missing_history' || basis.admission === 'missing_history') {
+    return 'Не удалось подтвердить историческую площадку этой игры. Это ограничение данных, а не новое разрешение.';
+  }
+  if (basis.admission === 'deny' && basis.reason === 'window_closed') {
+    return 'Срок подачи отзыва по этой игре истёк.';
+  }
+  if (basis.admission !== 'may_submit') {
+    const reasonCopy = venueEligibilityReasonCopy(basis.reason);
+    return reasonCopy
+      ? `Сейчас нельзя оставить отзыв по этой игре. ${reasonCopy}`
+      : 'Сейчас нельзя оставить отзыв по этой игре.';
+  }
+  return null;
+}
+
+export type VenueExperienceReceiptSummary = {
+  primary: string;
+  visibility: string;
+};
+
+/**
+ * One verified audience/token receipt summary.
+ * Private (incl. revision_waiting + null token): saved only for you; no moderation claim.
+ * Public pending: awaiting review; older published may remain.
+ */
+export function venueExperienceReceiptSummary(
+  receipt: VenueReviewMutationReceipt,
+  audience: VenueAudience,
+): VenueExperienceReceiptSummary {
+  if (receipt.publicVisible) {
+    return {
+      primary: 'Публичная версия отзыва доступна на странице площадки.',
+      visibility: 'Актуальный статус отзыва о площадке можно посмотреть на сайте.',
+    };
+  }
+  const privateNullToken = audience === 'self_draft'
+    || ((receipt.status === 'self_draft' || receipt.status === 'revision_waiting')
+      && receipt.receiptToken === null);
+  if (privateNullToken) {
+    return {
+      primary: 'Сохранено только вам. Эти изменения видите только вы.',
+      visibility: 'Ранее опубликованная версия может оставаться видимой. Только вам — без публикации этой версии на странице площадки.',
+    };
+  }
+  if (
+    receipt.status === 'submitted_waiting'
+    || receipt.status === 'submitted'
+    || receipt.status === 'revision_waiting'
+  ) {
+    return {
+      primary: receipt.status === 'revision_waiting'
+        ? 'Новая публичная версия ожидает проверки. Пока она не опубликована.'
+        : 'Новая публичная версия отправлена и ожидает проверки. Пока она не опубликована.',
+      visibility: 'Эта новая версия ещё не опубликована. Более ранняя опубликованная версия может оставаться видимой.',
+    };
+  }
+  return {
+    primary: 'Отправка принята. Актуальный статус смотрите на сайте.',
+    visibility: 'Актуальный статус отзыва о площадке можно посмотреть на сайте.',
+  };
+}
+
+/** Immutable owner for one focused VenueExperienceEntry route lifetime. */
+export type VenueExperienceRouteOwner = {
+  gen: number;
+  gameId: string;
+  venueId: string;
+  actorId: string;
+  sessionId: string;
+};
+
+/**
+ * Capture THIS route's owned surface when live actor+surface match the Entry game.
+ * Blur/unmount cleanup must retire this capture — never rebuild expected from a later getSnapshot().
+ */
+export function captureVenueExperienceRouteOwner(args: {
+  gameId: string;
+  actor: { actorId: string; sessionId: string } | null | undefined;
+  surface: { gen: number; gameId: string; venueId: string } | null | undefined;
+}): VenueExperienceRouteOwner | null {
+  const { gameId, actor, surface } = args;
+  if (!actor || !surface || surface.gameId !== gameId) return null;
+  return {
+    gen: surface.gen,
+    gameId: surface.gameId,
+    venueId: surface.venueId,
+    actorId: actor.actorId,
+    sessionId: actor.sessionId,
+  };
+}
+
+/**
+ * While the route stays focused, remember the latest matching owner (open after focus / reopen).
+ * A null next leaves the prior capture unchanged — ordinary close does not clear departure debt.
+ */
+export function noteVenueExperienceRouteOwner(
+  prior: VenueExperienceRouteOwner | null,
+  next: VenueExperienceRouteOwner | null,
+): VenueExperienceRouteOwner | null {
+  return next ?? prior;
+}
+
+/**
+ * Production gate for VenueExperienceEntry eligibility GET.
+ * Probe only when THIS route is focused, actor/session verified, live venue + ready results,
+ * composer closed (open owns its load), and no original venue journal is pending.
+ * Returns null for hidden/blurred, open-composer, pending, or incomplete admission — no target leak.
+ */
+export function venueExperienceEntryProbeTarget(args: {
+  routeFocused: boolean;
+  authenticated: boolean;
+  actor: { actorId: string; sessionId: string } | null | undefined;
+  meActorId: string | null | undefined;
+  meSessionId: string | null | undefined;
+  gameId: string;
+  liveVenueId: string | null | undefined;
+  resultsStatus: string | null | undefined;
+  composerOpen: boolean;
+  pendingVenueJournal: boolean;
+}): { gameId: string; venueId: string } | null {
+  if (!args.routeFocused || args.composerOpen || args.pendingVenueJournal) return null;
+  if (!args.authenticated || !args.actor || !args.meActorId || !args.meSessionId) return null;
+  if (args.actor.actorId !== args.meActorId || args.actor.sessionId !== args.meSessionId) return null;
+  if (!UUID.test(args.gameId) || !args.liveVenueId || !isVenueId(args.liveVenueId)) return null;
+  if (args.resultsStatus !== 'ready') return null;
+  return { gameId: args.gameId.toLowerCase(), venueId: args.liveVenueId.toLowerCase() };
+}
+
+export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experience-create' {
+  return kind === 'venue-experience-create';
+}
+
+/**
+ * Discriminated Packet guard — narrows owning packet/body (kind-string guard alone does not).
+ * Generic intersection keeps actor/key/path from the caller Packet without circular imports.
+ */
+export function isVenueExperienceCreatePacket<T extends { readonly kind: string }>(
+  packet: T,
+): packet is T & {
+  readonly kind: 'venue-experience-create';
+  readonly gameId: string;
+  readonly venueId: string;
+  readonly body: VenueExperienceCreateBody;
+} {
+  return packet.kind === 'venue-experience-create';
+}
+
+export function venueExperienceIdempotencyExpired(firstDispatchedAt: number, now = Date.now()): boolean {
+  return Number.isFinite(firstDispatchedAt) && now - firstDispatchedAt >= VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS;
+}
+
+/**
+ * Fail-closed UNKNOWN replay gate: missing/invalid/backwards clock or elapsed ≥ 24h.
+ * Controllable via `now` for synthetic transport tests — never restarts original age.
+ */
+export function postgameIdempotencyReplayBlocked(
+  firstDispatchedAt: number | undefined,
+  now = Date.now(),
+): boolean {
+  if (typeof firstDispatchedAt !== 'number' || !Number.isFinite(firstDispatchedAt)) return true;
+  if (!Number.isFinite(now) || now < firstDispatchedAt) return true;
+  const elapsed = now - firstDispatchedAt;
+  if (!Number.isFinite(elapsed) || elapsed < 0) return true;
+  return elapsed >= POSTGAME_IDEMPOTENCY_TTL_MS;
+}
+
 export const TOPIC_LABEL: Record<VenueReviewTopic, string> = {
   surface: 'Покрытие',
   lighting: 'Свет',
   amenities: 'Удобства',
 };
+
+export const VENUE_TOPIC_OPTIONS: Array<{ value: VenueReviewTopic; label: string }> = [
+  { value: 'surface', label: TOPIC_LABEL.surface },
+  { value: 'lighting', label: TOPIC_LABEL.lighting },
+  { value: 'amenities', label: TOPIC_LABEL.amenities },
+];
