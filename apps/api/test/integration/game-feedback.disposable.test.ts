@@ -1524,7 +1524,7 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
   });
 
   it("native bearer private organization/training: score-or-comment, trainer_led binding, discrepancy, history/reply, writes-off", async () => {
-    const { gameId, annaContext } = await createEndedGameWithPlayers();
+    const { gameId } = await createEndedGameWithPlayers();
 
     const caps = await nativeGet(anna, `/v1/games/${gameId}/results`);
     expect(caps.statusCode).toBe(200);

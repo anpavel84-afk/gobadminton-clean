@@ -1418,14 +1418,15 @@ test('#522 private organization/training: wire whitelist, receipts, kind drafts,
   }), false);
   assert.equal(shouldOmitRoleDiscrepancy(undefined), false);
   // Null myAttendance is ambiguous — never drop explanation text.
-  assert.equal(shouldOmitRoleDiscrepancy({
+  const ambiguousNullAttendance: Results = {
     ...result,
     attendance: {
       installed: true, writesEnabled: true, myAttendance: null, roster: null,
       rosterNextCursor: null, summary: null,
       allowedActions: { canRecordAttendance: false, canBulkPresent: false },
     },
-  }), false);
+  };
+  assert.equal(shouldOmitRoleDiscrepancy(ambiguousNullAttendance), false);
 
   const org = peerReview({
     id: 'org-hist', kind: 'organization', subjectContextId: null, peerRating: null,
@@ -1475,9 +1476,11 @@ test('#522 private organization/training: wire whitelist, receipts, kind drafts,
   assert.equal(s.coordinator.getSnapshot().review?.kind, 'organization-create');
   await s.coordinator.confirm();
   assert.equal(s.sentPkts.filter(p => p.kind === 'organization-create').length, 1);
-  assert.equal(s.sentPkts.at(-1)?.body.kind, 'organization');
-  assert.ok(!('subjectContextId' in (s.sentPkts.at(-1)?.body ?? {})));
-  assert.ok(!('peerRating' in (s.sentPkts.at(-1)?.body ?? {})));
+  const orgSent = s.sentPkts.at(-1);
+  assert.ok(orgSent && orgSent.kind === 'organization-create');
+  assert.equal(orgSent.body.kind, 'organization');
+  assert.ok(!('subjectContextId' in orgSent.body));
+  assert.ok(!('peerRating' in orgSent.body));
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.trainingComment, 'не переносить');
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationScore, null);
 
@@ -1769,7 +1772,9 @@ test('#522 Root A/B: default-kind discrepancy patch, ambiguous null attendance, 
     },
   });
   await s.coordinator.confirm();
-  assert.equal(s.sentPkts.at(-1)?.body.discrepancyExplanation, 'нужно пояснение');
+  const orgAmbigSent = s.sentPkts.at(-1);
+  assert.ok(orgAmbigSent && orgAmbigSent.kind === 'organization-create');
+  assert.equal(orgAmbigSent.body.discrepancyExplanation, 'нужно пояснение');
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.comment, 'peer-keep');
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.trainingDiscrepancy, 'трен пояснение');
 });
