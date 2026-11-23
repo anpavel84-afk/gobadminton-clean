@@ -516,6 +516,11 @@ test('deferred results/history same-version rights; older gen cannot restore; no
     id: 'recv-defer', direction: 'received', version: 1, comment: 'v1',
     allowedActions: { canEdit: false, canReply: true, canReport: true },
   });
+  const revoked = {
+    ...row,
+    comment: 'v1-rights',
+    allowedActions: { canEdit: false, canReply: false, canReport: true },
+  };
   const s = setup({
     results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
     reviews: { received: [row], sent: [], nextCursor: 'cursor-a' },
@@ -524,11 +529,7 @@ test('deferred results/history same-version rights; older gen cannot restore; no
   await s.coordinator.loadReviews('received');
   assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, 'cursor-a');
   // Newer history rights win at same version.
-  s.reviews.received = [{
-    ...row,
-    comment: 'v1-rights',
-    allowedActions: { canEdit: false, canReply: false, canReport: true },
-  }];
+  s.reviews.received = [revoked];
   await s.coordinator.loadReviews('received');
   assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
   assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v1-rights');
@@ -536,27 +537,106 @@ test('deferred results/history same-version rights; older gen cannot restore; no
   await s.coordinator.loadResults(game.id);
   assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
   assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v1-rights');
-  // Non-peer rows on the page still leave nextCursor honest.
+
+  // Deferred older results after newer history: in-flight stale canReply:true must not restore.
+  let resolveStaleResults!: (value: Results) => void;
+  s.port.results = () => new Promise(r => { resolveStaleResults = r; });
+  const staleResultsFlight = s.coordinator.loadResults(game.id);
+  s.reviews.received = [revoked];
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
+  resolveStaleResults({
+    ...structuredClone(result),
+    gameId: game.id,
+    feedback: { ...feedbackReady, gameReviews: [row] },
+  });
+  await staleResultsFlight;
+  assert.equal(
+    s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply,
+    false,
+    'deferred older results must not restore reply after newer history revoke',
+  );
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v1-rights');
+
+  // Deferred older history after newer results: start history first, then results own higher version.
+  const v2 = peerReview({
+    id: 'recv-defer', direction: 'received', version: 2, comment: 'v2-current',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: true },
+  });
+  let resolveStaleHistory!: (value: { items: PrivateReview[]; nextCursor: null }) => void;
+  s.port.reviews = () => new Promise(r => { resolveStaleHistory = r; });
+  const staleHistoryFlight = s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'loading');
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [v2] },
+  });
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.version, 2);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.reply?.version, 1);
+  // Old delayed history (lower version, misleading canReply, missing reply) must not regress current.
+  resolveStaleHistory({
+    items: [{
+      ...row,
+      comment: 'stale-v1',
+      reply: null,
+      allowedActions: { canEdit: false, canReply: true, canReport: true },
+    }],
+    nextCursor: null,
+  });
+  await staleHistoryFlight;
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.version, 2);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v2-current');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.reply?.version, 1);
+
+  // Same-version reply-floor: typed history with weaker reply payload keeps current reply.
+  s.reviews.received = [{
+    ...v2,
+    comment: 'v2-same-reply-floor',
+    reply: null,
+    allowedActions: { canEdit: false, canReply: false, canReport: true },
+  }];
+  s.port.reviews = async () => ({
+    items: structuredClone(s.reviews.received),
+    nextCursor: null,
+  });
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v2-same-reply-floor');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.reply?.version, 1);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, false);
+
+  // Legitimate newer typed history restores current authority — revoked rights are not frozen forever.
+  const restored = {
+    ...v2,
+    comment: 'v2-restored',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  };
   const org = peerReview({
     id: 'org-defer', kind: 'organization', subjectContextId: null, peerRating: null,
     organizationScore: 4, direction: 'received',
     allowedActions: { canEdit: false, canReply: false, canReport: false },
   });
-  s.reviews.received = [row, org];
+  s.reviews.received = [restored, org];
   s.port.reviews = async () => ({ items: structuredClone(s.reviews.received), nextCursor: 'cursor-b' });
-  // Fresh root load (not more) — replace cursor set.
+  // Fresh root load (not more) — replace cursor set; mixed non-peer page keeps nextCursor honest.
   await s.coordinator.loadReviews('received');
   assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, 'cursor-b');
   assert.equal(
     peerReviewsOnly(s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? []).length,
     1,
   );
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.allowedActions.canReply, true);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-defer']?.comment, 'v2-restored');
   const projected = projectReviewsFromStore(
     s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? [],
     s.coordinator.getSnapshot().reviewsById,
   );
-  assert.equal(projected.find(r => r.id === 'recv-defer')?.allowedActions.canReply, false);
-  assert.equal(displayOnlyReview(row).allowedActions.canReply, false);
+  assert.equal(projected.find(r => r.id === 'recv-defer')?.allowedActions.canReply, true);
+  assert.equal(displayOnlyReview(restored).allowedActions.canReply, false);
 });
 
 test('actor switch clears private review projection and report draft', async () => {

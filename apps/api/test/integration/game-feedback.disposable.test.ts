@@ -1287,20 +1287,21 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
   });
 
   it("native bearer peer feedback: create/list/reply/report, consent/CAS/replay, writes-off report, PATCH denied", async () => {
-    const { gameId, ilyaContext } = await createEndedGameWithPlayers();
+    const { gameId, ilyaContext, annaContext } = await createEndedGameWithPlayers();
 
     const createKey = key();
+    const peerBody = {
+      kind: "peer" as const,
+      subjectContextId: ilyaContext,
+      peerRating: "play_again" as const,
+      comment: "Native peer thanks",
+      tags: ["teamwork"],
+      experienceAssertion: "i_experienced_this_game" as const,
+    };
     const created = await nativePost(
       anna,
       `/v1/games/${gameId}/reviews`,
-      {
-        kind: "peer",
-        subjectContextId: ilyaContext,
-        peerRating: "play_again",
-        comment: "Native peer thanks",
-        tags: ["teamwork"],
-        experienceAssertion: "i_experienced_this_game",
-      },
+      peerBody,
       createKey,
     );
     expect([200, 201]).toContain(created.statusCode);
@@ -1313,14 +1314,7 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     const replay = await nativePost(
       anna,
       `/v1/games/${gameId}/reviews`,
-      {
-        kind: "peer",
-        subjectContextId: ilyaContext,
-        peerRating: "play_again",
-        comment: "Native peer thanks",
-        tags: ["teamwork"],
-        experienceAssertion: "i_experienced_this_game",
-      },
+      peerBody,
       createKey,
     );
     expect(replay.statusCode).toBe(created.statusCode);
@@ -1427,7 +1421,53 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     });
     expect(outsiderReport.statusCode).toBe(404);
 
-    // Experience lost / create denied does not block historical recipient report when writes off.
+    // Real confirmed-experience loss: manager attendance correction marks author absent.
+    // Same-key create replay and new-key ownedPrior must recheck current admission (422),
+    // while historical sent/received/report stay independently accessible.
+    await put(manager, `/v1/games/${gameId}/attendance/${annaContext}`, {
+      expectedVersion: 1,
+      value: "absent",
+      correctionReason: "Native experience lost after create",
+    });
+    const experienceLostReplay = await nativePost(
+      anna,
+      `/v1/games/${gameId}/reviews`,
+      peerBody,
+      createKey,
+    );
+    expect(experienceLostReplay.statusCode).toBe(422);
+    expect(experienceLostReplay.json().code).toBe("FEEDBACK_PEER_EXPERIENCE_UNCONFIRMED");
+    const experienceLostOwnedPrior = await nativePost(
+      anna,
+      `/v1/games/${gameId}/reviews`,
+      peerBody,
+      key(),
+    );
+    expect(experienceLostOwnedPrior.statusCode).toBe(422);
+    expect(experienceLostOwnedPrior.json().code).toBe("FEEDBACK_PEER_EXPERIENCE_UNCONFIRMED");
+
+    const sentAfterAbsent = await nativeGet(anna, `/v1/me/reviews?direction=sent`);
+    expect(sentAfterAbsent.statusCode).toBe(200);
+    expect(sentAfterAbsent.json().items.some((r: { id: string }) => r.id === reviewId)).toBe(true);
+    const receivedAfterAbsent = await nativeGet(ilya, `/v1/me/reviews?direction=received`);
+    expect(receivedAfterAbsent.statusCode).toBe(200);
+    const receivedAfterRow = receivedAfterAbsent.json().items.find(
+      (r: { id: string }) => r.id === reviewId,
+    );
+    expect(receivedAfterRow).toBeTruthy();
+    expect(receivedAfterRow.allowedActions.canReport).toBe(true);
+    const reportAfterAbsent = await nativePost(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: reviewVersion,
+      reasonCode: "inappropriate",
+      detail: "report after author experience lost",
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect([200, 201]).toContain(reportAfterAbsent.statusCode);
+    expect(reportAfterAbsent.json().reviewId).toBe(reviewId);
+    expect(reportAfterAbsent.json().version).toBe(reviewVersion);
+
+    // Writes-off recourse stays separate and honest (env switch only — not experience loss).
     env.POST_GAME_INTERNAL_ENABLED = false;
     try {
       const createOff = await nativePost(anna, `/v1/games/${gameId}/reviews`, {
