@@ -973,26 +973,30 @@ test('address5: selected GET wrong id/handle/venue fails closed; zero POST; fenc
 test('address8: deferred selected GET → withdraw dispatch/ACK cannot restore old text/editor/row', async () => {
   let releaseDetail!: (value: SelectedOwnVenueReview) => void;
   const detailGate = new Promise<SelectedOwnVenueReview>(resolve => { releaseDetail = resolve; });
+  let releaseSend!: (value: unknown) => void;
+  const sendGate = new Promise<unknown>(resolve => { releaseSend = resolve; });
   let detailCalls = 0;
+  // Truthful owned list: start v1; flip to withdrawn v2 only at ACK (idlePort ownRow() is obsolete after withdraw).
+  let listItems: OwnVenueReview[] = [ownRow(1)];
+  const posts: string[] = [];
   const owner = new PostgameCoordinator({
     ...idlePort({
+      venueExperienceOwnList: async () => ({
+        items: listItems.map(row => ({ ...row, topics: [...row.topics] })),
+      }),
       venueExperienceOwnDetail: async () => {
         detailCalls += 1;
         if (detailCalls === 1) return detailGate;
-        return selected(2);
+        // Late / post-ACK selected still returns pre-withdraw detail — production must fence.
+        return selected(1);
       },
       send: async (packet) => {
-        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        if (!isVenueExperienceCommandPacket(packet)) {
+          throw assert.fail('expected venue-experience-command packet');
+        }
         assert.equal(packet.body.action, 'withdraw');
-        return {
-          id: reviewId,
-          version: 2,
-          status: 'withdrawn',
-          reviewHandle: handle,
-          receiptToken: null,
-          publicVisible: false,
-          notBefore: null,
-        };
+        posts.push(packet.key);
+        return sendGate;
       },
     }),
   }, () => 'addr8-wd-race-key');
@@ -1010,14 +1014,37 @@ test('address8: deferred selected GET → withdraw dispatch/ACK cannot restore o
   const pendingWithdraw = owner.confirmOwnVenueWithdraw();
   await tick();
   assert.equal(owner.getSnapshot().command?.status, 'sending');
+  assert.equal(posts.length, 1);
 
-  // Late pre-withdraw detail must not open composer or replace the row after mutation begins.
+  // Late pre-ACK detail must not open composer or replace the row after mutation begins.
   releaseDetail!(selected(1));
   await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
   assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
   assert.equal(owner.getSnapshot().venueDraft, null);
   assert.notEqual(owner.getSnapshot().ownVenueSelected?.status, 'withdrawn');
+  assert.equal(posts.length, 1);
 
+  // Update synthetic server list at ACK, then release — follow-up GET must see withdrawn v2.
+  listItems = [{
+    ...ownRow(2),
+    status: 'withdrawn',
+    text: null,
+    topics: [],
+    pendingRevision: null,
+    audience: null,
+    publicVisible: false,
+    receiptToken: null,
+  }];
+  releaseSend!({
+    id: reviewId,
+    version: 2,
+    status: 'withdrawn',
+    reviewHandle: handle,
+    receiptToken: null,
+    publicVisible: false,
+    notBefore: null,
+  });
   await pendingWithdraw;
   await tick();
   assert.equal(owner.getSnapshot().command, null);
@@ -1028,15 +1055,20 @@ test('address8: deferred selected GET → withdraw dispatch/ACK cannot restore o
   assert.equal(withdrawn?.text, null);
   assert.equal(owner.getSnapshot().venueExperience, null);
   assert.equal(owner.getSnapshot().venueDraft, null);
+  assert.equal(posts.length, 1);
 
-  // Explicit post-ACK selected GET of pre-withdraw detail cannot restore editable withdrawn text/row.
-  await owner.loadOwnVenueSelected(reviewId, { forEdit: true });
-  await tick();
-  assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
-  assert.equal(owner.getSnapshot().venueDraft, null);
-  assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.status, 'withdrawn');
-  assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.text, null);
-  assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+  // Post-ACK late selected of pre-withdraw detail — two bounded option cases; no restore, zero extra POST.
+  for (const opts of [{ forEdit: true }, { clearConflict: true }] as const) {
+    await owner.loadOwnVenueSelected(reviewId, opts);
+    await tick();
+    assert.equal(owner.getSnapshot().venueExperience?.reviewId, undefined);
+    assert.equal(owner.getSnapshot().venueDraft, null);
+    assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.status, 'withdrawn');
+    assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.text, null);
+    assert.equal(owner.getSnapshot().ownVenue.data?.items.find(row => row.id === reviewId)?.version, 2);
+    assert.equal(owner.getSnapshot().ownVenueReadRequired, true);
+    assert.equal(posts.length, 1);
+  }
 });
 
 test('address8: successful revision + open history during send → exactly one follow-up GET after reservation cleanup', async () => {
@@ -1050,7 +1082,9 @@ test('address8: successful revision + open history during send → exactly one f
         return { items: [ownRow(listCalls === 1 ? 1 : 2)] };
       },
       send: async (packet) => {
-        assert.equal(isVenueExperienceCommandPacket(packet), true);
+        if (!isVenueExperienceCommandPacket(packet)) {
+          throw assert.fail('expected venue-experience-command packet');
+        }
         assert.equal(packet.body.action, 'submit_revision');
         return sendGate;
       },
