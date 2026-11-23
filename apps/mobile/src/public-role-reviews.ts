@@ -801,8 +801,10 @@ export function mayPaintPublicReportReceipt(
 /**
  * Host claim-phase navigation fence (PublicRoleReviewHost).
  * Capture path+navGen before awaiting SecureStore claim; after claim, restore/replace only while
- * ownership holds. Own expected goal path already committed stays live; intervening unrelated
- * navigation — including ABA back to the claim-start path — drops without forcing old origin.
+ * ownership holds. Unchanged navigation on the claim-start path stays live; a single expected
+ * generation hop from a different claim-start path onto the goal stays live. Intervening
+ * unrelated navigation — including ABA back to the claim-start/goal path after leave/return —
+ * drops without forcing old origin (must not revive solely because currentPath === goalPath).
  */
 export function coldClaimStillOwnsNavigation(args: {
   pathAtClaim: string;
@@ -811,9 +813,14 @@ export function coldClaimStillOwnsNavigation(args: {
   currentNavGen: number;
   goalPath: string;
 }): boolean {
-  if (args.currentPath === args.goalPath) return true;
-  return args.currentNavGen === args.navGenAtClaim
-    && args.currentPath === args.pathAtClaim;
+  if (args.currentNavGen === args.navGenAtClaim) {
+    return args.currentPath === args.pathAtClaim;
+  }
+  // Own expected route commit: exactly one generation hop from a different start onto goal.
+  // Multi-hop / already-at-goal ABA (Messages→Back etc.) must retire even when path === goal.
+  return args.currentPath === args.goalPath
+    && args.pathAtClaim !== args.goalPath
+    && args.currentNavGen === args.navGenAtClaim + 1;
 }
 
 /**

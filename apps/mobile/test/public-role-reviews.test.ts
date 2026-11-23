@@ -4283,12 +4283,35 @@ test('#522 QA3: host claim/pending/eventual navigation seams fence three promise
     currentNavGen: 3,
     goalPath,
   }), false);
-  // Stable claim-start path may restore; own expected commit already on goal stays live.
+  // Already-at-goal claim + Messages → Back same game (navGen +2): must not revive on path===goal.
+  assert.equal(coldClaimStillOwnsNavigation({
+    pathAtClaim: goalPath,
+    navGenAtClaim: 4,
+    currentPath: goalPath,
+    currentNavGen: 6,
+    goalPath,
+  }), false);
+  // Different start → unrelated → goal with 2+ generation hops: reject (not a single own commit).
+  assert.equal(coldClaimStillOwnsNavigation({
+    pathAtClaim: '/games',
+    navGenAtClaim: 1,
+    currentPath: goalPath,
+    currentNavGen: 3,
+    goalPath,
+  }), false);
+  // Unchanged claim-start path may restore; own single expected hop different→goal stays live.
   assert.equal(coldClaimStillOwnsNavigation({
     pathAtClaim: '/games',
     navGenAtClaim: 1,
     currentPath: '/games',
     currentNavGen: 1,
+    goalPath,
+  }), true);
+  assert.equal(coldClaimStillOwnsNavigation({
+    pathAtClaim: goalPath,
+    navGenAtClaim: 4,
+    currentPath: goalPath,
+    currentNavGen: 4,
     goalPath,
   }), true);
   assert.equal(coldClaimStillOwnsNavigation({

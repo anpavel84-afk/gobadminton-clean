@@ -729,7 +729,8 @@ export function PublicRoleReviewHost() {
           currentNavGen: navGen.current,
           goalPath: path,
         })) {
-          // Intervening unrelated navigation while claim awaited — drop without old-origin replace.
+          // Intervening unrelated / ABA (incl. already-at-goal leave→return) while claim awaited —
+          // drop without old-origin replace; own single expected goal commit still owns.
           return;
         }
         const waitFromPath = pathnameRef.current;
