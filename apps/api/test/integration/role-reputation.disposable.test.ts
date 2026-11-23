@@ -29,7 +29,7 @@ const nativeRedirect = "https://app.example.test/auth/callback";
  * against dedicated disposable DB. Never creates live sessions/credentials.
  */
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 const adminOrigin = "http://localhost:18995";
 const pepper = "role-rep-consumer-admin-pepper-32chars!!";
 
@@ -114,9 +114,10 @@ run("#394 role reputation — disposable", () => {
       NODE_ENV: "test",
       APP_ENV: "local",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      ALLOWED_WEB_ORIGINS: origin,
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "role-rep-synthetic-fixture-pepper!!!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "role-rep-synthetic-fingerprint!!!!!",
