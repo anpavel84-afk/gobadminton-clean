@@ -309,7 +309,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
   const auth = useAuth(), owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const heading = useRef<ComponentRef<typeof Text>>(null);
-  const pageScrollRef = useRef<ScrollView>(null);
+  const pageScrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const reportHeadingRef = useRef<ComponentRef<typeof Text>>(null);
   const reportFormRef = useRef<ComponentRef<typeof View>>(null);
   const reportTriggerRefs = useRef(new Map<string, FocusTarget | null>());
