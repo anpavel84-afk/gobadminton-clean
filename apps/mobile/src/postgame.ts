@@ -470,7 +470,10 @@ export function validateReceipt(raw: unknown, p: Packet): Receipt {
   }
   if (p.kind === 'note-delete') {
     const r = parseNoteDeleteReceipt(raw);
-    if (r.gameId !== p.gameId || r.contextId !== p.contextId || r.deleted !== true || r.version !== p.body.expectedVersion + 1) invalid();
+    // Fresh delete returns expectedVersion+1; already-tombstoned success returns the current
+    // tomb version without increment (may be higher after concurrent web edit/delete).
+    // parseNoteDeleteReceipt already enforces deleted:true and strict positive bounded version.
+    if (r.gameId !== p.gameId || r.contextId !== p.contextId || r.deleted !== true || r.version < p.body.expectedVersion + 1) invalid();
     return r;
   }
   if (p.kind === 'outcome') { const r = parseResults(raw); if (r.gameId !== p.gameId || r.outcome.version !== p.body.expectedVersion + 1 || r.outcome.value !== p.body.outcome || r.outcome.reason !== (p.body.reason ?? null)) invalid(); return r; }

@@ -19,7 +19,13 @@ export type DisputeDraft = {
   withdrawReason?: string;
 };
 /** Actor-bound private note form drafts — wiped on logout / different actor. */
-export type NoteDraft = { selectedContextId?: string; createText?: string; editText?: string };
+export type NoteDraft = {
+  selectedContextId?: string;
+  createText?: string;
+  editText?: string;
+  /** Explicit create-form mutation (incl. deliberate empty); distinct from pristine empty prefill. */
+  createDirty?: boolean;
+};
 export type OwnNoteRef = { gameId: string; contextId: string };
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
 type OwnAck = { gameId: string; contextId: string; version: number };
@@ -204,7 +210,7 @@ export class PostgameCoordinator {
     if (createDraft?.selectedContextId === contextId) {
       // Confirmed absence of the selected context must clear its create-form text (prefill from loadNote),
       // not retain private content in the reachable NotesSection TextInput. Unrelated contexts stay intact.
-      noteDrafts[gameId] = { ...createDraft, selectedContextId: undefined, createText: '' };
+      noteDrafts[gameId] = { selectedContextId: undefined, createText: '', editText: createDraft.editText };
     }
     return noteDrafts;
   }
@@ -395,9 +401,9 @@ export class PostgameCoordinator {
       this.rememberOwnedNotes([data], noteGen, true);
       const cur = this.snapshot.notes[key];
       if (cur?.status === 'ready' && this.noteAppliedGen.get(key) === noteGen) {
-        // Dirty-draft-safe prefill after selected direct GET — never overwrite typed text.
+        // Prefill only pristine selection — createDirty tracks deliberate empty separately from ''.
         const createDraft = this.snapshot.noteDrafts[gameId];
-        if (createDraft?.selectedContextId === contextId && !createDraft.createText) {
+        if (createDraft?.selectedContextId === contextId && !createDraft.createDirty && !createDraft.createText) {
           this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [gameId]: { ...createDraft, createText: data.text } } });
         }
         return;
@@ -441,17 +447,25 @@ export class PostgameCoordinator {
     // Switching selected participant must not carry create text into another context.
     // Bounded myNotes absence is not authority — always direct-GET the chosen context before create/edit.
     if (patch.selectedContextId !== undefined && patch.selectedContextId !== prior.selectedContextId) {
-      const nextText = patch.createText !== undefined ? patch.createText : undefined;
+      const hasText = patch.createText !== undefined;
       this.show({
         noteDrafts: {
           ...this.snapshot.noteDrafts,
-          [key]: { selectedContextId: patch.selectedContextId, createText: nextText ?? '', editText: prior.editText },
+          [key]: {
+            selectedContextId: patch.selectedContextId,
+            createText: hasText ? patch.createText : '',
+            editText: prior.editText,
+            ...(hasText ? { createDirty: true } : {}),
+          },
         },
       });
       if (patch.selectedContextId) void this.loadNote(gameId, patch.selectedContextId);
       return;
     }
-    this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [key]: { ...prior, ...patch } } });
+    const next: NoteDraft = { ...prior, ...patch };
+    // Explicit createText patch (including '') marks dirty; selection-only init stays pristine.
+    if (patch.createText !== undefined) next.createDirty = true;
+    this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [key]: next } });
   };
   loadDispute = async (disputeId: string) => {
     try { postgameId(disputeId); } catch { return; }
@@ -636,7 +650,16 @@ export class PostgameCoordinator {
             this.noteVersionFloor.set(noteKeyId, Math.max(this.noteVersionFloor.get(noteKeyId) ?? 0, receipt.version));
           }
           const known = { ...this.snapshot.knownNoteRefs, [noteKeyId]: { gameId: packet.gameId, contextId: packet.contextId } };
-          const notes = { ...this.snapshot.notes, [noteKeyId]: { status: 'loading' as const } };
+          // Retain accepted newer projection as display-only under loading — do not drop data and fall
+          // back to stale bounded myNotes while follow-up GET is pending/error. Writes stay typed-ready only.
+          const priorNote = this.snapshot.notes[noteKeyId];
+          const notes = {
+            ...this.snapshot.notes,
+            [noteKeyId]: {
+              status: 'loading' as const,
+              ...(priorNote?.data ? { data: priorNote.data } : {}),
+            },
+          };
           const createKey = packet.gameId;
           const editKey = noteKeyId;
           const noteDrafts = { ...this.snapshot.noteDrafts };

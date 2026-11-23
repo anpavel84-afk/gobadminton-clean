@@ -1159,6 +1159,55 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     ).rows[0]!.n;
     expect(tombstonedLive).toBe(0);
 
+    // Already-tombstoned success: NativeSession DELETE with cached expectedVersion=1 after
+    // owned note was edited+deleted to a higher tomb — returns current tomb without increment.
+    const revisionCount = async () =>
+      (
+        await pool.query<{ n: number }>(
+          `SELECT COUNT(*)::int AS n FROM game_personal_note_revisions r
+           JOIN game_personal_notes n ON n.id = r.note_id
+           WHERE n.author_user_id = $1 AND r.game_id = $2 AND r.context_id = $3`,
+          [secondary.userId, gameId, annaContext],
+        )
+      ).rows[0]!.n;
+    const rowCountBefore = await noteRows(secondary.userId, gameId, annaContext);
+    const revBefore = await revisionCount();
+    const tombVersion = deleted.json().version as number;
+    const staleExpectedKey = key();
+    const staleExpectedDelete = await nativeDel(
+      secondary,
+      `/v1/games/${gameId}/notes/${annaContext}`,
+      { expectedVersion: 1 },
+      staleExpectedKey,
+    );
+    expect(staleExpectedDelete.statusCode).toBe(200);
+    expect(staleExpectedDelete.json()).toEqual({
+      gameId,
+      contextId: annaContext,
+      version: tombVersion,
+      deleted: true,
+    });
+    expect(await noteRows(secondary.userId, gameId, annaContext)).toBe(rowCountBefore);
+    expect(await revisionCount()).toBe(revBefore);
+    const staleExpectedReplay = await nativeDel(
+      secondary,
+      `/v1/games/${gameId}/notes/${annaContext}`,
+      { expectedVersion: 1 },
+      staleExpectedKey,
+    );
+    expect(staleExpectedReplay.statusCode).toBe(200);
+    expect(staleExpectedReplay.json()).toEqual(staleExpectedDelete.json());
+    expect(await noteRows(secondary.userId, gameId, annaContext)).toBe(rowCountBefore);
+    expect(await revisionCount()).toBe(revBefore);
+    const liveAfterStale = (
+      await pool.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM game_personal_notes
+         WHERE author_user_id = $1 AND game_id = $2 AND context_id = $3 AND deleted_at IS NULL`,
+        [secondary.userId, gameId, annaContext],
+      )
+    ).rows[0]!.n;
+    expect(liveAfterStale).toBe(0);
+
     const publicResults = await get(anna, `/v1/games/${gameId}/results`);
     expect(publicResults.statusCode).toBe(200);
     expect(JSON.stringify(publicResults.json())).not.toContain("Native note");
