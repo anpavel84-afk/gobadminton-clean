@@ -435,15 +435,15 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
           {!summary.items.length ? <Label>Пока нет опубликованных отзывов.</Label> : null}
           {summary.items.map(item => {
             const draft = s.publicReplyDrafts[item.reviewHandle] ?? { text: '', consent: false };
-            const rowDisabled = threadBusy
-              || replyAckHandle === item.reviewHandle
-              || reportAckHandle === item.reviewHandle;
+            // Per-action receipt gates: reply ACK must not disable report, and vice versa.
+            // Active/UNKNOWN journal still serializes via threadBusy.
+            const replyDisabled = threadBusy || replyAckHandle === item.reviewHandle;
+            const reportDisabled = threadBusy || reportAckHandle === item.reviewHandle;
             const itemReportKey = `${item.reviewHandle}:${item.publishedRevision}`;
             const showReport = !!report
               && report.reviewHandle === item.reviewHandle
               && report.publishedRevision === item.publishedRevision
               && item.allowedActions.canReport;
-            const reportDisabled = threadBusy || reportAckHandle === item.reviewHandle;
             return <View
               key={item.reviewHandle}
               ref={node => {
@@ -474,8 +474,8 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                     else reportTriggerRefs.current.delete(itemReportKey);
                   }}
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: rowDisabled }}
-                  disabled={rowDisabled}
+                  accessibilityState={{ disabled: reportDisabled }}
+                  disabled={reportDisabled}
                   onPress={() => owner.beginPublicReport(item, s.actor, s.publicSurface!.gen)}
                   style={({ pressed }) => [{
                     alignSelf: 'flex-start' as const,
@@ -487,7 +487,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                     justifyContent: 'center' as const,
                     paddingHorizontal: 16,
                     paddingVertical: 12,
-                    opacity: rowDisabled ? 0.5 : 1,
+                    opacity: reportDisabled ? 0.5 : 1,
                   }]}
                 >
                   <Label style={{ fontWeight: '700', textAlign: 'left' }}>Сообщить о нарушении</Label>
@@ -550,7 +550,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
               {item.allowedActions.canReply ? <>
                 <Label>Ваш ответ</Label>
                 <TextInput
-                  editable={!rowDisabled}
+                  editable={!replyDisabled}
                   multiline
                   scrollEnabled
                   textAlignVertical="top"
@@ -562,7 +562,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                 />
                 <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
                   <Switch
-                    disabled={rowDisabled}
+                    disabled={replyDisabled}
                     accessibilityLabel="Публикую ответ от своего имени по этой роли"
                     value={draft.consent}
                     onValueChange={consent => owner.patchPublicReplyDraft(item.reviewHandle, { consent })}
@@ -571,7 +571,7 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
                 </View>
                 <PrimaryButton
                   title="Отправить ответ"
-                  disabled={rowDisabled || !draft.text.trim()}
+                  disabled={replyDisabled || !draft.text.trim()}
                   onPress={() => {
                     Keyboard.dismiss();
                     void owner.submitPublicReply(item.reviewHandle, s.actor, s.publicSurface!.gen);

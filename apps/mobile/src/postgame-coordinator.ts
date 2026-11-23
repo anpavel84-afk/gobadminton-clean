@@ -159,8 +159,14 @@ type Snapshot = {
   publicReportDraft: PublicRoleReportDraft | null;
   publicConsentHash: string | null;
   publicReceipt: PublicRoleMutationReceipt | null;
-  /** Painted reply ACK bound to the owning reviewHandle — never freezes other rows. */
-  publicReplyReceipt: (PublicRoleReplyReceipt & { reviewHandle: string }) | null;
+  /**
+   * Painted reply ACK bound to owning reviewHandle + original packet expectedReviewRevision —
+   * never freezes other rows or a newer published review revision.
+   */
+  publicReplyReceipt: (PublicRoleReplyReceipt & {
+    reviewHandle: string;
+    expectedReviewRevision: number;
+  }) | null;
   /** Painted report ACK bound to the owning reviewHandle — never freezes other rows. */
   publicReportReceipt: (PublicRoleReportReceipt & { reviewHandle: string }) | null;
   publicNotice: string | null;
@@ -1456,10 +1462,16 @@ export class PostgameCoordinator {
       }
       if (retireConsentAuthority) this.publicPreviewGen++;
       const paintedReply = this.snapshot.publicReplyReceipt;
-      const retireReplyReceipt = !!paintedReply && items.some(item =>
-        item.reviewHandle === paintedReply.reviewHandle
-        && (item.replyAggregateVersion > paintedReply.version
-          || (item.subjectOwnReply?.version ?? 0) > paintedReply.version),
+      // Retire when handle leaves the page, published revision moves (even if aggregate unchanged),
+      // or typed reply aggregate/tip advances past the painted ACK.
+      const retireReplyReceipt = !!paintedReply && (
+        !items.some(i => i.reviewHandle === paintedReply.reviewHandle)
+        || items.some(item =>
+          item.reviewHandle === paintedReply.reviewHandle
+          && (item.publishedRevision !== paintedReply.expectedReviewRevision
+            || item.replyAggregateVersion > paintedReply.version
+            || (item.subjectOwnReply?.version ?? 0) > paintedReply.version),
+        )
       );
       const paintedReport = this.snapshot.publicReportReceipt;
       const keepReplyNotice = preserveNotice && priorNotice === 'Ответ принят.';
@@ -2436,23 +2448,34 @@ export class PostgameCoordinator {
         const replyReceipt = parsePublicRoleReplyReceipt(receipt);
         const paintUi = this.publicMutationUiCurrent(packet);
         this.publicMutationBind = null;
-        const drafts = { ...this.snapshot.publicReplyDrafts };
-        delete drafts[packet.reviewHandle];
         const floorBefore = this.publicReaderReplyFloor.get(packet.reviewHandle) ?? 0;
         const typed = this.currentReaderItem(packet.reviewHandle) ?? undefined;
-        const paint = paintUi && mayPaintPublicReplyReceipt(replyReceipt, typed, floorBefore);
+        const expectedReviewRevision = packet.body.expectedReviewRevision;
+        const paint = paintUi && mayPaintPublicReplyReceipt(
+          replyReceipt,
+          typed,
+          floorBefore,
+          expectedReviewRevision,
+        );
         this.publicReaderReplyFloor.set(
           packet.reviewHandle,
           Math.max(floorBefore, replyReceipt.version),
         );
         // ACK is intake acknowledgement only — never insert public reply text from ACK.
-        // Late older ACK still settles the journal but must not paint over newer typed aggregate.
+        // Late older ACK still settles the journal but must not paint over newer typed aggregate
+        // or a newer published revision, and must not erase that revision's draft/consent/context.
+        const drafts = { ...this.snapshot.publicReplyDrafts };
+        if (paint) delete drafts[packet.reviewHandle];
         this.show({
           command: null,
-          publicReplyDrafts: drafts,
-          publicConsentHash: null,
           ...(paint ? {
-            publicReplyReceipt: { ...replyReceipt, reviewHandle: packet.reviewHandle },
+            publicReplyDrafts: drafts,
+            publicConsentHash: null,
+            publicReplyReceipt: {
+              ...replyReceipt,
+              reviewHandle: packet.reviewHandle,
+              expectedReviewRevision,
+            },
             publicNotice: 'Ответ принят.',
           } : {}),
         });

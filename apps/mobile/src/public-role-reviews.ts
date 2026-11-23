@@ -749,15 +749,24 @@ export function mergeActorAwareReaderItem<T extends {
   };
 }
 
-/** Late reply ACK may settle the journal but must not paint over a newer typed aggregate. */
+/**
+ * Late reply ACK may settle the journal but must not paint over a newer typed aggregate
+ * or a different published review revision than the original packet expected.
+ */
 export function mayPaintPublicReplyReceipt(
   receipt: { version: number },
-  typed: { replyAggregateVersion: number; subjectOwnReply: { version: number } | null } | undefined,
+  typed: {
+    replyAggregateVersion: number;
+    publishedRevision: number;
+    subjectOwnReply: { version: number } | null;
+  } | undefined,
   floorBeforeReceipt: number,
+  expectedReviewRevision: number,
 ): boolean {
   if (receipt.version < floorBeforeReceipt) return false;
-  if (typed && typed.replyAggregateVersion > receipt.version) return false;
-  if (typed?.subjectOwnReply && typed.subjectOwnReply.version > receipt.version) return false;
+  if (!typed || typed.publishedRevision !== expectedReviewRevision) return false;
+  if (typed.replyAggregateVersion > receipt.version) return false;
+  if (typed.subjectOwnReply && typed.subjectOwnReply.version > receipt.version) return false;
   return true;
 }
 
