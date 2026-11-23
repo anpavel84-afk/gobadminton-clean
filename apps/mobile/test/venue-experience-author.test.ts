@@ -7,11 +7,13 @@ import { PostgameError } from '../src/postgame.ts';
 import {
   VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS,
   buildVenueExperienceCreateBody,
+  captureVenueExperienceRouteOwner,
   emptyVenueExperienceDraft,
   exactGameMaySubmitBasis,
   isVenueExperienceCreatePacket,
   isVenueExperienceCreateReceipt,
   isVenueExperiencePacketKind,
+  noteVenueExperienceRouteOwner,
   parseOwnVenueEligibility,
   parseVenueConsentPreview,
   parseVenueReviewMutationReceipt,
@@ -649,16 +651,19 @@ test('#522 address7 P3: stale submit eligibility cannot overwrite newer load or 
   const submitGate = new Promise<void>(r => { releaseSubmitElig = r; });
   let eligCalls = 0;
   let noticeMarker = '';
+  const eligByCall: Array<'allow' | 'deny' | undefined> = [];
   const owner = new PostgameCoordinator({
     ...idlePort({
       venueExperienceEligibility: async () => {
-        eligCalls += 1;
-        // 1 = open, 2 = submit prepare (deferred), 3 = newer load deny.
-        if (eligCalls === 2) await submitGate;
-        if (eligCalls >= 3) {
+        // Per-call ordinal — after newer deny starts, deferred call 2 must still be original allow.
+        const call = ++eligCalls;
+        if (call === 2) await submitGate;
+        if (call >= 3) {
           noticeMarker = 'deny-painted';
+          eligByCall[call] = 'deny';
           return eligibilityBody('deny');
         }
+        eligByCall[call] = 'allow';
         return eligibilityBody();
       },
       send: async (packet) => {
@@ -692,6 +697,8 @@ test('#522 address7 P3: stale submit eligibility cannot overwrite newer load or 
   releaseSubmitElig();
   await pending;
   await tick();
+  assert.equal(eligByCall[2], 'allow');
+  assert.equal(eligByCall[3], 'deny');
   assert.equal(keys.length, 0);
   assert.equal(owner.getSnapshot().command, null);
   assert.equal(exactGameMaySubmitBasis(owner.getSnapshot().venueEligibility.data!, gameId), null);
@@ -726,6 +733,196 @@ test('#522 address7 P3: stale submit eligibility cannot overwrite newer load or 
   await openPending;
   await tick();
   assert.equal(exactGameMaySubmitBasis(ordered.getSnapshot().venueEligibility.data!, gameId)?.admission, 'may_submit');
+
+  // Changed-version: deferred original v1 allow after newer v2 must not repaint or POST.
+  const versionKeys: string[] = [];
+  let releaseVersionSubmit!: () => void;
+  const versionGate = new Promise<void>(r => { releaseVersionSubmit = r; });
+  let versionCalls = 0;
+  const versioned = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        const call = ++versionCalls;
+        if (call === 2) await versionGate;
+        if (call >= 3) {
+          const body = eligibilityBody();
+          return {
+            bases: [{ ...body.bases[0]!, outcomeVersion: 2, attendanceVersion: 3 }],
+          };
+        }
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        versionKeys.push(packet.key);
+        return {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 1,
+          status: 'self_draft',
+          reviewHandle: 'e'.repeat(32),
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `ver-${versionKeys.length + 1}`);
+  versioned.setActor(actor);
+  versioned.openVenueExperience(gameId, venueId);
+  await tick();
+  versioned.patchVenueDraft({ text: 'Текст при смене версий', topics: ['lighting'] });
+  const versionPending = versioned.submitVenueExperience();
+  await tick();
+  await versioned.loadVenueEligibility();
+  await tick();
+  const v2 = venueExperienceBasisAuthority(versioned.getSnapshot().venueEligibility.data!, gameId);
+  assert.ok(v2);
+  assert.match(v2, /\u00012\u00013\u0001/);
+  releaseVersionSubmit();
+  await versionPending;
+  await tick();
+  assert.equal(versionKeys.length, 0);
+  assert.equal(versioned.getSnapshot().command, null);
+  assert.equal(venueExperienceBasisAuthority(versioned.getSnapshot().venueEligibility.data!, gameId), v2);
+  assert.equal(exactGameMaySubmitBasis(versioned.getSnapshot().venueEligibility.data!, gameId)?.outcomeVersion, 2);
+});
+
+test('#522 address8: production route lifecycle capture retires THIS owner only', async () => {
+  const keys: string[] = [];
+  let releaseElig!: () => void;
+  const eligGate = new Promise<void>(r => { releaseElig = r; });
+  let eligCalls = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        const call = ++eligCalls;
+        if (call >= 2) await eligGate;
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        return {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 1,
+          status: 'self_draft',
+          reviewHandle: 'e'.repeat(32),
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `life-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  // Focused route with no surface yet — capture stays null (no retire on ordinary idle).
+  let owned = noteVenueExperienceRouteOwner(
+    null,
+    captureVenueExperienceRouteOwner({
+      gameId,
+      actor: owner.getSnapshot().actor,
+      surface: owner.getSnapshot().venueExperience,
+    }),
+  );
+  assert.equal(owned, null);
+
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  // Open after initial focus — capture THIS lifetime owner (not a later live snapshot).
+  owned = noteVenueExperienceRouteOwner(
+    owned,
+    captureVenueExperienceRouteOwner({
+      gameId,
+      actor: owner.getSnapshot().actor,
+      surface: owner.getSnapshot().venueExperience,
+    }),
+  );
+  assert.ok(owned);
+  assert.equal(owned!.gen, owner.getSnapshot().venueExperience!.gen);
+  owner.patchVenueDraft({ text: 'Текст до ухода с маршрута', topics: ['surface'] });
+  const departedGen = owned!.gen;
+  const pending = owner.submitVenueExperience();
+  await tick();
+
+  // Departure cleanup uses captured owner — retires pending fresh prepare.
+  owner.retireVenueExperienceSurface(owned!);
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  releaseElig();
+  await pending;
+  await tick();
+  assert.equal(keys.length, 0);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // Deliberate reopen within a new focused lifetime — capture advances to newer gen.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  const newerOwned = noteVenueExperienceRouteOwner(
+    null,
+    captureVenueExperienceRouteOwner({
+      gameId,
+      actor: owner.getSnapshot().actor,
+      surface: owner.getSnapshot().venueExperience,
+    }),
+  );
+  assert.ok(newerOwned);
+  assert.notEqual(newerOwned!.gen, departedGen);
+  owner.patchVenueDraft({ text: 'Новая поверхность', topics: ['lighting'] });
+
+  // Stale cleanup for the OLD captured owner must not close the newer same-game surface.
+  // (Bug was cleanup reading live getSnapshot gen — which would wrongly equal newerOwned.gen.)
+  const liveAtStaleCleanup = owner.getSnapshot().venueExperience!;
+  assert.equal(liveAtStaleCleanup.gen, newerOwned!.gen);
+  assert.notEqual(owned!.gen, liveAtStaleCleanup.gen);
+  owner.retireVenueExperienceSurface(owned!);
+  assert.equal(owner.getSnapshot().venueExperience?.gen, newerOwned!.gen);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Новая поверхность');
+
+  // Close + reopen within same focused route: note keeps prior until next capture, then advances.
+  const beforeClose = newerOwned!;
+  owner.closeVenueExperience();
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  const afterClose = noteVenueExperienceRouteOwner(
+    beforeClose,
+    captureVenueExperienceRouteOwner({
+      gameId,
+      actor: owner.getSnapshot().actor,
+      surface: owner.getSnapshot().venueExperience,
+    }),
+  );
+  assert.equal(afterClose?.gen, beforeClose.gen);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  const reopened = noteVenueExperienceRouteOwner(
+    afterClose,
+    captureVenueExperienceRouteOwner({
+      gameId,
+      actor: owner.getSnapshot().actor,
+      surface: owner.getSnapshot().venueExperience,
+    }),
+  );
+  assert.ok(reopened);
+  assert.notEqual(reopened!.gen, beforeClose.gen);
+
+  // Actor replacement: stale prior capture must not retire the restored actor's surface.
+  const other = {
+    actorId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    generation: 2,
+  };
+  owner.setActor(other);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  const otherOwned = captureVenueExperienceRouteOwner({
+    gameId,
+    actor: owner.getSnapshot().actor,
+    surface: owner.getSnapshot().venueExperience,
+  });
+  assert.ok(otherOwned);
+  assert.equal(otherOwned!.actorId, other.actorId);
+  owner.retireVenueExperienceSurface(reopened!);
+  assert.equal(owner.getSnapshot().venueExperience?.gen, otherOwned!.gen);
+  owner.retireVenueExperienceSurface(otherOwned!);
+  assert.equal(owner.getSnapshot().venueExperience, null);
+  assert.equal(keys.length, 0);
 });
 
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
@@ -754,6 +951,12 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(composer, /useFocusEffect/);
   assert.match(composer, /retireVenueExperienceSurface/);
   assert.match(composer, /routeFocused/);
+  assert.match(composer, /ownedRouteRef/);
+  assert.match(composer, /captureVenueExperienceRouteOwner/);
+  assert.match(composer, /noteVenueExperienceRouteOwner/);
+  // Cleanup must retire the captured owner — not rebuild expected from a live getSnapshot surface.
+  assert.match(composer, /const expected = ownedRouteRef\.current/);
+  assert.doesNotMatch(composer, /return \(\) => \{[\s\S]*getSnapshot\(\)[\s\S]*retireVenueExperienceSurface/);
   assert.doesNotMatch(composer, /Публичный отзыв не виден/);
 
   const postgameUi = read('../src/components/postgame.tsx');
@@ -767,6 +970,8 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(helpers, /venueExperienceReceiptSummary/);
   assert.match(helpers, /venueEligibilityReasonCopy/);
   assert.match(helpers, /venueExperienceBasisAuthority/);
+  assert.match(helpers, /captureVenueExperienceRouteOwner/);
+  assert.match(helpers, /noteVenueExperienceRouteOwner/);
   assert.match(helpers, /isVenueExperienceCreatePacket/);
   assert.match(helpers, /new Map/);
   assert.doesNotMatch(helpers, /Причина: \$\{basis\.reason\}/);

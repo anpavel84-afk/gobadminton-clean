@@ -422,6 +422,46 @@ export function venueExperienceReceiptSummary(
   };
 }
 
+/** Immutable owner for one focused VenueExperienceEntry route lifetime. */
+export type VenueExperienceRouteOwner = {
+  gen: number;
+  gameId: string;
+  venueId: string;
+  actorId: string;
+  sessionId: string;
+};
+
+/**
+ * Capture THIS route's owned surface when live actor+surface match the Entry game.
+ * Blur/unmount cleanup must retire this capture — never rebuild expected from a later getSnapshot().
+ */
+export function captureVenueExperienceRouteOwner(args: {
+  gameId: string;
+  actor: { actorId: string; sessionId: string } | null | undefined;
+  surface: { gen: number; gameId: string; venueId: string } | null | undefined;
+}): VenueExperienceRouteOwner | null {
+  const { gameId, actor, surface } = args;
+  if (!actor || !surface || surface.gameId !== gameId) return null;
+  return {
+    gen: surface.gen,
+    gameId: surface.gameId,
+    venueId: surface.venueId,
+    actorId: actor.actorId,
+    sessionId: actor.sessionId,
+  };
+}
+
+/**
+ * While the route stays focused, remember the latest matching owner (open after focus / reopen).
+ * A null next leaves the prior capture unchanged — ordinary close does not clear departure debt.
+ */
+export function noteVenueExperienceRouteOwner(
+  prior: VenueExperienceRouteOwner | null,
+  next: VenueExperienceRouteOwner | null,
+): VenueExperienceRouteOwner | null {
+  return next ?? prior;
+}
+
 export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experience-create' {
   return kind === 'venue-experience-create';
 }

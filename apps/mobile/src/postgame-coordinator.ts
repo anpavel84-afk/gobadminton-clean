@@ -2650,7 +2650,8 @@ export class PostgameCoordinator {
     });
   };
   /**
-   * Route blur/unmount retirement — only the captured surface gen + actor/game/venue owner.
+   * Route blur/unmount retirement — only the Entry-captured surface gen + actor/game/venue owner
+   * (immutable lifetime owner from focus/open — never a fresh getSnapshot() expected at cleanup).
    * Preserves already-dispatched sending/UNKNOWN packet/key/body/age/lock. No autosend on reopen.
    * Stale cleanup must not close a newer same-game surface or another actor.
    */

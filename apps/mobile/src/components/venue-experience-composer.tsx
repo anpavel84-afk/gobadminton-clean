@@ -5,14 +5,17 @@ import { useAuth } from '../auth.tsx';
 import {
   TOPIC_LABEL,
   VENUE_TOPIC_OPTIONS,
+  captureVenueExperienceRouteOwner,
   exactGameMaySubmitBasis,
   isVenueExperienceCreatePacket,
   isVenueExperiencePacketKind,
+  noteVenueExperienceRouteOwner,
   postgameIdempotencyReplayBlocked,
   venueExperienceReceiptSummary,
   venueReviewEligibilityHelp,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   type VenueAudience,
+  type VenueExperienceRouteOwner,
   type VenueReviewTopic,
 } from '../venue-reviews.ts';
 import { Choice, FocusContext } from './postgame.tsx';
@@ -359,6 +362,8 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
   const actorKey = current && s.actor ? `${s.actor.actorId}:${s.actor.sessionId}` : null;
   /** Route still focused — return-focus must not target a blurred/departed results screen. */
   const routeFocused = useRef(false);
+  /** Immutable owner for THIS focused route lifetime — cleanup must not read live gen/actor. */
+  const ownedRouteRef = useRef<VenueExperienceRouteOwner | null>(null);
 
   useEffect(() => {
     if (!current || !liveVenueId || results?.status !== 'ready') return;
@@ -367,22 +372,37 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     owner.probeVenueEligibility(gameId, liveVenueId);
   }, [current, liveVenueId, results?.status, results?.data, owner, gameId, pendingCommand]);
 
-  // Route blur (kept-mounted) + unmount: retire only this Entry's captured venue surface/prepare.
+  // While focused, remember latest matching surface (open after focus / close+reopen); no retire here.
+  useEffect(() => {
+    if (!routeFocused.current) return;
+    ownedRouteRef.current = noteVenueExperienceRouteOwner(
+      ownedRouteRef.current,
+      captureVenueExperienceRouteOwner({
+        gameId,
+        actor: current ? s.actor : null,
+        surface: s.venueExperience,
+      }),
+    );
+  }, [current, s.actor, s.venueExperience, gameId]);
+
+  // Route blur (kept-mounted) + unmount: retire only THIS Entry's captured owner — never live snapshot.
   useFocusEffect(useCallback(() => {
     routeFocused.current = true;
+    const snap = owner.getSnapshot();
+    ownedRouteRef.current = noteVenueExperienceRouteOwner(
+      ownedRouteRef.current,
+      captureVenueExperienceRouteOwner({
+        gameId,
+        actor: snap.actor,
+        surface: snap.venueExperience,
+      }),
+    );
     return () => {
       routeFocused.current = false;
-      const snap = owner.getSnapshot();
-      const surface = snap.venueExperience;
-      const act = snap.actor;
-      if (!surface || !act || surface.gameId !== gameId) return;
-      owner.retireVenueExperienceSurface({
-        gen: surface.gen,
-        gameId: surface.gameId,
-        venueId: surface.venueId,
-        actorId: act.actorId,
-        sessionId: act.sessionId,
-      });
+      const expected = ownedRouteRef.current;
+      ownedRouteRef.current = null;
+      if (!expected) return;
+      owner.retireVenueExperienceSurface(expected);
     };
   }, [owner, gameId]));
 
