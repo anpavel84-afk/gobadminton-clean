@@ -904,3 +904,106 @@ test('fresh never-owned GET404 refresh: loading blocks create0; error rejects; r
   assert.equal(s.sent.length, 1);
   assert.equal((s.sent[0]!.body as { expectedVersion: number }).expectedVersion, 7);
 });
+
+test('stale deferred GET404/network must not tombstone or downgrade newer results-owned note; current 404 still hides', async () => {
+  const key = `${game.id}:${contextB}`;
+  const ownedV1: PersonalNote = {
+    gameId: game.id, contextId: contextB, subjectDisplay: 'Илья', text: 'web-created-v1',
+    version: 1, updatedAt: date, allowedActions: { canEdit: true, canDelete: true },
+  };
+  let failOlder!: (error: PostgameError) => void;
+  const olderGate = new Promise<PersonalNote>((_, reject) => { failOlder = reject; });
+  let releaseResults!: (value: Results) => void;
+  const resultsGate = new Promise<Results>((resolve) => { releaseResults = resolve; });
+  const sent: Packet[] = [];
+  const port = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async () => resultsGate,
+    note: async () => olderGate,
+    send: async (p: Packet): Promise<unknown> => {
+      sent.push(p);
+      if (p.kind === 'note-upsert') {
+        return {
+          gameId: p.gameId, contextId: p.contextId, subjectDisplay: 'Илья',
+          text: p.body.text, version: p.body.expectedVersion + 1, updatedAt: date,
+          allowedActions: { canEdit: true, canDelete: true },
+        };
+      }
+      throw new PostgameError('invalid');
+    },
+  };
+  const c = new PostgameCoordinator(port, () => `key-${sent.length}`);
+  c.setActor(actor);
+
+  // Initial unowned contextB: older direct GET begins (will 404) before external web create.
+  const older404 = c.loadNote(game.id, contextB);
+  assert.equal(c.getSnapshot().notes[key]?.status, 'loading');
+
+  // Newer results returns own note1 after that GET started; apply ready authority.
+  const newerResults = c.loadResults(game.id);
+  releaseResults({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [ownedV1] },
+  });
+  await newerResults;
+  assert.equal(c.getSnapshot().notes[key]?.status, 'ready');
+  assert.equal(c.getSnapshot().notes[key]?.data?.version, 1);
+  assert.equal(c.getSnapshot().notes[key]?.data?.text, 'web-created-v1');
+  assert.equal(c.getSnapshot().notes[key]?.data?.allowedActions.canEdit, true);
+  assert.equal(c.getSnapshot().notes[key]?.data?.allowedActions.canDelete, true);
+
+  // Late older private404 must not tombstone/hide the newer owned projection; create0 stays blocked.
+  failOlder(new PostgameError('private', 404));
+  await older404;
+  assert.equal(c.getSnapshot().notes[key]?.status, 'ready');
+  assert.equal(c.getSnapshot().notes[key]?.data?.version, 1);
+  assert.equal(c.getSnapshot().notes[key]?.data?.text, 'web-created-v1');
+  assert.equal(c.getSnapshot().notes[key]?.data?.allowedActions.canEdit, true);
+  assert.equal(c.getSnapshot().notes[key]?.data?.allowedActions.canDelete, true);
+  assert.ok(c.getSnapshot().knownNoteRefs[key]);
+  c.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'stale-create0' } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'late 404 must not unlock create0 over ready owned note');
+
+  // Same race with older network error: must not downgrade ready rights.
+  // Actor logout/rebind clears applied gens; protections stay on the new session.
+  let failNet!: (error: PostgameError) => void;
+  const netGate = new Promise<PersonalNote>((_, reject) => { failNet = reject; });
+  let releaseResults2!: (value: Results) => void;
+  const resultsGate2 = new Promise<Results>((resolve) => { releaseResults2 = resolve; });
+  port.note = async () => netGate;
+  port.results = async () => resultsGate2;
+  c.setActor(null);
+  c.setActor({ ...actor, sessionId: 'session-net-race', generation: 2 });
+  assert.deepEqual(c.getSnapshot().notes, {});
+  const olderNet = c.loadNote(game.id, contextB);
+  const newerResults2 = c.loadResults(game.id);
+  releaseResults2({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [ownedV1] },
+  });
+  await newerResults2;
+  assert.equal(c.getSnapshot().notes[key]?.status, 'ready');
+  failNet(new PostgameError('network', 503));
+  await olderNet;
+  assert.equal(c.getSnapshot().notes[key]?.status, 'ready', 'late network must not downgrade ready');
+  assert.equal(c.getSnapshot().notes[key]?.data?.version, 1);
+  assert.equal(c.getSnapshot().notes[key]?.data?.text, 'web-created-v1');
+  assert.equal(c.getSnapshot().notes[key]?.data?.allowedActions.canEdit, true);
+  c.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 1, text: 'edit after late net' } });
+  assert.equal(c.getSnapshot().review?.kind, 'note-upsert', 'ready rights preserved after late network');
+  c.cancelReview();
+  assert.equal(sent.length, 0);
+
+  // Genuinely current private404 of known own note still shadows/clears and tombstones.
+  port.note = async () => { throw new PostgameError('private', 404); };
+  await c.loadNote(game.id, contextB);
+  assert.equal(c.getSnapshot().notes[key]?.status, 'unavailable');
+  assert.equal(c.getSnapshot().knownNoteRefs[key], undefined);
+  assert.equal(c.getSnapshot().notes[key]?.data, undefined);
+  c.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'after current 404' } });
+  await c.confirm();
+  assert.equal(sent.length, 0, 'current known-note 404 must not unlock create0');
+});

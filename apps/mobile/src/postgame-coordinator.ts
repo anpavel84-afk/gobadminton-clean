@@ -400,6 +400,10 @@ export class PostgameCoordinator {
       }
     } catch (error) {
       if (!valid()) return;
+      // Stale negative fence: newer results/direct already accepted after this GET started.
+      // Late older private404 must not tombstone that projection; late network must not downgrade ready rights.
+      const applied = this.noteAppliedGen.get(key) ?? 0;
+      if (noteGen < applied) return;
       const denied = error instanceof PostgameError && error.kind === 'private';
       const current = this.snapshot.notes[key] ?? old;
       const known = !!this.snapshot.knownNoteRefs[key] || this.noteTombs.has(key) || !!current.data || !!old.data;
