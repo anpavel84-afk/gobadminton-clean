@@ -16,6 +16,7 @@ import {
   parseVenueConsentPreview,
   parseVenueReviewMutationReceipt,
   venueEligibilityReasonCopy,
+  venueExperienceBasisAuthority,
   venueExperienceIdempotencyExpired,
   venueExperienceReceiptSummary,
   venueReviewEligibilityHelp,
@@ -491,6 +492,242 @@ test('private vs public receipt summary + closed eligibility reason copy', () =>
   assert.doesNotMatch(unknownHelp ?? '', /weird_raw_code/);
 });
 
+test('#522 address7 P1: deferred eligibility → route retire → zeroPOST; stale cleanup spares newer surface', async () => {
+  const keys: string[] = [];
+  let releaseElig!: () => void;
+  const eligGate = new Promise<void>(r => { releaseElig = r; });
+  let eligCalls = 0;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        eligCalls += 1;
+        // Open resolves immediately; submit prepare eligibility waits across departure.
+        if (eligCalls >= 2) await eligGate;
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        return {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 1,
+          status: 'self_draft',
+          reviewHandle: 'e'.repeat(32),
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `depart-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ text: 'Текст до ухода с маршрута', topics: ['surface'] });
+  const departedGen = owner.getSnapshot().venueExperience!.gen;
+  const pending = owner.submitVenueExperience();
+  await tick();
+  assert.equal(!!owner.getSnapshot().venueExperience, true);
+
+  owner.retireVenueExperienceSurface({
+    gen: departedGen,
+    gameId,
+    venueId,
+    actorId: actor.actorId,
+    sessionId: actor.sessionId,
+  });
+  assert.equal(owner.getSnapshot().venueExperience, null);
+
+  releaseElig();
+  await pending;
+  await tick();
+  assert.equal(keys.length, 0);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // Deliberate same-origin reopen after departure — no autosend.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  const newerGen = owner.getSnapshot().venueExperience!.gen;
+  assert.notEqual(newerGen, departedGen);
+  owner.patchVenueDraft({ text: 'Новая поверхность после возврата', topics: ['lighting'] });
+
+  // Stale blur cleanup for the old gen must not close the newer surface.
+  owner.retireVenueExperienceSurface({
+    gen: departedGen,
+    gameId,
+    venueId,
+    actorId: actor.actorId,
+    sessionId: actor.sessionId,
+  });
+  assert.equal(owner.getSnapshot().venueExperience?.gen, newerGen);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Новая поверхность после возврата');
+  assert.equal(keys.length, 0);
+});
+
+test('#522 address7 P2: basis authority change invalidates consent; deferred preview cannot restore', async () => {
+  let eligMode: 'v1' | 'v2' | 'deny' | 'missing' = 'v1';
+  let deferPreview = false;
+  let releasePreview!: () => void;
+  const previewGate = new Promise<void>(r => { releasePreview = r; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        if (eligMode === 'missing') return { bases: [] };
+        if (eligMode === 'deny') return eligibilityBody('deny');
+        if (eligMode === 'v2') {
+          const body = eligibilityBody();
+          return {
+            bases: [{ ...body.bases[0]!, outcomeVersion: 2, attendanceVersion: 3 }],
+          };
+        }
+        return eligibilityBody();
+      },
+      venueExperienceConsentPreview: async () => {
+        if (deferPreview) await previewGate;
+        return { consentProjectionHash: 'c'.repeat(64), authorLabel: 'Участник игры' };
+      },
+      send: async () => {
+        throw new Error('zeroPOST expected');
+      },
+    }),
+  }, () => 'consent-auth');
+
+  owner.setActor(actor);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ audience: 'public_venue', text: 'Публичный текст согласия', topics: ['surface'] });
+  await owner.ensureVenueConsentPreview();
+  assert.equal(owner.getSnapshot().venueDraft?.consent, true);
+  assert.equal(owner.getSnapshot().venueConsentHash, 'c'.repeat(64));
+  const v1 = venueExperienceBasisAuthority(owner.getSnapshot().venueEligibility.data!, gameId);
+  assert.ok(v1);
+
+  eligMode = 'v2';
+  await owner.loadVenueEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Публичный текст согласия');
+  assert.equal(owner.getSnapshot().venueDraft?.audience, 'public_venue');
+  assert.equal(owner.getSnapshot().venueDraft?.topics?.join(','), 'surface');
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  const v2 = venueExperienceBasisAuthority(owner.getSnapshot().venueEligibility.data!, gameId);
+  assert.notEqual(v2, v1);
+
+  // Deferred preview started before deny reread must not restore hash/consent afterward.
+  deferPreview = true;
+  owner.patchVenueDraft({ audience: 'public_venue', text: 'Публичный текст согласия', topics: ['surface'] });
+  const stalePreview = owner.ensureVenueConsentPreview();
+  await tick();
+  eligMode = 'deny';
+  await owner.loadVenueEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  releasePreview();
+  await stalePreview;
+  await tick();
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Публичный текст согласия');
+  assert.equal(exactGameMaySubmitBasis(owner.getSnapshot().venueEligibility.data!, gameId), null);
+
+  eligMode = 'missing';
+  await owner.loadVenueEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().venueDraft?.consent, false);
+  assert.equal(owner.getSnapshot().venueConsentHash, null);
+  assert.equal(venueExperienceBasisAuthority(owner.getSnapshot().venueEligibility.data!, gameId), null);
+
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+});
+
+test('#522 address7 P3: stale submit eligibility cannot overwrite newer load or POST', async () => {
+  const keys: string[] = [];
+  let releaseSubmitElig!: () => void;
+  const submitGate = new Promise<void>(r => { releaseSubmitElig = r; });
+  let eligCalls = 0;
+  let noticeMarker = '';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        eligCalls += 1;
+        // 1 = open, 2 = submit prepare (deferred), 3 = newer load deny.
+        if (eligCalls === 2) await submitGate;
+        if (eligCalls >= 3) {
+          noticeMarker = 'deny-painted';
+          return eligibilityBody('deny');
+        }
+        return eligibilityBody();
+      },
+      send: async (packet) => {
+        keys.push(packet.key);
+        return {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 1,
+          status: 'self_draft',
+          reviewHandle: 'e'.repeat(32),
+          receiptToken: null,
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `fence-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ text: 'Текст при гонке допуска', topics: ['surface'] });
+  const pending = owner.submitVenueExperience();
+  await tick();
+
+  await owner.loadVenueEligibility();
+  await tick();
+  assert.equal(exactGameMaySubmitBasis(owner.getSnapshot().venueEligibility.data!, gameId), null);
+  assert.equal(noticeMarker, 'deny-painted');
+  const denyNotice = owner.getSnapshot().venueNotice;
+
+  releaseSubmitElig();
+  await pending;
+  await tick();
+  assert.equal(keys.length, 0);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(exactGameMaySubmitBasis(owner.getSnapshot().venueEligibility.data!, gameId), null);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Текст при гонке допуска');
+  assert.equal(owner.getSnapshot().venueNotice, denyNotice);
+
+  // Older ordinary load resolving after the latest submit/current read must not repaint authority.
+  let releaseOldLoad!: () => void;
+  const oldGate = new Promise<void>(r => { releaseOldLoad = r; });
+  let loadPhase: 'hold-old' | 'allow-new' = 'hold-old';
+  const ordered = new PostgameCoordinator({
+    ...idlePort({
+      venueExperienceEligibility: async () => {
+        if (loadPhase === 'hold-old') {
+          await oldGate;
+          return eligibilityBody('hold');
+        }
+        return eligibilityBody();
+      },
+    }),
+  }, () => 'order');
+  ordered.setActor(actor);
+  ordered.openVenueExperience(gameId, venueId);
+  // First open load is held; start it then supersede with a newer allow read.
+  const openPending = ordered.loadVenueEligibility();
+  await tick();
+  loadPhase = 'allow-new';
+  await ordered.loadVenueEligibility();
+  await tick();
+  assert.equal(exactGameMaySubmitBasis(ordered.getSnapshot().venueEligibility.data!, gameId)?.admission, 'may_submit');
+  releaseOldLoad();
+  await openPending;
+  await tick();
+  assert.equal(exactGameMaySubmitBasis(ordered.getSnapshot().venueEligibility.data!, gameId)?.admission, 'may_submit');
+});
+
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const results = read('../app/my-games/[gameId]/results.tsx');
   assert.match(results, /VenueExperienceEntry/);
@@ -514,6 +751,9 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(composer, /FocusContext/);
   assert.match(composer, /openerRef|liveRef/);
   assert.match(composer, /requestAnimationFrame/);
+  assert.match(composer, /useFocusEffect/);
+  assert.match(composer, /retireVenueExperienceSurface/);
+  assert.match(composer, /routeFocused/);
   assert.doesNotMatch(composer, /Публичный отзыв не виден/);
 
   const postgameUi = read('../src/components/postgame.tsx');
@@ -526,6 +766,7 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(helpers, /Ранее опубликованная версия может оставаться видимой|Более ранняя опубликованная версия может оставаться видимой/);
   assert.match(helpers, /venueExperienceReceiptSummary/);
   assert.match(helpers, /venueEligibilityReasonCopy/);
+  assert.match(helpers, /venueExperienceBasisAuthority/);
   assert.match(helpers, /isVenueExperienceCreatePacket/);
   assert.match(helpers, /new Map/);
   assert.doesNotMatch(helpers, /Причина: \$\{basis\.reason\}/);
@@ -537,6 +778,10 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(coordinator, /reconcileVenueExperience/);
   assert.match(coordinator, /postgameIdempotencyReplayBlocked|VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS|venueExperienceIdempotencyExpired/);
   assert.match(coordinator, /writePrepare|beginWritePrepare/);
+  assert.match(coordinator, /retireVenueExperienceSurface/);
+  assert.match(coordinator, /retireVenueConsentAuthority/);
+  assert.match(coordinator, /venueExperienceBasisAuthority/);
+  assert.match(coordinator, /eligibilityRequest/);
   assert.match(coordinator, /mayDispatchRetention|dispatchPermit/);
   assert.match(coordinator, /Receipt card owns success copy|venueNotice: null/);
 

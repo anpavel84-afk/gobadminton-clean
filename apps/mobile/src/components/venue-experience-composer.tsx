@@ -1,5 +1,6 @@
-import { useContext, useEffect, useRef, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
+import { useCallback, useContext, useEffect, useRef, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Modal, Platform, Pressable, Switch, Text, TextInput, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import {
   TOPIC_LABEL,
@@ -356,6 +357,8 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
   const wasComposerOpen = useRef(false);
   const focusScopeRef = useRef(`${current && s.actor ? `${s.actor.actorId}:${s.actor.sessionId}` : ''}|${gameId}`);
   const actorKey = current && s.actor ? `${s.actor.actorId}:${s.actor.sessionId}` : null;
+  /** Route still focused — return-focus must not target a blurred/departed results screen. */
+  const routeFocused = useRef(false);
 
   useEffect(() => {
     if (!current || !liveVenueId || results?.status !== 'ready') return;
@@ -363,6 +366,25 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     if (pendingCommand) return;
     owner.probeVenueEligibility(gameId, liveVenueId);
   }, [current, liveVenueId, results?.status, results?.data, owner, gameId, pendingCommand]);
+
+  // Route blur (kept-mounted) + unmount: retire only this Entry's captured venue surface/prepare.
+  useFocusEffect(useCallback(() => {
+    routeFocused.current = true;
+    return () => {
+      routeFocused.current = false;
+      const snap = owner.getSnapshot();
+      const surface = snap.venueExperience;
+      const act = snap.actor;
+      if (!surface || !act || surface.gameId !== gameId) return;
+      owner.retireVenueExperienceSurface({
+        gen: surface.gen,
+        gameId: surface.gameId,
+        venueId: surface.venueId,
+        actorId: act.actorId,
+        sessionId: act.sessionId,
+      });
+    };
+  }, [owner, gameId]));
 
   // Return focus to the remounted entry control after Composer unmounts; never cross actor/game.
   useEffect(() => {
@@ -374,10 +396,11 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     }
     if (wasComposerOpen.current && !composerOpen) {
       wasComposerOpen.current = false;
-      if (!actorKey) return;
+      // Blur/unmount retirement closes the surface — do not focus a hidden/departed route.
+      if (!actorKey || !routeFocused.current) return;
       const held = scope;
       const frame = requestAnimationFrame(() => {
-        if (focusScopeRef.current !== held) return;
+        if (focusScopeRef.current !== held || !routeFocused.current) return;
         openerRef.current?.focus();
         const node = findNodeHandle(openerRef.current);
         if (node) AccessibilityInfo.setAccessibilityFocus(node);

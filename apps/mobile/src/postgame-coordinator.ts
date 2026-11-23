@@ -74,6 +74,7 @@ import {
   parseOwnVenueEligibility,
   parseVenueConsentPreview,
   postgameIdempotencyReplayBlocked,
+  venueExperienceBasisAuthority,
   venueExperienceText,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   type OwnVenueEligibility,
@@ -2632,6 +2633,7 @@ export class PostgameCoordinator {
     const priorSurfaceGen = this.snapshot.venueExperience?.gen;
     this.venueSurfaceGen++;
     this.venuePreviewGen++;
+    this.venueEligibilityGen++;
     // Invalidate venue prepare owned by the surface we just hid — never clear a newer reservation.
     if (this.writePrepare?.origin === 'venue-experience'
       && priorSurfaceGen !== undefined
@@ -2648,6 +2650,55 @@ export class PostgameCoordinator {
     });
   };
   /**
+   * Route blur/unmount retirement — only the captured surface gen + actor/game/venue owner.
+   * Preserves already-dispatched sending/UNKNOWN packet/key/body/age/lock. No autosend on reopen.
+   * Stale cleanup must not close a newer same-game surface or another actor.
+   */
+  retireVenueExperienceSurface = (expected: {
+    gen: number;
+    gameId: string;
+    venueId: string;
+    actorId: string;
+    sessionId: string;
+  }) => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.venueExperience;
+    if (!surface || surface.gen !== expected.gen) return;
+    if (surface.gameId !== expected.gameId || surface.venueId !== expected.venueId) return;
+    if (!actor || actor.actorId !== expected.actorId || actor.sessionId !== expected.sessionId) return;
+    this.venueSurfaceGen++;
+    this.venuePreviewGen++;
+    this.venueEligibilityGen++;
+    if (this.writePrepare?.origin === 'venue-experience'
+      && this.writePrepare.surfaceGen === expected.gen
+      && this.writePrepare.gen === this.writePrepareGen) {
+      this.writePrepare = null;
+    }
+    this.show({
+      venueExperience: null,
+      venueDraft: null,
+      venueConsentHash: null,
+      venueReceipt: null,
+      venueNotice: null,
+      // Reset probe lane so remount can fresh-probe; cancelled in-flight load must not stick at loading.
+      venueProbe: null,
+      venueEligibility: { status: 'idle' },
+    });
+  };
+  /**
+   * Retire in-flight venue consent preview / hash when eligibility authority changes or is lost.
+   * Preserves dirty text/topics/audience; does not autosend.
+   */
+  private retireVenueConsentAuthority(patch: Partial<Snapshot> = {}) {
+    this.venuePreviewGen++;
+    const draft = patch.venueDraft !== undefined ? patch.venueDraft : this.snapshot.venueDraft;
+    this.show({
+      ...patch,
+      venueDraft: draft ? { ...draft, consent: false } : draft ?? null,
+      venueConsentHash: null,
+    });
+  }
+  /**
    * @param opts.preserveNotice Keep actionable venue business rejection through its automatic
    * follow-up eligibility GET (mirrors public create eligibility preserveNotice). Manual refresh omits this.
    */
@@ -2659,6 +2710,11 @@ export class PostgameCoordinator {
     if (!actor || !target) return;
     const preserveNotice = opts?.preserveNotice === true;
     const priorNotice = this.snapshot.venueNotice;
+    const priorData = this.snapshot.venueEligibility.status === 'ready'
+      ? this.snapshot.venueEligibility.data ?? null
+      : null;
+    const priorAuthority = venueExperienceBasisAuthority(priorData, target.gameId);
+    const priorUsable = !!exactGameMaySubmitBasis(priorData, target.gameId);
     const request = ++this.venueEligibilityGen;
     const venueId = target.venueId;
     const gameId = target.gameId;
@@ -2670,19 +2726,31 @@ export class PostgameCoordinator {
       if (this.snapshot.venueProbe?.venueId !== venueId || this.snapshot.venueProbe?.gameId !== gameId) return;
       if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
       const data = parseOwnVenueEligibility(raw);
-      // Successful automatic reread must not erase conclusive business / newer user notice or touch draft.
+      const nextAuthority = venueExperienceBasisAuthority(data, gameId);
+      const nextUsable = !!exactGameMaySubmitBasis(data, gameId);
+      // Changed / missing / no longer usable basis must drop hash+consent; unchanged basis keeps them.
+      const invalidateConsent = priorAuthority !== nextAuthority || (priorUsable && !nextUsable);
+      // Successful automatic reread must not erase conclusive business / newer user notice or text.
       const liveNotice = this.snapshot.venueNotice;
-      this.show({
-        venueEligibility: { status: 'ready', data },
-        venueNotice: preserveNotice ? (liveNotice ?? priorNotice) : null,
-      });
+      const notice = preserveNotice ? (liveNotice ?? priorNotice) : null;
+      if (invalidateConsent) {
+        this.retireVenueConsentAuthority({
+          venueEligibility: { status: 'ready', data },
+          venueNotice: notice,
+        });
+      } else {
+        this.show({
+          venueEligibility: { status: 'ready', data },
+          venueNotice: notice,
+        });
+      }
     } catch (error) {
       if (request !== this.venueEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
       if (this.snapshot.venueProbe?.venueId !== venueId || this.snapshot.venueProbe?.gameId !== gameId) return;
       if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
       const denied = error instanceof PostgameError && (error.kind === 'private' || error.status === 401);
       const liveNotice = this.snapshot.venueNotice;
-      this.show({
+      this.retireVenueConsentAuthority({
         venueEligibility: { status: denied ? 'unavailable' : 'error' },
         venueNotice: preserveNotice
           ? (liveNotice ?? priorNotice)
@@ -2793,12 +2861,21 @@ export class PostgameCoordinator {
       editor,
     });
     if (prepareGen === null) return;
+    // Participate in venueEligibilityGen ordering — later load/submit must retire this read.
+    const eligibilityRequest = ++this.venueEligibilityGen;
+    const capturedAuthority = venueExperienceBasisAuthority(
+      this.snapshot.venueEligibility.status === 'ready'
+        ? this.snapshot.venueEligibility.data ?? null
+        : null,
+      surface.gameId,
+    );
     // Recheck current exact-game authority immediately before fresh dispatch.
     try {
       const fresh = parseOwnVenueEligibility(
         await this.port.venueExperienceEligibility(actor, surface.venueId),
       );
       if (!this.writePrepareOwns(prepareGen) || !sameActor(actor, this.snapshot.actor)) return;
+      if (eligibilityRequest !== this.venueEligibilityGen) return;
       if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
       if (this.snapshot.command || this.inFlight) return;
       const liveDraft = this.snapshot.venueDraft;
@@ -2820,20 +2897,31 @@ export class PostgameCoordinator {
         });
         return;
       }
+      const freshAuthority = venueExperienceBasisAuthority(fresh, surface.gameId);
+      // Authority shifted under the same eligibility request — paint fresh, drop consent, no POST.
+      if (capturedAuthority !== null && freshAuthority !== capturedAuthority) {
+        this.retireVenueConsentAuthority({
+          venueEligibility: { status: 'ready', data: fresh },
+          venueNotice: 'Данные игры изменились. Проверьте обновлённый допуск перед новой отправкой.',
+        });
+        return;
+      }
       this.show({ venueEligibility: { status: 'ready', data: fresh } });
       const liveBasis = exactGameMaySubmitBasis(fresh, surface.gameId);
       if (!liveBasis
         || liveBasis.outcomeVersion !== basis.outcomeVersion
-        || liveBasis.attendanceVersion !== basis.attendanceVersion) {
-        this.venuePreviewGen++;
-        this.show({
-          venueConsentHash: null,
+        || liveBasis.attendanceVersion !== basis.attendanceVersion
+        || liveBasis.firstEligibleAt !== basis.firstEligibleAt
+        || liveBasis.admission !== basis.admission) {
+        this.retireVenueConsentAuthority({
           venueDraft: { ...liveDraft, consent: false },
           venueNotice: 'Данные игры изменились. Проверьте обновлённый допуск перед новой отправкой.',
         });
         return;
       }
       if (!this.writePrepareOwns(prepareGen, editor) || this.snapshot.command || this.inFlight) return;
+      if (eligibilityRequest !== this.venueEligibilityGen) return;
+      if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
       const body = buildVenueExperienceCreateBody({
         venueId: surface.venueId,
         basis: liveBasis,
@@ -2861,6 +2949,7 @@ export class PostgameCoordinator {
       await this.dispatch(packet, actor, false);
     } catch (error) {
       if (!this.writePrepareOwns(prepareGen) || !sameActor(actor, this.snapshot.actor)) return;
+      if (eligibilityRequest !== this.venueEligibilityGen) return;
       if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
       const business = error instanceof PostgameError && error.kind === 'business';
       this.show({

@@ -200,6 +200,29 @@ export function exactGameMaySubmitBasis(
   return basis;
 }
 
+/**
+ * Exact surface-game admitted authority fingerprint.
+ * Public preview/consent must renew when identity/version/admission/anchor changes or disappears.
+ */
+export function venueExperienceBasisAuthority(
+  eligibility: OwnVenueEligibility | null | undefined,
+  gameId: string,
+): string | null {
+  if (!eligibility || !UUID.test(gameId)) return null;
+  const wanted = gameId.toLowerCase();
+  const basis = eligibility.bases.find(b => b.gameId === wanted);
+  if (!basis) return null;
+  return [
+    basis.gameId,
+    basis.admission,
+    String(basis.outcomeVersion),
+    String(basis.attendanceVersion),
+    basis.firstEligibleAt ?? '',
+    basis.reason ?? '',
+    basis.helpHint ?? '',
+  ].join('\u0001');
+}
+
 export function parseVenueConsentPreview(value: unknown): VenueConsentPreview {
   const row = object(value);
   if (!text(row.consentProjectionHash) || !CONSENT_HASH.test(row.consentProjectionHash)) {
