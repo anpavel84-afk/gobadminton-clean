@@ -4,6 +4,7 @@ import type { GameInvitation } from './messages.ts';
 import { MessagesError } from './messages.ts';
 import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention, noteText } from './postgame.ts';
 import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage, PersonalNote } from './postgame.ts';
+import { mergeReviewPages, type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason } from './postgame-feedback.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -27,6 +28,22 @@ export type NoteDraft = {
   createDirty?: boolean;
 };
 export type OwnNoteRef = { gameId: string; contextId: string };
+/** Actor-bound peer feedback drafts — wiped on logout / different actor. */
+export type FeedbackDraft = {
+  mode?: 'peer' | 'received' | 'sent';
+  subjectContextId?: string;
+  peerRating?: PeerRating;
+  comment?: string;
+  tags?: PeerTag[];
+  replyText?: Record<string, string>;
+  reportReviewId?: string;
+  reportReason?: ReviewReportReason;
+  reportDetail?: string;
+  /** Explicit consent for exact frozen review.version — reset when revision changes. */
+  reportConsent?: boolean;
+  reportConsentVersion?: number;
+};
+export type ReviewDirection = 'sent' | 'received';
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
@@ -44,7 +61,12 @@ type Snapshot = {
   notes: Record<string,Source<PersonalNote>>;
   /** Exact actor-bound owned contexts remembered this session (no cold discovery). */
   knownNoteRefs: Record<string,OwnNoteRef>;
+  /** Own directional private review history — independent of denied results/roster. */
+  reviewHistory: Record<ReviewDirection, Source<MeReviewsPage>>;
+  /** Latest typed review by id from history/results/receipts — monotonic merge authority. */
+  reviewsById: Record<string, PrivateReview>;
   selection: DisputeSelection | null; drafts: Record<string,DisputeDraft>; noteDrafts: Record<string,NoteDraft>;
+  feedbackDrafts: Record<string, FeedbackDraft>;
   review: Intent | null; command: Command | null; notice: string | null;
 };
 type Port = {
@@ -57,11 +79,16 @@ type Port = {
   history?: (actor: Actor, gameId: string, contextId: string, limit?: number) => Promise<AttendanceHistoryPage>;
   /** Direct own personal note GET — exists independently of results access. */
   note?: (actor: Actor, gameId: string, contextId: string) => Promise<PersonalNote>;
+  /** Own directional private reviews — exists independently of results access. */
+  reviews?: (actor: Actor, direction: ReviewDirection, cursor?: string) => Promise<MeReviewsPage>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
 const empty = (actor: Actor | null): Snapshot => ({
   actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, invitations: {status:'idle'},
-  games: {}, disputes: {}, histories: {}, notes: {}, knownNoteRefs: {}, selection: null, drafts: {}, noteDrafts: {},
+  games: {}, disputes: {}, histories: {}, notes: {}, knownNoteRefs: {},
+  reviewHistory: { received: { status: 'idle' }, sent: { status: 'idle' } },
+  reviewsById: {},
+  selection: null, drafts: {}, noteDrafts: {}, feedbackDrafts: {},
   review:null, command:null, notice:null,
 });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
@@ -83,9 +110,13 @@ function freezeIntent(intent: Intent): Intent {
     case 'later': copy={...intent,body:{...intent.body}}; break;
     case 'note-upsert': copy={...intent,body:{...intent.body}}; break;
     case 'note-delete': copy={...intent,body:{...intent.body}}; break;
+    case 'peer-create': copy={...intent,body:{...intent.body,...(intent.body.tags ? {tags:[...intent.body.tags]} : {})}}; break;
+    case 'peer-reply': copy={...intent,body:{...intent.body}}; break;
+    case 'peer-report': copy={...intent,body:{...intent.body}}; break;
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
   if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
+  if (copy.kind === 'peer-create' && copy.body.tags) Object.freeze(copy.body.tags);
   Object.freeze(copy.body); return Object.freeze(copy);
 }
 export class PostgameCoordinator {
@@ -114,6 +145,25 @@ export class PostgameCoordinator {
   private noteVersionFloor = new Map<string, number>();
   /** After confirmed upsert: only typed direct GET may reestablish ready rights (not historical myNotes). */
   private noteAwaitingTyped = new Set<string>();
+  /** Seen nextCursor values per review direction — reject ABA/replay cursors. */
+  private reviewCursors = new Map<ReviewDirection, Set<string>>();
+  /** Version floor per review id — stale receipts cannot regress. */
+  private reviewVersionFloor = new Map<string, number>();
+  /** Reply version floor per review id. */
+  private replyVersionFloor = new Map<string, number>();
+  /** Last applied read generation per review id — fences deferred results vs history. */
+  private reviewAppliedGen = new Map<string, number>();
+  /** After reply/create ACK: only typed history GET may reestablish write rights. */
+  private reviewAwaitingTyped = new Set<string>();
+  /** Ids whose current floor was established by typed history — results cannot same-version regress. */
+  private reviewHistoryOwned = new Set<string>();
+  /** Hard-denied own-history directions — results/receipts must not resurrect private projection. */
+  private reviewDirectionDenied = new Set<ReviewDirection>();
+  /** Per-direction coalesce: one fresh root history GET after mutation while a GET is in flight. */
+  private reviewsBusy: Record<ReviewDirection, boolean> = { sent: false, received: false };
+  private reviewsFollowup: Record<ReviewDirection, boolean> = { sent: false, received: false };
+  /** Generation that owns busy/followup per direction; stale finally must not clear a newer actor/read. */
+  private reviewsBusyGen: Record<ReviewDirection, number> = { sent: 0, received: 0 };
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -121,6 +171,7 @@ export class PostgameCoordinator {
     if (!port.dispute) port.dispute = async () => { throw new PostgameError('private', 404); };
     if (!port.history) port.history = async () => ({ items: [] });
     if (!port.note) port.note = async () => { throw new PostgameError('private', 404); };
+    if (!port.reviews) port.reviews = async () => ({ items: [], nextCursor: null });
     this.port = port as Required<Port>;
     this.random = random;
   }
@@ -136,10 +187,16 @@ export class PostgameCoordinator {
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
     this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear();
+    this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear();
+    this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear();
+    this.reviewDirectionDenied.clear();
+    this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false};
+    this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1};
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
     // Known own-note refs restore for in-session recovery only — never auto-write / cold discovery.
+    // Feedback drafts restore without auto-send; history must recheck authority via fresh GET.
     if (saved) this.show({
       filter:saved.filter,
       command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,
@@ -147,12 +204,13 @@ export class PostgameCoordinator {
       review:saved.review,
       drafts:saved.drafts,
       noteDrafts:saved.noteDrafts,
+      feedbackDrafts:saved.feedbackDrafts,
       knownNoteRefs:saved.knownNoteRefs,
       selection:saved.selection,
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -384,6 +442,7 @@ export class PostgameCoordinator {
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
       if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
+      if (data.feedback?.gameReviews?.length) this.rememberReviews(data.feedback.gameReviews, resultsGen, 'results');
       if (selection?.gameId === gameId) {
         const rows=[...(data.attendance?.roster ?? []),...(data.attendance?.myAttendance ? [data.attendance.myAttendance] : [])];
         const still=rows.some(r=>r.contextId === selection.contextId && r.dispute?.id === selection.disputeId);
@@ -528,6 +587,269 @@ export class PostgameCoordinator {
     const prior=this.snapshot.drafts[key] ?? {};
     this.show({drafts:{...this.snapshot.drafts,[key]:{...prior,...patch}}});
   };
+  setFeedbackDraft = (gameId: string, patch: FeedbackDraft) => {
+    if (!this.snapshot.actor) return;
+    try { postgameId(gameId); } catch { return; }
+    const prior = this.snapshot.feedbackDrafts[gameId] ?? {};
+    const next: FeedbackDraft = { ...prior, ...patch };
+    if (patch.replyText) next.replyText = { ...(prior.replyText ?? {}), ...patch.replyText };
+    // Opening/changing report target resets consent; keep known version from the open patch.
+    if (patch.reportReviewId !== undefined && patch.reportReviewId !== prior.reportReviewId) {
+      next.reportConsent = false;
+      if (patch.reportConsentVersion === undefined) next.reportConsentVersion = undefined;
+    }
+    // Revision change without an explicit consent field resets true consent (preserve detail).
+    // Explicit current-version grant in the same patch must take one press.
+    if (patch.reportConsentVersion !== undefined && prior.reportConsentVersion !== undefined
+      && patch.reportConsentVersion !== prior.reportConsentVersion
+      && patch.reportConsent === undefined) {
+      next.reportConsent = false;
+    }
+    this.show({ feedbackDrafts: { ...this.snapshot.feedbackDrafts, [gameId]: next } });
+  };
+  /** Reset report consent when typed revision advances; preserve detail draft. */
+  private resetReportConsentForRevision(row: PrivateReview) {
+    const drafts = { ...this.snapshot.feedbackDrafts };
+    let changed = false;
+    for (const [gameId, draft] of Object.entries(drafts)) {
+      if (draft.reportReviewId !== row.id) continue;
+      if (!draft.reportConsent && draft.reportConsentVersion === row.version) continue;
+      if (draft.reportConsentVersion === row.version && draft.reportConsent) continue;
+      drafts[gameId] = { ...draft, reportConsent: false };
+      changed = true;
+    }
+    if (changed) this.show({ feedbackDrafts: drafts });
+  }
+  /**
+   * Raise a strictly newer independent reply onto the kept current parent.
+   * Never adopts stale parent comment/rights/direction/game/consent/read-gen from the projection.
+   * Receipt still settles ACK-safe (strip writes, await typed); history clears awaiting and marks owned.
+   * Results leave parent authority/consent/ownership fences unchanged aside from the reply floor.
+   * replyOnly (older-gen discard): raise reply floor only — no ACK settle, awaiting clear, or history ownership.
+   */
+  private applyNewerReplyOntoKeptParent(
+    byId: Record<string, PrivateReview>,
+    row: PrivateReview,
+    prior: PrivateReview,
+    replyVer: number,
+    replyFloor: number,
+    source: 'results' | 'history' | 'receipt',
+    replyOnly = false,
+  ): boolean {
+    if (!row.reply || replyVer <= replyFloor) return false;
+    let next: PrivateReview = { ...prior, reply: row.reply };
+    if (!replyOnly && source === 'receipt') {
+      next = {
+        ...next,
+        allowedActions: {
+          canEdit: false,
+          canReply: false,
+          canReport: next.allowedActions.canReport,
+        },
+      };
+      this.reviewAwaitingTyped.add(row.id);
+      this.reviewHistoryOwned.delete(row.id);
+    }
+    if (!replyOnly && source === 'history') {
+      this.reviewAwaitingTyped.delete(row.id);
+      this.reviewHistoryOwned.add(row.id);
+    }
+    byId[row.id] = next;
+    this.replyVersionFloor.set(row.id, replyVer);
+    return true;
+  }
+  /**
+   * Monotonic typed review store — version + read-gen authority.
+   * Only typed history restores private projection after hard deny; results/receipts cannot
+   * resurrect while denied or (results) while awaiting typed GET. Receipt ACK is display-only
+   * until typed history refresh. Reply revision is independently monotonic across review edits.
+   */
+  private rememberReviews(rows: PrivateReview[], gen: number, source: 'results' | 'history' | 'receipt') {
+    const byId = { ...this.snapshot.reviewsById };
+    let changed = false;
+    const revisionAdvances: PrivateReview[] = [];
+    for (const row of rows) {
+      // Hard-denied direction: settle packet elsewhere; only successful typed history may restore.
+      if (source !== 'history' && this.reviewDirectionDenied.has(row.direction)) continue;
+      if (source === 'results' && this.reviewAwaitingTyped.has(row.id)) continue;
+      const floor = this.reviewVersionFloor.get(row.id) ?? 0;
+      const prior = byId[row.id];
+      const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
+      const replyVer = row.reply?.version ?? 0;
+      const applied = this.reviewAppliedGen.get(row.id) ?? 0;
+      const staleRead = gen < applied;
+      // Older-gen reply-only: raise reply without parent authority / awaiting changes.
+      // Receipt ACK still settles display-only + await typed even on discard.
+      const replyOnly = staleRead && source !== 'receipt';
+      // Before every parent-discard branch: strictly newer reply is an independent dimension.
+      if (row.version < floor) {
+        // Older parent must not regress content/permissions/read-gen/consent.
+        // Any legitimate typed read (history/receipt/Results) may still raise reply onto kept parent.
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source, replyOnly)) {
+          changed = true;
+        }
+        continue;
+      }
+      // Typed history owns the current floor — later results cannot same-version regress rights/text.
+      // Strictly newer independent reply may still raise onto the kept parent (reply-only).
+      if (source === 'results' && this.reviewHistoryOwned.has(row.id) && row.version <= floor) {
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source, replyOnly)) {
+          changed = true;
+        }
+        continue;
+      }
+      if (row.version === floor && staleRead) {
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source, replyOnly)) {
+          changed = true;
+        }
+        continue;
+      }
+      let next: PrivateReview = row;
+      // Reply revisions are independent of parent review version — keep highest accepted reply.
+      if (prior && replyVer < replyFloor) {
+        next = { ...row, reply: prior.reply };
+      }
+      if (source === 'receipt') {
+        // Historical ACK settles the packet only — strip write grants until typed history.
+        next = {
+          ...next,
+          allowedActions: {
+            canEdit: false,
+            canReply: false,
+            canReport: next.allowedActions.canReport,
+          },
+        };
+        this.reviewAwaitingTyped.add(row.id);
+        this.reviewHistoryOwned.delete(row.id);
+      }
+      if (source === 'history') {
+        this.reviewAwaitingTyped.delete(row.id);
+        this.reviewHistoryOwned.add(row.id);
+      }
+      if (source === 'results' && row.version > floor) this.reviewHistoryOwned.delete(row.id);
+      byId[row.id] = next;
+      this.reviewVersionFloor.set(row.id, Math.max(floor, row.version));
+      this.replyVersionFloor.set(row.id, Math.max(replyFloor, next.reply?.version ?? 0));
+      this.reviewAppliedGen.set(row.id, gen);
+      if (prior && prior.version !== next.version) revisionAdvances.push(next);
+      changed = true;
+    }
+    if (changed) this.show({ reviewsById: byId });
+    for (const row of revisionAdvances) this.resetReportConsentForRevision(row);
+  }
+  /** Hard-denied own-history: retire private projection/permissions for that direction. */
+  private retireReviewDirection(direction: ReviewDirection) {
+    this.reviewDirectionDenied.add(direction);
+    const byId = { ...this.snapshot.reviewsById };
+    const retired = new Set<string>();
+    let changed = false;
+    for (const [id, row] of Object.entries(byId)) {
+      if (row.direction !== direction) continue;
+      delete byId[id];
+      retired.add(id);
+      this.reviewVersionFloor.delete(id);
+      this.replyVersionFloor.delete(id);
+      this.reviewAppliedGen.delete(id);
+      this.reviewAwaitingTyped.delete(id);
+      this.reviewHistoryOwned.delete(id);
+      changed = true;
+    }
+    const drafts = { ...this.snapshot.feedbackDrafts };
+    let draftsChanged = false;
+    for (const [gameId, draft] of Object.entries(drafts)) {
+      if (!draft.reportReviewId || !retired.has(draft.reportReviewId)) continue;
+      drafts[gameId] = {
+        ...draft,
+        reportReviewId: undefined,
+        reportConsent: false,
+        reportConsentVersion: undefined,
+      };
+      draftsChanged = true;
+    }
+    if (changed || draftsChanged) {
+      this.show({
+        reviewsById: byId,
+        ...(draftsChanged ? { feedbackDrafts: drafts } : {}),
+      });
+    }
+  }
+  /**
+   * Write authority: actor/session-bound typed ready history (or idle+ready results bootstrap).
+   * Pending/error/unavailable and post-ACK awaiting typed never grant new reply/report.
+   */
+  private currentReviewForWrite(reviewId: string): PrivateReview | null {
+    if (this.reviewAwaitingTyped.has(reviewId)) return null;
+    const review = this.snapshot.reviewsById[reviewId] ?? null;
+    if (!review) return null;
+    if (this.reviewDirectionDenied.has(review.direction)) return null;
+    const history = this.snapshot.reviewHistory[review.direction];
+    if (history.status === 'loading' || history.status === 'error' || history.status === 'unavailable') {
+      return null;
+    }
+    if (history.status === 'ready') return review;
+    // Idle: only a ready results projection may bootstrap before the first history GET settles.
+    const results = this.snapshot.games[review.gameId];
+    if (results?.status === 'ready' && results.data?.feedback?.gameReviews?.some(r => r.id === reviewId)) {
+      return review;
+    }
+    return null;
+  }
+  /** Own directional history — independent of denied results; honest cursor/empty/error. */
+  loadReviews = async (direction: ReviewDirection, more = false) => {
+    if (direction !== 'sent' && direction !== 'received') return;
+    // Mutation refresh during in-flight initial/load-more: invalidate the stale page and
+    // coalesce exactly one fresh authoritative root GET. Busy (not status) gates re-entry
+    // so a queued followup can start after invalidation while UI status is still loading.
+    // Queued work is read-only — never autosend writes.
+    if (this.reviewsBusy[direction]) {
+      if (!more) {
+        this.reviewsFollowup[direction] = true;
+        this.reads.set(`reviews:${direction}`, ++this.serial);
+      }
+      return;
+    }
+    const old = this.snapshot.reviewHistory[direction];
+    const cursor = more ? old.data?.nextCursor : undefined;
+    if (more && !cursor) return;
+    const { actor, valid } = this.start(`reviews:${direction}`);
+    if (!actor) return;
+    const busyGen = ++this.reviewsBusyGen[direction];
+    this.reviewsBusy[direction] = true;
+    const historyGen = this.reads.get(`reviews:${direction}`) ?? 0;
+    const put = (source: Source<MeReviewsPage>) => this.show({
+      reviewHistory: { ...this.snapshot.reviewHistory, [direction]: source },
+    });
+    put({ ...old, status: 'loading' });
+    try {
+      const page = await this.port.reviews(actor, direction, cursor ?? undefined);
+      if (!valid()) return;
+      const seen = more ? this.reviewCursors.get(direction) ?? new Set<string>() : new Set<string>();
+      if (page.nextCursor && (page.nextCursor === cursor || seen.has(page.nextCursor))) throw new PostgameError('invalid');
+      if (page.nextCursor) seen.add(page.nextCursor);
+      this.reviewCursors.set(direction, seen);
+      const priorItems = more ? old.data?.items ?? [] : [];
+      // Retain nextCursor honestly even when page has non-peer rows.
+      const merged = mergeReviewPages(priorItems, page.items, direction);
+      this.reviewDirectionDenied.delete(direction);
+      this.rememberReviews(page.items, historyGen, 'history');
+      // Prefer store projection so UI/history page stay coherent with monotonic rights.
+      const projected = merged.map(row => this.snapshot.reviewsById[row.id] ?? row);
+      put({ status: 'ready', data: { items: projected, nextCursor: page.nextCursor } });
+    } catch (error) {
+      if (!valid()) return;
+      const denied = error instanceof PostgameError && error.kind === 'private';
+      put(this.failure(error, old));
+      if (denied) this.retireReviewDirection(direction);
+    } finally {
+      if (this.reviewsBusyGen[direction] === busyGen) {
+        this.reviewsBusy[direction] = false;
+        if (this.reviewsFollowup[direction]) {
+          this.reviewsFollowup[direction] = false;
+          if (actor && sameActor(actor, this.snapshot.actor)) void this.loadReviews(direction, false);
+        }
+      }
+    }
+  };
   private currentNote(gameId: string, contextId: string): PersonalNote | null {
     const key = noteKey(gameId, contextId);
     if (this.noteTombs.has(key)) return null;
@@ -546,6 +868,39 @@ export class PostgameCoordinator {
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
   }
   private allowed(intent: Intent) {
+    if (intent.kind === 'peer-create') {
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreatePeer) return false;
+      if (intent.body.kind !== 'peer' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
+      return feedback.capabilities.peerSubjects.some(s => s.contextId === intent.body.subjectContextId);
+    }
+    if (intent.kind === 'peer-reply') {
+      const review = this.currentReviewForWrite(intent.reviewId);
+      if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
+      if (review.direction !== 'received' || !review.allowedActions.canReply) return false;
+      const results = this.snapshot.games[intent.gameId];
+      // When results are ready, fresh writesEnabled gates ordinary reply; history canReply alone is not enough against known writes-off.
+      if (results?.status === 'ready') {
+        const feedback = results.data?.feedback;
+        if (!feedback?.installed || !feedback.writesEnabled) return false;
+      }
+      const replyVer = review.reply?.version ?? 0;
+      return replyVer === intent.body.expectedVersion;
+    }
+    if (intent.kind === 'peer-report') {
+      const review = this.currentReviewForWrite(intent.reviewId);
+      if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
+      if (review.direction !== 'received' || !review.allowedActions.canReport) return false;
+      // Report is independent of writesEnabled / create experience.
+      if (review.version !== intent.body.expectedVersion) return false;
+      if (intent.body.gameId !== intent.gameId || intent.body.shareReviewWithSupport !== true) return false;
+      const draft = this.snapshot.feedbackDrafts[intent.gameId];
+      if (!draft?.reportConsent || draft.reportReviewId !== intent.reviewId) return false;
+      // Exact frozen revision consent — undefined version is not an escape.
+      if (draft.reportConsentVersion !== review.version) return false;
+      return true;
+    }
     if (intent.kind === 'note-upsert' || intent.kind === 'note-delete') {
       if (intent.kind === 'note-upsert') {
         try { noteText(intent.body.text); } catch { return false; }
@@ -686,6 +1041,43 @@ export class PostgameCoordinator {
       if (packet.kind === 'note-delete' && 'deleted' in receipt && receipt.deleted) {
         this.tombstoneOwnedNote(packet.gameId, packet.contextId, receipt.version);
       }
+      if (packet.kind === 'peer-create' && 'peerRating' in receipt && 'direction' in receipt) {
+        // ACK display-only until typed sent history refresh reestablishes rights.
+        this.rememberReviews([receipt], ++this.serial, 'receipt');
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = {
+          ...prior,
+          peerRating: undefined,
+          comment: '',
+          tags: [],
+          subjectContextId: prior.subjectContextId,
+        };
+        this.show({ feedbackDrafts: drafts });
+      }
+      if (packet.kind === 'peer-reply' && 'reply' in receipt && 'direction' in receipt) {
+        // ACK display-only until typed received history refresh; do not grant another reply from receipt.
+        this.rememberReviews([receipt], ++this.serial, 'receipt');
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        const replyText = { ...(prior.replyText ?? {}) };
+        delete replyText[packet.reviewId];
+        drafts[packet.gameId] = { ...prior, replyText };
+        this.show({ feedbackDrafts: drafts });
+      }
+      if (packet.kind === 'peer-report' && 'reportId' in receipt && receipt.status === 'submitted') {
+        // Receipt already bound to original packet by validateReceipt — clear consent, keep detail draft.
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = {
+          ...prior,
+          reportReviewId: undefined,
+          reportConsent: false,
+          reportConsentVersion: undefined,
+          reportDetail: prior.reportDetail,
+        };
+        this.show({ feedbackDrafts: drafts });
+      }
       // Resolving ACK: verified resolvedDispute stays on the ACK receipt only.
       // Never fabricate dispute timestamps/rights or regress the projection from historical receipt fields.
       // Authoritative DTO comes from loadDispute below; follow-up GET failure stays a distinct retryable read error.
@@ -707,21 +1099,44 @@ export class PostgameCoordinator {
       if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
       // After upsert ACK: typed GET reestablishes rights/version; GET failure is retryable READ, not write success.
       if (noteWrite && packet.kind === 'note-upsert') void this.loadNote(packet.gameId, packet.contextId);
+      if (packet.kind === 'peer-create') void this.loadReviews('sent');
+      if (packet.kind === 'peer-reply' || packet.kind === 'peer-report') void this.loadReviews('received');
     } catch(error) {
       if(!valid()) return;
       const definite=!reconciling && error instanceof PostgameError && error.status < 500 && error.kind === 'business' && !['COMMAND_IN_PROGRESS','KEY_REUSED','IDEMPOTENCY_KEY_REUSED'].includes(error.code);
       const noteConflict = definite && packet.kind.startsWith('note-') && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
+      const peerConflict = definite && (packet.kind === 'peer-reply' || packet.kind === 'peer-report')
+        && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
       const noteUnknown = !definite && (packet.kind === 'note-upsert' || packet.kind === 'note-delete');
+      const peerUnknown = !definite && (packet.kind === 'peer-create' || packet.kind === 'peer-reply' || packet.kind === 'peer-report');
+      if (peerConflict && packet.kind === 'peer-report') {
+        // Preserve detail draft; reset consent after revision change.
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = { ...prior, reportConsent: false, reportConsentVersion: undefined };
+        this.show({ feedbackDrafts: drafts });
+        void this.loadReviews('received');
+      }
+      if (peerConflict && packet.kind === 'peer-reply') {
+        void this.loadReviews('received');
+        void this.loadResults(packet.gameId);
+      }
       const notice = definite
         ? (noteConflict
           ? 'Версия заметки изменилась. Обновите заметку и сохраните снова.'
-          : 'Изменение отклонено. Обновите данные и проверьте условия.')
+          : peerConflict
+            ? (packet.kind === 'peer-report'
+              ? 'Версия отзыва изменилась. Проверьте новую редакцию и снова подтвердите согласие.'
+              : 'Версия ответа изменилась. Обновите отзыв и сохраните снова.')
+            : 'Изменение отклонено. Обновите данные и проверьте условия.')
         : (noteUnknown
           ? (packet.kind === 'note-delete'
             ? 'Пока не удалось подтвердить удаление. Проверьте исходное действие.'
             : 'Пока не удалось подтвердить сохранение. Проверьте исходное действие.')
-          : unknownNotice);
-      // Dirty note drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
+          : peerUnknown
+            ? 'Результат отправки пока неизвестен. Проверьте исходное действие.'
+            : unknownNotice);
+      // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
       this.show({command:definite ? null : {packet,status:'unknown'},notice});
     } finally { if(this.inFlight === packet) this.inFlight=null; }
   }

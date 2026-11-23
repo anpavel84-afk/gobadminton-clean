@@ -30,6 +30,8 @@ const feedbackReady = {
   installed: true, writesEnabled: true,
   capabilities: {
     canCreateNote: true,
+    canCreatePeer: false,
+    peerCreateReason: null as null,
     peerSubjects: [
       { contextId: contextA, displayName: 'Анна' },
       { contextId: contextB, displayName: 'Илья' },
@@ -105,13 +107,12 @@ function setup(overrides: Partial<{ results: Results; note: PersonalNote | null 
   return { coordinator, port, sent, notes };
 }
 
-test('parse personal note + narrow feedback; reject nested wrong-game; ignore unimplemented review fields', () => {
+test('parse personal note + feedback peer caps; reject nested wrong-game; reject malformed gameReviews', () => {
   assert.deepEqual(parsePersonalNote(note), note);
   const parsed = parseResults({
     ...result,
     feedback: {
       ...feedbackReady,
-      gameReviews: [{ id: 'should-be-ignored', kind: 'peer' }],
       capabilities: {
         ...feedbackReady.capabilities,
         canCreatePeer: true,
@@ -124,9 +125,16 @@ test('parse personal note + narrow feedback; reject nested wrong-game; ignore un
     },
   });
   assert.equal(parsed.feedback?.capabilities.canCreateNote, true);
+  assert.equal(parsed.feedback?.capabilities.canCreatePeer, true);
   assert.equal(parsed.feedback?.myNotes.length, 1);
   assert.ok(!('gameReviews' in (parsed.feedback as object)));
-  assert.ok(!('canCreatePeer' in parsed.feedback!.capabilities));
+  assert.throws(() => parseResults({
+    ...result,
+    feedback: {
+      ...feedbackReady,
+      gameReviews: [{ id: 'malformed', kind: 'peer' }],
+    },
+  }));
   assert.throws(() => parsePersonalNote({ ...note, text: '' }));
   assert.throws(() => noteText('  '));
   assert.equal(noteText('ok'), 'ok');
@@ -335,7 +343,7 @@ test('same-account reauth restores known refs and UNKNOWN without autowrite; ins
   const disabled = setup({
     results: {
       ...result,
-      feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, peerSubjects: [] }, myNotes: [] },
+      feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, canCreatePeer: false, peerCreateReason: null, peerSubjects: [] }, myNotes: [] },
     },
   });
   await disabled.coordinator.loadResults(game.id);
@@ -820,6 +828,8 @@ test('note subject selector prefers roster over nonempty narrower peerSubjects',
       myNotes: [],
       capabilities: {
         canCreateNote: true,
+        canCreatePeer: false,
+        peerCreateReason: null,
         peerSubjects: [{ contextId: peerOnly, displayName: 'Только peer' }],
       },
     },

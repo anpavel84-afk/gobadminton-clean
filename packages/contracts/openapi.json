@@ -19423,10 +19423,13 @@
           "Games"
         ],
         "summary": "Create private contextual review (peer/organization/training)",
-        "description": "PG-3. Requires explicit experienceAssertion and authorized participation/manager context. Server derives recipient/visibility/provenance. Creator is not automatic participant. No self-peer-review. One review per actor/kind/subject/game; UNIQUE maps to owned receipt/conflict. Absent/unknown/contested/not_held require discrepancyExplanation (not fabricated verified attendance). Organizer cannot suppress via absent. No skill mutation/public route. Text bounds 1–500; tags ≤3 from communication|teamwork|agreements; actorMutationBudgetPerGame=80 (count, no time window). Writes default OFF.",
+        "description": "PG-3. Requires explicit experienceAssertion and authorized participation/manager context. Server derives recipient/visibility/provenance. Creator is not automatic participant. No self-peer-review. One review per actor/kind/subject/game; UNIQUE maps to owned receipt/conflict. Absent/unknown/contested/not_held require discrepancyExplanation (not fabricated verified attendance). Organizer cannot suppress via absent. No skill mutation/public route. Text bounds 1–500; tags ≤3 from communication|teamwork|agreements; actorMutationBudgetPerGame=80 (count, no time window). Writes default OFF. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -19705,10 +19708,13 @@
           "Games"
         ],
         "summary": "Create or edit singleton recipient reply",
-        "description": "PG-3. Designated recipient only. expectedVersion 0 creates; >0 edits with edited marker/history. No forum. No-store.",
+        "description": "PG-3. Designated recipient only. expectedVersion 0 creates; >0 edits with edited marker/history. No forum. No-store. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -19836,10 +19842,13 @@
           "Games"
         ],
         "summary": "List own authored or received private reviews",
-        "description": "PG-3. Own/recipient ACL only; no public list. Bounded pagination limit 1–50 default 20. direction=sent|received. No-store.",
+        "description": "PG-3. Own/recipient ACL only; no public list. Bounded pagination limit 1–50 default 20. direction=sent|received. No-store. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -21895,10 +21904,13 @@
           "Games"
         ],
         "summary": "Report a received private peer review at an exact version",
-        "description": "PG-3/#394/#372. Current authorized recipient of a private peer review only. Requires expectedVersion, supported reason/detail, and shareReviewWithSupport:true. Server derives game/author/recipient; binds abuse_reports(game_review) to immutable game_review_revisions. Same actor/review/version does not create duplicate reports. Cookie+CSRF+Origin+Idempotency. No-store. Does not publish, hide, or block.",
+        "description": "PG-3/#394/#372. Current authorized recipient of a private peer review only. Requires expectedVersion, supported reason/detail, and shareReviewWithSupport:true. Server derives game/author/recipient; binds abuse_reports(game_review) to immutable game_review_revisions. Same actor/review/version does not create duplicate reports. Cookie+CSRF+Origin+Idempotency. No-store. Does not publish, hide, or block. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
