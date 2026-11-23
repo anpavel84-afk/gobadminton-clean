@@ -1974,7 +1974,6 @@ run("#394 role reputation — disposable", () => {
     const profileLane = await app.inject({
       method: "GET",
       url: `/v1/players/${orgPublic.public_player_id}/role-reputations/organization`,
-      headers: orgBearer,
     });
     expect(profileLane.statusCode).toBe(200);
     expect(profileLane.json().roleHandle).toBe(seeded.roleHandle);
