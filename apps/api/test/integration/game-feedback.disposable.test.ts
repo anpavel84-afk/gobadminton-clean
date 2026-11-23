@@ -1776,9 +1776,55 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
 
     const trainReceived = await nativeGet(manager, `/v1/me/reviews?direction=received`);
     expect(trainReceived.statusCode).toBe(200);
-    expect(
-      trainReceived.json().items.some((r: { id: string; kind: string }) => r.id === trainId && r.kind === "training"),
-    ).toBe(true);
+    const trainRow = trainReceived.json().items.find(
+      (r: { id: string; kind: string }) => r.id === trainId && r.kind === "training",
+    );
+    expect(trainRow).toBeTruthy();
+    expect(trainRow.kind).toBe("training");
+    expect(trainRow.comment).toBe("Тренировка прошла ясно");
+    expect(trainRow.allowedActions.canReply).toBe(true);
+
+    // Genuine trainer-recipient native reply on trainId (not orgId) — version/history/replay.
+    const trainReplyKey = key();
+    const trainReplied = await nativePut(
+      manager,
+      `/v1/reviews/${trainId}/reply`,
+      { expectedVersion: 0, text: "Спасибо за отзыв о тренировке" },
+      trainReplyKey,
+    );
+    expect(trainReplied.statusCode).toBe(200);
+    expect(trainReplied.json().kind).toBe("training");
+    expect(trainReplied.json().id).toBe(trainId);
+    expect(trainReplied.json().reply.text).toBe("Спасибо за отзыв о тренировке");
+    expect(trainReplied.json().reply.version).toBe(1);
+    const trainReplyReplay = await nativePut(
+      manager,
+      `/v1/reviews/${trainId}/reply`,
+      { expectedVersion: 0, text: "Спасибо за отзыв о тренировке" },
+      trainReplyKey,
+    );
+    expect(trainReplyReplay.statusCode).toBe(200);
+    expect(trainReplyReplay.json().id).toBe(trainId);
+    expect(trainReplyReplay.json().reply.version).toBe(1);
+    expect(trainReplyReplay.json().reply.text).toBe("Спасибо за отзыв о тренировке");
+
+    const trainReceivedAfter = await nativeGet(manager, `/v1/me/reviews?direction=received`);
+    expect(trainReceivedAfter.statusCode).toBe(200);
+    const trainReceivedRow = trainReceivedAfter.json().items.find((r: { id: string }) => r.id === trainId);
+    expect(trainReceivedRow).toBeTruthy();
+    expect(trainReceivedRow.kind).toBe("training");
+    expect(trainReceivedRow.comment).toBe("Тренировка прошла ясно");
+    expect(trainReceivedRow.reply.text).toBe("Спасибо за отзыв о тренировке");
+    expect(trainReceivedRow.reply.version).toBe(1);
+
+    const trainSentAfter = await nativeGet(anna, `/v1/me/reviews?direction=sent`);
+    expect(trainSentAfter.statusCode).toBe(200);
+    const trainSentRow = trainSentAfter.json().items.find((r: { id: string }) => r.id === trainId);
+    expect(trainSentRow).toBeTruthy();
+    expect(trainSentRow.kind).toBe("training");
+    expect(trainSentRow.comment).toBe("Тренировка прошла ясно");
+    expect(trainSentRow.reply.text).toBe("Спасибо за отзыв о тренировке");
+    expect(trainSentRow.reply.version).toBe(1);
 
     env.POST_GAME_INTERNAL_ENABLED = false;
     try {

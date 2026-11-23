@@ -300,15 +300,95 @@ export const DISCREPANCY_UNEXPECTED_MESSAGE = 'Пояснение для это�
 /** Honest hint when client knows explanation will not be sent. */
 export const DISCREPANCY_OMIT_HINT = 'Пояснение сейчас не требуется и не будет отправлено';
 
+export type RoleDiscrepancyResults = {
+  outcome: { value: 'unknown' | 'held' | 'not_held' };
+  attendance?: {
+    installed: boolean;
+    myAttendance: { value: string; dispute: { status: string } | null } | null;
+  } | null;
+};
+
+/** Attendance/outcome fingerprint — server decision must not survive unrelated context. */
+export type RoleDiscrepancyContext = {
+  outcome: 'unknown' | 'held' | 'not_held';
+  attendance: 'present' | 'absent' | 'unknown' | 'null' | 'missing';
+  disputeOpen: boolean;
+};
+
+/** Server FEEDBACK_DISCREPANCY_* bound to the kind+context that produced it — not a translated-message key. */
+export type RoleDiscrepancyDecision = {
+  kind: 'organization' | 'training';
+  fieldError: typeof DISCREPANCY_REQUIRED_MESSAGE | typeof DISCREPANCY_UNEXPECTED_MESSAGE;
+  context: RoleDiscrepancyContext;
+};
+
+export function roleDiscrepancyContextFromResults(
+  results: RoleDiscrepancyResults | undefined,
+): RoleDiscrepancyContext {
+  if (!results) return { outcome: 'unknown', attendance: 'missing', disputeOpen: false };
+  const my = results.attendance?.installed ? results.attendance.myAttendance : undefined;
+  let attendance: RoleDiscrepancyContext['attendance'] = 'missing';
+  let disputeOpen = false;
+  if (results.attendance?.installed) {
+    if (my === null) attendance = 'null';
+    else if (my) {
+      attendance = my.value === 'present' || my.value === 'absent' || my.value === 'unknown'
+        ? my.value
+        : 'unknown';
+      disputeOpen = my.dispute?.status === 'open';
+    }
+  }
+  return { outcome: results.outcome.value, attendance, disputeOpen };
+}
+
+export function roleDiscrepancyContextsEqual(
+  a: RoleDiscrepancyContext,
+  b: RoleDiscrepancyContext,
+): boolean {
+  return a.outcome === b.outcome && a.attendance === b.attendance && a.disputeOpen === b.disputeOpen;
+}
+
+export function roleDiscrepancyDecisionFromError(
+  kind: 'organization' | 'training',
+  code: 'FEEDBACK_DISCREPANCY_REQUIRED' | 'FEEDBACK_DISCREPANCY_UNEXPECTED',
+  results: RoleDiscrepancyResults | undefined,
+): RoleDiscrepancyDecision {
+  return {
+    kind,
+    fieldError: code === 'FEEDBACK_DISCREPANCY_REQUIRED'
+      ? DISCREPANCY_REQUIRED_MESSAGE
+      : DISCREPANCY_UNEXPECTED_MESSAGE,
+    context: roleDiscrepancyContextFromResults(results),
+  };
+}
+
+/** Decision applies only to matching kind + current attendance/outcome context. */
+export function roleDiscrepancyActiveDecision(
+  decision: RoleDiscrepancyDecision | null | undefined,
+  kind: 'organization' | 'training',
+  results: RoleDiscrepancyResults | undefined,
+): RoleDiscrepancyDecision | null {
+  if (!decision || decision.kind !== kind) return null;
+  if (!roleDiscrepancyContextsEqual(decision.context, roleDiscrepancyContextFromResults(results))) {
+    return null;
+  }
+  return decision;
+}
+
+export function boundRoleDiscrepancyFieldError(
+  decision: RoleDiscrepancyDecision | null | undefined,
+  kind: 'organization' | 'training',
+  results: RoleDiscrepancyResults | undefined,
+): string | null {
+  return roleDiscrepancyActiveDecision(decision, kind, results)?.fieldError ?? null;
+}
+
 /**
  * Omit discrepancy from the wire only when own attendance is known present (no open dispute).
  * Null myAttendance is AMBIGUOUS (manager projection gap) — never proof of not_participant_manager;
  * do not drop text. Outcome not_held always allows the field. Missing results → optional.
  */
-export function shouldOmitRoleDiscrepancy(results: {
-  outcome: { value: 'unknown' | 'held' | 'not_held' };
-  attendance?: { installed: boolean; myAttendance: { value: string; dispute: { status: string } | null } | null } | null;
-} | undefined): boolean {
+export function shouldOmitRoleDiscrepancy(results: RoleDiscrepancyResults | undefined): boolean {
   if (!results) return false;
   if (results.outcome.value === 'not_held') return false;
   const my = results.attendance?.installed ? results.attendance.myAttendance : undefined;
@@ -332,9 +412,10 @@ export type RoleDiscrepancyPresentation = {
 /**
  * UI + wire for role discrepancy: server REQUIRED recovers even if prior omit inference differs;
  * known-unnecessary (present) hides editable input and omits on wire while draft stays in store.
+ * Callers pass already kind+context-bound fieldError (see boundRoleDiscrepancyFieldError).
  */
 export function roleDiscrepancyPresentation(
-  results: Parameters<typeof shouldOmitRoleDiscrepancy>[0],
+  results: RoleDiscrepancyResults | undefined,
   fieldError: string | null | undefined,
 ): RoleDiscrepancyPresentation {
   if (fieldError === DISCREPANCY_REQUIRED_MESSAGE) {
@@ -388,22 +469,25 @@ export function resolveFeedbackDisplayMode(
 
 /**
  * Same patch DiscrepancyField applies — explicit rendered kind, never inferred draft.mode.
- * Peer comment/tags are untouched. REQUIRED recover stays until ACK so omit cannot drop text mid-edit.
+ * Peer comment/tags are untouched. REQUIRED recover stays while editing in the SAME bound context.
+ * Pass the active (kind+context-matched) decision; unbound/stale/cross-kind clears the store slot.
  */
 export function feedbackDiscrepancyDraftPatch(
   kind: 'organization' | 'training',
   text: string,
-  priorFieldError?: string | null,
+  activeDecision?: RoleDiscrepancyDecision | null,
 ): (
-  | { organizationDiscrepancy: string; discrepancyFieldError: string | null }
-  | { trainingDiscrepancy: string; discrepancyFieldError: string | null }
+  | { organizationDiscrepancy: string; discrepancyDecision: RoleDiscrepancyDecision | null }
+  | { trainingDiscrepancy: string; discrepancyDecision: RoleDiscrepancyDecision | null }
 ) {
-  const discrepancyFieldError = priorFieldError === DISCREPANCY_REQUIRED_MESSAGE
-    ? DISCREPANCY_REQUIRED_MESSAGE
+  const discrepancyDecision = activeDecision
+    && activeDecision.kind === kind
+    && activeDecision.fieldError === DISCREPANCY_REQUIRED_MESSAGE
+    ? activeDecision
     : null;
   return kind === 'organization'
-    ? { organizationDiscrepancy: text, discrepancyFieldError }
-    : { trainingDiscrepancy: text, discrepancyFieldError };
+    ? { organizationDiscrepancy: text, discrepancyDecision }
+    : { trainingDiscrepancy: text, discrepancyDecision };
 }
 
 /**

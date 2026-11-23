@@ -23,7 +23,12 @@ import {
   TAG_OPTIONS,
 } from '../postgame.ts';
 import type { PrivateReview, Results } from '../postgame.ts';
-import { roleDiscrepancyRequiredBlocksCreate } from '../postgame-feedback.ts';
+import {
+  boundRoleDiscrepancyFieldError,
+  roleDiscrepancyActiveDecision,
+  roleDiscrepancyRequiredBlocksCreate,
+  type RoleDiscrepancyDecision,
+} from '../postgame-feedback.ts';
 import { Choice, ReviewButton } from './postgame.tsx';
 import { Label, Loading, TextButton, styles } from './ui.tsx';
 
@@ -158,7 +163,7 @@ function ReportForm({ draftGameId, review }: { draftGameId: string; review: Priv
  * (default organization/training leaves mode undefined and would no-op onChange).
  */
 function DiscrepancyField({
-  gameId, kind, value, blocked, editable, fieldError, hint,
+  gameId, kind, value, blocked, editable, fieldError, hint, activeDecision,
 }: {
   gameId: string;
   kind: 'organization' | 'training';
@@ -167,6 +172,7 @@ function DiscrepancyField({
   editable: boolean;
   fieldError: string | null | undefined;
   hint: string | null;
+  activeDecision: RoleDiscrepancyDecision | null;
 }) {
   const { owner } = useOwner();
   const canEdit = !blocked && editable;
@@ -179,7 +185,7 @@ function DiscrepancyField({
       value={value}
       onChangeText={text => {
         if (!canEdit) return;
-        owner.setFeedbackDraft(gameId, feedbackDiscrepancyDraftPatch(kind, text, fieldError));
+        owner.setFeedbackDraft(gameId, feedbackDiscrepancyDraftPatch(kind, text, activeDecision));
       }}
       maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
       style={[styles.input, { minHeight: 60, maxHeight: 120 }]} />
@@ -218,7 +224,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
   const orgDiscrepancy = draft.organizationDiscrepancy ?? '';
   const trainingComment = draft.trainingComment ?? '';
   const trainingDiscrepancy = draft.trainingDiscrepancy ?? '';
-  const discrepancyError = draft.discrepancyFieldError;
+  // Bind server decision to the rendered role kind + current attendance/outcome — never cross-kind.
+  const roleKind = mode === 'organization' || mode === 'training' ? mode : null;
+  const activeDecision = roleKind
+    ? roleDiscrepancyActiveDecision(draft.discrepancyDecision, roleKind, data)
+    : null;
+  const discrepancyError = roleKind
+    ? boundRoleDiscrepancyFieldError(draft.discrepancyDecision, roleKind, data)
+    : null;
   const discrepancyUi = roleDiscrepancyPresentation(data, discrepancyError);
   const orgDiscrepancyNormalized = normalizeFormReason(orgDiscrepancy);
   const trainingDiscrepancyNormalized = normalizeFormReason(trainingDiscrepancy);
@@ -431,7 +444,8 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       {discrepancyUi.visible ? (
         <DiscrepancyField gameId={gameId} kind="organization" value={orgDiscrepancy}
           blocked={blocked} editable={canCreateOrganization && discrepancyUi.editable}
-          fieldError={discrepancyError} hint={discrepancyUi.hint} />
+          fieldError={discrepancyError} hint={discrepancyUi.hint}
+          activeDecision={activeDecision} />
       ) : null}
       <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
       <ReviewButton title="Отправить организатору лично"
@@ -452,7 +466,8 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
       {discrepancyUi.visible ? (
         <DiscrepancyField gameId={gameId} kind="training" value={trainingDiscrepancy}
           blocked={blocked} editable={canCreateTraining && discrepancyUi.editable}
-          fieldError={discrepancyError} hint={discrepancyUi.hint} />
+          fieldError={discrepancyError} hint={discrepancyUi.hint}
+          activeDecision={activeDecision} />
       ) : null}
       <Label>Отправляя отзыв, вы подтверждаете, что описываете собственный опыт этой встречи</Label>
       <ReviewButton title="Отправить"

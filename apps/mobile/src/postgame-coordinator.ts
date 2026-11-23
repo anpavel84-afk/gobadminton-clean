@@ -5,8 +5,12 @@ import { MessagesError } from './messages.ts';
 import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention, noteText } from './postgame.ts';
 import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage, PersonalNote } from './postgame.ts';
 import {
-  DISCREPANCY_REQUIRED_MESSAGE, DISCREPANCY_UNEXPECTED_MESSAGE, mergeReviewPages,
+  mergeReviewPages,
+  roleDiscrepancyContextsEqual,
+  roleDiscrepancyContextFromResults,
+  roleDiscrepancyDecisionFromError,
   type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason,
+  type RoleDiscrepancyDecision,
 } from './postgame-feedback.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
@@ -45,8 +49,11 @@ export type FeedbackDraft = {
   organizationDiscrepancy?: string;
   trainingComment?: string;
   trainingDiscrepancy?: string;
-  /** Server FEEDBACK_DISCREPANCY_* field message; cleared on mode switch / successful ACK. */
-  discrepancyFieldError?: string | null;
+  /**
+   * Server FEEDBACK_DISCREPANCY_* bound to kind + attendance/outcome context.
+   * Cleared on mode switch / successful ACK / authoritative context change; drafts stay.
+   */
+  discrepancyDecision?: RoleDiscrepancyDecision | null;
   replyText?: Record<string, string>;
   reportReviewId?: string;
   reportReason?: ReviewReportReason;
@@ -249,6 +256,20 @@ export class PostgameCoordinator {
       }
     }
     if (changed) this.show({drafts});
+  }
+  /** Authoritative attendance/outcome change retires obsolete REQUIRED/UNEXPECTED; draft texts stay. */
+  private retireStaleDiscrepancyDecision(gameId: string, results: Results) {
+    const draft = this.snapshot.feedbackDrafts[gameId];
+    const decision = draft?.discrepancyDecision;
+    if (!decision) return;
+    const current = roleDiscrepancyContextFromResults(results);
+    if (roleDiscrepancyContextsEqual(decision.context, current)) return;
+    this.show({
+      feedbackDrafts: {
+        ...this.snapshot.feedbackDrafts,
+        [gameId]: { ...draft, discrepancyDecision: null },
+      },
+    });
   }
   /**
    * Prefill/refresh only pristine selection — createDirty tracks explicit mutations
@@ -455,6 +476,7 @@ export class PostgameCoordinator {
       // A GET never acknowledges or settles a pending command. Roster pagination keeps selection.
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
+      this.retireStaleDiscrepancyDecision(gameId, data);
       if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
       if (data.feedback?.gameReviews?.length) this.rememberReviews(data.feedback.gameReviews, resultsGen, 'results');
       if (selection?.gameId === gameId) {
@@ -607,8 +629,8 @@ export class PostgameCoordinator {
     const prior = this.snapshot.feedbackDrafts[gameId] ?? {};
     const next: FeedbackDraft = { ...prior, ...patch };
     if (patch.replyText) next.replyText = { ...(prior.replyText ?? {}), ...patch.replyText };
-    // Mode switch clears discrepancy field error; kind-separated draft fields stay intact.
-    if (patch.mode !== undefined && patch.mode !== prior.mode) next.discrepancyFieldError = null;
+    // Mode switch clears bound discrepancy decision; kind-separated draft fields stay intact.
+    if (patch.mode !== undefined && patch.mode !== prior.mode) next.discrepancyDecision = null;
     // Opening/changing report target resets consent; keep known version from the open patch.
     if (patch.reportReviewId !== undefined && patch.reportReviewId !== prior.reportReviewId) {
       next.reportConsent = false;
@@ -1098,13 +1120,13 @@ export class PostgameCoordinator {
             organizationScore: null,
             organizationComment: '',
             organizationDiscrepancy: '',
-            discrepancyFieldError: null,
+            discrepancyDecision: null,
           }
           : {
             ...prior,
             trainingComment: '',
             trainingDiscrepancy: '',
-            discrepancyFieldError: null,
+            discrepancyDecision: null,
           };
         this.show({ feedbackDrafts: drafts });
       }
@@ -1182,15 +1204,19 @@ export class PostgameCoordinator {
         void this.loadReviews('received');
         void this.loadResults(packet.gameId);
       }
-      if (roleDiscrepancy && error instanceof PostgameError) {
-        // Preserve kind draft; surface Russian field message and require explicit re-review (no autosend).
+      if (roleDiscrepancy && error instanceof PostgameError
+        && (error.code === 'FEEDBACK_DISCREPANCY_REQUIRED' || error.code === 'FEEDBACK_DISCREPANCY_UNEXPECTED')) {
+        // Bind to actual packet kind + current results context — not a game-global Russian message key.
         const drafts = { ...this.snapshot.feedbackDrafts };
         const prior = drafts[packet.gameId] ?? {};
+        const kind = packet.kind === 'organization-create' ? 'organization' : 'training';
         drafts[packet.gameId] = {
           ...prior,
-          discrepancyFieldError: error.code === 'FEEDBACK_DISCREPANCY_REQUIRED'
-            ? DISCREPANCY_REQUIRED_MESSAGE
-            : DISCREPANCY_UNEXPECTED_MESSAGE,
+          discrepancyDecision: roleDiscrepancyDecisionFromError(
+            kind,
+            error.code,
+            this.snapshot.games[packet.gameId]?.data,
+          ),
         };
         this.show({ feedbackDrafts: drafts });
         void this.loadResults(packet.gameId);

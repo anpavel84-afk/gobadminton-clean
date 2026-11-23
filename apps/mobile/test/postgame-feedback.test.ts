@@ -13,7 +13,13 @@ import {
   reviewCommandsOpen, displayOnlyReview, resolvePeerDraftSubject, peerHistoryEmptyText,
   normalizeFormReason,
 } from '../src/postgame.ts';
-import { roleDiscrepancyRequiredBlocksCreate } from '../src/postgame-feedback.ts';
+import {
+  boundRoleDiscrepancyFieldError,
+  roleDiscrepancyActiveDecision,
+  roleDiscrepancyContextFromResults,
+  roleDiscrepancyDecisionFromError,
+  roleDiscrepancyRequiredBlocksCreate,
+} from '../src/postgame-feedback.ts';
 import type { Intent, Packet, PrivateReview, Results } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import { game as publicGame } from './fixtures.ts';
@@ -1598,13 +1604,17 @@ test('#522 private role: discrepancy REQUIRED/UNEXPECTED preserve draft; writes-
   await s.coordinator.confirm();
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'черновик');
   assert.equal(
-    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyFieldError,
+    boundRoleDiscrepancyFieldError(
+      s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision,
+      'organization',
+      heldPresent,
+    ),
     DISCREPANCY_REQUIRED_MESSAGE,
   );
   assert.match(s.coordinator.getSnapshot().notice ?? '', /пояснение расхождения/i);
 
   s.coordinator.setFeedbackDraft(game.id, {
-    organizationDiscrepancy: 'лишнее', discrepancyFieldError: null,
+    organizationDiscrepancy: 'лишнее', discrepancyDecision: null,
   });
   s.coordinator.review({
     kind: 'organization-create', gameId: game.id,
@@ -1615,7 +1625,11 @@ test('#522 private role: discrepancy REQUIRED/UNEXPECTED preserve draft; writes-
   });
   await s.coordinator.confirm();
   assert.equal(
-    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyFieldError,
+    boundRoleDiscrepancyFieldError(
+      s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision,
+      'organization',
+      heldPresent,
+    ),
     DISCREPANCY_UNEXPECTED_MESSAGE,
   );
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'черновик');
@@ -1656,19 +1670,25 @@ test('#522 Root A/B: default-kind discrepancy patch, ambiguous null attendance, 
   // Explicit rendered kind — draft.mode undefined (default org/training) must still write.
   assert.deepEqual(
     feedbackDiscrepancyDraftPatch('organization', 'пояснение орг'),
-    { organizationDiscrepancy: 'пояснение орг', discrepancyFieldError: null },
+    { organizationDiscrepancy: 'пояснение орг', discrepancyDecision: null },
   );
   assert.deepEqual(
     feedbackDiscrepancyDraftPatch('training', 'пояснение трен'),
-    { trainingDiscrepancy: 'пояснение трен', discrepancyFieldError: null },
+    { trainingDiscrepancy: 'пояснение трен', discrepancyDecision: null },
+  );
+  const requiredOrg = roleDiscrepancyDecisionFromError(
+    'organization', 'FEEDBACK_DISCREPANCY_REQUIRED', result,
   );
   assert.deepEqual(
-    feedbackDiscrepancyDraftPatch('organization', 'ещё', DISCREPANCY_REQUIRED_MESSAGE),
-    { organizationDiscrepancy: 'ещё', discrepancyFieldError: DISCREPANCY_REQUIRED_MESSAGE },
+    feedbackDiscrepancyDraftPatch('organization', 'ещё', requiredOrg),
+    { organizationDiscrepancy: 'ещё', discrepancyDecision: requiredOrg },
+  );
+  const unexpectedTrain = roleDiscrepancyDecisionFromError(
+    'training', 'FEEDBACK_DISCREPANCY_UNEXPECTED', result,
   );
   assert.deepEqual(
-    feedbackDiscrepancyDraftPatch('training', 'ещё', DISCREPANCY_UNEXPECTED_MESSAGE),
-    { trainingDiscrepancy: 'ещё', discrepancyFieldError: null },
+    feedbackDiscrepancyDraftPatch('training', 'ещё', unexpectedTrain),
+    { trainingDiscrepancy: 'ещё', discrepancyDecision: null },
   );
 
   assert.equal(resolveFeedbackDisplayMode(undefined, {
@@ -1828,5 +1848,202 @@ test('#522 Astra address3: REQUIRED empty discrepancy blocks create; readonly or
     ui,
     /if \(roleDiscrepancyRequiredBlocksCreate\(discrepancyError, normalizeFormReason\(trainingDiscrepancy\)\)\) return;/,
   );
+  // UI binds through active decision helpers — not a game-global discrepancyFieldError string.
+  assert.match(ui, /roleDiscrepancyActiveDecision/);
+  assert.match(ui, /boundRoleDiscrepancyFieldError/);
+});
+
+test('#522 address7: UNEXPECTED present→fresh absent/contested/not_held; kind fallback; REQUIRED same-context recover', async () => {
+  const presentRow = {
+    contextId: 'me', value: 'present' as const, version: 1, late: false,
+    assertion: { actorDisplay: null as string | null, source: 'self_attested' as const, at: date },
+    acknowledgedVersion: null as number | null, dispute: null as { id: string; version: number; challengedVersion: number; status: string } | null,
+    displayName: 'Я',
+    allowedActions: {
+      canSetAttendance: false, canAcknowledge: false, canDispute: false,
+      canWithdrawDispute: false, canRespondDispute: false, canRequestHelp: false,
+    },
+  };
+  let live: Results = {
+    ...result,
+    feedback: {
+      ...feedbackReady,
+      capabilities: {
+        ...feedbackReady.capabilities,
+        canCreatePeer: false,
+        canCreateOrganization: true,
+        canCreateTraining: true,
+        peerSubjects: [],
+      },
+    },
+    attendance: {
+      installed: true, writesEnabled: true,
+      myAttendance: presentRow,
+      roster: null, rosterNextCursor: null, summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+  };
+  const s = setup({ results: live, reviews: { received: [], sent: [] } });
+  s.port.results = async (_a: Actor, id: string) => ({ ...structuredClone(live), gameId: id });
+  await s.coordinator.loadResults(game.id);
+
+  s.port.send = async (p: Packet) => {
+    s.sentPkts.push(p);
+    if (p.kind === 'organization-create' && p.body.discrepancyExplanation) {
+      throw new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_UNEXPECTED');
+    }
+    if (p.kind === 'training-create' && !p.body.discrepancyExplanation) {
+      throw new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_REQUIRED');
+    }
+    return peerReview({
+      id: 'role-bound', kind: p.kind === 'training-create' ? 'training' : 'organization',
+      subjectContextId: null, peerRating: null, organizationScore: null,
+      comment: 'ok', tags: [], direction: 'sent',
+    });
+  };
+
+  // UNEXPECTED on present organization — decision bound to organization+present.
+  s.coordinator.setFeedbackDraft(game.id, {
+    mode: 'organization', organizationComment: 'org-draft', organizationDiscrepancy: 'лишнее',
+  });
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: {
+      kind: 'organization', experienceAssertion: 'i_experienced_this_game',
+      comment: 'org-draft', discrepancyExplanation: 'лишнее',
+    },
+  });
+  await s.coordinator.confirm();
+  const unexpectedDecision = s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision;
+  assert.ok(unexpectedDecision);
+  assert.equal(unexpectedDecision.kind, 'organization');
+  assert.equal(unexpectedDecision.fieldError, DISCREPANCY_UNEXPECTED_MESSAGE);
+  assert.deepEqual(unexpectedDecision.context, roleDiscrepancyContextFromResults(live));
+  assert.equal(
+    boundRoleDiscrepancyFieldError(unexpectedDecision, 'organization', live),
+    DISCREPANCY_UNEXPECTED_MESSAGE,
+  );
+  assert.deepEqual(
+    roleDiscrepancyPresentation(live, boundRoleDiscrepancyFieldError(unexpectedDecision, 'organization', live)),
+    { visible: true, editable: false, omitFromWire: true, hint: DISCREPANCY_OMIT_HINT },
+  );
+  // Cross-kind: training surface must not inherit organization UNEXPECTED.
+  assert.equal(boundRoleDiscrepancyFieldError(unexpectedDecision, 'training', live), null);
+  assert.deepEqual(
+    roleDiscrepancyPresentation(live, boundRoleDiscrepancyFieldError(unexpectedDecision, 'training', live)),
+    { visible: true, editable: false, omitFromWire: true, hint: DISCREPANCY_OMIT_HINT },
+  );
+
+  // Kind fallback display (lost training tab → organization): training decision never applies to org.
+  const trainRequired = roleDiscrepancyDecisionFromError('training', 'FEEDBACK_DISCREPANCY_REQUIRED', live);
+  assert.equal(
+    resolveFeedbackDisplayMode('training', { peer: false, organization: true, training: false }),
+    'organization',
+  );
+  assert.equal(
+    boundRoleDiscrepancyFieldError(trainRequired, 'organization', live),
+    null,
+    'fallback display must not transplant training decision onto organization',
+  );
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'org-draft');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationDiscrepancy, 'лишнее');
+
+  // Fresh absent: retire UNEXPECTED; form becomes editable without a predictably-bad confirmation.
+  live = {
+    ...live,
+    attendance: {
+      ...live.attendance!,
+      myAttendance: { ...presentRow, value: 'absent', version: 2 },
+    },
+  };
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision, null);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationComment, 'org-draft');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationDiscrepancy, 'лишнее');
+  assert.deepEqual(roleDiscrepancyPresentation(live, null), {
+    visible: true, editable: true, omitFromWire: false, hint: null,
+  });
+
+  // Contested (open dispute on present) and not_held also unbound from prior present UNEXPECTED.
+  const contested: Results = {
+    ...live,
+    attendance: {
+      ...live.attendance!,
+      myAttendance: {
+        ...presentRow,
+        value: 'present',
+        dispute: { id: 'd1', version: 1, challengedVersion: 1, status: 'open' },
+      },
+    },
+  };
+  const notHeld: Results = {
+    ...live,
+    outcome: { ...live.outcome, value: 'not_held' },
+    attendance: {
+      ...live.attendance!,
+      myAttendance: presentRow,
+    },
+  };
+  const stalePresentUnexpected = roleDiscrepancyDecisionFromError(
+    'organization', 'FEEDBACK_DISCREPANCY_UNEXPECTED',
+    { ...result, attendance: { installed: true, myAttendance: presentRow, roster: null, rosterNextCursor: null, summary: null, allowedActions: { canRecordAttendance: false, canBulkPresent: false } } },
+  );
+  assert.equal(boundRoleDiscrepancyFieldError(stalePresentUnexpected, 'organization', contested), null);
+  assert.equal(boundRoleDiscrepancyFieldError(stalePresentUnexpected, 'organization', notHeld), null);
+  assert.deepEqual(roleDiscrepancyPresentation(contested, null), {
+    visible: true, editable: true, omitFromWire: false, hint: null,
+  });
+  assert.deepEqual(roleDiscrepancyPresentation(notHeld, null), {
+    visible: true, editable: true, omitFromWire: false, hint: null,
+  });
+
+  // REQUIRED recovery persists while editing in the SAME absent context.
+  s.port.send = async (p: Packet) => {
+    s.sentPkts.push(p);
+    if (p.kind === 'organization-create' && !p.body.discrepancyExplanation) {
+      throw new PostgameError('business', 422, 'FEEDBACK_DISCREPANCY_REQUIRED');
+    }
+    return peerReview({
+      id: 'org-req', kind: 'organization', subjectContextId: null, peerRating: null,
+      organizationScore: null, comment: 'after', tags: [], direction: 'sent',
+      discrepancyExplanation: p.kind === 'organization-create' ? (p.body.discrepancyExplanation ?? null) : null,
+    });
+  };
+  s.coordinator.setFeedbackDraft(game.id, {
+    mode: 'organization', organizationComment: 'after-absent', organizationDiscrepancy: '',
+  });
+  s.coordinator.review({
+    kind: 'organization-create', gameId: game.id,
+    body: { kind: 'organization', experienceAssertion: 'i_experienced_this_game', comment: 'after-absent' },
+  });
+  await s.coordinator.confirm();
+  const requiredDecision = s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision;
+  assert.ok(requiredDecision);
+  assert.equal(requiredDecision.fieldError, DISCREPANCY_REQUIRED_MESSAGE);
+  assert.equal(
+    boundRoleDiscrepancyFieldError(requiredDecision, 'organization', live),
+    DISCREPANCY_REQUIRED_MESSAGE,
+  );
+  const editPatch = feedbackDiscrepancyDraftPatch(
+    'organization',
+    'пояснение после absent',
+    roleDiscrepancyActiveDecision(requiredDecision, 'organization', live),
+  );
+  assert.equal(editPatch.discrepancyDecision?.fieldError, DISCREPANCY_REQUIRED_MESSAGE);
+  s.coordinator.setFeedbackDraft(game.id, editPatch);
+  assert.equal(
+    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision?.fieldError,
+    DISCREPANCY_REQUIRED_MESSAGE,
+  );
+  assert.equal(
+    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.organizationDiscrepancy,
+    'пояснение после absent',
+  );
+  // New kind must not receive the organization REQUIRED decision.
+  assert.equal(boundRoleDiscrepancyFieldError(
+    s.coordinator.getSnapshot().feedbackDrafts[game.id]?.discrepancyDecision,
+    'training',
+    live,
+  ), null);
 });
 
