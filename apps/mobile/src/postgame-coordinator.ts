@@ -308,8 +308,11 @@ export class PostgameCoordinator {
     this.publicMutationBind=null; this.publicOwnDenied=false;
     // Same-account reauth: keep actor-scoped version/awaiting fences so a deferred own GET
     // cannot let an older ACK repaint over a floor already established this session.
-    // Different actor / logout still drops fences; write authority reestablishes via fresh GET only.
-    if (!saved) {
+    // AuthCoordinator.refresh() hydrates via setActor(null) while quarantine retains UNKNOWN —
+    // park floors across that transient null; restore only when the matching account returns.
+    // Different actor still drops fences; write authority reestablishes via fresh GET only.
+    // Explicit forget() clears floors separately. Null alone must not wipe a parked floor.
+    if (actor && !saved) {
       this.publicOwnVersionFloor.clear();
       this.publicOwnAwaitingTyped.clear();
     }

@@ -1284,7 +1284,7 @@ test('eligibility 401 retires consent; UNKNOWN create packet preserved without a
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 
-test('#522 QA4: same-actor reauth keeps version floor; deferred GET then older withdraw ACK cannot paint over v4', async () => {
+test('#522 QA5: null-actor reauth keeps version floor; deferred GET then older withdraw ACK cannot paint over v4', async () => {
   const reviewId = '55555555-5555-4555-8555-555555555555';
   const v2 = {
     id: reviewId,
@@ -1332,7 +1332,7 @@ test('#522 QA4: same-actor reauth keeps version floor; deferred GET then older w
         throw new PostgameError('network', 503);
       },
     }),
-  }, () => 'qa4-reauth-floor');
+  }, () => 'qa5-null-reauth-floor');
 
   owner.setActor(actor);
   owner.openOwnPublicHistory();
@@ -1351,13 +1351,23 @@ test('#522 QA4: same-actor reauth keeps version floor; deferred GET then older w
   assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
   assert.equal(mayPaintOwnPublicReceipt(ackV3, owner.getSnapshot().publicOwn.data!.items[0], 4), false);
 
-  // Same-actor session/generation rotate; defer automatic history GET so ACK races before typed rows return.
+  // Production AuthCoordinator.refresh(): show(hydrating) → postgame.setActor(null), then accept → setActor(same).
+  // Must not bypass the null phase with a direct actor swap — that missed the floor wipe.
   ownPhase = 'defer';
+  owner.setActor(null);
+  await tick();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicOwn.data, undefined);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+
   owner.setActor({ ...actor, sessionId: 'reauth-session', generation: 2 });
   await tick();
   assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
   assert.equal(owner.getSnapshot().publicOwn.status, 'loading');
+  // Private typed rows stay unloaded until GET; floor must still fence older ACK paint.
+  assert.equal(owner.getSnapshot().publicOwn.data?.items?.[0]?.version, undefined);
 
   // Explicit reconciliation of original withdrawn ACK v3 must not paint over established v4 floor
   // even while the reauth GET is still outstanding (typed rows not yet restored).
@@ -1376,6 +1386,92 @@ test('#522 QA4: same-actor reauth keeps version floor; deferred GET then older w
   await tick();
   assert.equal(owner.getSnapshot().publicReceipt, null);
   assert.notEqual(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
+});
+
+test('#522 QA5: different account after null-actor quarantine cannot restore floor, UNKNOWN, or private rows', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const v2 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'Приватный текст аккаунта A',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  const v4 = {
+    ...v2,
+    version: 4,
+    text: 'Повторная подача A',
+    receiptToken: 'r4',
+    pendingRevision: 2,
+  };
+  const ackV3 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    version: 3,
+    status: 'withdrawn' as const,
+    receiptToken: 'w-receipt-v3',
+    pendingIntakeStatus: 'waiting_intake' as const,
+  };
+  let ownPhase: 'v2' | 'v4' | 'empty' = 'v2';
+  let sendMode: 'unknown' | 'ack-v3' = 'unknown';
+  const keys: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => ({ items: ownPhase === 'empty' ? [] : ownPhase === 'v4' ? [v4] : [v2] }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        if (sendMode === 'ack-v3') return ackV3;
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => 'qa5-cross-account');
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  await withdrawWithRender(owner, v2);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  ownPhase = 'v4';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
+
+  // Hydrating null parks A's UNKNOWN + floor; account B must not inherit them.
+  owner.setActor(null);
+  await tick();
+  ownPhase = 'empty';
+  const beforeB = keys.length;
+  owner.setActor({ actorId: 'actor-b', sessionId: 'session-b', generation: 1 });
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.equal(owner.getSnapshot().publicDraft, null);
+  assert.equal(owner.getSnapshot().publicOwn.data?.items?.length ?? 0, 0);
+  assert.notEqual(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
+  assert.equal(keys.length, beforeB);
+
+  // B has no restored write/reconcile authority for A's packet; no cross-account send.
+  sendMode = 'ack-v3';
+  await owner.reconcilePublic();
+  await tick();
+  assert.equal(keys.length, beforeB);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+
+  // Fresh empty own list for B is not overwritten by A's withdrawn ACK or private text.
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items?.length ?? 0, 0);
+  assert.equal(owner.getSnapshot().publicOwn.data?.items?.[0]?.text, undefined);
 });
 
 test('#522 QA4: withdraw 409 VERSION_CONFLICT notice survives owning follow-up own-list GET', async () => {
