@@ -462,6 +462,41 @@ export function noteVenueExperienceRouteOwner(
   return next ?? prior;
 }
 
+/** Immutable owner for one focused Profile own-venue history lifetime. */
+export type OwnVenueHistoryRouteOwner = {
+  gen: number;
+  actorId: string;
+  sessionId: string;
+};
+
+/**
+ * Capture THIS Profile route's owned history surface when live actor matches.
+ * Blur/unmount cleanup must retire this capture — never rebuild expected from a later getSnapshot().
+ */
+export function captureOwnVenueHistoryRouteOwner(args: {
+  actor: { actorId: string; sessionId: string } | null | undefined;
+  surface: { mode: 'history'; gen: number } | null | undefined;
+}): OwnVenueHistoryRouteOwner | null {
+  const { actor, surface } = args;
+  if (!actor || !surface || surface.mode !== 'history') return null;
+  return {
+    gen: surface.gen,
+    actorId: actor.actorId,
+    sessionId: actor.sessionId,
+  };
+}
+
+/**
+ * While Profile stays focused, remember the latest matching history owner (open after focus / reopen).
+ * A null next leaves the prior capture unchanged — ordinary close does not clear departure debt.
+ */
+export function noteOwnVenueHistoryRouteOwner(
+  prior: OwnVenueHistoryRouteOwner | null,
+  next: OwnVenueHistoryRouteOwner | null,
+): OwnVenueHistoryRouteOwner | null {
+  return next ?? prior;
+}
+
 /**
  * Production gate for VenueExperienceEntry eligibility GET.
  * Probe only when THIS route is focused, actor/session verified, live venue + ready results,
@@ -488,8 +523,319 @@ export function venueExperienceEntryProbeTarget(args: {
   return { gameId: args.gameId.toLowerCase(), venueId: args.liveVenueId.toLowerCase() };
 }
 
-export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experience-create' {
-  return kind === 'venue-experience-create';
+export type OwnVenueReview = {
+  id: string;
+  reviewHandle: string;
+  venueId: string;
+  status: string;
+  version: number;
+  audience: VenueAudience | null;
+  text: string | null;
+  topics: VenueReviewTopic[];
+  pendingRevision: number | null;
+  approvedRevision: number | null;
+  publicVisible: boolean;
+  notBefore: string | null;
+  firstEligibleAt: string | null;
+  receiptToken: string | null;
+};
+
+export type SelectedOwnVenueReview = OwnVenueReview & {
+  editContext: {
+    revisionId: string;
+    resourceVersion: number;
+    gameId: string;
+    basis: OwnVenueEligibilityBasis;
+  } | null;
+  editUnavailableReason: 'withdrawn' | 'missing_history' | null;
+};
+
+export type VenueExperienceSubmitRevisionBody = {
+  action: 'submit_revision';
+  expectedVersion: number;
+  gameId: string;
+  audience: VenueAudience;
+  expectedBasisVersions: { outcomeVersion: number; attendanceVersion: number };
+  text: string;
+  topics: VenueReviewTopic[];
+  consentProjectionHash?: string;
+};
+
+export type VenueExperienceWithdrawBody = {
+  action: 'withdraw';
+  expectedVersion: number;
+};
+
+export type VenueExperienceCommandBody =
+  | VenueExperienceSubmitRevisionBody
+  | VenueExperienceWithdrawBody;
+
+export type OwnVenueReviewsPage = { items: OwnVenueReview[] };
+
+/** Closed parser for GET /me/venue-reviews — owner private list only. */
+export function parseOwnVenueReviewsPage(value: unknown): OwnVenueReviewsPage {
+  const row = object(value);
+  if (!Array.isArray(row.items) || row.items.length > 50) throw new PublicApiError('invalid');
+  const items = row.items.map(parseOwnVenueReview);
+  if (new Set(items.map(item => item.id)).size !== items.length) throw new PublicApiError('invalid');
+  return { items };
+}
+
+export function parseOwnVenueReview(value: unknown): OwnVenueReview {
+  const entry = object(value);
+  const id = uuid(entry.id);
+  if (!text(entry.reviewHandle) || !HANDLE.test(entry.reviewHandle)) throw new PublicApiError('invalid');
+  if (!isVenueId(entry.venueId)) throw new PublicApiError('invalid');
+  if (!text(entry.status) || entry.status.length < 1 || entry.status.length > 64) {
+    throw new PublicApiError('invalid');
+  }
+  if (!(entry.audience === null || entry.audience === 'self_draft' || entry.audience === 'public_venue')) {
+    throw new PublicApiError('invalid');
+  }
+  if (!(entry.text === null || (text(entry.text) && entry.text.length <= 500))) {
+    throw new PublicApiError('invalid');
+  }
+  const topics = venueTopics(entry.topics ?? []);
+  if (!(entry.pendingRevision === null || (typeof entry.pendingRevision === 'number' && Number.isInteger(entry.pendingRevision) && entry.pendingRevision >= 1))) {
+    throw new PublicApiError('invalid');
+  }
+  if (!(entry.approvedRevision === null || (typeof entry.approvedRevision === 'number' && Number.isInteger(entry.approvedRevision) && entry.approvedRevision >= 1))) {
+    throw new PublicApiError('invalid');
+  }
+  if (typeof entry.publicVisible !== 'boolean') throw new PublicApiError('invalid');
+  if (!(entry.notBefore === null || date(entry.notBefore))) throw new PublicApiError('invalid');
+  if (!(entry.firstEligibleAt === null || date(entry.firstEligibleAt))) throw new PublicApiError('invalid');
+  if (!(entry.receiptToken === null
+    || (text(entry.receiptToken) && entry.receiptToken.trim().length >= 1))) {
+    throw new PublicApiError('invalid');
+  }
+  return {
+    id,
+    reviewHandle: entry.reviewHandle.toLowerCase(),
+    venueId: String(entry.venueId).toLowerCase(),
+    status: entry.status,
+    version: int(entry.version, 1),
+    audience: entry.audience as VenueAudience | null,
+    text: entry.text as string | null,
+    topics,
+    pendingRevision: entry.pendingRevision as number | null,
+    approvedRevision: entry.approvedRevision as number | null,
+    publicVisible: entry.publicVisible,
+    notBefore: entry.notBefore as string | null,
+    firstEligibleAt: entry.firstEligibleAt as string | null,
+    receiptToken: entry.receiptToken as string | null,
+  };
+}
+
+/** Closed parser for GET /me/venue-reviews/{id} — selected owner snapshot. */
+export function parseSelectedOwnVenueReview(value: unknown): SelectedOwnVenueReview {
+  const base = parseOwnVenueReview(value);
+  const row = object(value);
+  const reason = row.editUnavailableReason;
+  if (!(reason === null || reason === 'withdrawn' || reason === 'missing_history')) {
+    throw new PublicApiError('invalid');
+  }
+  if (row.editContext === null) {
+    if (reason !== 'withdrawn' && reason !== 'missing_history') throw new PublicApiError('invalid');
+    return { ...base, editContext: null, editUnavailableReason: reason };
+  }
+  const edit = object(row.editContext);
+  const basisRaw = object(edit.basis);
+  const admission = text(basisRaw.admission) && ADMISSIONS.has(basisRaw.admission)
+    ? basisRaw.admission as OwnVenueEligibilityBasis['admission']
+    : null;
+  if (!admission) throw new PublicApiError('invalid');
+  if (!(basisRaw.gameTitle === null || text(basisRaw.gameTitle))) throw new PublicApiError('invalid');
+  if (!(basisRaw.reason === null || text(basisRaw.reason))) throw new PublicApiError('invalid');
+  if (!(basisRaw.firstEligibleAt === null || date(basisRaw.firstEligibleAt))) {
+    throw new PublicApiError('invalid');
+  }
+  const help = basisRaw.helpHint === null ? null
+    : text(basisRaw.helpHint) && HELP.has(basisRaw.helpHint)
+      ? basisRaw.helpHint as OwnVenueEligibilityBasis['helpHint']
+      : (() => { throw new PublicApiError('invalid'); })();
+  const gameId = uuid(edit.gameId);
+  const basis: OwnVenueEligibilityBasis = {
+    gameId: uuid(basisRaw.gameId),
+    gameTitle: basisRaw.gameTitle as string | null,
+    admission,
+    reason: basisRaw.reason as string | null,
+    outcomeVersion: int(basisRaw.outcomeVersion),
+    attendanceVersion: int(basisRaw.attendanceVersion),
+    firstEligibleAt: basisRaw.firstEligibleAt as string | null,
+    helpHint: help,
+  };
+  if (basis.gameId !== gameId) throw new PublicApiError('invalid');
+  if (!text(edit.revisionId) || !UUID.test(edit.revisionId)) throw new PublicApiError('invalid');
+  const resourceVersion = int(edit.resourceVersion, 1);
+  if (resourceVersion !== (base.pendingRevision ?? base.approvedRevision)) {
+    throw new PublicApiError('invalid');
+  }
+  if (base.status === 'withdrawn' || reason !== null) throw new PublicApiError('invalid');
+  return {
+    ...base,
+    editContext: {
+      revisionId: String(edit.revisionId).toLowerCase(),
+      resourceVersion,
+      gameId,
+      basis,
+    },
+    editUnavailableReason: null,
+  };
+}
+
+/** Validate selected private response still matches the row identity before edit/withdraw. */
+export function isSelectedOwnVenueReview(
+  value: SelectedOwnVenueReview,
+  own: Pick<OwnVenueReview, 'id' | 'venueId' | 'reviewHandle'>,
+): boolean {
+  if (!value || value.id !== own.id || value.venueId !== own.venueId
+    || value.reviewHandle !== own.reviewHandle
+    || !Number.isSafeInteger(value.version) || value.version < 1
+    || !Array.isArray(value.topics) || value.topics.length > 3
+    || value.topics.some(topic => !TOPICS.has(topic))
+    || (value.text !== null && typeof value.text !== 'string')
+    || ![null, 'self_draft', 'public_venue'].includes(value.audience)) {
+    return false;
+  }
+  const edit = value.editContext;
+  if (edit === null) {
+    return value.editUnavailableReason === 'withdrawn'
+      || value.editUnavailableReason === 'missing_history';
+  }
+  return Boolean(
+    value.status !== 'withdrawn'
+    && value.editUnavailableReason === null
+    && typeof edit.revisionId === 'string' && edit.revisionId
+    && Number.isSafeInteger(edit.resourceVersion) && edit.resourceVersion >= 1
+    && edit.resourceVersion === (value.pendingRevision ?? value.approvedRevision)
+    && typeof edit.gameId === 'string' && edit.gameId
+    && edit.basis && edit.basis.gameId === edit.gameId
+    && ADMISSIONS.has(edit.basis.admission)
+    && Number.isSafeInteger(edit.basis.outcomeVersion) && edit.basis.outcomeVersion >= 0
+    && Number.isSafeInteger(edit.basis.attendanceVersion) && edit.basis.attendanceVersion >= 0,
+  );
+}
+
+export function isWithdrawVenueReviewReceipt(
+  value: unknown,
+  own: Pick<OwnVenueReview, 'id' | 'reviewHandle' | 'version'>,
+): value is VenueReviewMutationReceipt {
+  if (!value || typeof value !== 'object') return false;
+  try {
+    const receipt = parseVenueReviewMutationReceipt(value);
+    return receipt.id === own.id
+      && receipt.reviewHandle === own.reviewHandle
+      && Number.isSafeInteger(own.version) && own.version >= 1
+      && receipt.version === own.version + 1
+      && receipt.status === 'withdrawn'
+      && receipt.publicVisible === false
+      && receipt.receiptToken === null
+      && receipt.notBefore === null;
+  } catch {
+    return false;
+  }
+}
+
+export function isSubmitVenueReviewReceipt(
+  value: unknown,
+  own: Pick<OwnVenueReview, 'id' | 'reviewHandle' | 'version'>,
+  audience: VenueAudience,
+): value is VenueReviewMutationReceipt {
+  if (!value || typeof value !== 'object') return false;
+  try {
+    const receipt = parseVenueReviewMutationReceipt(value);
+    if (receipt.id !== own.id || receipt.reviewHandle !== own.reviewHandle
+      || receipt.version !== own.version + 1) {
+      return false;
+    }
+    return isVenueExperienceCreateReceipt(receipt, audience);
+  } catch {
+    return false;
+  }
+}
+
+export function buildVenueExperienceWithdrawBody(
+  own: Pick<OwnVenueReview, 'version'>,
+): VenueExperienceWithdrawBody {
+  if (!Number.isSafeInteger(own.version) || own.version < 1) throw new PublicApiError('invalid');
+  return { action: 'withdraw', expectedVersion: own.version };
+}
+
+export function buildVenueExperienceSubmitRevisionBody(args: {
+  own: SelectedOwnVenueReview;
+  audience: VenueAudience;
+  text: string;
+  topics: VenueReviewTopic[];
+  consentProjectionHash?: string;
+}): VenueExperienceSubmitRevisionBody {
+  const edit = args.own.editContext;
+  if (!edit || edit.basis.admission !== 'may_submit' || args.own.status === 'withdrawn') {
+    throw new PublicApiError('invalid');
+  }
+  const text = venueExperienceText(args.text);
+  const topics = venueTopics(args.topics);
+  if (args.audience === 'public_venue') {
+    const hash = args.consentProjectionHash?.toLowerCase();
+    if (!hash || !CONSENT_HASH.test(hash)) throw new PublicApiError('invalid');
+    return {
+      action: 'submit_revision',
+      expectedVersion: args.own.version,
+      gameId: edit.gameId,
+      audience: 'public_venue',
+      expectedBasisVersions: {
+        outcomeVersion: edit.basis.outcomeVersion,
+        attendanceVersion: edit.basis.attendanceVersion,
+      },
+      text,
+      topics,
+      consentProjectionHash: hash,
+    };
+  }
+  if (args.consentProjectionHash !== undefined) throw new PublicApiError('invalid');
+  return {
+    action: 'submit_revision',
+    expectedVersion: args.own.version,
+    gameId: edit.gameId,
+    audience: 'self_draft',
+    expectedBasisVersions: {
+      outcomeVersion: edit.basis.outcomeVersion,
+      attendanceVersion: edit.basis.attendanceVersion,
+    },
+    text,
+    topics,
+  };
+}
+
+export function mayWithdrawOwnVenue(item: OwnVenueReview): boolean {
+  return item.status !== 'withdrawn' && Number.isSafeInteger(item.version) && item.version >= 1;
+}
+
+export function mayEditOwnVenue(item: SelectedOwnVenueReview): boolean {
+  return item.status !== 'withdrawn'
+    && item.editContext?.basis.admission === 'may_submit'
+    && item.editUnavailableReason === null;
+}
+
+export function ownVenueStatusLabel(item: OwnVenueReview): string {
+  if (item.status === 'withdrawn') return 'Отозван';
+  // Astra1: audience/status self_draft (incl. non-pending tip) is private — before pending/moderation.
+  if (item.audience === 'self_draft' || item.status === 'self_draft') {
+    return 'Личный черновик';
+  }
+  if (item.pendingRevision !== null || item.receiptToken) {
+    // Private pending over a published tip (revision_waiting + null token) — never “moderation”.
+    const privatePending = item.receiptToken === null && item.audience !== 'public_venue';
+    return privatePending ? 'Личный черновик' : 'На проверке';
+  }
+  if (item.publicVisible) return 'Опубликован';
+  return 'Не опубликован';
+}
+
+export function isVenueExperiencePacketKind(
+  kind: string,
+): kind is 'venue-experience-create' | 'venue-experience-command' {
+  return kind === 'venue-experience-create' || kind === 'venue-experience-command';
 }
 
 /**
@@ -505,6 +851,67 @@ export function isVenueExperienceCreatePacket<T extends { readonly kind: string 
   readonly body: VenueExperienceCreateBody;
 } {
   return packet.kind === 'venue-experience-create';
+}
+
+export function isVenueExperienceCommandPacket<T extends { readonly kind: string }>(
+  packet: T,
+): packet is T & {
+  readonly kind: 'venue-experience-command';
+  readonly gameId: string;
+  readonly venueId: string;
+  readonly reviewId: string;
+  readonly reviewHandle: string;
+  readonly body: VenueExperienceCommandBody;
+} {
+  return packet.kind === 'venue-experience-command';
+}
+
+/**
+ * Production pending-recovery navigation target for venue packets.
+ * Create keeps immutable results gameId; owner command never uses a game URL (incl. sentinel own-venue).
+ */
+export function venueExperiencePendingRecoveryTarget(packet: {
+  readonly kind: string;
+  readonly gameId: string;
+}): { kind: 'create-results'; gameId: string } | { kind: 'owner-history' } | null {
+  if (isVenueExperienceCreatePacket(packet)) {
+    return { kind: 'create-results', gameId: packet.gameId };
+  }
+  if (isVenueExperienceCommandPacket(packet)) {
+    return { kind: 'owner-history' };
+  }
+  return null;
+}
+
+/**
+ * Selected own-detail must match the requested id and current own row handle/venue when known.
+ * A valid different row fails closed — never retargets the editor or clears a selected-read fence.
+ */
+export function ownVenueSelectedMatchesRequest(
+  selected: { id: string; venueId: string; reviewHandle: string },
+  request: { id: string; venueId?: string; reviewHandle?: string },
+): boolean {
+  if (!selected || selected.id !== request.id) return false;
+  if (request.venueId !== undefined && selected.venueId !== request.venueId) return false;
+  if (request.reviewHandle !== undefined && selected.reviewHandle !== request.reviewHandle) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Withdraw confirm view flags — sending is busy; UNKNOWN is pending/actionable, not busy.
+ * Hide (not cancel) while sending or UNKNOWN so closing preserves the journal.
+ */
+export function ownVenueWithdrawConfirmFlags(input: {
+  command: { status: string; packet: { readonly kind: string } } | null | undefined;
+}): { busy: boolean; pending: boolean; hideWindow: boolean } {
+  const owner = input.command && isVenueExperienceCommandPacket(input.command.packet)
+    ? input.command
+    : null;
+  const busy = owner?.status === 'sending';
+  const pending = owner?.status === 'unknown';
+  return { busy: !!busy, pending: !!pending, hideWindow: !!busy || !!pending };
 }
 
 export function venueExperienceIdempotencyExpired(firstDispatchedAt: number, now = Date.now()): boolean {

@@ -67,17 +67,30 @@ import {
 } from './role-reputation.ts';
 import {
   buildVenueExperienceCreateBody,
+  buildVenueExperienceSubmitRevisionBody,
+  buildVenueExperienceWithdrawBody,
   emptyVenueExperienceDraft,
   exactGameMaySubmitBasis,
+  isSelectedOwnVenueReview,
+  isVenueExperienceCommandPacket,
   isVenueExperienceCreatePacket,
   isVenueExperiencePacketKind,
+  mayEditOwnVenue,
+  mayWithdrawOwnVenue,
+  ownVenueSelectedMatchesRequest,
   parseOwnVenueEligibility,
+  parseOwnVenueReviewsPage,
+  parseSelectedOwnVenueReview,
   parseVenueConsentPreview,
   postgameIdempotencyReplayBlocked,
   venueExperienceBasisAuthority,
   venueExperienceText,
+  venueReviewEligibilityHelp,
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   type OwnVenueEligibility,
+  type OwnVenueReview,
+  type OwnVenueReviewsPage,
+  type SelectedOwnVenueReview,
   type VenueAudience,
   type VenueExperienceDraft,
   type VenueReviewMutationReceipt,
@@ -114,13 +127,18 @@ type VenueFreshDispatchBind = {
   audience: VenueAudience;
   basisAuthority: string;
   eligibilityGen: number;
+  /** Present for owner submit_revision — absent for exact-game create. */
+  reviewId?: string;
+  slotVersion?: number;
+  revisionId?: string;
+  resourceVersion?: number;
 };
 export type PostgameDispatchPermit = {
   key: string;
   actorId: string;
   sessionId: string;
   firstDispatchedAt?: number;
-  /** Present only for fresh venue-experience-create — never for UNKNOWN reconcile. */
+  /** Present only for fresh venue create/submit_revision — never for UNKNOWN reconcile or withdraw. */
   freshVenue?: Omit<VenueFreshDispatchBind, 'key'>;
 };
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
@@ -252,13 +270,26 @@ type Snapshot = {
   pendingPublicReader: PublicRoleReaderTarget | null;
   /** Exact-game venue eligibility probe target (composer may be closed). */
   venueProbe: null | { gameId: string; venueId: string };
-  /** Exact-game venue experience composer — no venue picker / broad CTA. */
-  venueExperience: null | { gameId: string; venueId: string; gen: number };
+  /** Exact-game venue experience composer — no venue picker / broad CTA. reviewId marks Profile edit. */
+  venueExperience: null | { gameId: string; venueId: string; gen: number; reviewId?: string };
   venueEligibility: Source<OwnVenueEligibility>;
   venueDraft: VenueExperienceDraft | null;
   venueConsentHash: string | null;
   venueReceipt: VenueReviewMutationReceipt | null;
   venueNotice: string | null;
+  /** Profile own venue history — separate from exact-game create and private CommandReview. */
+  ownVenueSurface: null | { mode: 'history'; gen: number };
+  ownVenue: Source<OwnVenueReviewsPage>;
+  /** Last successful selected GET for edit/conflict recovery. */
+  ownVenueSelected: SelectedOwnVenueReview | null;
+  /** Row pending explicit withdraw confirm (history sheet). */
+  ownVenueWithdraw: OwnVenueReview | null;
+  /**
+   * Version conflict / selected-edit fence.
+   * Active selected editor: only successful matching selected GET clears.
+   * Withdraw-row conflict: successful list GET may clear (fresh confirm required).
+   */
+  ownVenueReadRequired: boolean;
 };
 type Port = {
   own: (actor: Actor, cursor?: string) => Promise<OwnResults>;
@@ -300,6 +331,8 @@ type Port = {
     query?: { cursor?: string; limit?: number },
   ) => Promise<unknown>;
   venueExperienceEligibility?: (actor: Actor, venueId: string) => Promise<unknown>;
+  venueExperienceOwnList?: (actor: Actor) => Promise<unknown>;
+  venueExperienceOwnDetail?: (actor: Actor, id: string) => Promise<unknown>;
   venueExperienceConsentPreview?: (
     actor: Actor,
     body: { venueId: string; text: string; topics: VenueReviewTopic[] },
@@ -328,6 +361,11 @@ const empty = (actor: Actor | null): Snapshot => ({
   venueConsentHash: null,
   venueReceipt: null,
   venueNotice: null,
+  ownVenueSurface: null,
+  ownVenue: { status: 'idle' },
+  ownVenueSelected: null,
+  ownVenueWithdraw: null,
+  ownVenueReadRequired: false,
 });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
 function draftKey(gameId: string, contextId: string, disputeId?: string | null) {
@@ -363,6 +401,11 @@ function freezeIntent(intent: Intent): Intent {
     case 'public-role-reply': copy={...intent,body:{...intent.body}}; break;
     case 'public-role-report': copy={...intent,body:{...intent.body}}; break;
     case 'venue-experience-create': copy={...intent,body:{...intent.body,expectedBasisVersions:{...intent.body.expectedBasisVersions},topics:[...intent.body.topics]}}; break;
+    case 'venue-experience-command': {
+      if (intent.body.action === 'withdraw') copy={...intent,body:{...intent.body}};
+      else copy={...intent,body:{...intent.body,expectedBasisVersions:{...intent.body.expectedBasisVersions},topics:[...intent.body.topics]}};
+      break;
+    }
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
   if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
@@ -374,6 +417,9 @@ function freezeIntent(intent: Intent): Intent {
     Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
   }
   if (copy.kind === 'venue-experience-create') {
+    Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
+  }
+  if (copy.kind === 'venue-experience-command' && copy.body.action === 'submit_revision') {
     Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
   }
   Object.freeze(copy.body); return Object.freeze(copy);
@@ -450,6 +496,20 @@ export class PostgameCoordinator {
   private venueEligibilityGen = 0;
   private venuePreviewGen = 0;
   private venueSurfaceGen = 0;
+  /** Profile own venue history surface/list/selected generation fences. */
+  private ownVenueSurfaceGen = 0;
+  private ownVenueListGen = 0;
+  private ownVenueSelectedGen = 0;
+  /**
+   * One-shot Profile focus open for owner pending recovery — actor-fenced, GET only, zero POST.
+   * Set before navigating to /profile; consumed once on verified Profile focus; discarded on logout/switch.
+   */
+  private ownVenueHistoryNavIntent: null | { actorId: string; sessionId: string } = null;
+  /**
+   * List GET demanded while inFlight/sending — flushed once after inFlight cleanup when surface gen still current.
+   * Cleared on close/retire/account switch; never a timer/poll.
+   */
+  private ownVenueListDeferred: null | { surfaceGen: number; preserveNotice: boolean } = null;
   /**
    * Fresh venue create post-token authority — cleared on settle/UNKNOWN path end/setActor/forget.
    * Distinct from writePrepare (pre-dispatch) and from UNKNOWN reconcile (no fresh bind).
@@ -482,6 +542,8 @@ export class PostgameCoordinator {
     if (!port.publicOwnReviews) port.publicOwnReviews = async () => ({ items: [] });
     if (!port.publicRoleByHandle) port.publicRoleByHandle = async () => { throw new PostgameError('private', 404); };
     if (!port.venueExperienceEligibility) port.venueExperienceEligibility = async () => { throw new PostgameError('private', 404); };
+    if (!port.venueExperienceOwnList) port.venueExperienceOwnList = async () => ({ items: [] });
+    if (!port.venueExperienceOwnDetail) port.venueExperienceOwnDetail = async () => { throw new PostgameError('private', 404); };
     if (!port.venueExperienceConsentPreview) port.venueExperienceConsentPreview = async () => { throw new PostgameError('private', 404); };
     this.port = port as Required<Port>;
     this.random = random;
@@ -504,6 +566,8 @@ export class PostgameCoordinator {
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     this.writePrepare = null;
     this.venueFreshDispatchBind = null;
+    this.ownVenueHistoryNavIntent = null;
+    this.ownVenueListDeferred = null;
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
@@ -605,6 +669,13 @@ export class PostgameCoordinator {
       venueNotice: saved.command && isVenueExperiencePacketKind(saved.command.packet.kind)
         ? unknownNotice
         : saved.venueNotice,
+      ownVenueSurface: saved.ownVenueSurface
+        ? { ...saved.ownVenueSurface, gen: ++this.ownVenueSurfaceGen }
+        : null,
+      ownVenue: { status: 'idle' },
+      ownVenueSelected: saved.ownVenueSelected ? { ...saved.ownVenueSelected } : null,
+      ownVenueWithdraw: null,
+      ownVenueReadRequired: saved.ownVenueReadRequired,
     });
     else this.show({
       pendingPublicAuthor: pendingPublic,
@@ -646,9 +717,13 @@ export class PostgameCoordinator {
     if (actor && saved?.publicSurface?.mode === 'composer') void this.loadPublicEligibility();
     if (actor && saved?.publicSurface?.mode === 'history') void this.loadOwnPublicReviews();
     if (actor && saved?.publicSurface?.mode === 'reader') void this.loadPublicReader();
-    if (actor && (saved?.venueExperience || saved?.venueProbe)) void this.loadVenueEligibility();
+    if (actor && (saved?.venueExperience || saved?.venueProbe)) {
+      if (saved?.venueExperience?.reviewId) void this.loadOwnVenueSelected(saved.venueExperience.reviewId, { forEdit: true });
+      else void this.loadVenueEligibility();
+    }
+    if (actor && saved?.ownVenueSurface?.mode === 'history') void this.loadOwnVenueReviews();
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.writePrepare=null; this.venueFreshDispatchBind=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.writePrepare=null; this.venueFreshDispatchBind=null; this.ownVenueHistoryNavIntent=null; this.ownVenueListDeferred=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.ownVenueSurfaceGen++; this.ownVenueListGen++; this.ownVenueSelectedGen++; this.snapshot=empty(null); this.show({}); };
   /** Local permit captured before AuthCoordinator token await — never on the API wire. */
   dispatchPermit = (packet: Packet): PostgameDispatchPermit => {
     const cmd = this.snapshot.command;
@@ -659,7 +734,9 @@ export class PostgameCoordinator {
       firstDispatchedAt: cmd?.packet.key === packet.key ? cmd.firstDispatchedAt : undefined,
     };
     const fresh = this.venueFreshDispatchBind;
-    if (fresh && fresh.key === packet.key && isVenueExperienceCreatePacket(packet)) {
+    if (fresh && fresh.key === packet.key
+      && (isVenueExperienceCreatePacket(packet)
+        || (isVenueExperienceCommandPacket(packet) && packet.body.action === 'submit_revision'))) {
       return {
         ...base,
         freshVenue: {
@@ -672,6 +749,12 @@ export class PostgameCoordinator {
           audience: fresh.audience,
           basisAuthority: fresh.basisAuthority,
           eligibilityGen: fresh.eligibilityGen,
+          ...(fresh.reviewId ? {
+            reviewId: fresh.reviewId,
+            slotVersion: fresh.slotVersion,
+            revisionId: fresh.revisionId,
+            resourceVersion: fresh.resourceVersion,
+          } : {}),
         },
       };
     }
@@ -699,27 +782,53 @@ export class PostgameCoordinator {
     packet: Packet,
     fresh: NonNullable<PostgameDispatchPermit['freshVenue']>,
   ): boolean {
-    if (!isVenueExperienceCreatePacket(packet)) return false;
     const actor = this.snapshot.actor;
     if (!actor || actor.actorId !== fresh.actorId || actor.sessionId !== fresh.sessionId) return false;
     if (packet.actor.actorId !== fresh.actorId) return false;
     const surface = this.snapshot.venueExperience;
     if (!surface || surface.gen !== fresh.surfaceGen) return false;
-    if (surface.gameId !== packet.gameId || surface.venueId !== packet.venueId) return false;
-    if (fresh.eligibilityGen !== this.venueEligibilityGen) return false;
+    // Narrow before venueId — Packet union includes kinds without venueId.
+    if (!isVenueExperienceCreatePacket(packet) && !isVenueExperienceCommandPacket(packet)) return false;
+    if (surface.venueId !== packet.venueId) return false;
     const draft = this.snapshot.venueDraft;
     if (!draft || draft.audience !== fresh.audience || draft.consent !== fresh.consent) return false;
     if (this.snapshot.venueConsentHash !== fresh.consentHash) return false;
     const editor = this.venueDraftEditorKey(draft, this.snapshot.venueConsentHash);
     if (editor !== fresh.editor) return false;
-    const currentBasis = venueExperienceBasisAuthority(
-      this.snapshot.venueEligibility.status === 'ready'
-        ? this.snapshot.venueEligibility.data ?? null
-        : null,
-      packet.gameId,
-    );
-    if (currentBasis === null || currentBasis !== fresh.basisAuthority) return false;
-    return true;
+    if (isVenueExperienceCreatePacket(packet)) {
+      if (surface.gameId !== packet.gameId || surface.reviewId) return false;
+      if (fresh.eligibilityGen !== this.venueEligibilityGen) return false;
+      if (fresh.reviewId) return false;
+      const currentBasis = venueExperienceBasisAuthority(
+        this.snapshot.venueEligibility.status === 'ready'
+          ? this.snapshot.venueEligibility.data ?? null
+          : null,
+        packet.gameId,
+      );
+      if (currentBasis === null || currentBasis !== fresh.basisAuthority) return false;
+      return true;
+    }
+    if (isVenueExperienceCommandPacket(packet) && packet.body.action === 'submit_revision') {
+      if (!fresh.reviewId || surface.reviewId !== fresh.reviewId || packet.reviewId !== fresh.reviewId) {
+        return false;
+      }
+      if (surface.gameId !== packet.gameId) return false;
+      if (fresh.eligibilityGen !== this.ownVenueSelectedGen) return false;
+      const selected = this.snapshot.ownVenueSelected;
+      if (!selected || selected.id !== fresh.reviewId) return false;
+      if (selected.version !== fresh.slotVersion) return false;
+      const edit = selected.editContext;
+      if (!edit || edit.revisionId !== fresh.revisionId || edit.resourceVersion !== fresh.resourceVersion) {
+        return false;
+      }
+      const currentBasis = venueExperienceBasisAuthority(
+        { bases: [edit.basis] },
+        packet.gameId,
+      );
+      if (currentBasis === null || currentBasis !== fresh.basisAuthority) return false;
+      return true;
+    }
+    return false;
   }
   retentionExpiredFor = (packet: Packet): boolean => {
     const cmd = this.snapshot.command;
@@ -737,7 +846,11 @@ export class PostgameCoordinator {
     return gen;
   }
   private releaseWritePrepare(gen: number) {
-    if (this.writePrepare?.gen === gen) this.writePrepare = null;
+    if (this.writePrepare?.gen !== gen) return;
+    this.writePrepare = null;
+    // Deferred own-history list may have been queued while prepare still owned the write lane;
+    // dispatch.finally can run before this release and must not be the last flush chance.
+    this.flushDeferredOwnVenueList();
   }
   private writePrepareOwns(gen: number, editor?: string): boolean {
     const prep = this.writePrepare;
@@ -2664,6 +2777,392 @@ export class PostgameCoordinator {
     });
     void this.loadVenueEligibility();
   };
+  /**
+   * Actor-scoped read-only intent for owner pending recovery — set before /profile navigation.
+   * Consumed once on verified Profile focus; never opens history here (survives route commit).
+   */
+  requestOwnVenueHistoryNavIntent = () => {
+    const actor = this.snapshot.actor;
+    if (!actor) return;
+    this.ownVenueHistoryNavIntent = {
+      actorId: actor.actorId,
+      sessionId: actor.sessionId,
+    };
+  };
+  /**
+   * Consume one-shot Profile history nav intent when actor/session still match.
+   * Returns true only when caller should open history (GET only, zero POST).
+   */
+  consumeOwnVenueHistoryNavIntent = (): boolean => {
+    const intent = this.ownVenueHistoryNavIntent;
+    this.ownVenueHistoryNavIntent = null;
+    if (!intent) return false;
+    const actor = this.snapshot.actor;
+    if (!actor || actor.actorId !== intent.actorId || actor.sessionId !== intent.sessionId) {
+      return false;
+    }
+    return true;
+  };
+  /** Profile entry — private own venue history (at most 50). Not a game-results CTA. */
+  openOwnVenueHistory = () => {
+    if (!this.snapshot.actor) return;
+    this.ownVenueSurfaceGen++;
+    this.ownVenueListGen++;
+    this.ownVenueSelectedGen++;
+    this.ownVenueListDeferred = null;
+    this.show({
+      ownVenueSurface: { mode: 'history', gen: this.ownVenueSurfaceGen },
+      ownVenue: { status: 'idle' },
+      ownVenueWithdraw: null,
+      ownVenueReadRequired: false,
+      venueNotice: null,
+    });
+    void this.loadOwnVenueReviews();
+  };
+  closeOwnVenueHistory = () => {
+    this.ownVenueSurfaceGen++;
+    this.ownVenueListGen++;
+    this.ownVenueSelectedGen++;
+    this.ownVenueListDeferred = null;
+    this.show({
+      ownVenueSurface: null,
+      ownVenue: { status: 'idle' },
+      ownVenueWithdraw: null,
+      ownVenueReadRequired: false,
+    });
+  };
+  /**
+   * Profile blur/unmount retirement — only the Host-captured history gen + actor/session.
+   * Never rebuilds expected from a live getSnapshot at cleanup. Preserves UNKNOWN journal.
+   * Does not close exact-game create (no reviewId). Stale cleanup cannot close a newer generation.
+   */
+  retireOwnVenueHistorySurface = (expected: {
+    gen: number;
+    actorId: string;
+    sessionId: string;
+  }) => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.ownVenueSurface;
+    if (!surface || surface.mode !== 'history' || surface.gen !== expected.gen) return;
+    if (!actor || actor.actorId !== expected.actorId || actor.sessionId !== expected.sessionId) return;
+    this.ownVenueSurfaceGen++;
+    this.ownVenueListGen++;
+    this.ownVenueSelectedGen++;
+    this.ownVenueListDeferred = null;
+    const edit = this.snapshot.venueExperience;
+    const retireEdit = !!edit?.reviewId;
+    if (retireEdit) {
+      this.venueSurfaceGen++;
+      this.venuePreviewGen++;
+      if (this.writePrepare?.origin === 'venue-experience'
+        && this.writePrepare.surfaceGen === edit!.gen
+        && this.writePrepare.gen === this.writePrepareGen) {
+        this.writePrepare = null;
+        // History retire already cleared deferred; flush is a no-op when marker is null.
+        this.flushDeferredOwnVenueList();
+      }
+    }
+    this.show({
+      ownVenueSurface: null,
+      ownVenue: { status: 'idle' },
+      ownVenueWithdraw: null,
+      ownVenueReadRequired: false,
+      ...(retireEdit ? {
+        venueExperience: null,
+        venueDraft: null,
+        venueConsentHash: null,
+        venueReceipt: null,
+        venueNotice: null,
+      } : {}),
+    });
+  };
+  loadOwnVenueReviews = async (opts?: { preserveNotice?: boolean }) => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.ownVenueSurface;
+    if (!actor || !surface || surface.mode !== 'history') {
+      this.ownVenueListDeferred = null;
+      return;
+    }
+    // List GET never settles UNKNOWN; block only while a fresh write is preparing/sending.
+    if (this.inFlight || this.writePrepare
+      || (this.snapshot.command && this.snapshot.command.status === 'sending')) {
+      this.ownVenueListDeferred = {
+        surfaceGen: surface.gen,
+        preserveNotice: opts?.preserveNotice === true,
+      };
+      return;
+    }
+    this.ownVenueListDeferred = null;
+    const preserveNotice = opts?.preserveNotice === true;
+    const priorNotice = this.snapshot.venueNotice;
+    const request = ++this.ownVenueListGen;
+    const surfaceGen = surface.gen;
+    this.show({ ownVenue: { status: 'loading' } });
+    try {
+      const page = parseOwnVenueReviewsPage(await this.port.venueExperienceOwnList(actor));
+      if (request !== this.ownVenueListGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (this.snapshot.ownVenueSurface?.gen !== surfaceGen) return;
+      // Active selected editor: only matching selected GET clears the fence; list may clear withdraw-row conflict.
+      const keepSelectedReadFence = !!this.snapshot.venueExperience?.reviewId
+        && this.snapshot.ownVenueReadRequired;
+      this.show({
+        ownVenue: { status: 'ready', data: page },
+        ownVenueWithdraw: null,
+        ownVenueReadRequired: keepSelectedReadFence,
+        venueNotice: preserveNotice ? (this.snapshot.venueNotice ?? priorNotice) : null,
+      });
+    } catch (error) {
+      if (request !== this.ownVenueListGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (this.snapshot.ownVenueSurface?.gen !== surfaceGen) return;
+      const denied = error instanceof PostgameError && (error.kind === 'private' || error.status === 401);
+      this.show({
+        ownVenue: { status: denied ? 'unavailable' : 'error', ...(denied ? {} : { data: this.snapshot.ownVenue.data }) },
+        venueNotice: denied
+          ? 'Войдите, чтобы увидеть свои отзывы о площадках.'
+          : 'Не удалось загрузить ваши отзывы. Последнее подтверждённое состояние сохранено; действия недоступны до успешного чтения.',
+      });
+    }
+  };
+  /**
+   * After inFlight cleanup — one deferred own-history list GET when the same surface gen still demands it.
+   * Closed history / account switch already cleared the deferred marker → zero late GET.
+   */
+  private flushDeferredOwnVenueList = () => {
+    const deferred = this.ownVenueListDeferred;
+    if (!deferred) return;
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.ownVenueSurface;
+    if (!actor || !surface || surface.mode !== 'history' || surface.gen !== deferred.surfaceGen) {
+      this.ownVenueListDeferred = null;
+      return;
+    }
+    if (this.inFlight || this.writePrepare
+      || (this.snapshot.command && this.snapshot.command.status === 'sending')) {
+      return;
+    }
+    const preserveNotice = deferred.preserveNotice;
+    this.ownVenueListDeferred = null;
+    void this.loadOwnVenueReviews({ preserveNotice });
+  };
+  /**
+   * Selected owner GET — edit open or conflict recovery. Never proves UNKNOWN settled.
+   */
+  loadOwnVenueSelected = async (
+    reviewId: string,
+    opts?: { forEdit?: boolean; clearConflict?: boolean },
+  ) => {
+    const actor = this.snapshot.actor;
+    if (!actor) return;
+    try { postgameId(reviewId); } catch { return; }
+    if (this.snapshot.command || this.inFlight || this.writePrepare) return;
+    const request = ++this.ownVenueSelectedGen;
+    const surfaceGen = this.snapshot.venueExperience?.gen;
+    const historyGen = this.snapshot.ownVenueSurface?.gen;
+    this.show({ venueNotice: null });
+    try {
+      const selected = parseSelectedOwnVenueReview(
+        await this.port.venueExperienceOwnDetail(actor, reviewId),
+      );
+      if (request !== this.ownVenueSelectedGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      if (historyGen !== undefined && this.snapshot.ownVenueSurface?.gen !== historyGen) return;
+      // Competing accepted mutation (withdraw/revision) already owns newer state — stale selected cannot regress.
+      if (this.snapshot.command || this.inFlight || this.writePrepare) return;
+      const list = this.snapshot.ownVenue.data?.items ?? [];
+      const currentOwn = list.find(row => row.id === reviewId)
+        ?? (this.snapshot.ownVenueSelected?.id === reviewId ? this.snapshot.ownVenueSelected : null)
+        ?? (this.snapshot.ownVenueWithdraw?.id === reviewId ? this.snapshot.ownVenueWithdraw : null);
+      const editorVenueId = this.snapshot.venueExperience?.reviewId === reviewId
+        ? this.snapshot.venueExperience.venueId
+        : undefined;
+      const bindOk = ownVenueSelectedMatchesRequest(selected, {
+        id: reviewId,
+        ...(currentOwn ? { venueId: currentOwn.venueId, reviewHandle: currentOwn.reviewHandle } : {}),
+        ...(editorVenueId && !currentOwn ? { venueId: editorVenueId } : {}),
+      }) && (!currentOwn || isSelectedOwnVenueReview(selected, currentOwn));
+      const mutationAhead = !!currentOwn && (
+        selected.version < currentOwn.version
+        || (currentOwn.status === 'withdrawn' && selected.status !== 'withdrawn')
+      );
+      if (!bindOk || mutationAhead) {
+        // Fail closed — do not retarget editor, restore withdrawn text, or clear selected-read fence.
+        this.show({
+          venueNotice: 'Не удалось перечитать выбранный отзыв. Действия остаются заблокированы.',
+          ownVenueReadRequired: true,
+        });
+        return;
+      }
+      const items = list.some(row => row.id === selected.id)
+        ? list.map(row => row.id === selected.id ? selected : row)
+        : list;
+      if (opts?.clearConflict) {
+        const editingSame = this.snapshot.venueExperience?.reviewId === selected.id
+          && this.snapshot.venueDraft;
+        if (editingSame) {
+          // Explicit selected reread after edit conflict — keep unsent text/topics/audience;
+          // clear consent/preview; update authority; require deliberate reconfirm.
+          const liveDraft = this.snapshot.venueDraft!;
+          this.show({
+            ownVenue: this.snapshot.ownVenue.status === 'ready'
+              ? { status: 'ready', data: { items } }
+              : this.snapshot.ownVenue,
+            ownVenueSelected: selected,
+            ownVenueReadRequired: false,
+            venueEligibility: selected.editContext
+              ? { status: 'ready', data: { bases: [selected.editContext.basis] } }
+              : { status: 'ready', data: { bases: [] } },
+            venueConsentHash: null,
+            venueDraft: {
+              audience: liveDraft.audience,
+              text: liveDraft.text,
+              topics: [...liveDraft.topics],
+              consent: false,
+            },
+            venueReceipt: null,
+            venueNotice: 'Отзыв перечитан. Проверьте текст и подтвердите отправку заново.',
+          });
+          return;
+        }
+        this.show({
+          ownVenue: this.snapshot.ownVenue.status === 'ready'
+            ? { status: 'ready', data: { items } }
+            : this.snapshot.ownVenue,
+          ownVenueSelected: selected,
+          ownVenueReadRequired: false,
+          venueExperience: null,
+          venueDraft: null,
+          venueConsentHash: null,
+          venueReceipt: null,
+          venueNotice: 'Отзыв перечитан. Выберите действие и подтвердите его заново.',
+        });
+        return;
+      }
+      if (opts?.forEdit) {
+        if (!mayEditOwnVenue(selected)) {
+          this.show({
+            ownVenue: this.snapshot.ownVenue.status === 'ready'
+              ? { status: 'ready', data: { items } }
+              : this.snapshot.ownVenue,
+            ownVenueSelected: selected,
+            venueNotice: selected.status === 'withdrawn'
+              ? 'Отозванный отзыв нельзя отправить повторно.'
+              : (venueReviewEligibilityHelp(selected.editContext?.basis)
+                ?? 'Редактирование недоступно.'),
+          });
+          return;
+        }
+        const topics = selected.topics.filter((t): t is VenueReviewTopic =>
+          t === 'surface' || t === 'lighting' || t === 'amenities');
+        const gen = ++this.venueSurfaceGen;
+        this.venuePreviewGen++;
+        this.show({
+          ownVenue: this.snapshot.ownVenue.status === 'ready'
+            ? { status: 'ready', data: { items } }
+            : this.snapshot.ownVenue,
+          ownVenueSelected: selected,
+          ownVenueReadRequired: false,
+          venueProbe: { gameId: selected.editContext!.gameId, venueId: selected.venueId },
+          venueExperience: {
+            gameId: selected.editContext!.gameId,
+            venueId: selected.venueId,
+            gen,
+            reviewId: selected.id,
+          },
+          venueDraft: {
+            audience: selected.audience ?? 'self_draft',
+            text: selected.text ?? '',
+            // Preserve selected empty topics exactly — no silent ['surface'] prefill on edit.
+            topics,
+            consent: false,
+          },
+          venueConsentHash: null,
+          venueReceipt: null,
+          venueEligibility: {
+            status: 'ready',
+            data: { bases: [selected.editContext!.basis] },
+          },
+          venueNotice: null,
+        });
+        return;
+      }
+      this.show({
+        ownVenue: this.snapshot.ownVenue.status === 'ready'
+          ? { status: 'ready', data: { items } }
+          : this.snapshot.ownVenue,
+        ownVenueSelected: selected,
+        ownVenueReadRequired: false,
+      });
+    } catch (error) {
+      if (request !== this.ownVenueSelectedGen || !sameActor(actor, this.snapshot.actor)) return;
+      const denied = error instanceof PostgameError && (error.kind === 'private' || error.status === 401);
+      this.show({
+        venueNotice: denied
+          ? 'Сессия изменилась. Повтор прежней отправки недоступен.'
+          : 'Не удалось перечитать выбранный отзыв. Действия остаются заблокированы.',
+        ...(denied ? {} : { ownVenueReadRequired: true }),
+      });
+    }
+  };
+  openOwnVenueEdit = (row: OwnVenueReview) => {
+    const actor = this.snapshot.actor;
+    if (!actor || this.snapshot.command || this.inFlight || this.writePrepare) return;
+    if (this.snapshot.ownVenueReadRequired) return;
+    // Competing exact-game create surface owns the composer until closed — no silent replace.
+    if (this.snapshot.venueExperience && !this.snapshot.venueExperience.reviewId) return;
+    if (!this.snapshot.ownVenue.data?.items.some(item => item.id === row.id)) return;
+    if (row.status === 'withdrawn') return;
+    void this.loadOwnVenueSelected(row.id, { forEdit: true });
+  };
+  beginOwnVenueWithdraw = (row: OwnVenueReview) => {
+    if (!this.snapshot.actor || this.snapshot.command || this.inFlight || this.writePrepare) return;
+    if (this.snapshot.ownVenueReadRequired) return;
+    if (!mayWithdrawOwnVenue(row)) return;
+    if (!this.snapshot.ownVenue.data?.items.some(item => item.id === row.id && item.version === row.version)) {
+      return;
+    }
+    this.show({ ownVenueWithdraw: Object.freeze({ ...row, topics: [...row.topics] }) as OwnVenueReview });
+  };
+  cancelOwnVenueWithdraw = () => {
+    this.show({ ownVenueWithdraw: null });
+  };
+  /**
+   * Confirmed withdraw — action/expectedVersion only; no game admission or history window.
+   */
+  confirmOwnVenueWithdraw = async () => {
+    const actor = this.snapshot.actor;
+    const row = this.snapshot.ownVenueWithdraw;
+    const surface = this.snapshot.ownVenueSurface;
+    if (!actor || !row || !surface || surface.mode !== 'history') return;
+    if (this.snapshot.command || this.inFlight || this.writePrepare || this.snapshot.ownVenueReadRequired) return;
+    if (!mayWithdrawOwnVenue(row)) return;
+    const live = this.snapshot.ownVenue.data?.items.find(item => item.id === row.id);
+    if (!live || live.version !== row.version) return;
+    try {
+      const body = buildVenueExperienceWithdrawBody(live);
+      const intent: Intent = {
+        kind: 'venue-experience-command',
+        gameId: 'own-venue',
+        venueId: live.venueId,
+        reviewId: live.id,
+        reviewHandle: live.reviewHandle,
+        body,
+      };
+      const transport = wire(intent);
+      const packet: Packet = Object.freeze({
+        ...freezeIntent(intent),
+        method: transport.method,
+        path: transport.path,
+        actor: Object.freeze({ ...actor }),
+        key: this.random(),
+      }) as Packet;
+      this.venueFreshDispatchBind = null;
+      // Fence outstanding selected GETs at mutation begin — late detail must not reopen withdrawn text.
+      this.ownVenueSelectedGen++;
+      await this.dispatch(packet, actor, false);
+    } catch {
+      this.show({ venueNotice: 'Не удалось отозвать. Обновите список.' });
+    }
+  };
   /** Exact current-game venue experience — hide when eligibility is not may_submit for this game. */
   openVenueExperience = (gameId: string, venueId: string) => {
     const actor = this.snapshot.actor;
@@ -2722,6 +3221,7 @@ export class PostgameCoordinator {
       && this.writePrepare.surfaceGen === priorSurfaceGen
       && this.writePrepare.gen === this.writePrepareGen) {
       this.writePrepare = null;
+      this.flushDeferredOwnVenueList();
     }
     this.show({
       venueExperience: null,
@@ -2760,6 +3260,7 @@ export class PostgameCoordinator {
       && this.writePrepare.surfaceGen === expected.gen
       && this.writePrepare.gen === this.writePrepareGen) {
       this.writePrepare = null;
+      this.flushDeferredOwnVenueList();
     }
     this.show({
       venueExperience: null,
@@ -2852,7 +3353,8 @@ export class PostgameCoordinator {
     const next: VenueExperienceDraft = {
       audience: patch.audience ?? draft.audience,
       text: patch.text ?? draft.text,
-      topics: patch.topics ? [...patch.topics] : [...draft.topics],
+      // undefined = leave unchanged; [] is a deliberate empty selection (last topic removed).
+      topics: patch.topics !== undefined ? [...patch.topics] : [...draft.topics],
       consent: patch.consent ?? draft.consent,
     };
     const cleared = next.audience !== draft.audience
@@ -2901,8 +3403,8 @@ export class PostgameCoordinator {
     }
   };
   /**
-   * Venue create via the single command journal. UNKNOWN keeps the original key/body;
-   * after 24h first-dispatch age never late-POST — inspect status on web profile until native own-history exists.
+   * Venue create or selected revision via the single command journal.
+   * UNKNOWN keeps the original key/body; Profile owns recovery for owner packets.
    */
   submitVenueExperience = async () => {
     const actor = this.snapshot.actor;
@@ -2915,6 +3417,10 @@ export class PostgameCoordinator {
         && cmd.packet.actor.actorId === actor.actorId) {
         await this.reconcileVenueExperience();
       }
+      return;
+    }
+    if (surface.reviewId) {
+      await this.submitVenueExperienceRevision();
       return;
     }
     const eligibility = this.snapshot.venueEligibility.status === 'ready'
@@ -3063,6 +3569,191 @@ export class PostgameCoordinator {
       this.releaseWritePrepare(prepareGen);
     }
   };
+  /**
+   * Selected revision edit — re-GET selected id, recheck versions/admission/consent, then submit_revision.
+   * No new game picker; withdraw is independent (confirmOwnVenueWithdraw).
+   */
+  private submitVenueExperienceRevision = async () => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.venueExperience;
+    const draft = this.snapshot.venueDraft;
+    if (!actor || !surface?.reviewId || !draft) return;
+    if (this.snapshot.command || this.inFlight || this.writePrepare || this.snapshot.venueReceipt) return;
+    const prior = this.snapshot.ownVenueSelected;
+    if (!prior || prior.id !== surface.reviewId || !mayEditOwnVenue(prior)) {
+      this.show({ venueNotice: 'Редактирование недоступно. Перечитайте выбранный отзыв.' });
+      return;
+    }
+    if (draft.audience === 'public_venue' && (!draft.consent || !this.snapshot.venueConsentHash)) {
+      this.show({ venueNotice: 'Отметьте согласие с публичной публикацией.' });
+      return;
+    }
+    let text: string;
+    try { text = venueExperienceText(draft.text); } catch {
+      this.show({ venueNotice: 'Проверьте текст отзыва.' });
+      return;
+    }
+    const surfaceGen = surface.gen;
+    const capturedAudience = draft.audience;
+    const capturedTopics = [...draft.topics];
+    const capturedConsent = draft.consent;
+    const capturedHash = this.snapshot.venueConsentHash;
+    const editor = this.venueDraftEditorKey(draft, capturedHash);
+    const prepareGen = this.beginWritePrepare({
+      actorId: actor.actorId,
+      sessionId: actor.sessionId,
+      origin: 'venue-experience',
+      surfaceGen,
+      editor,
+    });
+    if (prepareGen === null) return;
+    const selectedRequest = ++this.ownVenueSelectedGen;
+    const capturedAuthority = venueExperienceBasisAuthority(
+      { bases: prior.editContext ? [prior.editContext.basis] : [] },
+      surface.gameId,
+    );
+    try {
+      const fresh = parseSelectedOwnVenueReview(
+        await this.port.venueExperienceOwnDetail(actor, surface.reviewId),
+      );
+      if (!this.writePrepareOwns(prepareGen) || !sameActor(actor, this.snapshot.actor)) return;
+      if (selectedRequest !== this.ownVenueSelectedGen) return;
+      if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      if (this.snapshot.command || this.inFlight) return;
+      if (!ownVenueSelectedMatchesRequest(fresh, {
+        id: surface.reviewId,
+        venueId: surface.venueId,
+        reviewHandle: prior.reviewHandle,
+      }) || !isSelectedOwnVenueReview(fresh, prior)) {
+        this.show({ venueNotice: 'Не удалось перечитать отзыв.', ownVenueReadRequired: true });
+        return;
+      }
+      const liveDraft = this.snapshot.venueDraft;
+      const liveEditor = liveDraft
+        ? this.venueDraftEditorKey(liveDraft, this.snapshot.venueConsentHash)
+        : null;
+      if (!liveDraft || liveEditor !== editor
+        || liveDraft.audience !== capturedAudience
+        || liveDraft.text !== draft.text
+        || liveDraft.topics.join(',') !== capturedTopics.join(',')
+        || liveDraft.consent !== capturedConsent
+        || this.snapshot.venueConsentHash !== capturedHash) {
+        this.venuePreviewGen++;
+        this.show({
+          venueConsentHash: null,
+          venueDraft: liveDraft ? { ...liveDraft, consent: false } : null,
+          venueNotice: 'Черновик изменился. Проверьте текст и согласие перед новой отправкой.',
+        });
+        return;
+      }
+      const oldContext = prior.editContext;
+      const freshBasis = fresh.editContext?.basis;
+      if (fresh.version !== prior.version
+        || fresh.editContext?.revisionId !== oldContext?.revisionId
+        || fresh.editContext?.resourceVersion !== oldContext?.resourceVersion
+        || fresh.editContext?.gameId !== oldContext?.gameId
+        || freshBasis?.outcomeVersion !== oldContext?.basis.outcomeVersion
+        || freshBasis?.attendanceVersion !== oldContext?.basis.attendanceVersion) {
+        this.ownVenueSelectedGen++;
+        this.show({
+          ownVenueSelected: fresh,
+          venueEligibility: fresh.editContext
+            ? { status: 'ready', data: { bases: [fresh.editContext.basis] } }
+            : { status: 'ready', data: { bases: [] } },
+          venueConsentHash: null,
+          venueDraft: { ...liveDraft, consent: false },
+          ownVenueReadRequired: true,
+          venueNotice: 'Версия изменилась. Перечитайте выбранный отзыв и подтвердите заново.',
+        });
+        return;
+      }
+      if (!mayEditOwnVenue(fresh) || !freshBasis || freshBasis.admission !== 'may_submit') {
+        this.show({
+          ownVenueSelected: fresh,
+          venueEligibility: fresh.editContext
+            ? { status: 'ready', data: { bases: [fresh.editContext.basis] } }
+            : { status: 'ready', data: { bases: [] } },
+          venueNotice: venueReviewEligibilityHelp(freshBasis) ?? 'Редактирование недоступно.',
+        });
+        return;
+      }
+      const freshAuthority = venueExperienceBasisAuthority({ bases: [freshBasis] }, surface.gameId);
+      if (capturedAuthority !== null && freshAuthority !== capturedAuthority) {
+        this.show({
+          ownVenueSelected: fresh,
+          venueEligibility: { status: 'ready', data: { bases: [freshBasis] } },
+          venueConsentHash: null,
+          venueDraft: { ...liveDraft, consent: false },
+          venueNotice: 'Данные игры изменились. Проверьте обновлённый допуск перед новой отправкой.',
+        });
+        return;
+      }
+      this.show({
+        ownVenueSelected: fresh,
+        venueEligibility: { status: 'ready', data: { bases: [freshBasis] } },
+      });
+      if (!this.writePrepareOwns(prepareGen, editor) || this.snapshot.command || this.inFlight) return;
+      if (selectedRequest !== this.ownVenueSelectedGen) return;
+      if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      const body = buildVenueExperienceSubmitRevisionBody({
+        own: fresh,
+        audience: liveDraft.audience,
+        text,
+        topics: liveDraft.topics,
+        ...(liveDraft.audience === 'public_venue' && this.snapshot.venueConsentHash
+          ? { consentProjectionHash: this.snapshot.venueConsentHash }
+          : {}),
+      });
+      const intent: Intent = {
+        kind: 'venue-experience-command',
+        gameId: fresh.editContext!.gameId,
+        venueId: fresh.venueId,
+        reviewId: fresh.id,
+        reviewHandle: fresh.reviewHandle,
+        body,
+      };
+      const transport = wire(intent);
+      const packet: Packet = Object.freeze({
+        ...freezeIntent(intent),
+        method: transport.method,
+        path: transport.path,
+        actor: Object.freeze({ ...actor }),
+        key: this.random(),
+      }) as Packet;
+      const basisFingerprint = venueExperienceBasisAuthority({ bases: [freshBasis] }, surface.gameId);
+      if (basisFingerprint === null) return;
+      this.venueFreshDispatchBind = {
+        key: packet.key,
+        actorId: actor.actorId,
+        sessionId: actor.sessionId,
+        surfaceGen,
+        editor,
+        consent: liveDraft.consent,
+        consentHash: this.snapshot.venueConsentHash,
+        audience: liveDraft.audience,
+        basisAuthority: basisFingerprint,
+        eligibilityGen: selectedRequest,
+        reviewId: fresh.id,
+        slotVersion: fresh.version,
+        revisionId: fresh.editContext!.revisionId,
+        resourceVersion: fresh.editContext!.resourceVersion,
+      };
+      await this.dispatch(packet, actor, false);
+    } catch (error) {
+      if (!this.writePrepareOwns(prepareGen) || !sameActor(actor, this.snapshot.actor)) return;
+      if (selectedRequest !== this.ownVenueSelectedGen) return;
+      if (this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      const business = error instanceof PostgameError && error.kind === 'business';
+      this.show({
+        venueNotice: business
+          ? 'Отправка недоступна. Текст сохранён.'
+          : 'Не удалось перечитать отзыв. Текст сохранён.',
+        ...(business && error.status === 409 ? { ownVenueReadRequired: true } : {}),
+      });
+    } finally {
+      this.releaseWritePrepare(prepareGen);
+    }
+  };
   reconcileVenueExperience = async () => {
     const { actor, command } = this.snapshot;
     if (!actor || !command || command.status !== 'unknown' || this.inFlight) return;
@@ -3088,7 +3779,8 @@ export class PostgameCoordinator {
   private allowed(intent: Intent) {
     if (intent.kind === 'public-role-create' || intent.kind === 'public-role-command'
       || intent.kind === 'public-role-reply' || intent.kind === 'public-role-report'
-      || intent.kind === 'venue-experience-create') {
+      || intent.kind === 'venue-experience-create'
+      || intent.kind === 'venue-experience-command') {
       // Public/venue mutations use dedicated submit paths — never private CommandReview.allowed.
       return false;
     }
@@ -3373,7 +4065,8 @@ export class PostgameCoordinator {
         const venueReceipt = receipt as VenueReviewMutationReceipt;
         const paint = !!this.snapshot.venueExperience
           && this.snapshot.venueExperience.gameId === packet.gameId
-          && this.snapshot.venueExperience.venueId === packet.venueId;
+          && this.snapshot.venueExperience.venueId === packet.venueId
+          && !this.snapshot.venueExperience.reviewId;
         this.show({
           command: null,
           ...(paint ? {
@@ -3385,6 +4078,57 @@ export class PostgameCoordinator {
         });
         // Venue ACK settles once on the owned composer — no generic notice / results / reminders refresh.
         // finally still clears inFlight + venueFreshDispatchBind.
+        return;
+      }
+      if (packet.kind === 'venue-experience-command' && 'reviewHandle' in receipt && 'publicVisible' in receipt) {
+        const venueReceipt = receipt as VenueReviewMutationReceipt;
+        const paintEdit = !!this.snapshot.venueExperience
+          && this.snapshot.venueExperience.reviewId === packet.reviewId
+          && this.snapshot.venueExperience.venueId === packet.venueId;
+        const paintHistory = !!this.snapshot.ownVenueSurface
+          && this.snapshot.ownVenueSurface.mode === 'history';
+        if (packet.body.action === 'withdraw') {
+          // ACK invalidates outstanding selected reads — accepted withdrawn state must not regress.
+          this.ownVenueSelectedGen++;
+          const items = (this.snapshot.ownVenue.data?.items ?? []).map(row => (
+            row.id === packet.reviewId
+              ? {
+                ...row,
+                ...venueReceipt,
+                text: null,
+                topics: [] as VenueReviewTopic[],
+                pendingRevision: null,
+                audience: null as VenueAudience | null,
+              }
+              : row
+          ));
+          this.show({
+            command: null,
+            ownVenueWithdraw: null,
+            ownVenueReadRequired: false,
+            ...(paintHistory || this.snapshot.ownVenue.status === 'ready'
+              ? { ownVenue: { status: 'ready', data: { items } } }
+              : {}),
+            venueNotice: 'Отзыв отозван. Публикация и ожидающая заявка сняты.',
+          });
+          if (paintHistory) void this.loadOwnVenueReviews({ preserveNotice: true });
+          return;
+        }
+        // submit_revision — fence next action on selected re-read; receipt on edit surface only.
+        // ACK invalidates outstanding selected reads older than the accepted revision.
+        this.ownVenueSelectedGen++;
+        this.show({
+          command: null,
+          ownVenueReadRequired: true,
+          ...(paintEdit ? {
+            venueReceipt,
+            venueConsentHash: null,
+            venueNotice: 'Редакция сохранена. Перед следующим действием перечитайте выбранный отзыв.',
+          } : {
+            venueNotice: 'Редакция сохранена. Перед следующим действием перечитайте выбранный отзыв.',
+          }),
+        });
+        if (paintHistory) void this.loadOwnVenueReviews({ preserveNotice: true });
         return;
       }
       if (packet.kind === 'public-role-create' && 'receiptToken' in receipt) {
@@ -3698,11 +4442,19 @@ export class PostgameCoordinator {
             void this.loadPublicReader({ preserveNotice: true });
           }
         }
-      } else if (isVenueExperienceCreatePacket(packet)) {
-        const paintUi = !!this.snapshot.venueExperience
-          && this.snapshot.venueExperience.gameId === packet.gameId
-          && this.snapshot.venueExperience.venueId === packet.venueId;
-        if (paintUi && venueBusiness) this.venuePreviewGen++;
+      } else if (isVenueExperienceCreatePacket(packet) || isVenueExperienceCommandPacket(packet)) {
+        const paintEdit = !!this.snapshot.venueExperience
+          && this.snapshot.venueExperience.venueId === packet.venueId
+          && (isVenueExperienceCreatePacket(packet)
+            ? (!this.snapshot.venueExperience.reviewId
+              && this.snapshot.venueExperience.gameId === packet.gameId)
+            : this.snapshot.venueExperience.reviewId === packet.reviewId);
+        const paintHistory = isVenueExperienceCommandPacket(packet)
+          && !!this.snapshot.ownVenueSurface
+          && this.snapshot.ownVenueSurface.mode === 'history';
+        const paintUi = paintEdit || paintHistory;
+        if (paintEdit && venueBusiness) this.venuePreviewGen++;
+        const conflict = venueBusiness && error instanceof PostgameError && error.status === 409;
         this.show({
           command: definite ? null : {
             packet,
@@ -3710,19 +4462,34 @@ export class PostgameCoordinator {
             ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
           },
           notice: null,
+          ...(conflict ? { ownVenueReadRequired: true } : {}),
           ...(paintUi ? {
-            venueConsentHash: definite ? null : this.snapshot.venueConsentHash,
-            venueDraft: definite && this.snapshot.venueDraft
+            venueConsentHash: definite && paintEdit ? null : this.snapshot.venueConsentHash,
+            venueDraft: definite && paintEdit && this.snapshot.venueDraft
               ? { ...this.snapshot.venueDraft, consent: false }
               : this.snapshot.venueDraft,
             venueNotice: venueBusiness
-              ? (error instanceof PostgameError && error.status === 409
-                ? 'Версия изменилась. Перечитайте допуск и подтвердите заново.'
-                : 'Отправка недоступна для этой игры. Текст сохранён.')
+              ? (conflict
+                ? (isVenueExperienceCommandPacket(packet)
+                  ? 'Версия отзыва изменилась. Сначала обновите список, затем подтвердите отзыв заново.'
+                  : 'Версия изменилась. Перечитайте допуск и подтвердите заново.')
+                : (isVenueExperienceCommandPacket(packet) && packet.body.action === 'withdraw'
+                  ? 'Не удалось отозвать. Обновите список.'
+                  : 'Отправка недоступна. Текст сохранён.'))
               : notice,
           } : {}),
         });
-        if (paintUi && venueBusiness) void this.loadVenueEligibility({ preserveNotice: true });
+        if (paintEdit && venueBusiness && isVenueExperienceCreatePacket(packet)) {
+          void this.loadVenueEligibility({ preserveNotice: true });
+        }
+        // Edit 409: fence with ownVenueReadRequired; do not auto-GET authorize — explicit selected reread.
+        if (paintEdit && venueBusiness && isVenueExperienceCommandPacket(packet)
+          && packet.body.action === 'submit_revision' && !conflict) {
+          void this.loadOwnVenueSelected(packet.reviewId);
+        }
+        if (paintHistory && venueBusiness && isVenueExperienceCommandPacket(packet)) {
+          void this.loadOwnVenueReviews({ preserveNotice: true });
+        }
       } else {
         this.show({
           command: definite ? null : {
@@ -3737,6 +4504,8 @@ export class PostgameCoordinator {
     } finally {
       if (this.inFlight === packet) this.inFlight = null;
       if (this.venueFreshDispatchBind?.key === packet.key) this.venueFreshDispatchBind = null;
+      // After inFlight clear: one deferred own-history GET when still demanded for the same surface gen.
+      this.flushDeferredOwnVenueList();
     }
   }
 }

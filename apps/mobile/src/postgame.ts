@@ -32,7 +32,9 @@ import {
   type PublicRoleReportReceipt,
 } from './public-role-reviews.ts';
 import {
+  isSubmitVenueReviewReceipt,
   isVenueExperienceCreateReceipt,
+  isWithdrawVenueReviewReceipt,
   parseVenueReviewMutationReceipt,
   postgameIdempotencyReplayBlocked,
   venueExperienceText,
@@ -40,6 +42,7 @@ import {
   POSTGAME_RETENTION_EXPIRED_NOTICE,
   VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS,
   type VenueAudience,
+  type VenueExperienceCommandBody,
   type VenueExperienceCreateBody,
   type VenueReviewMutationReceipt,
   type VenueReviewTopic,
@@ -191,7 +194,13 @@ export type Intent =
   /** Private report on published public review — gameId query only for game origin. */
   | { kind: 'public-role-report'; gameId: string; reviewHandle: string; body: PublicReportBody; gameQuery: string | null }
   /** Exact-game venue experience create — private self_draft default or consented public_venue. */
-  | { kind: 'venue-experience-create'; gameId: string; venueId: string; body: VenueExperienceCreateBody };
+  | { kind: 'venue-experience-create'; gameId: string; venueId: string; body: VenueExperienceCreateBody }
+  /**
+   * Owner Profile venue command — submit_revision (selected revision) or withdraw (no game admission).
+   * Distinct from create; gameId is persisted revision game for revise, or 'own-venue' for withdraw.
+   * `reviewHandle` is local ACK metadata from the selected/list DTO — never a wire body field.
+   */
+  | { kind: 'venue-experience-command'; gameId: string; venueId: string; reviewId: string; reviewHandle: string; body: VenueExperienceCommandBody };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
@@ -432,6 +441,46 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path:
       if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
     }
     return { method: 'POST', path: '/me/venue-reviews', body: packet.body };
+  }
+  if (packet.kind === 'venue-experience-command') {
+    const reviewId = postgameId(packet.reviewId);
+    if (!isVenueId(packet.venueId)) invalid();
+    // Local expected handle from owning DTO — validated here, omitted from wire body.
+    const reviewHandle = str(packet.reviewHandle);
+    if (!/^[0-9a-f]{32}$/i.test(reviewHandle)) invalid();
+    const body = object(packet.body);
+    const action = str(body.action);
+    if (action === 'withdraw') {
+      // Withdraw needs no game admission — packet.gameId may be sentinel 'own-venue'.
+      if (packet.gameId !== 'own-venue') postgameId(packet.gameId);
+      exact(body, ['action', 'expectedVersion']);
+      num(body.expectedVersion, 1);
+      return { method: 'POST', path: `/me/venue-reviews/${reviewId}/commands`, body: packet.body };
+    }
+    if (action === 'submit_revision') {
+      const gameId = postgameId(packet.gameId);
+      const audience = choice(body.audience, ['self_draft', 'public_venue'] as const) as VenueAudience;
+      const keys = audience === 'public_venue'
+        ? ['action', 'expectedVersion', 'gameId', 'audience', 'expectedBasisVersions', 'text', 'topics', 'consentProjectionHash']
+        : ['action', 'expectedVersion', 'gameId', 'audience', 'expectedBasisVersions', 'text', 'topics'];
+      exact(body, keys);
+      num(body.expectedVersion, 1);
+      if (postgameId(body.gameId) !== gameId) invalid();
+      const versions = object(body.expectedBasisVersions);
+      exact(versions, ['outcomeVersion', 'attendanceVersion']);
+      num(versions.outcomeVersion); num(versions.attendanceVersion);
+      venueExperienceText(str(body.text));
+      const topics = array(body.topics, item => choice(item, ['surface', 'lighting', 'amenities'] as const)) as VenueReviewTopic[];
+      if (topics.length > 3) invalid();
+      const seen = new Set<string>();
+      for (const topic of topics) { if (seen.has(topic)) invalid(); seen.add(topic); }
+      if (audience === 'public_venue') {
+        const hash = str(body.consentProjectionHash);
+        if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
+      }
+      return { method: 'POST', path: `/me/venue-reviews/${reviewId}/commands`, body: packet.body };
+    }
+    return invalid();
   }
   if (packet.kind === 'public-role-create') {
     const gameId = postgameId(packet.gameId), body = object(packet.body);
@@ -811,6 +860,27 @@ export function validateReceipt(raw: unknown, p: Packet): Receipt {
     const r = parseVenueReviewMutationReceipt(raw);
     if (!isVenueExperienceCreateReceipt(r, p.body.audience)) invalid();
     return r;
+  }
+  if (p.kind === 'venue-experience-command') {
+    const r = parseVenueReviewMutationReceipt(raw);
+    if (p.body.action === 'withdraw') {
+      if (!isWithdrawVenueReviewReceipt(r, {
+        id: p.reviewId,
+        reviewHandle: p.reviewHandle,
+        version: p.body.expectedVersion,
+      })) return invalid();
+      return r;
+    }
+    if (p.body.action === 'submit_revision') {
+      if (!isSubmitVenueReviewReceipt(r, {
+        id: p.reviewId,
+        reviewHandle: p.reviewHandle,
+        version: p.body.expectedVersion,
+      }, p.body.audience)) return invalid();
+      return r;
+    }
+    // Retire owner-command branch explicitly — never fall through into attendance decoding.
+    return invalid();
   }
   if (p.kind === 'public-role-create' || p.kind === 'public-role-command') {
     const r = parsePublicRoleMutationReceipt(raw);

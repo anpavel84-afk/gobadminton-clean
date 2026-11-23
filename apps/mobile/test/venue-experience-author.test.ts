@@ -1252,7 +1252,7 @@ test('#522 address16: venue ACK skips generic results/reminders; Entry receipt b
   assert.match(coordinator, /finally still clears inFlight|venueFreshDispatchBind/);
 });
 
-test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
+test('source wiring: results entry + dual-auth guards + APK38 pins', () => {
   const results = read('../app/my-games/[gameId]/results.tsx');
   assert.match(results, /VenueExperienceEntry/);
   assert.doesNotMatch(results, /canWriteHint/);
@@ -1341,8 +1341,10 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(controller, /eligibility[\s\S]*requirePrincipal\(request\)/);
   assert.match(controller, /consentPreview[\s\S]*requirePrincipalMutation\(request\)/);
   assert.match(controller, /create\([\s\S]*requirePrincipalMutation\(request\)/);
-  assert.match(controller, /listMine[\s\S]*requireSession\(request\)/);
+  assert.match(controller, /listMine[\s\S]*requirePrincipal\(request\)/);
+  assert.match(controller, /getMine[\s\S]*requirePrincipal\(request\)/);
+  assert.match(controller, /submit_revision[\s\S]*withdraw[\s\S]*requirePrincipalMutation/);
   assert.match(controller, /ownCommand[\s\S]*requireCookieMutation\(request\)/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 37);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 38);
 });

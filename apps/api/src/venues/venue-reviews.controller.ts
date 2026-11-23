@@ -57,14 +57,16 @@ export class VenueReviewsController {
   @Get("me/venue-reviews")
   @Header("Cache-Control", "no-store")
   async listMine(@Req() request: FastifyRequest) {
-    const actor = await this.auth.requireSession(request);
+    // Explicit NativeBearer opt-in for owner list; cookie session preserved via requirePrincipal.
+    const actor = await this.auth.requirePrincipal(request);
     return this.reviews.listMine(actor.userId);
   }
 
   @Get("me/venue-reviews/:id")
   @Header("Cache-Control", "no-store")
   async getMine(@Req() request: FastifyRequest, @Param("id") id: string) {
-    const actor = await this.auth.requireSession(request);
+    // Explicit NativeBearer opt-in for selected owner detail; cookie session preserved via requirePrincipal.
+    const actor = await this.auth.requirePrincipal(request);
     return this.reviews.getMine(actor.userId, id);
   }
 
@@ -75,7 +77,15 @@ export class VenueReviewsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("id") id: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    // Native bearer only for submit_revision / withdraw; appeal/resubmit stay cookie-only.
+    const raw = request.body;
+    const action = raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as { action?: unknown }).action
+      : undefined;
+    const bearerOwner = action === "submit_revision" || action === "withdraw";
+    const actor = bearerOwner
+      ? await this.auth.requirePrincipalMutation(request)
+      : await this.auth.requireCookieMutation(request);
     const result = await this.reviews.ownCommand(
       actor.userId,
       actor.sessionId,
