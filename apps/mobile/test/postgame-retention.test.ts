@@ -536,9 +536,9 @@ test('#522 address10: deferred token + route retire → 0 POST; auth quarantine 
   let releaseAuth!: () => void;
   const authGate = new Promise<void>(r => { releaseAuth = r; });
   let authMode: 'stale' | 'ok' = 'stale';
-  const quarantined = new PostgameCoordinator({
+  const quarantined: PostgameCoordinator = new PostgameCoordinator({
     ...idlePort({
-      send: async (packet) => {
+      send: async (packet): Promise<unknown> => {
         const permit = quarantined.dispatchPermit(packet);
         await authGate;
         if (!quarantined.mayDispatchRetention(packet, permit)) {
