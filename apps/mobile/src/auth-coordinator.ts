@@ -78,6 +78,14 @@ export class AuthCoordinator {
       // Credential-omit public origin reads — resumed cold goals only; never bearer opt-in.
       publicGameRoleOrigin: (gameId, role) => publicApi.gameRoleReputation(gameId, role),
       publicPlayerRoleOrigin: (publicPlayerId, role, query) => publicApi.playerRoleReputation(publicPlayerId, role, query),
+      venueExperienceEligibility: (actor, venueId) => this.participationRead(
+        access => deps.api.venueExperienceEligibility(access, venueId),
+        actor,
+      ),
+      venueExperienceConsentPreview: (actor, body) => this.participationRead(
+        access => deps.api.venueExperienceConsentPreview(access, body),
+        actor,
+      ),
       send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
     },deps.random);
     this.contact = new ContactCoordinator({

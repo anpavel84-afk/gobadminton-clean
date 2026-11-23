@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, reviewKindModeLabel, resolvingAckAssertion } from '../postgame.ts';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
+import { isVenueExperiencePacketKind } from '../venue-reviews.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
@@ -50,11 +51,12 @@ export function CommandReview({gameId}: {gameId?:string}) {
   const s=useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot);
   const p=useSyncExternalStore(participation.subscribe,participation.getSnapshot,participation.getSnapshot);
   const command=s.command, review=s.review, selected=review ?? command?.packet;
-  // Public role mutations own their sheet — never open private CommandReview for them.
+  // Public role / venue experience mutations own their sheets — never open private CommandReview.
   const publicRole=!!selected && isPublicRolePacketKind(selected.kind);
+  const venueExperience=!!selected && isVenueExperiencePacketKind(selected.kind);
   const active=path === (gameId ? `/my-games/${gameId}/results` : '/my-games');
   const [dismissed,setDismissed]=useState<typeof command>(null);
-  const visible=active && !publicRole && !!(review || command && command !== dismissed);
+  const visible=active && !publicRole && !venueExperience && !!(review || command && command !== dismissed);
   const heading=useRef<ComponentRef<typeof Text>>(null), trigger=useContext(FocusContext), wasOpen=useRef(false);
   useEffect(()=>{
     if(!visible && wasOpen.current && active) {

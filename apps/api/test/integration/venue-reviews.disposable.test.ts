@@ -1069,4 +1069,185 @@ run("#394 venue experience — disposable", () => {
     expect((await read()).json()).toMatchObject({ status: "withdrawn", editContext: null, editUnavailableReason: "withdrawn" });
   }, 60000);
 
+  it("native bearer exact-game venue experience: eligibility/preview/private+public create + negatives (separate HTTPS harness)", async () => {
+    const { NativeSessionService } = await import("../../src/auth/native-session.service");
+    const { ActorFenceService } = await import("../../src/common/actor-fence.service");
+    const nativeClientId = "native.venue.fixture";
+    const nativeRedirect = "https://app.example.test/auth/callback";
+    const nativeOrigin = "https://127.0.0.1:3001";
+    const nativeApiOrigin = "https://127.0.0.1:3000";
+    // Separate native-enabled HTTPS app over the same disposable pool — original cookie cases keep HTTP/COOKIE_SECURE=false.
+    const envNative = loadEnv({
+      NODE_ENV: "test",
+      APP_ENV: "local",
+      DATABASE_URL: env.DATABASE_URL,
+      PUBLIC_API_ORIGIN: nativeApiOrigin,
+      PUBLIC_WEB_ORIGIN: nativeOrigin,
+      ALLOWED_WEB_ORIGINS: nativeOrigin,
+      COOKIE_SECURE: "true",
+      AUTH_PEPPER: env.AUTH_PEPPER,
+      CONTENT_MODERATION_PROVIDER: "fake",
+      CONTENT_MODERATION_FINGERPRINT_SECRET: "venue-rev-synthetic-fingerprint!!!!!",
+      POST_GAME_INTERNAL_ENABLED: "1",
+      SOCIAL_DIRECTORY_ENABLED: "1",
+      ADMIN_INTERNAL_ENABLED: "1",
+      CASES_INTERNAL_ENABLED: "1",
+      ADMIN_ORIGIN: adminOrigin,
+      ADMIN_AUTH_PEPPER: pepper,
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([
+        { clientId: nativeClientId, redirectUris: [nativeRedirect] },
+      ]),
+    });
+    const refNative = await Test.createTestingModule({
+      imports: [
+        buildTestCoreModule(envNative, pool),
+        GamesModule,
+        VenuesModule,
+        ProfilesModule,
+        AdminModule,
+      ],
+    }).compile();
+    const nativeApp = refNative.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter({ logger: false }),
+    );
+    try {
+      await nativeApp.register(cookie);
+      nativeApp.setGlobalPrefix("v1");
+      nativeApp.useGlobalFilters(new ProblemExceptionFilter());
+      await nativeApp.init();
+      await nativeApp.getHttpAdapter().getInstance().ready();
+      const native = refNative.get(NativeSessionService);
+      const fence = refNative.get(ActorFenceService);
+
+      const author = await actor(`native-venue-${randomUUID()}`);
+      const org = await actor(`native-venue-org-${randomUUID()}`);
+      const seeded = await seedHeldGame({
+        organizerId: org.userId,
+        participantId: author.userId,
+        endsAt: new Date(Date.now() - 3 * 86400_000),
+        venueCreatedBy: outsider.userId,
+      });
+
+      const issued = await native.transaction(async (client) => {
+        await fence.assertActiveConsumerInTransaction(client, {
+          actorId: author.userId,
+          sessionId: author.sessionId,
+        });
+        return native.issue(client, author.userId, nativeClientId);
+      });
+      const bearer = (idem?: string) => ({
+        authorization: `Bearer ${issued.accessToken}`,
+        ...(idem ? { "idempotency-key": idem } : {}),
+      });
+
+      const eligibility = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+        headers: bearer(),
+      });
+      expect(eligibility.statusCode, eligibility.body).toBe(200);
+      const basis = eligibility.json().bases.find((b: { gameId: string }) => b.gameId === seeded.gameId);
+      expect(basis).toMatchObject({
+        gameId: seeded.gameId,
+        admission: "may_submit",
+        outcomeVersion: 1,
+        attendanceVersion: 1,
+      });
+
+      const privateText = "Покрытие удобное для тренировки — только себе.";
+      const privateCreate = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          venueId: seeded.venueId,
+          gameId: seeded.gameId,
+          audience: "self_draft",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: privateText,
+          topics: ["surface"],
+        },
+      });
+      expect(privateCreate.statusCode, privateCreate.body).toBe(200);
+      expect(privateCreate.json()).toMatchObject({
+        status: "self_draft",
+        receiptToken: null,
+        publicVisible: false,
+        notBefore: null,
+      });
+
+      const publicText =
+        "Покрытие удобное, боковой свет мешает следить за воланом — публичный опыт.";
+      const topics = ["surface", "lighting"] as const;
+      const hash = projectionHash({
+        canonicalVenueId: seeded.venueId,
+        audience: "public_venue",
+        text: publicText,
+        topics: [...topics],
+      });
+      const preview = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews/consent-preview",
+        headers: { ...bearer(), "content-type": "application/json" },
+        payload: { venueId: seeded.venueId, text: publicText, topics: [...topics] },
+      });
+      expect(preview.statusCode, preview.body).toBe(200);
+      expect(preview.json()).toEqual({
+        consentProjectionHash: hash,
+        authorLabel: "Участник игры",
+      });
+
+      const publicCreate = await nativeApp.inject({
+        method: "POST",
+        url: "/v1/me/venue-reviews",
+        headers: { ...bearer(randomUUID()), "content-type": "application/json" },
+        payload: {
+          venueId: seeded.venueId,
+          gameId: seeded.gameId,
+          audience: "public_venue",
+          expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+          text: publicText,
+          topics: [...topics],
+          consentProjectionHash: hash,
+        },
+      });
+      expect(publicCreate.statusCode, publicCreate.body).toBe(200);
+      expect(publicCreate.json().status).toBe("submitted_waiting");
+      expect(publicCreate.json().receiptToken).toBeTruthy();
+      expect(publicCreate.json().publicVisible).toBe(false);
+
+      // Cookie-only siblings stay cookie-only on the native harness.
+      const mine = await nativeApp.inject({
+        method: "GET",
+        url: "/v1/me/venue-reviews",
+        headers: bearer(),
+      });
+      expect(mine.statusCode).toBe(401);
+
+      const guest = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+      });
+      expect(guest.statusCode).toBe(401);
+
+      const mixed = await nativeApp.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+        headers: { ...bearer(), cookie: author.cookie },
+      });
+      expect([400, 401]).toContain(mixed.statusCode);
+
+      // Original cookie HTTP app remains usable for cookie eligibility (environment unchanged).
+      const cookieElig = await app.inject({
+        method: "GET",
+        url: `/v1/me/venue-reviews/eligibility?venueId=${seeded.venueId}`,
+        headers: { cookie: author.cookie },
+      });
+      expect(cookieElig.statusCode, cookieElig.body).toBe(200);
+    } finally {
+      await nativeApp.close();
+    }
+  }, 120000);
+
 });

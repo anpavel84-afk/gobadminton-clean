@@ -208,6 +208,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `postgame-feedback.test.ts` / notes·postgame; API `game-feedback.disposable` 7th native peer lifecycle; source APK counter 32 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native peer feedback source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-09 · Native exact-game venue experience private/public (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameResultsComposition` + `VenueReviewComposer`; `GET /me/venue-reviews/eligibility`, `POST .../consent-preview`, `POST /me/venue-reviews`; native `venue-experience-composer` + same root `PostgameCoordinator` |
+| Entry | Authenticated `/my-games/[gameId]/results` after feedback — exact current game + matching game-detail venue only; guest returns to same results path after sign-in |
+| Trigger | Explicit «Оставить отзыв о площадке» when eligibility basis for this game is `may_submit`; private Save or public consent-preview then Save; no autosend |
+| Expected | Private `self_draft` default; public shows exact projection + initially unchecked consent; create binds venueId/gameId/audience/text/topics/basis versions (+ consent hash for public); receipt private null token / public intake token; `publicVisible=false`; UNKNOWN original packet; after 24h first-dispatch age no late POST — inspect on web profile; no optimistic publication |
+| Accessibility | Named topics/audience/consent; keyboard-safe modal; busy/UNKNOWN announced |
+| Unfinished | Native own-history/edit/withdraw/pagination/report/appeal; physical UAT/iOS/OTA; full #522 venue parity |
+| Evidence | Mobile unit `venue-experience-author.test.ts`; API `venue-reviews.disposable` native bearer harness (five cookie cases preserved); source APK counter 37 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 first venue-experience slice; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED / not full #522 |
+
 ## R-07 · Postgame private organization/training feedback (#522 PARTIAL)
 
 | Field | Content |

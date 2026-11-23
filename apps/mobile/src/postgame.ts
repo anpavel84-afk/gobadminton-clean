@@ -31,6 +31,16 @@ import {
   type PublicRoleReplyReceipt,
   type PublicRoleReportReceipt,
 } from './public-role-reviews.ts';
+import {
+  isVenueExperienceCreateReceipt,
+  parseVenueReviewMutationReceipt,
+  venueExperienceText,
+  type VenueAudience,
+  type VenueExperienceCreateBody,
+  type VenueReviewMutationReceipt,
+  type VenueReviewTopic,
+} from './venue-reviews.ts';
+import { isVenueId } from './venues.ts';
 export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage, ReviewKind } from './postgame-feedback.ts';
 export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
@@ -169,11 +179,13 @@ export type Intent =
   /** Public recipient reply — opaque reviewHandle; gameId is origin bind or 'public-role-profile'. */
   | { kind: 'public-role-reply'; gameId: string; reviewHandle: string; body: PublicReplyCommandBody }
   /** Private report on published public review — gameId query only for game origin. */
-  | { kind: 'public-role-report'; gameId: string; reviewHandle: string; body: PublicReportBody; gameQuery: string | null };
+  | { kind: 'public-role-report'; gameId: string; reviewHandle: string; body: PublicReportBody; gameQuery: string | null }
+  /** Exact-game venue experience create — private self_draft default or consented public_venue. */
+  | { kind: 'venue-experience-create'; gameId: string; venueId: string; body: VenueExperienceCreateBody };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
-export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | PublicRoleMutationReceipt | PublicRoleReplyReceipt | PublicRoleReportReceipt | { items: Attendance[] } | Reminders;
+export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | PublicRoleMutationReceipt | PublicRoleReplyReceipt | PublicRoleReportReceipt | VenueReviewMutationReceipt | { items: Attendance[] } | Reminders;
 const invalid = (): never => { throw new PostgameError('invalid'); };
 export function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function str(v: unknown): string { return typeof v === 'string' ? v : invalid(); }
@@ -386,6 +398,31 @@ export function noteText(v: unknown): string {
   return s === s.trim() && s.length > 0 && s.length <= 500 && !hasControl(s) ? s : invalid();
 }
 export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path: string; body: Intent['body'] } {
+  if (packet.kind === 'venue-experience-create') {
+    const gameId = postgameId(packet.gameId);
+    if (!isVenueId(packet.venueId)) invalid();
+    const body = object(packet.body);
+    const audience = choice(body.audience, ['self_draft', 'public_venue'] as const) as VenueAudience;
+    const keys = audience === 'public_venue'
+      ? ['venueId', 'gameId', 'audience', 'expectedBasisVersions', 'text', 'topics', 'consentProjectionHash']
+      : ['venueId', 'gameId', 'audience', 'expectedBasisVersions', 'text', 'topics'];
+    exact(body, keys);
+    if (!isVenueId(body.venueId) || String(body.venueId).toLowerCase() !== packet.venueId.toLowerCase()) invalid();
+    if (postgameId(body.gameId) !== gameId) invalid();
+    const versions = object(body.expectedBasisVersions);
+    exact(versions, ['outcomeVersion', 'attendanceVersion']);
+    num(versions.outcomeVersion); num(versions.attendanceVersion);
+    venueExperienceText(str(body.text));
+    const topics = array(body.topics, item => choice(item, ['surface', 'lighting', 'amenities'] as const)) as VenueReviewTopic[];
+    if (topics.length > 3) invalid();
+    const seen = new Set<string>();
+    for (const topic of topics) { if (seen.has(topic)) invalid(); seen.add(topic); }
+    if (audience === 'public_venue') {
+      const hash = str(body.consentProjectionHash);
+      if (!/^[0-9a-f]{64}$/i.test(hash)) invalid();
+    }
+    return { method: 'POST', path: '/me/venue-reviews', body: packet.body };
+  }
   if (packet.kind === 'public-role-create') {
     const gameId = postgameId(packet.gameId), body = object(packet.body);
     exact(body, ['gameId', 'role', 'expectedBasisVersions', 'text', 'topics', 'consentProjectionHash']);
@@ -760,6 +797,11 @@ export function collectNotes(
   return [...byContext.values()];
 }
 export function validateReceipt(raw: unknown, p: Packet): Receipt {
+  if (p.kind === 'venue-experience-create') {
+    const r = parseVenueReviewMutationReceipt(raw);
+    if (!isVenueExperienceCreateReceipt(r, p.body.audience)) invalid();
+    return r;
+  }
   if (p.kind === 'public-role-create' || p.kind === 'public-role-command') {
     const r = parsePublicRoleMutationReceipt(raw);
     if (p.kind === 'public-role-create') {

@@ -65,6 +65,21 @@ import {
   type ActorAwarePublicRoleReviewItem,
   type RoleKind,
 } from './role-reputation.ts';
+import {
+  buildVenueExperienceCreateBody,
+  emptyVenueExperienceDraft,
+  exactGameMaySubmitBasis,
+  isVenueExperiencePacketKind,
+  parseOwnVenueEligibility,
+  parseVenueConsentPreview,
+  venueExperienceIdempotencyExpired,
+  venueExperienceText,
+  type OwnVenueEligibility,
+  type VenueExperienceDraft,
+  type VenueReviewMutationReceipt,
+  type VenueReviewTopic,
+} from './venue-reviews.ts';
+import { isVenueId } from './venues.ts';
 type PublicMutationBind = {
   surfaceGen: number;
   actorId: string;
@@ -135,6 +150,8 @@ type Command = {
   status: 'sending' | 'unknown';
   /** Attendance/outcome fingerprint at owned-packet send — never on the API wire. */
   roleDiscrepancyContext?: RoleDiscrepancyContext;
+  /** First dispatch clock for venue 24h idempotency client fence — never on the API wire. */
+  firstDispatchedAt?: number;
 };
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
@@ -204,6 +221,15 @@ type Snapshot = {
   pendingPublicAuthor: PublicRoleAuthorTarget | null;
   /** Guest auth return: bounded reader role/origin only; never consent/text/autowrite. */
   pendingPublicReader: PublicRoleReaderTarget | null;
+  /** Exact-game venue eligibility probe target (composer may be closed). */
+  venueProbe: null | { gameId: string; venueId: string };
+  /** Exact-game venue experience composer — no venue picker / broad CTA. */
+  venueExperience: null | { gameId: string; venueId: string; gen: number };
+  venueEligibility: Source<OwnVenueEligibility>;
+  venueDraft: VenueExperienceDraft | null;
+  venueConsentHash: string | null;
+  venueReceipt: VenueReviewMutationReceipt | null;
+  venueNotice: string | null;
 };
 type Port = {
   own: (actor: Actor, cursor?: string) => Promise<OwnResults>;
@@ -244,6 +270,11 @@ type Port = {
     role: RoleKind,
     query?: { cursor?: string; limit?: number },
   ) => Promise<unknown>;
+  venueExperienceEligibility?: (actor: Actor, venueId: string) => Promise<unknown>;
+  venueExperienceConsentPreview?: (
+    actor: Actor,
+    body: { venueId: string; text: string; topics: VenueReviewTopic[] },
+  ) => Promise<unknown>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
 const empty = (actor: Actor | null): Snapshot => ({
@@ -261,6 +292,13 @@ const empty = (actor: Actor | null): Snapshot => ({
   publicNotice: null,
   pendingPublicAuthor: null,
   pendingPublicReader: null,
+  venueProbe: null,
+  venueExperience: null,
+  venueEligibility: { status: 'idle' },
+  venueDraft: null,
+  venueConsentHash: null,
+  venueReceipt: null,
+  venueNotice: null,
 });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
 function draftKey(gameId: string, contextId: string, disputeId?: string | null) {
@@ -295,6 +333,7 @@ function freezeIntent(intent: Intent): Intent {
     }
     case 'public-role-reply': copy={...intent,body:{...intent.body}}; break;
     case 'public-role-report': copy={...intent,body:{...intent.body}}; break;
+    case 'venue-experience-create': copy={...intent,body:{...intent.body,expectedBasisVersions:{...intent.body.expectedBasisVersions},topics:[...intent.body.topics]}}; break;
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
   if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
@@ -303,6 +342,9 @@ function freezeIntent(intent: Intent): Intent {
     Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
   }
   if (copy.kind === 'public-role-command' && (copy.body.action === 'submit_revision' || copy.body.action === 'resubmit')) {
+    Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
+  }
+  if (copy.kind === 'venue-experience-create') {
     Object.freeze(copy.body.expectedBasisVersions); Object.freeze(copy.body.topics);
   }
   Object.freeze(copy.body); return Object.freeze(copy);
@@ -375,6 +417,10 @@ export class PostgameCoordinator {
   private publicOwnDenied = false;
   /** Per-reviewHandle reply aggregate floor — stale ACK cannot paint over newer typed GET. */
   private publicReaderReplyFloor = new Map<string, number>();
+  /** Exact-game venue experience eligibility/preview/surface generation fences. */
+  private venueEligibilityGen = 0;
+  private venuePreviewGen = 0;
+  private venueSurfaceGen = 0;
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -387,6 +433,8 @@ export class PostgameCoordinator {
     if (!port.publicConsentPreview) port.publicConsentPreview = async () => { throw new PostgameError('private', 404); };
     if (!port.publicOwnReviews) port.publicOwnReviews = async () => ({ items: [] });
     if (!port.publicRoleByHandle) port.publicRoleByHandle = async () => { throw new PostgameError('private', 404); };
+    if (!port.venueExperienceEligibility) port.venueExperienceEligibility = async () => { throw new PostgameError('private', 404); };
+    if (!port.venueExperienceConsentPreview) port.venueExperienceConsentPreview = async () => { throw new PostgameError('private', 404); };
     this.port = port as Required<Port>;
     this.random = random;
   }
@@ -417,6 +465,7 @@ export class PostgameCoordinator {
     this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1};
     this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
     this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnDenied=false;
+    this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++;
     // Same-account reauth: keep actor-scoped version/awaiting fences so a deferred own GET
     // cannot let an older ACK repaint over a floor already established this session.
     // AuthCoordinator.refresh() hydrates via setActor(null) while quarantine retains UNKNOWN —
@@ -443,6 +492,9 @@ export class PostgameCoordinator {
         status:'unknown' as const,
         ...(saved.command.roleDiscrepancyContext
           ? { roleDiscrepancyContext: saved.command.roleDiscrepancyContext }
+          : {}),
+        ...(saved.command.firstDispatchedAt !== undefined
+          ? { firstDispatchedAt: saved.command.firstDispatchedAt }
           : {}),
       } : null,
       notice:saved.command ? unknownNotice : null,
@@ -489,6 +541,20 @@ export class PostgameCoordinator {
           origin: { ...saved.pendingPublicReader.origin },
         }
         : null),
+      // Same-account reauth: restore exact-game venue sheet without consent/autosend.
+      venueProbe: saved.venueProbe ? { ...saved.venueProbe } : null,
+      venueExperience: saved.venueExperience
+        ? { ...saved.venueExperience, gen: ++this.venueSurfaceGen }
+        : null,
+      venueDraft: saved.venueDraft
+        ? { ...saved.venueDraft, topics: [...saved.venueDraft.topics], consent: false }
+        : null,
+      venueConsentHash: null,
+      venueReceipt: saved.venueReceipt,
+      venueEligibility: { status: 'idle' },
+      venueNotice: saved.command && isVenueExperiencePacketKind(saved.command.packet.kind)
+        ? unknownNotice
+        : saved.venueNotice,
     });
     else this.show({
       pendingPublicAuthor: pendingPublic,
@@ -530,8 +596,9 @@ export class PostgameCoordinator {
     if (actor && saved?.publicSurface?.mode === 'composer') void this.loadPublicEligibility();
     if (actor && saved?.publicSurface?.mode === 'history') void this.loadOwnPublicReviews();
     if (actor && saved?.publicSurface?.mode === 'reader') void this.loadPublicReader();
+    if (actor && (saved?.venueExperience || saved?.venueProbe)) void this.loadVenueEligibility();
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.reviewAppliedGen.clear(); this.reviewAwaitingTyped.clear(); this.reviewHistoryOwned.clear(); this.reviewDirectionDenied.clear(); this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false}; this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1}; this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++; this.publicReaderGen++; this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false; this.publicReaderReplyFloor.clear(); this.venueEligibilityGen++; this.venuePreviewGen++; this.venueSurfaceGen++; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -2415,10 +2482,251 @@ export class PostgameCoordinator {
     if (command.packet.actor.actorId !== actor.actorId) return;
     await this.dispatch(command.packet, actor, true);
   };
+  /** Probe exact current-game venue eligibility without opening the composer. */
+  probeVenueEligibility = (gameId: string, venueId: string) => {
+    const actor = this.snapshot.actor;
+    if (!actor || !isVenueId(venueId)) return;
+    try { postgameId(gameId); } catch { return; }
+    const normalized = venueId.toLowerCase();
+    const prior = this.snapshot.venueProbe;
+    if (prior?.gameId === gameId && prior.venueId === normalized
+      && this.snapshot.venueEligibility.status === 'loading') {
+      return;
+    }
+    this.show({
+      venueProbe: { gameId, venueId: normalized },
+      venueEligibility: { status: 'loading' },
+      ...(this.snapshot.venueExperience ? {} : { venueNotice: null }),
+    });
+    void this.loadVenueEligibility();
+  };
+  /** Exact current-game venue experience — hide when eligibility is not may_submit for this game. */
+  openVenueExperience = (gameId: string, venueId: string) => {
+    const actor = this.snapshot.actor;
+    if (!actor || !isVenueId(venueId)) return;
+    try { postgameId(gameId); } catch { return; }
+    if (this.snapshot.command || this.inFlight) return;
+    const normalized = venueId.toLowerCase();
+    const gen = ++this.venueSurfaceGen;
+    this.venuePreviewGen++;
+    this.show({
+      venueProbe: { gameId, venueId: normalized },
+      venueExperience: { gameId, venueId: normalized, gen },
+      venueDraft: emptyVenueExperienceDraft(),
+      venueConsentHash: null,
+      venueReceipt: null,
+      venueNotice: null,
+      venueEligibility: { status: 'loading' },
+    });
+    void this.loadVenueEligibility();
+  };
+  closeVenueExperience = () => {
+    if (this.snapshot.command && isVenueExperiencePacketKind(this.snapshot.command.packet.kind)) {
+      this.show({ venueNotice: 'Проверьте результат отправки перед закрытием.' });
+      return;
+    }
+    this.venueSurfaceGen++;
+    this.venuePreviewGen++;
+    this.show({
+      venueExperience: null,
+      venueDraft: null,
+      venueConsentHash: null,
+      venueReceipt: null,
+      venueNotice: null,
+    });
+  };
+  loadVenueEligibility = async () => {
+    const actor = this.snapshot.actor;
+    const probe = this.snapshot.venueProbe;
+    const surface = this.snapshot.venueExperience;
+    const target = surface ?? (probe ? { ...probe, gen: 0 } : null);
+    if (!actor || !target) return;
+    const request = ++this.venueEligibilityGen;
+    const venueId = target.venueId;
+    const gameId = target.gameId;
+    const surfaceGen = surface?.gen;
+    this.show({ venueEligibility: { status: 'loading' } });
+    try {
+      const raw = await this.port.venueExperienceEligibility(actor, venueId);
+      if (request !== this.venueEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (this.snapshot.venueProbe?.venueId !== venueId || this.snapshot.venueProbe?.gameId !== gameId) return;
+      if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      const data = parseOwnVenueEligibility(raw);
+      this.show({ venueEligibility: { status: 'ready', data }, venueNotice: null });
+    } catch (error) {
+      if (request !== this.venueEligibilityGen || !sameActor(actor, this.snapshot.actor)) return;
+      if (this.snapshot.venueProbe?.venueId !== venueId || this.snapshot.venueProbe?.gameId !== gameId) return;
+      if (surfaceGen !== undefined && this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      const denied = error instanceof PostgameError && (error.kind === 'private' || error.status === 401);
+      this.show({
+        venueEligibility: { status: denied ? 'unavailable' : 'error' },
+        venueNotice: denied ? 'Войдите, чтобы поделиться опытом площадки.' : 'Не удалось проверить допуск по этой игре.',
+      });
+    }
+  };
+  patchVenueDraft = (patch: Partial<VenueExperienceDraft>) => {
+    const surface = this.snapshot.venueExperience;
+    const draft = this.snapshot.venueDraft;
+    if (!surface || !draft || this.snapshot.command || this.inFlight || this.snapshot.venueReceipt) return;
+    const next: VenueExperienceDraft = {
+      audience: patch.audience ?? draft.audience,
+      text: patch.text ?? draft.text,
+      topics: patch.topics ? [...patch.topics] : [...draft.topics],
+      consent: patch.consent ?? draft.consent,
+    };
+    const cleared = next.audience !== draft.audience
+      || next.text !== draft.text
+      || next.topics.join(',') !== draft.topics.join(',')
+      || (patch.consent === false);
+    if (cleared) {
+      this.venuePreviewGen++;
+      next.consent = patch.consent === true ? true : false;
+      this.show({ venueDraft: next, venueConsentHash: null });
+      return;
+    }
+    this.show({ venueDraft: next });
+  };
+  ensureVenueConsentPreview = async (): Promise<string | null> => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.venueExperience;
+    const draft = this.snapshot.venueDraft;
+    if (!actor || !surface || !draft || draft.audience !== 'public_venue') return null;
+    if (this.snapshot.command || this.inFlight || this.snapshot.venueReceipt) return null;
+    let text: string;
+    try { text = venueExperienceText(draft.text); } catch {
+      this.show({ venueNotice: 'Проверьте текст отзыва.' });
+      return null;
+    }
+    const previewGen = ++this.venuePreviewGen;
+    const surfaceGen = surface.gen;
+    try {
+      const preview = parseVenueConsentPreview(await this.port.venueExperienceConsentPreview(actor, {
+        venueId: surface.venueId,
+        text,
+        topics: draft.topics,
+      }));
+      if (previewGen !== this.venuePreviewGen || surfaceGen !== this.snapshot.venueExperience?.gen) return null;
+      if (!sameActor(actor, this.snapshot.actor)) return null;
+      this.show({
+        venueConsentHash: preview.consentProjectionHash,
+        venueDraft: { ...draft, consent: true },
+        venueNotice: null,
+      });
+      return preview.consentProjectionHash;
+    } catch {
+      if (previewGen !== this.venuePreviewGen || surfaceGen !== this.snapshot.venueExperience?.gen) return null;
+      this.show({ venueConsentHash: null, venueNotice: 'Не удалось подготовить публичный просмотр.' });
+      return null;
+    }
+  };
+  /**
+   * Venue create via the single command journal. UNKNOWN keeps the original key/body;
+   * after 24h first-dispatch age never late-POST — inspect status on web profile until native own-history exists.
+   */
+  submitVenueExperience = async () => {
+    const actor = this.snapshot.actor;
+    const surface = this.snapshot.venueExperience;
+    const draft = this.snapshot.venueDraft;
+    if (!actor || !surface || !draft) return;
+    if (this.snapshot.command || this.inFlight || this.snapshot.venueReceipt) {
+      const cmd = this.snapshot.command;
+      if (cmd?.status === 'unknown' && isVenueExperiencePacketKind(cmd.packet.kind)
+        && cmd.packet.actor.actorId === actor.actorId) {
+        await this.reconcileVenueExperience();
+      }
+      return;
+    }
+    const eligibility = this.snapshot.venueEligibility.status === 'ready'
+      ? this.snapshot.venueEligibility.data ?? null
+      : null;
+    const basis = exactGameMaySubmitBasis(eligibility, surface.gameId);
+    if (!basis) {
+      this.show({ venueNotice: 'Сейчас нельзя оставить отзыв по этой игре.' });
+      return;
+    }
+    if (draft.audience === 'public_venue' && (!draft.consent || !this.snapshot.venueConsentHash)) {
+      this.show({ venueNotice: 'Отметьте согласие с публичной публикацией.' });
+      return;
+    }
+    let text: string;
+    try { text = venueExperienceText(draft.text); } catch {
+      this.show({ venueNotice: 'Проверьте текст отзыва.' });
+      return;
+    }
+    const surfaceGen = surface.gen;
+    // Recheck current exact-game authority immediately before fresh dispatch.
+    try {
+      const fresh = parseOwnVenueEligibility(
+        await this.port.venueExperienceEligibility(actor, surface.venueId),
+      );
+      if (!sameActor(actor, this.snapshot.actor) || this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      this.show({ venueEligibility: { status: 'ready', data: fresh } });
+      const liveBasis = exactGameMaySubmitBasis(fresh, surface.gameId);
+      if (!liveBasis
+        || liveBasis.outcomeVersion !== basis.outcomeVersion
+        || liveBasis.attendanceVersion !== basis.attendanceVersion) {
+        this.venuePreviewGen++;
+        this.show({
+          venueConsentHash: null,
+          venueDraft: draft ? { ...draft, consent: false } : null,
+          venueNotice: 'Данные игры изменились. Проверьте обновлённый допуск перед новой отправкой.',
+        });
+        return;
+      }
+      const body = buildVenueExperienceCreateBody({
+        venueId: surface.venueId,
+        basis: liveBasis,
+        audience: draft.audience,
+        text,
+        topics: draft.topics,
+        ...(draft.audience === 'public_venue' && this.snapshot.venueConsentHash
+          ? { consentProjectionHash: this.snapshot.venueConsentHash }
+          : {}),
+      });
+      const intent: Intent = {
+        kind: 'venue-experience-create',
+        gameId: liveBasis.gameId,
+        venueId: surface.venueId,
+        body,
+      };
+      const transport = wire(intent);
+      const packet: Packet = Object.freeze({
+        ...freezeIntent(intent),
+        method: transport.method,
+        path: transport.path,
+        actor: Object.freeze({ ...actor }),
+        key: this.random(),
+      }) as Packet;
+      await this.dispatch(packet, actor, false);
+    } catch (error) {
+      if (!sameActor(actor, this.snapshot.actor) || this.snapshot.venueExperience?.gen !== surfaceGen) return;
+      const business = error instanceof PostgameError && error.kind === 'business';
+      this.show({
+        venueNotice: business
+          ? 'Отправка недоступна для этой игры. Текст сохранён.'
+          : 'Не удалось проверить допуск. Текст сохранён.',
+      });
+    }
+  };
+  reconcileVenueExperience = async () => {
+    const { actor, command } = this.snapshot;
+    if (!actor || !command || command.status !== 'unknown' || this.inFlight) return;
+    if (!isVenueExperiencePacketKind(command.packet.kind)) return;
+    if (command.packet.actor.actorId !== actor.actorId) return;
+    if (command.firstDispatchedAt !== undefined
+      && venueExperienceIdempotencyExpired(command.firstDispatchedAt)) {
+      this.show({
+        venueNotice: 'Срок проверки исходного действия истёк. Статус отзыва о площадке смотрите в веб-профиле — нативная история своих отзывов ещё не готова.',
+      });
+      return;
+    }
+    await this.dispatch(command.packet, actor, true);
+  };
   private allowed(intent: Intent) {
     if (intent.kind === 'public-role-create' || intent.kind === 'public-role-command'
-      || intent.kind === 'public-role-reply' || intent.kind === 'public-role-report') {
-      // Public mutations use submitPublicRole — never private CommandReview.allowed path.
+      || intent.kind === 'public-role-reply' || intent.kind === 'public-role-report'
+      || intent.kind === 'venue-experience-create') {
+      // Public/venue mutations use dedicated submit paths — never private CommandReview.allowed.
       return false;
     }
     if (intent.kind === 'peer-create') {
@@ -2565,14 +2873,19 @@ export class PostgameCoordinator {
           ? priorCommand.roleDiscrepancyContext
           : roleDiscrepancyContextFromResults(this.snapshot.games[packet.gameId]?.data))
         : undefined;
+    const firstDispatchedAt = reconciling && priorCommand?.packet === packet && priorCommand.firstDispatchedAt !== undefined
+      ? priorCommand.firstDispatchedAt
+      : (isVenueExperiencePacketKind(packet.kind) ? Date.now() : undefined);
     this.show({
       command: {
         packet,
         status: 'sending',
         ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+        ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
       },
       review: null,
       notice: null,
+      ...(isVenueExperiencePacketKind(packet.kind) ? { venueNotice: null } : {}),
     });
     // Actor object identity also fences a switch away and back to identical
     // credentials. Explicit reconcile captures the new authority separately.
@@ -2640,6 +2953,22 @@ export class PostgameCoordinator {
           subjectContextId: prior.subjectContextId,
         };
         this.show({ feedbackDrafts: drafts });
+      }
+      if (packet.kind === 'venue-experience-create' && 'reviewHandle' in receipt && 'publicVisible' in receipt) {
+        const venueReceipt = receipt as VenueReviewMutationReceipt;
+        const paint = !!this.snapshot.venueExperience
+          && this.snapshot.venueExperience.gameId === packet.gameId
+          && this.snapshot.venueExperience.venueId === packet.venueId;
+        this.show({
+          command: null,
+          ...(paint ? {
+            venueReceipt,
+            venueConsentHash: null,
+            venueNotice: packet.body.audience === 'self_draft'
+              ? 'Сохранено только вам.'
+              : 'Отправлен; ещё не опубликован.',
+          } : {}),
+        });
       }
       if (packet.kind === 'public-role-create' && 'receiptToken' in receipt) {
         const publicReceipt = parsePublicRoleMutationReceipt(receipt);
@@ -2844,6 +3173,8 @@ export class PostgameCoordinator {
       );
       const publicUnknown = !definite && isPublicRolePacketKind(packet.kind);
       const publicBusiness = definite && isPublicRolePacketKind(packet.kind);
+      const venueUnknown = !definite && isVenueExperiencePacketKind(packet.kind);
+      const venueBusiness = definite && isVenueExperiencePacketKind(packet.kind);
       if (peerConflict && packet.kind === 'peer-report') {
         // Preserve detail draft; reset consent after revision change.
         const drafts = { ...this.snapshot.feedbackDrafts };
@@ -2896,13 +3227,15 @@ export class PostgameCoordinator {
             : 'Пока не удалось подтвердить сохранение. Проверьте исходное действие.')
           : peerUnknown
             ? 'Результат отправки пока неизвестен. Проверьте исходное действие.'
-            : publicUnknown
+              : publicUnknown
               ? (packet.kind === 'public-role-reply'
                 ? 'Не удалось подтвердить ответ. Он мог быть принят — не повторяйте отправку.'
                 : packet.kind === 'public-role-report'
                   ? 'Не удалось подтвердить жалобу. Она могла быть получена — не повторяйте отправку.'
                   : 'Отзыв мог быть принят. Проверьте «Мои публичные отзывы о ролях».')
-              : unknownNotice);
+              : venueUnknown
+                ? 'Не удалось подтвердить отправку опыта площадки. Текст сохранён — не повторяйте отправку автоматически.'
+                : unknownNotice);
       // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
       // Preserve original owned-packet discrepancy fingerprint across UNKNOWN for reconcile.
       // Public 409/422 retain draft and require reread/reconsent; private CommandReview notice stays unset for public kinds.
@@ -2943,12 +3276,38 @@ export class PostgameCoordinator {
             void this.loadPublicReader({ preserveNotice: true });
           }
         }
+      } else if (isVenueExperiencePacketKind(packet.kind)) {
+        const paintUi = !!this.snapshot.venueExperience
+          && this.snapshot.venueExperience.gameId === packet.gameId
+          && this.snapshot.venueExperience.venueId === packet.venueId;
+        if (paintUi && venueBusiness) this.venuePreviewGen++;
+        this.show({
+          command: definite ? null : {
+            packet,
+            status: 'unknown',
+            ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+          },
+          notice: null,
+          ...(paintUi ? {
+            venueConsentHash: definite ? null : this.snapshot.venueConsentHash,
+            venueDraft: definite && this.snapshot.venueDraft
+              ? { ...this.snapshot.venueDraft, consent: false }
+              : this.snapshot.venueDraft,
+            venueNotice: venueBusiness
+              ? (error instanceof PostgameError && error.status === 409
+                ? 'Версия изменилась. Перечитайте допуск и подтвердите заново.'
+                : 'Отправка недоступна для этой игры. Текст сохранён.')
+              : notice,
+          } : {}),
+        });
+        if (paintUi && venueBusiness) void this.loadVenueEligibility();
       } else {
         this.show({
           command: definite ? null : {
             packet,
             status: 'unknown',
             ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+            ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
           },
           notice,
         });
