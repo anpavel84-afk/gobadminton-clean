@@ -208,7 +208,10 @@ test('UNKNOWN retains exact packet; conflict keeps draft; logout wipes private n
   const s = setup();
   await s.coordinator.loadResults(game.id);
   await s.coordinator.loadNote(game.id, contextA);
+  // setNoteDraft(selectedContextId) launches a new direct GET — await that authority before write.
   s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA, createText: 'draft body' });
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
   s.port.send = async (p) => { s.sent.push(p); throw new PostgameError('network', 503); };
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'draft body' } });
   await s.coordinator.confirm();
@@ -359,18 +362,39 @@ test('late results must not regress newer direct note; late GET after delete mus
   assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
   assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'direct-v3');
 
-  // Delete + fresh empty results, then late GET must not reinstate private text/known ref.
+  // LEGAL delete under ready typed current version BEFORE refresh; late GET must not resurrect.
   let lateNote!: (value: PersonalNote) => void;
   const lateGate = new Promise<PersonalNote>((resolve) => { lateNote = resolve; });
+  let releaseDelete!: (value: unknown) => void;
+  const deleteGate = new Promise<unknown>((resolve) => { releaseDelete = resolve; });
+  let deleteEntered!: () => void;
+  const deleteStarted = new Promise<void>((resolve) => { deleteEntered = resolve; });
   port.note = async () => lateGate;
   port.results = async () => ({
     ...result,
     feedback: { ...feedbackReady, myNotes: [] },
   });
-  const lateGet = c.loadNote(game.id, contextA);
+  port.send = async (p: Packet): Promise<unknown> => {
+    sent.push(p);
+    if (p.kind === 'note-delete') {
+      deleteEntered();
+      return deleteGate;
+    }
+    throw new PostgameError('invalid');
+  };
+  // Ready typed v3 still grants delete — start real delete before any new refresh.
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
   c.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 3 } });
-  await c.confirm();
+  const confirmP = c.confirm();
+  await deleteStarted;
   assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.kind, 'note-delete');
+  // Direct GET while delete inflight, then valid delete ACK, then fresh EMPTY results, then stale GET.
+  const lateGet = c.loadNote(game.id, contextA);
+  releaseDelete({ gameId: game.id, contextId: contextA, version: 4, deleted: true as const });
+  await confirmP;
+  assert.equal(sent.length, 1, 'exactly one DELETE sent');
   await c.loadResults(game.id);
   assert.equal(c.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`], undefined);
   assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data, undefined);
