@@ -19,8 +19,9 @@ import type { Actor } from './participation.ts';
 import type { NativeMe } from '@gobadminton/contracts/native-auth';
 import type { NativeApi } from './native-api.ts';
 import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, canonicalReturnPath,
-  parseCallback, parseCredentials, parseNativeMe, parseSecureEnvelope, parseSessions, parseTransaction } from './native-auth-protocol.ts';
-import type { PendingLogin, SecureEnvelope, SecureSession, NativeSessionRow } from './native-auth-protocol.ts';
+  parseCallback, parseCredentials, parseNativeMe, parsePublicRoleLocalGoal, parseSecureEnvelope, parseSessions,
+  parseTransaction, publicRoleGoalPath } from './native-auth-protocol.ts';
+import type { PendingLogin, PublicRoleLocalGoal, SecureEnvelope, SecureSession, NativeSessionRow } from './native-auth-protocol.ts';
 
 export type AuthSnapshot = {
   status: 'hydrating' | 'guest' | 'signing-in' | 'authenticated' | 'unverifiable';
@@ -40,7 +41,7 @@ export class AuthCoordinator {
   private writes: Promise<void> = Promise.resolve();
   private boot: Promise<void> | null = null;
   private rotation: Promise<void> | null = null;
-  private exchange: { pending: PendingLogin; code: string; work: Promise<string | null> } | null = null;
+  private exchange: { pending: PendingLogin; code: string; work: Promise<string | null>; goal: PublicRoleLocalGoal | null } | null = null;
   private validation: Promise<void> | null = null;
   private writable = true;
   private starting: Promise<{ url: string; generation: string } | null> | null = null;
@@ -330,10 +331,14 @@ export class AuthCoordinator {
     })();
     return this.boot;
   };
+  private clearWarmPublicGoals() {
+    this.postgame.clearPendingPublicGoals();
+  }
   private async fail(epoch: number, error: unknown) {
     if (epoch !== this.epoch) return;
     this.epoch++; const next = this.epoch;
     this.access = null; this.rotation = null; this.exchange = null; this.validation = null;
+    this.clearWarmPublicGoals();
     this.envelope = this.empty();
     const kind = error instanceof NativeAuthError ? error.kind : 'network';
     this.show({ status: kind === 'network' ? 'unverifiable' : 'guest', me: null, sessions: [],
@@ -341,7 +346,13 @@ export class AuthCoordinator {
     try { await this.persist(this.envelope, next); }
     catch { if (next === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); } }
   }
-  private async accept(raw: unknown, epoch: number, previous?: SecureSession) {
+  private async accept(
+    raw: unknown,
+    epoch: number,
+    previous?: SecureSession,
+    admittedGoal?: PublicRoleLocalGoal | null,
+    goalExpiresAt?: number,
+  ) {
     this.check(epoch);
     const receivedAt = this.now();
     const credentials = parseCredentials(raw, receivedAt);
@@ -354,6 +365,27 @@ export class AuthCoordinator {
       refreshExpiresAt: credentials.refreshExpiresAt, refreshAbsoluteExpiresAt: credentials.refreshAbsoluteExpiresAt,
     } };
     delete envelope.pending;
+    // Refresh keeps a still-matching unclaimed goal; login exchange may admit one bound to this session.
+    if (previous) {
+      const prior = this.envelope?.unclaimedPublicRoleGoal;
+      if (prior && prior.actorId === me.id && prior.sessionId === credentials.sessionId
+          && prior.generation === envelope.generation && prior.expiresAt > this.now()) {
+        envelope.unclaimedPublicRoleGoal = prior;
+      } else {
+        delete envelope.unclaimedPublicRoleGoal;
+      }
+    } else if (admittedGoal && typeof goalExpiresAt === 'number' && goalExpiresAt > this.now()
+        && publicRoleGoalPath(admittedGoal) === envelope.returnPath) {
+      envelope.unclaimedPublicRoleGoal = {
+        ...admittedGoal,
+        generation: envelope.generation,
+        expiresAt: goalExpiresAt,
+        actorId: me.id,
+        sessionId: credentials.sessionId,
+      };
+    } else {
+      delete envelope.unclaimedPublicRoleGoal;
+    }
     await this.persist(envelope, epoch); this.check(epoch);
     this.envelope = envelope;
     const expiresAt = receivedAt + credentials.expiresIn * 1000 - 30_000;
@@ -381,13 +413,19 @@ export class AuthCoordinator {
     void work.finally(() => { if (this.rotation === work) this.rotation = null; });
     return work;
   };
-  beginLogin = (returnPath?: string | null): Promise<{ url: string; generation: string } | null> => {
+  beginLogin = (
+    returnPath?: string | null,
+    goal?: PublicRoleLocalGoal | null,
+  ): Promise<{ url: string; generation: string } | null> => {
     if (this.starting) return this.starting;
-    const work = this.startLogin(returnPath); this.starting = work;
+    const work = this.startLogin(returnPath, goal); this.starting = work;
     void work.finally(() => { if (this.starting === work) this.starting = null; });
     return work;
   };
-  private async startLogin(returnPath?: string | null): Promise<{ url: string; generation: string } | null> {
+  private async startLogin(
+    returnPath?: string | null,
+    goal?: PublicRoleLocalGoal | null,
+  ): Promise<{ url: string; generation: string } | null> {
     await this.hydrate();
     if (!this.writable) return null;
     // Account switch is explicit and fences all old requests before creating the new pending login.
@@ -395,7 +433,15 @@ export class AuthCoordinator {
     await this.logout(false, false);
     if (this.epoch !== before + 1 || !this.writable) return null;
     const epoch = this.epoch;
-    const intent = canonicalReturnPath(returnPath) ?? this.snapshot.returnPath;
+    // Generic / replacement login must never adopt a previous warm selection.
+    this.clearWarmPublicGoals();
+    const pathHint = canonicalReturnPath(returnPath);
+    const goalPath = goal ? publicRoleGoalPath(goal) : null;
+    const admitted = goal && goalPath ? parsePublicRoleLocalGoal(goal, pathHint ?? goalPath) : null;
+    // Goal path wins when admitted; mismatched optional returnPath drops the goal (path-only login).
+    const intent = (admitted && (!pathHint || pathHint === publicRoleGoalPath(admitted))
+      ? publicRoleGoalPath(admitted) : null) ?? pathHint ?? this.snapshot.returnPath;
+    const closedGoal = admitted && publicRoleGoalPath(admitted) === intent ? admitted : null;
     this.envelope = this.empty(intent);
     this.show({ status: 'signing-in', me: null, sessions: [], returnPath: intent, notice: null });
     try {
@@ -409,7 +455,8 @@ export class AuthCoordinator {
         codeChallenge: challenge, codeChallengeMethod: 'S256', state, ...(intent ? { returnPath: intent } : {}) }), this.now());
       this.check(epoch);
       const pending: PendingLogin = { generation: this.envelope.generation, clientId: NATIVE_CLIENT_ID, redirectUri: NATIVE_REDIRECT,
-        verifier, state, transactionId: transaction.transactionId, expiresAt: Date.parse(transaction.expiresAt), returnPath: intent };
+        verifier, state, transactionId: transaction.transactionId, expiresAt: Date.parse(transaction.expiresAt), returnPath: intent,
+        ...(closedGoal ? { goal: closedGoal } : {}) };
       const envelope = { ...this.envelope, pending };
       await this.persist(envelope, epoch); this.check(epoch); this.envelope = envelope;
       return { url: transaction.browserStartUrl, generation: pending.generation };
@@ -430,16 +477,17 @@ export class AuthCoordinator {
     try { code = parseCallback(raw, pending, this.now(), this.envelope!.generation); }
     catch { this.show({ notice: pending.expiresAt <= this.now() ? 'signin' : this.snapshot.notice }); return null; }
     // Synchronous memory consumption fences duplicate WebBrowser + Linking delivery before the first await.
+    const admittedGoal = pending.goal ?? null;
     const consumed = { ...this.envelope! }; delete consumed.pending; this.envelope = consumed;
     const work = (async () => {
       try {
         await this.persist(consumed, epoch); this.check(epoch);
         const rawCredentials = await this.deps.api.exchange({ clientId: NATIVE_CLIENT_ID, redirectUri: NATIVE_REDIRECT, code, verifier: pending.verifier });
-        this.check(epoch); await this.accept(rawCredentials, epoch);
+        this.check(epoch); await this.accept(rawCredentials, epoch, undefined, admittedGoal, pending.expiresAt);
         return pending.returnPath ?? '/profile';
       } catch (error) { await this.fail(epoch, error); return null; }
     })();
-    this.exchange = { pending, code, work };
+    this.exchange = { pending, code, work, goal: admittedGoal };
     try { return await work; }
     finally { if (this.exchange?.work === work) this.exchange = null; }
   };
@@ -447,9 +495,47 @@ export class AuthCoordinator {
     await this.hydrate();
     if (!this.envelope?.pending || (generation && generation !== this.envelope.generation)) return;
     const epoch = ++this.epoch;
+    this.clearWarmPublicGoals();
     const envelope = this.empty(); this.envelope = envelope;
     this.show({ status: 'guest', me: null, sessions: [], notice: 'cancelled' });
     try { await this.persist(envelope, epoch); } catch (error) { await this.fail(epoch, error); }
+  };
+  /**
+   * Durable at-most-once claim of an unclaimed public-role goal for the current actor/session.
+   * Clears secure storage before returning; failed clear write never opens a sheet.
+   */
+  claimPublicRoleGoal = async (): Promise<PublicRoleLocalGoal | null> => {
+    await this.hydrate();
+    const epoch = this.epoch;
+    const envelope = this.envelope;
+    const unclaimed = envelope?.unclaimedPublicRoleGoal;
+    const session = envelope?.session;
+    const me = this.snapshot.me;
+    if (!envelope || !unclaimed || !session || this.snapshot.status !== 'authenticated' || !me) return null;
+    if (unclaimed.actorId !== session.actorId || unclaimed.sessionId !== session.sessionId
+        || unclaimed.actorId !== me.id || unclaimed.sessionId !== me.session.id
+        || unclaimed.generation !== envelope.generation) {
+      return null;
+    }
+    const closed = parsePublicRoleLocalGoal({
+      mode: unclaimed.mode, role: unclaimed.role, roleHandle: unclaimed.roleHandle, origin: unclaimed.origin,
+    }, envelope.returnPath);
+    const retire = async () => {
+      const cleared: SecureEnvelope = { ...envelope }; delete cleared.unclaimedPublicRoleGoal;
+      await this.persist(cleared, epoch); this.check(epoch); this.envelope = cleared;
+    };
+    if (!closed || unclaimed.expiresAt <= this.now()) {
+      try { await retire(); } catch { if (epoch === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); } }
+      return null;
+    }
+    try { await retire(); }
+    catch {
+      if (epoch === this.epoch) { this.writable = false; this.show({ status: 'unverifiable', notice: 'storage' }); }
+      return null;
+    }
+    if (epoch !== this.epoch || this.snapshot.status !== 'authenticated' || !this.snapshot.me) return null;
+    if (this.snapshot.me.id !== unclaimed.actorId || this.snapshot.me.session.id !== unclaimed.sessionId) return null;
+    return closed;
   };
   private async token(epoch: number): Promise<string> {
     if (this.rotation) await this.rotation;
@@ -511,6 +597,7 @@ export class AuthCoordinator {
     const refresh = this.envelope?.session?.refreshToken, access = this.access?.token;
     const epoch = ++this.epoch;
     this.rotation = null; this.exchange = null; this.validation = null; this.access = null;
+    if (!forgetCreation) this.clearWarmPublicGoals();
     const envelope = this.empty(); this.envelope = envelope;
     if (forgetCreation) this.gameManagement.forgetCreation();
     if (forgetCreation) this.profile.forget();

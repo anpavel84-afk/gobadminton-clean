@@ -65,7 +65,80 @@ export function canonicalPostgamePath(value: unknown): string | null {
 export function canonicalVenuePath(value: unknown): string | null {
   return typeof value === 'string' && value.match(/^\/venues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)?.[0] === value ? value : null;
 }
-export function canonicalReturnPath(value: unknown): string | null { return canonicalVenuePath(value) ?? canonicalPostgamePath(value) ?? (value === '/players/browse' ? value : null) ?? canonicalVenueCreatePath(value) ?? (value === '/games/create' || typeof value === 'string' && /^\/games\/manage\/[A-Za-z0-9_-]{1,128}$/.test(value) ? value : canonicalGamePath(value) ?? canonicalMessagePath(value)); }
+/**
+ * Exact public-player detail path only. Reserved hubs (`/players/browse`) stay distinct and are
+ * never parsed as a detail id. No queries, encoding tricks, trailing slash or control suffix.
+ */
+export function canonicalPlayerPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^\/players\/([A-Za-z0-9_-]{1,128})$/);
+  if (!match || match[0] !== value) return null;
+  const id = match[1]!;
+  if (id === 'browse') return null;
+  return value;
+}
+export function canonicalReturnPath(value: unknown): string | null {
+  return canonicalVenuePath(value)
+    ?? canonicalPostgamePath(value)
+    ?? (value === '/players/browse' ? value : null)
+    ?? canonicalPlayerPath(value)
+    ?? canonicalVenueCreatePath(value)
+    ?? (value === '/games/create' || typeof value === 'string' && /^\/games\/manage\/[A-Za-z0-9_-]{1,128}$/.test(value)
+      ? value
+      : canonicalGamePath(value) ?? canonicalMessagePath(value));
+}
+/** Closed local public-role destination: author(game) or reader(game|profile). No draft/consent/private fields. */
+export type PublicRoleLocalGoal =
+  | { mode: 'author'; role: 'organization' | 'training'; roleHandle: string; origin: { kind: 'game'; gameId: string } }
+  | {
+    mode: 'reader';
+    role: 'organization' | 'training';
+    roleHandle: string;
+    origin: { kind: 'game'; gameId: string } | { kind: 'profile'; publicPlayerId: string };
+  };
+const ROLE_HANDLE = /^[0-9a-f]{32}$/i;
+const ORIGIN_ID = /^[A-Za-z0-9_-]{1,128}$/;
+/** Derive the bare return path the goal must agree with. */
+export function publicRoleGoalPath(goal: PublicRoleLocalGoal): string | null {
+  if (goal.origin.kind === 'game') return canonicalGamePath(`/games/${encodeURIComponent(goal.origin.gameId)}`);
+  return canonicalPlayerPath(`/players/${goal.origin.publicPlayerId}`);
+}
+/**
+ * Reconstruct a closed goal from untrusted input. Extra/private fields are never retained.
+ * Malformed optional metadata yields null (caller may keep a valid session/pending).
+ */
+export function parsePublicRoleLocalGoal(value: unknown, returnPath: string | null): PublicRoleLocalGoal | null {
+  if (value === undefined || value === null) return null;
+  try {
+    const row = record(value);
+    const mode = row.mode;
+    const role = row.role;
+    if ((mode !== 'author' && mode !== 'reader') || (role !== 'organization' && role !== 'training')) return null;
+    if (typeof row.roleHandle !== 'string' || !ROLE_HANDLE.test(row.roleHandle)) return null;
+    const roleHandle = row.roleHandle.toLowerCase();
+    const origin = record(row.origin);
+    if (mode === 'author') {
+      if (origin.kind !== 'game' || typeof origin.gameId !== 'string' || !ORIGIN_ID.test(origin.gameId)) return null;
+      const goal: PublicRoleLocalGoal = { mode: 'author', role, roleHandle, origin: { kind: 'game', gameId: origin.gameId } };
+      return publicRoleGoalPath(goal) === returnPath ? goal : null;
+    }
+    if (origin.kind === 'game') {
+      if (typeof origin.gameId !== 'string' || !ORIGIN_ID.test(origin.gameId)) return null;
+      const goal: PublicRoleLocalGoal = { mode: 'reader', role, roleHandle, origin: { kind: 'game', gameId: origin.gameId } };
+      return publicRoleGoalPath(goal) === returnPath ? goal : null;
+    }
+    if (origin.kind !== 'profile' || typeof origin.publicPlayerId !== 'string' || !ORIGIN_ID.test(origin.publicPlayerId)
+        || origin.publicPlayerId === 'browse') return null;
+    const goal: PublicRoleLocalGoal = {
+      mode: 'reader', role, roleHandle, origin: { kind: 'profile', publicPlayerId: origin.publicPlayerId },
+    };
+    return publicRoleGoalPath(goal) === returnPath ? goal : null;
+  } catch { return null; }
+}
+/** Actor/session/generation/deadline-bound unclaimed goal after verified session commit. */
+export type UnclaimedPublicRoleGoal = PublicRoleLocalGoal & {
+  generation: string; expiresAt: number; actorId: string; sessionId: string;
+};
 export function gamePath(id: string): string | null { return canonicalGamePath(`/games/${encodeURIComponent(id)}`); }
 export function publicGameUrl(id: string): string {
   const path = gamePath(id); if (!path) throw new NativeAuthError('invalid');
@@ -81,9 +154,28 @@ export function parseTransaction(value: unknown, now: number): NativeTransaction
 export type PendingLogin = {
   generation: string; clientId: typeof NATIVE_CLIENT_ID; redirectUri: typeof NATIVE_REDIRECT;
   verifier: string; state: string; transactionId: string; expiresAt: number; returnPath: string | null;
+  goal?: PublicRoleLocalGoal;
 };
 export type SecureSession = { refreshToken: string; sessionId: string; actorId: string; refreshExpiresAt: string; refreshAbsoluteExpiresAt: string };
-export type SecureEnvelope = { version: 1; generation: string; returnPath: string | null; session?: SecureSession; pending?: PendingLogin };
+export type SecureEnvelope = {
+  version: 1; generation: string; returnPath: string | null;
+  session?: SecureSession; pending?: PendingLogin; unclaimedPublicRoleGoal?: UnclaimedPublicRoleGoal;
+};
+function parseUnclaimedPublicRoleGoal(
+  value: unknown, returnPath: string | null, generation: string, session: SecureSession, now: number,
+): UnclaimedPublicRoleGoal | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const row = record(value);
+    if (row.generation !== generation || typeof row.expiresAt !== 'number' || row.expiresAt <= now
+        || row.actorId !== session.actorId || row.sessionId !== session.sessionId) return undefined;
+    const goal = parsePublicRoleLocalGoal({
+      mode: row.mode, role: row.role, roleHandle: row.roleHandle, origin: row.origin,
+    }, returnPath);
+    if (!goal) return undefined;
+    return { ...goal, generation, expiresAt: row.expiresAt, actorId: session.actorId, sessionId: session.sessionId };
+  } catch { return undefined; }
+}
 /** A future version is never erased/migrated by this binary. Existing preferences use a separate key. */
 export function parseSecureEnvelope(raw: string | null, now: number): SecureEnvelope | null {
   if (raw === null) return null;
@@ -100,6 +192,11 @@ export function parseSecureEnvelope(raw: string | null, now: number): SecureEnve
       if (Date.parse(session.refreshExpiresAt) > now && Date.parse(session.refreshAbsoluteExpiresAt) > now) {
         envelope.session = { refreshToken: session.refreshToken, sessionId: session.sessionId, actorId: session.actorId,
           refreshExpiresAt: session.refreshExpiresAt, refreshAbsoluteExpiresAt: session.refreshAbsoluteExpiresAt };
+        // Malformed optional goal is dropped; valid session bytes stay. Unknown future stays fail-closed above.
+        const unclaimed = parseUnclaimedPublicRoleGoal(
+          row.unclaimedPublicRoleGoal, envelope.returnPath, envelope.generation, envelope.session, now,
+        );
+        if (unclaimed) envelope.unclaimedPublicRoleGoal = unclaimed;
       }
     }
     if (row.pending !== undefined) {
@@ -109,7 +206,17 @@ export function parseSecureEnvelope(raw: string | null, now: number): SecureEnve
           typeof pending.transactionId !== 'string' || !opaque.test(pending.transactionId) || typeof pending.expiresAt !== 'number' ||
           pending.expiresAt > now + 600_000 || !(pending.returnPath === null || canonicalReturnPath(pending.returnPath)) ||
           pending.returnPath !== envelope.returnPath) throw new NativeAuthError('storage');
-      if (pending.expiresAt > now) envelope.pending = pending as PendingLogin;
+      if (pending.expiresAt > now) {
+        const closed: PendingLogin = {
+          generation: pending.generation as string, clientId: NATIVE_CLIENT_ID, redirectUri: NATIVE_REDIRECT,
+          verifier: pending.verifier as string, state: pending.state as string,
+          transactionId: pending.transactionId as string, expiresAt: pending.expiresAt as number,
+          returnPath: pending.returnPath as string | null,
+        };
+        const goal = parsePublicRoleLocalGoal(pending.goal, closed.returnPath);
+        if (goal) closed.goal = goal;
+        envelope.pending = closed;
+      }
     }
     return envelope;
   } catch { throw new NativeAuthError('storage'); }

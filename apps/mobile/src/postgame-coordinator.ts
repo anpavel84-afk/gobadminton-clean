@@ -1184,6 +1184,11 @@ export class PostgameCoordinator {
     const feedback = this.snapshot.games[gameId]?.data?.feedback;
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
   }
+  /** Drop warm guest author/reader targets — cancel/expiry/replacement login must not inherit them. */
+  clearPendingPublicGoals = () => {
+    if (!this.snapshot.pendingPublicAuthor && !this.snapshot.pendingPublicReader) return;
+    this.show({ pendingPublicAuthor: null, pendingPublicReader: null });
+  };
   /** Guest: remember bounded role/game only; consent/text never retained across auth. */
   rememberPendingPublicAuthor = (target: PublicRoleAuthorTarget) => {
     this.show({

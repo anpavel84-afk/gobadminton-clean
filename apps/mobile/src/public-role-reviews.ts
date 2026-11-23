@@ -798,7 +798,7 @@ export function mayPaintPublicReportReceipt(
   return !!typed && typed.publishedRevision === expectedRevision;
 }
 
-/** Stable guest return uses existing game path only — role/game target lives on PostgameCoordinator. */
+/** Stable guest return uses existing game path only — role destination is admitted with the login envelope. */
 export function publicAuthorReturnPath(gameId: string): string | null {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(gameId)) return null;
   try {
@@ -807,6 +807,60 @@ export function publicAuthorReturnPath(gameId: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Bare game or public-player detail return for a reader origin; reserved `/players/browse` is not a detail. */
+export function publicReaderReturnPath(origin: PublicRoleReaderOrigin): string | null {
+  if (origin.kind === 'game') return publicAuthorReturnPath(origin.gameId);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(origin.publicPlayerId) || origin.publicPlayerId === 'browse') return null;
+  return `/players/${origin.publicPlayerId}`;
+}
+
+/** Closed local goal for guest author entry — no display name, draft, consent or command fields. */
+export function publicAuthorLocalGoal(target: PublicRoleAuthorTarget): {
+  mode: 'author';
+  role: RoleKind;
+  roleHandle: string;
+  origin: { kind: 'game'; gameId: string };
+} | null {
+  if (!/^[0-9a-f]{32}$/i.test(target.roleHandle)) return null;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(target.gameId)) return null;
+  if (target.role !== 'organization' && target.role !== 'training') return null;
+  return {
+    mode: 'author',
+    role: target.role,
+    roleHandle: target.roleHandle.toLowerCase(),
+    origin: { kind: 'game', gameId: target.gameId },
+  };
+}
+
+/** Closed local goal for guest reader entry — game or profile origin only. */
+export function publicReaderLocalGoal(target: PublicRoleReaderTarget): {
+  mode: 'reader';
+  role: RoleKind;
+  roleHandle: string;
+  origin: PublicRoleReaderOrigin;
+} | null {
+  if (!/^[0-9a-f]{32}$/i.test(target.roleHandle)) return null;
+  if (target.role !== 'organization' && target.role !== 'training') return null;
+  if (target.origin.kind === 'game') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(target.origin.gameId)) return null;
+    return {
+      mode: 'reader',
+      role: target.role,
+      roleHandle: target.roleHandle.toLowerCase(),
+      origin: { kind: 'game', gameId: target.origin.gameId },
+    };
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(target.origin.publicPlayerId) || target.origin.publicPlayerId === 'browse') {
+    return null;
+  }
+  return {
+    mode: 'reader',
+    role: target.role,
+    roleHandle: target.roleHandle.toLowerCase(),
+    origin: { kind: 'profile', publicPlayerId: target.origin.publicPlayerId },
+  };
 }
 
 export function isPublicRolePacketKind(

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View, type ScrollView } from 'react-native';
 import { useAuth } from '../auth.tsx';
+import type { PublicRoleLocalGoal } from '../native-auth-protocol.ts';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
   bindPublicRoleFocusRef,
@@ -612,29 +613,56 @@ export function PublicRoleReaderSheet({ onClose }: { onClose: () => void }) {
 
 /**
  * Single persistent host under AuthProvider (RootLayout) — opens composer/history/reader from
- * PostgameCoordinator surface ownership; resumes bounded guest pending once when actor is current.
+ * PostgameCoordinator surface ownership; claims durable cold goal once before warm pending resume.
  */
 export function PublicRoleReviewHost() {
   const auth = useAuth(), owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const claimGen = useRef(0);
   useEffect(() => {
     if (auth.status !== 'authenticated') return;
     if (!auth.me || !s.actor) return;
     if (s.actor.actorId !== auth.me.id || s.actor.sessionId !== auth.me.session.id) return;
-    if (s.pendingPublicAuthor) {
-      owner.resumePendingPublicAuthor();
-      return;
-    }
-    if (s.pendingPublicReader) owner.resumePendingPublicReader();
+    if (s.publicSurface) return;
+    const gen = ++claimGen.current;
+    void (async () => {
+      const goal = await auth.claimPublicRoleGoal();
+      if (gen !== claimGen.current) return;
+      if (goal?.mode === 'author' && goal.origin.kind === 'game') {
+        owner.openPublicComposer({
+          roleHandle: goal.roleHandle,
+          role: goal.role,
+          gameId: goal.origin.gameId,
+        });
+        return;
+      }
+      if (goal?.mode === 'reader') {
+        owner.openPublicReader({
+          roleHandle: goal.roleHandle,
+          role: goal.role,
+          origin: goal.origin,
+        });
+        return;
+      }
+      const live = owner.getSnapshot();
+      if (live.publicSurface) return;
+      if (live.pendingPublicAuthor) {
+        owner.resumePendingPublicAuthor();
+        return;
+      }
+      if (live.pendingPublicReader) owner.resumePendingPublicReader();
+    })();
   }, [
     auth.status,
     auth.me?.id,
     auth.me?.session.id,
+    auth.claimPublicRoleGoal,
     owner,
     s.actor?.actorId,
     s.actor?.sessionId,
     s.pendingPublicAuthor,
     s.pendingPublicReader,
+    s.publicSurface,
   ]);
   const surface = s.publicSurface;
   if (!surface) return null;
@@ -656,14 +684,14 @@ export function PublicRoleReviewHost() {
 export function beginPublicReaderEntry(args: {
   authenticated: boolean;
   target: PublicRoleReaderTarget;
-  signIn: (returnPath: string | null) => void;
+  signIn: (returnPath: string | null, goal?: PublicRoleLocalGoal | null) => void;
   open: (target: PublicRoleReaderTarget) => void;
-  rememberPending: (target: PublicRoleReaderTarget) => void;
   returnPath: string | null;
+  goal: PublicRoleLocalGoal | null;
 }) {
   if (!args.authenticated) {
-    args.rememberPending(args.target);
-    args.signIn(args.returnPath);
+    // Durable goal is admitted only inside beginLogin — no warm remember that survives cancel.
+    args.signIn(args.returnPath, args.goal);
     return;
   }
   args.open(args.target);
@@ -672,14 +700,13 @@ export function beginPublicReaderEntry(args: {
 export function beginPublicAuthorEntry(args: {
   authenticated: boolean;
   target: PublicRoleAuthorTarget;
-  signIn: (returnPath: string | null) => void;
+  signIn: (returnPath: string | null, goal?: PublicRoleLocalGoal | null) => void;
   open: (target: PublicRoleAuthorTarget) => void;
-  rememberPending: (target: PublicRoleAuthorTarget) => void;
   returnPath: string | null;
+  goal: PublicRoleLocalGoal | null;
 }) {
   if (!args.authenticated) {
-    args.rememberPending(args.target);
-    args.signIn(args.returnPath);
+    args.signIn(args.returnPath, args.goal);
     return;
   }
   args.open(args.target);

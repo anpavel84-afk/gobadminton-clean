@@ -714,9 +714,9 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   // Author entry + actor-aware reader entry on game disclosure; guest list stays private-field-free.
   // Reply/report authority and buttons live on root PublicRoleReaderSheet, not disclosure rows.
   assert.match(disclosure, /Поделиться опытом/);
-  assert.match(disclosure, /openPublicComposer|beginPublicAuthorEntry|rememberPendingPublicAuthor/);
+  assert.match(disclosure, /openPublicComposer|beginPublicAuthorEntry|publicAuthorLocalGoal/);
   assert.match(disclosure, /Ответить или пожаловаться|beginPublicReaderEntry|openPublicReader/);
-  assert.match(disclosure, /rememberPendingPublicReader/);
+  assert.match(disclosure, /publicReaderLocalGoal|publicReaderReturnPath/);
   assert.doesNotMatch(disclosure, /allowedActions\.canReply|allowedActions\.canReport|Сообщить о нарушении/);
   const readerHost = read('../src/components/public-role-reviews.tsx');
   assert.match(readerHost, /PublicRoleReaderSheet/);
@@ -747,5 +747,5 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(nav, /flexBasis: 'auto'/);
   assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
   assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 35);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 36);
 });

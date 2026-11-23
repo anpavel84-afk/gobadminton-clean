@@ -905,7 +905,7 @@ test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-ac
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 
-test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK35 root-host source wiring', () => {
+test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK36 root-host source wiring', () => {
   const createPacket = {
     kind: 'public-role-create' as const,
     gameId,
@@ -951,7 +951,9 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.doesNotMatch(disclosure, /consumePendingPublicAuthor|resumePendingPublicAuthor/);
   assert.doesNotMatch(disclosure, /PublicRoleReviewHost/);
   assert.match(disclosure, /Ответить или пожаловаться|beginPublicReaderEntry|openPublicReader/);
-  assert.match(disclosure, /rememberPendingPublicReader/);
+  assert.match(disclosure, /publicReaderLocalGoal|publicAuthorLocalGoal/);
+  assert.match(disclosure, /publicReaderReturnPath/);
+  assert.doesNotMatch(disclosure, /rememberPendingPublicAuthor|rememberPendingPublicReader/);
   // Reply/report actions live on root reader sheet — not inside game-disclosure list rows.
   assert.doesNotMatch(disclosure, /allowedActions\.canReply|allowedActions\.canReport|Сообщить о нарушении/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
@@ -961,6 +963,7 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(host, /restorePublicTriggerFocus/);
   assert.match(host, /rememberPublicRoleFocusTarget/);
   assert.match(host, /clearPublicRoleFocusTarget/);
+  assert.match(host, /claimPublicRoleGoal/);
   assert.match(host, /resumePendingPublicAuthor/);
   assert.match(host, /resumePendingPublicReader/);
   assert.match(host, /PublicRoleAuthorEntryButton/);
@@ -993,6 +996,7 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   const coordinator = read('../src/postgame-coordinator.ts');
   assert.match(coordinator, /resumePendingPublicAuthor/);
   assert.match(coordinator, /resumePendingPublicReader/);
+  assert.match(coordinator, /clearPendingPublicGoals/);
   assert.match(coordinator, /rememberPendingPublicReader/);
   assert.match(coordinator, /openPublicReader/);
   assert.match(coordinator, /submitPublicReply/);
@@ -1025,7 +1029,7 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.doesNotMatch(controller, /replyCommand[\s\S]*requireCookieMutation/);
   assert.doesNotMatch(controller, /report[\s\S]*requireCookieMutation/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 35);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 36);
   assert.equal(draftEditorKey(emptyPublicRoleDraft(gameId), handle, 'organization').includes(gameId), true);
 });
 

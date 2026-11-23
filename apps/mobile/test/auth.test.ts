@@ -14,9 +14,9 @@ import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
 import { game as fixture } from './fixtures.ts';
-import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalReturnPath, canonicalVenueCreatePath,
-  parseCallback, parseNativeMe, parseSecureEnvelope } from '../src/native-auth-protocol.ts';
-import type { PendingLogin, SecureEnvelope } from '../src/native-auth-protocol.ts';
+import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalPlayerPath, canonicalReturnPath, canonicalVenueCreatePath,
+  parseCallback, parseNativeMe, parsePublicRoleLocalGoal, parseSecureEnvelope, publicRoleGoalPath } from '../src/native-auth-protocol.ts';
+import type { PendingLogin, PublicRoleLocalGoal, SecureEnvelope } from '../src/native-auth-protocol.ts';
 
 const now = Date.parse('2026-11-14T00:00:00Z');
 const token = (s: string) => s.repeat(43);
@@ -1375,4 +1375,212 @@ test('closed community ports use real same-actor auth, exact packet and permit; 
   assert.equal(s.auth.participation.getSnapshot().actor,null);
   const comments=s.calls.slice(before).filter(c=>c.path.includes('/comments'));
   assert.equal(comments.length,1);assert.match((comments[0]!.init.headers as Record<string,string>).Authorization!,/^Bearer /);
+});
+
+const roleHandle = 'a'.repeat(32);
+const gameAuthorGoal: PublicRoleLocalGoal = {
+  mode: 'author', role: 'organization', roleHandle, origin: { kind: 'game', gameId: 'same-game' },
+};
+const gameReaderGoal: PublicRoleLocalGoal = {
+  mode: 'reader', role: 'organization', roleHandle, origin: { kind: 'game', gameId: 'same-game' },
+};
+const profileReaderGoal: PublicRoleLocalGoal = {
+  mode: 'reader', role: 'training', roleHandle, origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+};
+
+test('#522 family1: cold game-author goal survives stored-bytes restart; duplicate callback exchanges once; blank claim; zero business writes', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  assert.equal(path, '/games/same-game');
+  const first = setup(); await first.auth.hydrate();
+  assert.ok(await first.auth.beginLogin(path, gameAuthorGoal));
+  const pending = parseSecureEnvelope(first.stored(), now)!.pending!;
+  assert.deepEqual(pending.goal, gameAuthorGoal);
+  assert.equal(JSON.stringify(pending).includes('consent'), false);
+  assert.equal(JSON.stringify(pending).includes('displayName'), false);
+  // Reconstruct coordinator from durable bytes (process death before callback).
+  const cold = setup(JSON.parse(first.stored()!)); await cold.auth.hydrate();
+  assert.equal(cold.auth.getSnapshot().status, 'signing-in');
+  assert.deepEqual(parseSecureEnvelope(cold.stored(), now)!.pending!.goal, gameAuthorGoal);
+  const verified = deferred<typeof me>();
+  cold.setHandler(async path => path === '/me' ? verified.promise : credentials);
+  const a = cold.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`);
+  const b = cold.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`);
+  await new Promise(r => setImmediate(r));
+  assert.equal(cold.auth.postgame.getSnapshot().publicSurface, null);
+  verified.resolve(me);
+  assert.deepEqual(await Promise.all([a, b]), [path, path]);
+  assert.equal(cold.calls.filter(c => c.path === '/auth/native/exchange').length, 1);
+  const secure = parseSecureEnvelope(cold.stored(), now)!;
+  assert.equal(secure.pending, undefined);
+  assert.deepEqual(secure.unclaimedPublicRoleGoal && {
+    mode: secure.unclaimedPublicRoleGoal.mode,
+    role: secure.unclaimedPublicRoleGoal.role,
+    roleHandle: secure.unclaimedPublicRoleGoal.roleHandle,
+    origin: secure.unclaimedPublicRoleGoal.origin,
+  }, gameAuthorGoal);
+  const claimed = await cold.auth.claimPublicRoleGoal();
+  assert.deepEqual(claimed, gameAuthorGoal);
+  assert.equal(parseSecureEnvelope(cold.stored(), now)!.unclaimedPublicRoleGoal, undefined);
+  assert.equal(await cold.auth.claimPublicRoleGoal(), null);
+  assert.equal(cold.calls.filter(c => c.init.method && c.init.method !== 'GET' && !c.path.startsWith('/auth/')).length, 0);
+  assert.equal(cold.auth.postgame.getSnapshot().publicDraft, null);
+  assert.equal(cold.auth.postgame.getSnapshot().publicConsentHash, null);
+});
+
+test('#522 family2: profile and game reader goals restore typed origin; metadata stays out of transaction/callback', async () => {
+  for (const goal of [profileReaderGoal, gameReaderGoal]) {
+    const path = publicRoleGoalPath(goal)!;
+    assert.equal(canonicalReturnPath(path), path);
+    const s = setup(); await s.auth.hydrate();
+    assert.ok(await s.auth.beginLogin(path, goal));
+    const pending = parseSecureEnvelope(s.stored(), now)!.pending!;
+    assert.deepEqual(pending.goal, goal);
+    const tx = s.calls.find(c => c.path === '/auth/native/transactions')!;
+    const body = JSON.parse(String(tx.init.body));
+    assert.equal(body.returnPath, path);
+    assert.equal('goal' in body, false);
+    assert.equal(JSON.stringify(body).includes(roleHandle), false);
+    assert.equal(await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`), path);
+    const claimed = await s.auth.claimPublicRoleGoal();
+    assert.deepEqual(claimed, goal);
+  }
+  assert.equal(canonicalPlayerPath('/players/browse'), null);
+  assert.equal(canonicalPlayerPath('/players/public-peer-a'), '/players/public-peer-a');
+  assert.equal(canonicalReturnPath('/players/browse'), '/players/browse');
+});
+
+test('#522 family3: post-commit pre-claim restart reopens once; second restart and failed clear never open', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const first = setup(); await first.auth.hydrate();
+  assert.ok(await first.auth.beginLogin(path, gameAuthorGoal));
+  const pending = parseSecureEnvelope(first.stored(), now)!.pending!;
+  assert.equal(await first.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`), path);
+  const mid = JSON.parse(first.stored()!);
+  assert.ok(mid.unclaimedPublicRoleGoal);
+  // Death after session commit, before host claim.
+  const resumed = setup(mid); await resumed.auth.hydrate();
+  assert.equal(resumed.auth.getSnapshot().status, 'authenticated');
+  const once = await resumed.auth.claimPublicRoleGoal();
+  assert.deepEqual(once, gameAuthorGoal);
+  assert.equal(parseSecureEnvelope(resumed.stored(), now)!.unclaimedPublicRoleGoal, undefined);
+  // Second restart after successful claim — nothing left to open.
+  const again = setup(JSON.parse(resumed.stored()!)); await again.auth.hydrate();
+  assert.equal(await again.auth.claimPublicRoleGoal(), null);
+  // Failed durable clear write must not hand a goal to the host.
+  const blocked = setup(mid); await blocked.auth.hydrate();
+  const realSet = blocked.store.setItem.bind(blocked.store);
+  blocked.store.setItem = async () => { throw new Error('disk full'); };
+  assert.equal(await blocked.auth.claimPublicRoleGoal(), null);
+  blocked.store.setItem = realSet;
+  assert.equal(blocked.auth.getSnapshot().notice, 'storage');
+});
+
+test('#522 family4: cancel/expiry/unavailable then generic login; obsolete cancel cannot clear newer pending', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const cancelled = setup(); await cancelled.auth.hydrate();
+  cancelled.auth.postgame.rememberPendingPublicAuthor({ roleHandle, role: 'organization', gameId: 'same-game' });
+  assert.ok(await cancelled.auth.beginLogin(path, gameAuthorGoal));
+  const gen = parseSecureEnvelope(cancelled.stored(), now)!.generation;
+  await cancelled.auth.cancelLogin(gen);
+  assert.equal(cancelled.auth.postgame.getSnapshot().pendingPublicAuthor, null);
+  assert.equal(parseSecureEnvelope(cancelled.stored(), now)?.pending, undefined);
+  assert.ok(await cancelled.auth.beginLogin('/games/create'));
+  assert.equal(parseSecureEnvelope(cancelled.stored(), now)!.pending!.goal, undefined);
+  assert.equal(await cancelled.auth.callback(
+    `${NATIVE_REDIRECT}?code=${token('c')}&state=${parseSecureEnvelope(cancelled.stored(), now)!.pending!.state}`,
+  ), '/games/create');
+  assert.equal(await cancelled.auth.claimPublicRoleGoal(), null);
+
+  const expired = setup(); await expired.auth.hydrate();
+  assert.ok(await expired.auth.beginLogin(path, gameAuthorGoal));
+  const stalePending = parseSecureEnvelope(expired.stored(), now)!;
+  const past = { ...stalePending, pending: { ...stalePending.pending!, expiresAt: now - 1 } };
+  const coldExpired = setup(past); await coldExpired.auth.hydrate();
+  assert.equal(coldExpired.auth.getSnapshot().status, 'guest');
+  assert.equal(parseSecureEnvelope(coldExpired.stored(), now)?.pending, undefined);
+
+  const unavailable = setup(); await unavailable.auth.hydrate();
+  unavailable.auth.postgame.rememberPendingPublicReader({
+    roleHandle, role: 'organization', origin: { kind: 'game', gameId: 'same-game' },
+  });
+  unavailable.setHandler(async path => path === '/auth/methods'
+    ? { items: [{ method: 'vk', type: 'oauth', available: false }] }
+    : credentials);
+  assert.equal(await unavailable.auth.beginLogin(path, gameAuthorGoal), null);
+  assert.equal(unavailable.auth.postgame.getSnapshot().pendingPublicReader, null);
+
+  const race = setup(); await race.auth.hydrate();
+  assert.ok(await race.auth.beginLogin(path, gameAuthorGoal));
+  const oldGen = parseSecureEnvelope(race.stored(), now)!.generation;
+  assert.ok(await race.auth.beginLogin(path, gameAuthorGoal));
+  const newer = parseSecureEnvelope(race.stored(), now)!;
+  assert.notEqual(newer.generation, oldGen);
+  await race.auth.cancelLogin(oldGen);
+  assert.ok(parseSecureEnvelope(race.stored(), now)!.pending);
+  assert.deepEqual(parseSecureEnvelope(race.stored(), now)!.pending!.goal, gameAuthorGoal);
+});
+
+test('#522 family5: logout and account switch drop unclaimed goals; delayed claim cannot inherit', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const s = setup(); await s.auth.hydrate();
+  assert.ok(await s.auth.beginLogin(path, gameAuthorGoal));
+  const pending = parseSecureEnvelope(s.stored(), now)!.pending!;
+  assert.equal(await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`), path);
+  assert.ok(parseSecureEnvelope(s.stored(), now)!.unclaimedPublicRoleGoal);
+  await s.auth.logout();
+  assert.equal(parseSecureEnvelope(s.stored(), now)?.unclaimedPublicRoleGoal, undefined);
+  assert.equal(await s.auth.claimPublicRoleGoal(), null);
+
+  const switcher = setup(); await switcher.auth.hydrate();
+  assert.ok(await switcher.auth.beginLogin(path, gameAuthorGoal));
+  const login = parseSecureEnvelope(switcher.stored(), now)!.pending!;
+  const verified = deferred<typeof me>();
+  switcher.setHandler(async p => p === '/me' ? verified.promise : { ...credentials, sessionId: 'goal-session' });
+  const work = switcher.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  await new Promise(r => setImmediate(r));
+  await switcher.auth.logout();
+  verified.resolve({ ...me, session: { ...me.session, id: 'goal-session' } });
+  assert.equal(await work, null);
+  assert.equal(await switcher.auth.claimPublicRoleGoal(), null);
+});
+
+test('#522 family6: legacy v1 / future envelope / adversarial goals fail closed without private retention', async () => {
+  assert.deepEqual(parsePublicRoleLocalGoal({
+    ...gameAuthorGoal, consent: true, text: 'leak', command: { key: 'x' }, displayName: 'Secret',
+  }, '/games/same-game'), gameAuthorGoal);
+  assert.equal(parsePublicRoleLocalGoal({
+    mode: 'author', role: 'organization', roleHandle, origin: { kind: 'profile', publicPlayerId: 'peer' },
+  }, '/players/peer'), null);
+  assert.equal(parsePublicRoleLocalGoal(gameAuthorGoal, '/games/other'), null);
+  assert.equal(parsePublicRoleLocalGoal({
+    mode: 'reader', role: 'organization', roleHandle, origin: { kind: 'profile', publicPlayerId: 'browse' },
+  }, '/players/browse'), null);
+  for (const bad of [
+    '/players/peer?x=1', '/players/peer#x', '/players/peer\n', '/players/%70eer', '/players/peer/extra',
+    '/games/same-game?role=1', '//evil/players/peer',
+  ]) assert.equal(canonicalReturnPath(bad), null, bad);
+
+  const legacy = { version: 1, generation: token('g'), returnPath: '/games/same-game', pending: {
+    generation: token('g'), clientId: NATIVE_CLIENT_ID, redirectUri: NATIVE_REDIRECT,
+    verifier: token('v'), state: token('s'), transactionId: token('t'), expiresAt: now + 600000,
+    returnPath: '/games/same-game',
+  } };
+  assert.deepEqual(parseSecureEnvelope(JSON.stringify(legacy), now)?.pending?.goal, undefined);
+
+  const injected = {
+    version: 1, generation: token('g'), returnPath: '/games/same-game',
+    pending: {
+      ...legacy.pending,
+      goal: { ...gameAuthorGoal, draft: 'x', receiptToken: 'r', idempotencyKey: 'k' },
+    },
+  };
+  const parsed = parseSecureEnvelope(JSON.stringify(injected), now)!;
+  assert.deepEqual(parsed.pending!.goal, gameAuthorGoal);
+  assert.equal(JSON.stringify(parsed.pending!.goal).includes('draft'), false);
+
+  const future = { version: 2, generation: token('g'), returnPath: null, pending: legacy.pending };
+  const frozen = setup(future); await frozen.auth.hydrate();
+  assert.equal(frozen.auth.getSnapshot().notice, 'storage');
+  assert.equal(frozen.stored(), JSON.stringify(future));
+  assert.equal(await frozen.auth.beginLogin('/games/same-game', gameAuthorGoal), null);
 });
