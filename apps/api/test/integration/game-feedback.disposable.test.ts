@@ -1571,10 +1571,13 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     expect(annaOrgStill.json().items.some((r: { id: string }) => r.id === orgId)).toBe(true);
     expect(annaOrgStill.json().items.some((r: { id: string }) => r.id === orgCommentOnlyId)).toBe(false);
 
+    // Creator seat = confirmed participation without attendance mark → unknown context
+    // requires discrepancy before SELF_ORGANIZATION (not not_participant_manager).
     const selfOrg = await nativePost(manager, `/v1/games/${gameId}/reviews`, {
       kind: "organization",
       organizationScore: 4,
       experienceAssertion: "i_experienced_this_game",
+      discrepancyExplanation: "Место организатора без отметки посещения",
     });
     expect(selfOrg.statusCode).toBe(422);
     expect(selfOrg.json().code).toBe("FEEDBACK_SELF_ORGANIZATION");
