@@ -1,5 +1,7 @@
 # Web и admin
 
+> **Исходная TECH_SELECTED топология, а не текущий live readback.** Hostnames/размещение ниже сверять с действующими DEV/PROD receipts и [ENVIRONMENTS](../operations/ENVIRONMENTS.md). Современная карта клиентов Web/PWA/Windows и Android/iOS — [индекс платформ](README.md). Этот документ не разрешает изменение VPN/PROD.
+
 Статус: **TECH_SELECTED**.
 
 ## Public web

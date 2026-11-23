@@ -19,6 +19,8 @@
 | Design inputs Stage A | [DESIGN_MATERIALS.json](../manifest/DESIGN_MATERIALS.json), [M2R spec](../product/M2R_DESIGN_SPEC.md), [Stage A runbook](../operations/chatops/DESIGN_EXCHANGE_STAGE_A.md): scoped registry/spec/OPS, не канон и не admission |
 | Хранение/передача | [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md), scoped политика; не расширяет execution authority |
 | Исходные продуктовые решения | [Owner decisions](../manifest/OWNER_DECISIONS.md), exact Owner Issues и [все ADR/Owner records](../decisions/README.md); статус/область каждого решения сохраняются |
+| Платформы и паритет | [Web / Android / iOS / Windows browser-install](../platforms/README.md), [матрица релизов](../platforms/PLATFORM_DELIVERY_MATRIX.md) — навигация, не второй backlog |
+| Внешние компании / enterprise | [Владение и подрядчики](../governance/PLATFORM_WORKSTREAMS_AND_EXTERNAL_TEAMS.md), [граница enterprise](../integrations/ENTERPRISE_PARTNER_BOUNDARY.md) — future target, доступы не выданы |
 | Domain/API/privacy/data | [Предметный индекс](../README.md); читать exact source/design revision своего assignment, не произвольный latest branch |
 | Приоритеты/очередь | GitHub Issues/Projects через [ACTIVE_BACKLOG](../ACTIVE_BACKLOG.md); никакого второго Markdown backlog |
 | Ограниченный AGY AUTHOR (t421u) | [ANTIGRAVITY_AUTHOR_ROUTE.md](../ops/ANTIGRAVITY_AUTHOR_ROUTE.md) — source/runbook, NOT_INSTALLED; offline self-checks, install/verify/rollback subset; activation/READY остаются отдельной reviewed OPS работой |

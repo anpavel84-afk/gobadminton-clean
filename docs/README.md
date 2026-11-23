@@ -14,6 +14,12 @@
 | Backlog/приоритеты | [GitHub Issues/Projects](ACTIVE_BACKLOG.md), не копия в Markdown |
 | Технический запуск | [Actions train](operations/chatops/ACTIONS_TRAIN.md), точный допуск и installed receipts |
 
+## Платформы и внешние участники
+
+[Web / Android / iOS / browser-installed Windows](platforms/README.md) · [Паритет и релизы](platforms/PLATFORM_DELIVERY_MATRIX.md) · [Владение и внешние команды](governance/PLATFORM_WORKSTREAMS_AND_EXTERNAL_TEAMS.md) · [Enterprise boundary](integrations/ENTERPRISE_PARTNER_BOUNDARY.md).
+
+Это навигация, не новый PMA/Owner admission, enterprise-доступ или второй backlog.
+
 ## Предметные документы приложения
 
 Читать их **в exact source/design revision, привязанной к заданию**. Они не заменяют регламент PMA и не дают execution authority. Отсутствующий вход нельзя подменять более старой branch-копией или догадкой.
