@@ -1007,3 +1007,245 @@ test('stale deferred GET404/network must not tombstone or downgrade newer result
   await c.confirm();
   assert.equal(sent.length, 0, 'current known-note 404 must not unlock create0');
 });
+
+test('historical PUT ACK after UNKNOWN + owned GET404 tombstone settles without restoring projection', async () => {
+  const secret = 'HISTORICAL-PUT-PRIVATE-TEXT';
+  const key = `${game.id}:${contextA}`;
+  const s = setup({
+    note: { ...note, text: 'before-put', version: 1 },
+    results: {
+      ...result,
+      feedback: { ...feedbackReady, myNotes: [{ ...note, text: 'before-put', version: 1 }] },
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'ready');
+
+  // PUT commits server-side but ACK is lost → UNKNOWN with exact original packet retained.
+  s.port.send = async (p) => {
+    s.sent.push(p);
+    if (p.kind !== 'note-upsert') throw new PostgameError('invalid');
+    const next: PersonalNote = {
+      gameId: p.gameId, contextId: p.contextId, subjectDisplay: 'Анна',
+      text: p.body.text, version: p.body.expectedVersion + 1, updatedAt: date,
+      allowedActions: { canEdit: true, canDelete: true },
+    };
+    s.notes.set(`${p.gameId}:${p.contextId}`, next);
+    throw new PostgameError('network', 503);
+  };
+  s.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 1, text: secret },
+  });
+  await s.coordinator.confirm();
+  const original = s.coordinator.getSnapshot().command!.packet;
+  assert.equal(s.coordinator.getSnapshot().command?.status, 'unknown');
+  assert.equal(original.kind, 'note-upsert');
+  assert.equal(original.method, 'PUT');
+  assert.equal(original.key, 'key-0');
+  assert.equal(original.actor.actorId, actor.actorId);
+  assert.ok(original.kind === 'note-upsert');
+  assert.equal(original.body.text, secret);
+  assert.equal(original.body.expectedVersion, 1);
+
+  // External DELETE + current owned GET404 establishes tombstone while UNKNOWN command is retained.
+  s.notes.delete(key);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().knownNoteRefs[key], undefined);
+  assert.equal(s.coordinator.getSnapshot().command?.packet, original);
+
+  // Stale results still hold prior private myNotes — collectNotes must keep them shadowed.
+  assert.equal(
+    s.coordinator.getSnapshot().games[game.id]?.data?.feedback?.myNotes[0]?.text,
+    'before-put',
+  );
+  const listedBefore = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.ok(!listedBefore.some(n => n.text === secret || n.text === 'before-put'));
+  assert.equal(listedBefore.length, 0);
+
+  // Defer follow-up typed GET from reconcile so we can assert while pending.
+  let failFollowup!: (error: PostgameError) => void;
+  const followupGate = new Promise<PersonalNote>((_, reject) => { failFollowup = reject; });
+  s.port.note = async () => followupGate;
+  s.port.send = async (p) => {
+    s.sent.push(p);
+    // Actual historical PUT receipt for the exact original packet (version/text), not synthetic UNKNOWN injection.
+    assert.equal(p, original);
+    return {
+      gameId: game.id, contextId: contextA, subjectDisplay: 'Анна',
+      text: secret, version: 2, updatedAt: date,
+      allowedActions: { canEdit: true, canDelete: true },
+    };
+  };
+  await s.coordinator.reconcile(game.id);
+  assert.equal(s.coordinator.getSnapshot().command, null, 'original command must settle');
+  assert.equal(s.sent[1], original, 'reconcile retains exact original packet');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable',
+    'must not replace tombstone with loading');
+  assert.equal(s.coordinator.getSnapshot().knownNoteRefs[key], undefined, 'no known ref restored');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data, undefined, 'no private text/version restored');
+  const listedPending = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.ok(!listedPending.some(n => n.text === secret || n.text === 'before-put'),
+    'collectNotes hides private text while follow-up GET pending');
+  assert.equal(listedPending.length, 0);
+  s.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 0, text: 'no-create-after-tomb' },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 2, 'no new create while tombstoned');
+  s.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 2, text: 'no-edit' },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 2, 'no edit grant from historical ACK');
+  s.coordinator.review({
+    kind: 'note-delete', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 2 },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 2, 'no delete grant from historical ACK');
+
+  const followupDone = followupGate.then(() => {}, () => {});
+  failFollowup(new PostgameError('network', 503));
+  await followupDone;
+  await Promise.resolve();
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'unavailable',
+    'tombstone persists after follow-up GET error');
+  const listedAfter = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.ok(!listedAfter.some(n => n.text === secret || n.text === 'before-put'));
+  assert.equal(listedAfter.length, 0);
+
+  // Positive post-ACK typed GET recovery + version floor still work when no tombstone.
+  const recovery = setup();
+  await recovery.coordinator.loadResults(game.id);
+  await recovery.coordinator.loadNote(game.id, contextA);
+  let releaseTyped!: (value: PersonalNote) => void;
+  const typedGate = new Promise<PersonalNote>((resolve) => { releaseTyped = resolve; });
+  recovery.port.note = async () => typedGate;
+  recovery.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 1, text: 'recovered-body' },
+  });
+  await recovery.coordinator.confirm();
+  assert.equal(recovery.sent.length, 1);
+  assert.equal(recovery.coordinator.getSnapshot().notes[key]?.status, 'loading');
+  releaseTyped({
+    ...note, version: 2, text: 'recovered-body',
+    allowedActions: { canEdit: true, canDelete: true },
+  });
+  await typedGate;
+  await Promise.resolve();
+  assert.equal(recovery.coordinator.getSnapshot().notes[key]?.status, 'ready');
+  assert.equal(recovery.coordinator.getSnapshot().notes[key]?.data?.version, 2);
+  assert.equal(recovery.coordinator.getSnapshot().notes[key]?.data?.text, 'recovered-body');
+  recovery.coordinator.review({
+    kind: 'note-upsert', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 2, text: 'after-typed' },
+  });
+  await recovery.coordinator.confirm();
+  assert.equal(recovery.sent.length, 2, 'typed ready restores write authority');
+});
+
+test('confirmed delete clears selected createText prefill; unrelated context draft preserved', async () => {
+  const deletedText = 'DELETE-PREFILL-PRIVATE';
+  const s = setup({
+    note: { ...note, text: deletedText },
+    results: {
+      ...result,
+      feedback: { ...feedbackReady, myNotes: [{ ...note, text: deletedText }] },
+    },
+  });
+  await s.coordinator.loadResults(game.id);
+  // Select existing note → loadNote prefills createText via actual direct GET.
+  s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA });
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextA);
+  assert.equal(s.coordinator.getSnapshot().noteDrafts[game.id]?.createText, deletedText);
+
+  s.coordinator.review({
+    kind: 'note-delete', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 1 },
+  });
+  await s.coordinator.confirm();
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable');
+  const draftAfter = s.coordinator.getSnapshot().noteDrafts[game.id];
+  assert.equal(draftAfter?.selectedContextId, undefined, 'selection cleared');
+  assert.equal(draftAfter?.createText ?? '', '', 'createText cleared — no retained private prefill');
+  // Fresh results omit the note; deleted privacy text must still disappear from collectNotes.
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, myNotes: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  const listed = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.ok(!listed.some(n => n.text === deletedText), 'deleted privacy text must disappear');
+  assert.equal(listed.length, 0);
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.sent[0]!.kind, 'note-delete');
+
+  // Separate fixture: selected B dirty createText remains when A is deleted.
+  const other = setup({
+    note: { ...note, text: deletedText },
+    results: {
+      ...result,
+      feedback: {
+        ...feedbackReady,
+        myNotes: [
+          { ...note, text: deletedText },
+          {
+            ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'other-owned',
+            version: 3, allowedActions: { canEdit: true, canDelete: true },
+          },
+        ],
+      },
+    },
+  });
+  other.notes.set(`${game.id}:${contextB}`, {
+    ...note, contextId: contextB, subjectDisplay: 'Илья', text: 'other-owned',
+    version: 3, allowedActions: { canEdit: true, canDelete: true },
+  });
+  await other.coordinator.loadResults(game.id);
+  await other.coordinator.loadNote(game.id, contextA);
+  other.coordinator.setNoteDraft(game.id, null, {
+    selectedContextId: contextB, createText: 'unrelated-dirty-B',
+  });
+  await other.coordinator.loadNote(game.id, contextB);
+  assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'unrelated-dirty-B');
+  other.coordinator.review({
+    kind: 'note-delete', gameId: game.id, contextId: contextA,
+    body: { expectedVersion: 1 },
+  });
+  await other.coordinator.confirm();
+  assert.equal(other.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable');
+  assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.selectedContextId, contextB);
+  assert.equal(other.coordinator.getSnapshot().noteDrafts[game.id]?.createText, 'unrelated-dirty-B',
+    'unrelated selected context draft must remain');
+  assert.equal(other.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'ready');
+  assert.equal(other.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.data?.text, 'other-owned');
+});

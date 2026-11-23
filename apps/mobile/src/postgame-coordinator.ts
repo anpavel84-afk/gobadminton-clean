@@ -211,7 +211,9 @@ export class PostgameCoordinator {
     const noteDrafts = {...this.snapshot.noteDrafts}; delete noteDrafts[key];
     const createDraft = noteDrafts[gameId];
     if (createDraft?.selectedContextId === contextId) {
-      noteDrafts[gameId] = { ...createDraft, selectedContextId: undefined, createText: createDraft.createText };
+      // Confirmed delete of the selected context must clear its create-form text (prefill from loadNote),
+      // not retain private content in the reachable NotesSection TextInput. Unrelated contexts stay intact.
+      noteDrafts[gameId] = { ...createDraft, selectedContextId: undefined, createText: '' };
     }
     this.show({ knownNoteRefs: known, notes, noteDrafts });
   }
@@ -617,21 +619,26 @@ export class PostgameCoordinator {
         // Historical ACK settles the original packet only — do not repaint receipt as current or unlock writes.
         const noteKeyId = noteKey(packet.gameId, packet.contextId);
         this.reads.set(`note:${noteKeyId}`, ++this.serial);
-        this.noteAwaitingTyped.add(noteKeyId);
-        // Raise floor from receipt version so older myNotes cannot win before typed GET; receipt stays non-current.
-        if (typeof receipt.version === 'number') {
-          this.noteVersionFloor.set(noteKeyId, Math.max(this.noteVersionFloor.get(noteKeyId) ?? 0, receipt.version));
+        // Per-context tombstone (e.g. owned GET404 after UNKNOWN PUT + external delete): settle without
+        // replacing unavailable with loading, restoring known refs/private text/version/rights, or create.
+        // Historical ACK is never current projection; follow-up loadNote stays tomb-fenced.
+        if (!this.noteTombs.has(noteKeyId)) {
+          this.noteAwaitingTyped.add(noteKeyId);
+          // Raise floor from receipt version so older myNotes cannot win before typed GET; receipt stays non-current.
+          if (typeof receipt.version === 'number') {
+            this.noteVersionFloor.set(noteKeyId, Math.max(this.noteVersionFloor.get(noteKeyId) ?? 0, receipt.version));
+          }
+          const known = { ...this.snapshot.knownNoteRefs, [noteKeyId]: { gameId: packet.gameId, contextId: packet.contextId } };
+          const notes = { ...this.snapshot.notes, [noteKeyId]: { status: 'loading' as const } };
+          const createKey = packet.gameId;
+          const editKey = noteKeyId;
+          const noteDrafts = { ...this.snapshot.noteDrafts };
+          if (noteDrafts[createKey]?.selectedContextId === packet.contextId) {
+            noteDrafts[createKey] = { selectedContextId: '', createText: '' };
+          }
+          if (noteDrafts[editKey]) delete noteDrafts[editKey];
+          this.show({ knownNoteRefs: known, notes, noteDrafts });
         }
-        const known = { ...this.snapshot.knownNoteRefs, [noteKeyId]: { gameId: packet.gameId, contextId: packet.contextId } };
-        const notes = { ...this.snapshot.notes, [noteKeyId]: { status: 'loading' as const } };
-        const createKey = packet.gameId;
-        const editKey = noteKeyId;
-        const noteDrafts = { ...this.snapshot.noteDrafts };
-        if (noteDrafts[createKey]?.selectedContextId === packet.contextId) {
-          noteDrafts[createKey] = { selectedContextId: '', createText: '' };
-        }
-        if (noteDrafts[editKey]) delete noteDrafts[editKey];
-        this.show({ knownNoteRefs: known, notes, noteDrafts });
       }
       if (packet.kind === 'note-delete' && 'deleted' in receipt && receipt.deleted) {
         this.tombstoneOwnedNote(packet.gameId, packet.contextId, receipt.version);
