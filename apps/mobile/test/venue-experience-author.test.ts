@@ -1036,7 +1036,7 @@ test('#522 address14: production probe gate + real GET counts hidden0/refocus1/r
         return eligibilityBody(call === 1 ? 'deny' : 'may_submit');
       },
     }),
-  });
+  }, () => 'focus-probe-key');
 
   const focusedArgs = {
     routeFocused: true,
