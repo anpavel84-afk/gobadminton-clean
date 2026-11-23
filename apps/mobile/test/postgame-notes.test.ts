@@ -588,9 +588,13 @@ test('pending refresh/error blocks edit/delete; explicit retry restores current 
 });
 
 test('after confirmed PUT and typed GET failure historical results cannot regrant write authority', async () => {
+  const key = `${game.id}:${contextA}`;
   const s = setup();
   await s.coordinator.loadResults(game.id);
   await s.coordinator.loadNote(game.id, contextA);
+  const lastAccepted = s.coordinator.getSnapshot().notes[key]?.data;
+  assert.equal(lastAccepted?.version, 1);
+  assert.equal(lastAccepted?.text, 'Личная заметка');
 
   let failGet!: (error: PostgameError) => void;
   const getGate = new Promise<PersonalNote>((_, reject) => { failGet = reject; });
@@ -599,26 +603,77 @@ test('after confirmed PUT and typed GET failure historical results cannot regran
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'saved' } });
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1);
-  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'loading');
-  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data, undefined);
+  const originalPut = s.sent[0]!;
+  assert.equal(s.coordinator.getSnapshot().command, null);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'loading');
+  // DISPLAY ONLY: SourceLoading retains last accepted v1/text from before PUT — not receipt v2 as current.
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.version, 1);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.text, 'Личная заметка');
+  assert.notEqual(s.coordinator.getSnapshot().notes[key]?.data?.text, 'saved');
+  const listedLoading = collectNotes(
+    game.id,
+    s.coordinator.getSnapshot().games[game.id]?.data,
+    s.coordinator.getSnapshot().notes,
+    s.coordinator.getSnapshot().knownNoteRefs,
+  );
+  assert.equal(listedLoading.find(n => n.contextId === contextA)?.version, 1);
+  assert.equal(listedLoading.find(n => n.contextId === contextA)?.text, 'Личная заметка');
 
-  // While awaiting typed GET, no write from receipt/loading.
+  // While awaiting typed GET: no writes from matching retained v1 OR receipt v2.
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'too soon v1' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'retained v1 is display-only — no write while loading');
+  assert.equal(s.coordinator.getSnapshot().command, null);
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'delete with retained v1 blocked while loading');
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 2, text: 'too soon' } });
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1, 'ACK receipt must not unlock writes before typed GET');
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 2 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'delete with receipt v2 blocked while loading');
 
   const getFailed = getGate.then(() => {}, () => {});
   failGet(new PostgameError('network', 503));
   await getFailed;
   await Promise.resolve();
-  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'error');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'error');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.version, 1);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.text, 'Личная заметка');
+
+  // While error: matching retained v1 and receipt v2 remain write-blocked (display-only).
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'during error v1' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'retained v1 display-only while error');
+  assert.equal(s.coordinator.getSnapshot().command, null);
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'delete with retained v1 blocked while error');
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 2, text: 'during error v2' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'receipt v2 blocked while error');
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 2 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'delete with receipt v2 blocked while error');
 
   // Historical myNotes (still v1 in fixture results) must not become ready write authority.
   await s.coordinator.loadResults(game.id);
-  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'error');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.status, 'error');
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.version, 1);
+  assert.equal(s.coordinator.getSnapshot().notes[key]?.data?.text, 'Личная заметка');
+  assert.equal(s.sent.length, 1, 'exact original confirmed PUT not resent on stale results refresh');
+  assert.equal(s.sent[0], originalPut);
+  assert.equal(s.coordinator.getSnapshot().command, null);
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'no fallback v1' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'no write from retained v1 after stale results');
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 2, text: 'no fallback' } });
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1, 'no write from historical result fallback after PUT+GET failure');
+  s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 1, 'delete with retained v1 blocked after stale results');
   s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 2 } });
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1, 'delete also blocked without typed ready authority');
