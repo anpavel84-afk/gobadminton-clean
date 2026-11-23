@@ -106,13 +106,31 @@ test('parsers: own list/selected/withdraw/revision receipts; create packet remai
   assert.equal(isVenueExperiencePacketKind('venue-experience-command'), true);
   assert.equal(isVenueExperienceCreatePacket({ kind: 'venue-experience-command' }), false);
   assert.equal(isVenueExperienceCommandPacket({ kind: 'venue-experience-command' }), true);
-  assert.equal(ownVenueStatusLabel(ownRow()), 'Не опубликован');
+  // Non-pending private self_draft tip — not “Не опубликован”.
+  assert.equal(ownVenueStatusLabel(ownRow()), 'Личный черновик');
   assert.equal(ownVenueStatusLabel({
     ...ownRow(),
     pendingRevision: 2,
     audience: 'self_draft',
     status: 'self_draft',
   }), 'Личный черновик');
+  // Private pending over published tip (revision_waiting + null token).
+  assert.equal(ownVenueStatusLabel({
+    ...ownRow(),
+    audience: null,
+    status: 'revision_waiting',
+    pendingRevision: 2,
+    receiptToken: null,
+    publicVisible: true,
+  }), 'Личный черновик');
+  // Withdrawn precedes private/public labels.
+  assert.equal(ownVenueStatusLabel({
+    ...ownRow(),
+    status: 'withdrawn',
+    audience: 'self_draft',
+    pendingRevision: 2,
+  }), 'Отозван');
+  // Public pending stays separate from private draft copy.
   assert.equal(ownVenueStatusLabel({
     ...ownRow(),
     audience: 'public_venue',
@@ -120,6 +138,14 @@ test('parsers: own list/selected/withdraw/revision receipts; create packet remai
     pendingRevision: 2,
     receiptToken: 'intake-token',
   }), 'На проверке');
+  assert.equal(ownVenueStatusLabel({
+    ...ownRow(),
+    audience: 'public_venue',
+    status: 'published',
+    pendingRevision: null,
+    receiptToken: null,
+    publicVisible: true,
+  }), 'Опубликован');
 
   const withdrawBody = buildVenueExperienceWithdrawBody(ownRow(3));
   assert.deepEqual(withdrawBody, { action: 'withdraw', expectedVersion: 3 });
