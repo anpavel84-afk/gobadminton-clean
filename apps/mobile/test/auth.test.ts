@@ -1743,3 +1743,36 @@ test('#522 QA1: cold hydrate and warm validate durably retire expired pending go
   assert.equal(retired.pending, undefined);
   assert.equal(retired.returnPath, path);
 });
+
+test('#522 QA2: cold expiry cleanup SecureStore write failure fail-closes hydrate (not guest+writable)', async () => {
+  const path = publicRoleGoalPath(gameAuthorGoal)!;
+  const seeded = setup(); await seeded.auth.hydrate();
+  assert.ok(await seeded.auth.beginLogin(path, gameAuthorGoal));
+  const expired = JSON.parse(seeded.stored()!);
+  expired.pending.expiresAt = now - 1;
+  // Keep raw expired pending bytes; cold parse drops them from memory and must rewrite.
+  const raw = JSON.stringify(expired);
+  let serial = 0;
+  let writeCount = 0;
+  const auth = new AuthCoordinator({
+    api: createNativeApi(async () => new Response(JSON.stringify(credentials))),
+    store: {
+      getItem: async () => raw,
+      setItem: async () => {
+        writeCount += 1;
+        throw new Error('disk full');
+      },
+    },
+    random: () => String.fromCharCode(65 + serial++).repeat(43),
+    challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'),
+    now: () => now,
+  });
+  await auth.hydrate();
+  assert.equal(writeCount, 1);
+  assert.equal(auth.getSnapshot().status, 'unverifiable');
+  assert.equal(auth.getSnapshot().notice, 'storage');
+  // Expired goal bytes remain in store; fail-closed must block a subsequent login write path.
+  assert.equal(await auth.beginLogin(path), null);
+  assert.equal(auth.getSnapshot().status, 'unverifiable');
+  assert.equal(auth.getSnapshot().notice, 'storage');
+});

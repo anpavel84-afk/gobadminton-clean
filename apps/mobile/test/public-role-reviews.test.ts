@@ -965,6 +965,8 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(host, /clearPublicRoleFocusTarget/);
   assert.match(host, /claimPublicRoleGoal/);
   assert.match(host, /publicRoleGoalPath|router\.replace/);
+  assert.match(host, /usePathname/);
+  assert.match(host, /pendingResume|isLive/);
   assert.match(host, /openResumedPublicComposer|openResumedPublicReader/);
   assert.match(host, /resumePendingPublicAuthor/);
   assert.match(host, /resumePendingPublicReader/);
@@ -1003,11 +1005,18 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   assert.match(coordinator, /openPublicReader/);
   assert.match(coordinator, /openResumedPublicComposer/);
   assert.match(coordinator, /openResumedPublicReader/);
+  assert.match(coordinator, /publicGameRoleOrigin|publicPlayerRoleOrigin/);
+  assert.match(coordinator, /resumeFrozenGameId/);
   assert.match(coordinator, /submitPublicReply/);
   assert.match(coordinator, /submitPublicReport/);
   assert.match(coordinator, /public-role-reply/);
   assert.match(coordinator, /public-role-report/);
   assert.match(coordinator, /mergeActorAwareReaderItem|mayPaintPublicReplyReceipt|mayPaintPublicReportReceipt/);
+
+  const authCoordinator = read('../src/auth-coordinator.ts');
+  assert.match(authCoordinator, /publicGameRoleOrigin:\s*\(gameId,\s*role\)\s*=>\s*publicApi\.gameRoleReputation/);
+  assert.match(authCoordinator, /publicPlayerRoleOrigin:\s*\(publicPlayerId,\s*role,\s*query\)\s*=>\s*publicApi\.playerRoleReputation/);
+  assert.match(authCoordinator, /persistExpiredAuthDrops/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /publicRoleEligibility/);
@@ -3940,10 +3949,28 @@ test('#522 address15: empty reply/report ACK keeps immutable UNKNOWN; explicit v
   assert.equal(reportKeys[1], reportFrozen.key);
 });
 
+function publicOriginSummary(over: Record<string, unknown> = {}) {
+  return {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 0,
+    projectionVersion: 'q'.repeat(32),
+    items: [],
+    nextCursor: null,
+    availability: 'available',
+    ...over,
+  };
+}
+
 test('#522 QA1: resumed author/reader suppress on origin/role denial; no fallback basis opens sheet', async () => {
   const otherGame = gameB;
   const authorDenied = new PostgameCoordinator({
     ...idlePort({
+      publicGameRoleOrigin: async () => publicOriginSummary(),
       publicEligibility: async () => eligibilityBody({
         bases: [{
           gameId: otherGame,
@@ -3966,32 +3993,26 @@ test('#522 QA1: resumed author/reader suppress on origin/role denial; no fallbac
   assert.equal(authorDenied.getSnapshot().publicSurface, null);
   assert.equal(authorDenied.getSnapshot().publicDraft, null);
 
-  const authorOk = new PostgameCoordinator({ ...idlePort() }, () => 'qa1-author-ok');
+  const authorOk = new PostgameCoordinator({
+    ...idlePort({
+      publicGameRoleOrigin: async () => publicOriginSummary(),
+    }),
+  }, () => 'qa1-author-ok');
   authorOk.setActor(actor);
   assert.equal(await authorOk.openResumedPublicComposer({
     roleHandle: handle, role: 'organization', gameId,
   }), true);
   assert.equal(authorOk.getSnapshot().publicSurface?.mode, 'composer');
   assert.equal(authorOk.getSnapshot().publicSurface?.target?.gameId, gameId);
+  assert.equal(authorOk.getSnapshot().publicSurface?.resumeFrozenGameId, gameId);
   await tick();
   assert.equal(authorOk.getSnapshot().publicDraft?.gameId, gameId);
   assert.equal(authorOk.getSnapshot().publicDraft?.consent, false);
 
-  const readerPage = {
-    roleHandle: handle,
-    role: 'organization',
-    subjectDisplayName: 'Org',
-    heldGamesCount: 1,
-    countScope: 'confirmed_history',
-    historyMayBeIncomplete: true,
-    publishedReviewCount: 0,
-    projectionVersion: 'q'.repeat(32),
-    items: [],
-    nextCursor: null,
-    availability: 'available',
-  };
+  const readerPage = publicOriginSummary();
   const readerDenied = new PostgameCoordinator({
     ...idlePort({
+      publicPlayerRoleOrigin: async () => publicOriginSummary(),
       publicRoleByHandle: async () => { throw new PostgameError('private', 404); },
     }),
   }, () => 'qa1-reader-deny');
@@ -4003,6 +4024,7 @@ test('#522 QA1: resumed author/reader suppress on origin/role denial; no fallbac
 
   const readerMismatch = new PostgameCoordinator({
     ...idlePort({
+      publicGameRoleOrigin: async () => publicOriginSummary(),
       publicRoleByHandle: async () => ({ ...readerPage, role: 'training' }),
     }),
   }, () => 'qa1-reader-mismatch');
@@ -4014,6 +4036,7 @@ test('#522 QA1: resumed author/reader suppress on origin/role denial; no fallbac
 
   const readerOk = new PostgameCoordinator({
     ...idlePort({
+      publicPlayerRoleOrigin: async () => publicOriginSummary(),
       publicRoleByHandle: async () => readerPage,
     }),
   }, () => 'qa1-reader-ok');
@@ -4023,4 +4046,214 @@ test('#522 QA1: resumed author/reader suppress on origin/role denial; no fallbac
   }), true);
   assert.equal(readerOk.getSnapshot().publicSurface?.mode, 'reader');
   assert.equal(readerOk.getSnapshot().publicSurface?.reader?.origin.kind, 'profile');
+});
+
+test('#522 QA2: denied/replaced public origin role handle suppress; missing origin port fail-closes resumed only', async () => {
+  const missingPort = new PostgameCoordinator({ ...idlePort() }, () => 'qa2-missing-port');
+  missingPort.setActor(actor);
+  assert.equal(await missingPort.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  }), false);
+  assert.equal(missingPort.getSnapshot().publicSurface, null);
+  // Normal signed-in composer still opens without origin ports.
+  missingPort.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
+  assert.equal(missingPort.getSnapshot().publicSurface?.mode, 'composer');
+  missingPort.closePublicSurface();
+
+  const replacedGame = new PostgameCoordinator({
+    ...idlePort({
+      publicGameRoleOrigin: async () => publicOriginSummary({ roleHandle: handleB }),
+    }),
+  }, () => 'qa2-replaced-game');
+  replacedGame.setActor(actor);
+  assert.equal(await replacedGame.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  }), false);
+  assert.equal(replacedGame.getSnapshot().publicSurface, null);
+
+  const deniedGame = new PostgameCoordinator({
+    ...idlePort({
+      publicGameRoleOrigin: async () => { throw new PostgameError('private', 404); },
+    }),
+  }, () => 'qa2-denied-game');
+  deniedGame.setActor(actor);
+  assert.equal(await deniedGame.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  }), false);
+
+  const replacedProfile = new PostgameCoordinator({
+    ...idlePort({
+      publicPlayerRoleOrigin: async () => publicOriginSummary({ roleHandle: handleB }),
+      publicRoleByHandle: async () => publicOriginSummary(),
+    }),
+  }, () => 'qa2-replaced-profile');
+  replacedProfile.setActor(actor);
+  assert.equal(await replacedProfile.openResumedPublicReader({
+    roleHandle: handle, role: 'organization', origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  }), false);
+  assert.equal(replacedProfile.getSnapshot().publicSurface, null);
+
+  let profileCalls = 0;
+  const profileOk = new PostgameCoordinator({
+    ...idlePort({
+      publicPlayerRoleOrigin: async (publicPlayerId, role) => {
+        profileCalls += 1;
+        assert.equal(publicPlayerId, 'public-peer-a');
+        assert.equal(role, 'organization');
+        return publicOriginSummary();
+      },
+      publicRoleByHandle: async (_actor, roleHandle, query) => {
+        assert.equal(roleHandle, handle);
+        assert.equal(query.gameId, undefined);
+        return publicOriginSummary();
+      },
+    }),
+  }, () => 'qa2-profile-ok');
+  profileOk.setActor(actor);
+  assert.equal(await profileOk.openResumedPublicReader({
+    roleHandle: handle, role: 'organization', origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  }), true);
+  assert.equal(profileCalls, 1);
+  assert.equal(profileOk.getSnapshot().publicSurface?.reader?.origin.kind, 'profile');
+});
+
+test('#522 QA2: resumed frozen basis survives second eligibility; later removal goes unavailable without fallback', async () => {
+  let eligPhase: 'both' | 'other-only' = 'both';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicGameRoleOrigin: async () => publicOriginSummary(),
+      publicEligibility: async () => {
+        if (eligPhase === 'other-only') {
+          return eligibilityBody({
+            bases: [{
+              gameId: gameB,
+              role: 'organization',
+              endsAt: '2026-10-01T18:00:00.000Z',
+              proofVersion: 2,
+              outcomeVersion: 1,
+              attendanceVersion: 1,
+              projectionHashPreview: null,
+              admission: 'may_submit',
+              reason: null,
+            }],
+          });
+        }
+        return eligibilityBody({
+          bases: [
+            {
+              gameId,
+              role: 'organization',
+              endsAt: '2026-10-01T18:00:00.000Z',
+              proofVersion: 2,
+              outcomeVersion: 1,
+              attendanceVersion: 1,
+              projectionHashPreview: null,
+              admission: 'may_submit',
+              reason: null,
+            },
+            {
+              gameId: gameB,
+              role: 'organization',
+              endsAt: '2026-10-01T19:00:00.000Z',
+              proofVersion: 2,
+              outcomeVersion: 1,
+              attendanceVersion: 1,
+              projectionHashPreview: null,
+              admission: 'may_submit',
+              reason: null,
+            },
+          ],
+        });
+      },
+    }),
+  }, () => 'qa2-frozen');
+  owner.setActor(actor);
+  assert.equal(await owner.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  }), true);
+  await tick();
+  assert.equal(owner.getSnapshot().publicSurface?.resumeFrozenGameId, gameId);
+  assert.equal(owner.getSnapshot().publicDraft?.gameId, gameId);
+
+  await owner.loadPublicEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().publicDraft?.gameId, gameId);
+  assert.equal(owner.getSnapshot().publicEligibility.status, 'ready');
+
+  eligPhase = 'other-only';
+  await owner.loadPublicEligibility();
+  await tick();
+  assert.equal(owner.getSnapshot().publicEligibility.status, 'unavailable');
+  assert.equal(owner.getSnapshot().publicDraft?.gameId, gameId);
+  assert.notEqual(owner.getSnapshot().publicDraft?.gameId, gameB);
+  assert.match(owner.getSnapshot().publicNotice ?? '', /Нет подтверждённой встречи/);
+
+  // Normal (non-resumed) composer may still prefer another eligible basis.
+  const normal = new PostgameCoordinator({
+    ...idlePort({
+      publicEligibility: async () => eligibilityBody({
+        bases: [{
+          gameId: gameB,
+          role: 'organization',
+          endsAt: '2026-10-01T18:00:00.000Z',
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+          projectionHashPreview: null,
+          admission: 'may_submit',
+          reason: null,
+        }],
+      }),
+    }),
+  }, () => 'qa2-normal-chooser');
+  normal.setActor(actor);
+  normal.openPublicComposer({ roleHandle: handle, role: 'organization', gameId });
+  await tick();
+  assert.equal(normal.getSnapshot().publicSurface?.resumeFrozenGameId, undefined);
+  assert.equal(normal.getSnapshot().publicDraft?.gameId, gameB);
+});
+
+test('#522 QA2: navigate-away / surface replacement fences delayed resumed author open', async () => {
+  let releaseOrigin: (value: unknown) => void = () => {};
+  const originPending = new Promise<unknown>(resolve => { releaseOrigin = resolve; });
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicGameRoleOrigin: async () => originPending,
+      publicRoleByHandle: async () => publicOriginSummary(),
+    }),
+  }, () => 'qa2-lifetime');
+  owner.setActor(actor);
+
+  let live = true;
+  const opening = owner.openResumedPublicComposer(
+    { roleHandle: handle, role: 'organization', gameId },
+    { isLive: () => live },
+  );
+  await tick();
+  // Host navigates away / claim gen retires while origin validation is delayed.
+  live = false;
+  releaseOrigin(publicOriginSummary());
+  assert.equal(await opening, false);
+  assert.equal(owner.getSnapshot().publicSurface, null);
+
+  let releaseOrigin2: (value: unknown) => void = () => {};
+  const originPending2 = new Promise<unknown>(resolve => { releaseOrigin2 = resolve; });
+  const replaced = new PostgameCoordinator({
+    ...idlePort({
+      publicGameRoleOrigin: async () => originPending2,
+    }),
+  }, () => 'qa2-surface-replace');
+  replaced.setActor(actor);
+  const opening2 = replaced.openResumedPublicComposer({
+    roleHandle: handle, role: 'organization', gameId,
+  });
+  await tick();
+  // Reader/history bumps eligibility+surface gen — delayed resume must not overwrite.
+  replaced.openPublicReader({
+    roleHandle: handle, role: 'organization', origin: { kind: 'game', gameId },
+  });
+  releaseOrigin2(publicOriginSummary());
+  assert.equal(await opening2, false);
+  assert.equal(replaced.getSnapshot().publicSurface?.mode, 'reader');
+  assert.equal(replaced.getSnapshot().publicSurface?.resumeFrozenGameId, undefined);
 });

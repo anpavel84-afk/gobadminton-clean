@@ -75,6 +75,9 @@ export class AuthCoordinator {
         access => deps.api.publicRoleByHandle(access, roleHandle, query, expected),
         actor,
       ),
+      // Credential-omit public origin reads — resumed cold goals only; never bearer opt-in.
+      publicGameRoleOrigin: (gameId, role) => publicApi.gameRoleReputation(gameId, role),
+      publicPlayerRoleOrigin: (publicPlayerId, role, query) => publicApi.playerRoleReputation(publicPlayerId, role, query),
       send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
     },deps.random);
     this.contact = new ContactCoordinator({
@@ -337,6 +340,7 @@ export class AuthCoordinator {
   /** When parse dropped an expired pending/goal, rewrite the cleaned envelope (same returnPath). */
   private async persistExpiredAuthDrops(raw: string, epoch: number): Promise<void> {
     if (!this.envelope || !this.writable) return;
+    let mustPersist = false;
     try {
       const row = JSON.parse(raw) as Record<string, unknown>;
       if (row.version !== 1) return;
@@ -349,10 +353,14 @@ export class AuthCoordinator {
       const droppedUnclaimed = !!(unclaimed && typeof unclaimed.expiresAt === 'number' && unclaimed.expiresAt <= clock
         && !this.envelope.unclaimedPublicRoleGoal);
       if (!droppedPending && !droppedUnclaimed) return;
-      await this.persist(this.envelope, epoch); this.check(epoch);
+      mustPersist = true;
     } catch {
-      // Leave original bytes on inspect/write failure; fail-closed future remains byte-preserved.
+      // Inspect failure: leave original bytes; future/corrupt envelopes stay byte-preserved.
+      return;
     }
+    // Cleanup write failure must fail-closed (not guest+notice=null with expired goal still durable).
+    if (!mustPersist) return;
+    await this.persist(this.envelope, epoch); this.check(epoch);
   }
   /** Warm expiry: retire matching pending+goal durably; keep safe guest returnPath. */
   private async retireExpiredPendingLogin(epoch: number): Promise<void> {
