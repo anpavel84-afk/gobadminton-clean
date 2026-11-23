@@ -211,9 +211,16 @@ export function parseNoteDeleteReceipt(v: unknown): NoteDeleteReceipt {
   if (r.deleted !== true) invalid();
   return { gameId: postgameId(r.gameId), contextId: postgameId(r.contextId), version: num(r.version, 1), deleted: true };
 }
-function parseFeedbackNotes(v: unknown): FeedbackNotes {
+function parseFeedbackNotes(v: unknown, gameId: string): FeedbackNotes {
   const r = object(v), caps = object(r.capabilities);
   // Consume only notes caps/projection — ignore unimplemented review/report fields.
+  const myNotes = array(r.myNotes ?? [], parsePersonalNote);
+  const seen = new Set<string>();
+  for (const note of myNotes) {
+    // Nested wrong-game or duplicate context is malformed under the current contract.
+    if (note.gameId !== gameId || seen.has(note.contextId)) invalid();
+    seen.add(note.contextId);
+  }
   return {
     installed: bool(r.installed), writesEnabled: bool(r.writesEnabled),
     capabilities: {
@@ -225,7 +232,7 @@ function parseFeedbackNotes(v: unknown): FeedbackNotes {
         return { contextId: postgameId(s.contextId), displayName };
       }),
     },
-    myNotes: array(r.myNotes ?? [], parsePersonalNote),
+    myNotes,
   };
 }
 export function parseResults(v: unknown): Results {
@@ -241,8 +248,8 @@ export function parseResults(v: unknown): Results {
       summary: s ? { rosterCount: num(s.rosterCount), marked: num(s.marked), unknown: num(s.unknown), underClarification: num(s.underClarification), agreed: num(s.agreed) } : null,
       allowedActions: { canRecordAttendance: bool(rights.canRecordAttendance), canBulkPresent: bool(rights.canBulkPresent) } };
   }
-  // Older servers may omit feedback; absent/installed=false disables Notes honestly.
-  if (r.feedback !== undefined) result.feedback = parseFeedbackNotes(r.feedback);
+  // Older servers may omit feedback; absent/installed=false disables Notes honestly without breaking outcome/attendance.
+  if (r.feedback !== undefined) result.feedback = parseFeedbackNotes(r.feedback, result.gameId);
   return result;
 }
 export function parseOwnResults(v: unknown): OwnResults {

@@ -100,6 +100,10 @@ export class PostgameCoordinator {
   private invitationsFollowup = false;
   /** Generation that owns busy/followup; stale finally must not clear a newer actor/read. */
   private invitationsBusyGen = 0;
+  /** Confirmed delete / definitive known-note 404 watermarks — block late GET/results resurrection. */
+  private noteTombs = new Map<string, number>();
+  /** Last applied read generation per note key — fences late results vs newer direct GET. */
+  private noteAppliedGen = new Map<string, number>();
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -121,6 +125,7 @@ export class PostgameCoordinator {
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
+    this.noteTombs.clear(); this.noteAppliedGen.clear();
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
@@ -137,7 +142,7 @@ export class PostgameCoordinator {
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -163,26 +168,49 @@ export class PostgameCoordinator {
     }
     if (changed) this.show({drafts});
   }
-  private rememberOwnedNotes(notes: PersonalNote[]) {
+  /** Monotonic note projection: never regress version; same-version rights may refresh under newer gens; tombs block resurrection. */
+  private rememberOwnedNotes(notes: PersonalNote[], gen: number) {
     const known = {...this.snapshot.knownNoteRefs};
     const sources = {...this.snapshot.notes};
+    let changed = false;
     for (const note of notes) {
       const key = noteKey(note.gameId, note.contextId);
+      if (this.noteTombs.has(key)) continue;
+      const prior = sources[key]?.status === 'ready' ? sources[key]?.data : this.snapshot.notes[key]?.status === 'ready' ? this.snapshot.notes[key]?.data : undefined;
+      const applied = this.noteAppliedGen.get(key) ?? 0;
+      if (prior && note.version < prior.version) continue;
+      if (prior && note.version === prior.version && gen < applied) continue;
+      this.noteAppliedGen.set(key, gen);
       known[key] = { gameId: note.gameId, contextId: note.contextId };
       sources[key] = { status: 'ready', data: note };
+      changed = true;
     }
-    this.show({ knownNoteRefs: known, notes: sources });
+    if (changed) this.show({ knownNoteRefs: known, notes: sources });
   }
-  private forgetOwnedNote(gameId: string, contextId: string) {
+  private tombstoneOwnedNote(gameId: string, contextId: string, version: number) {
     const key = noteKey(gameId, contextId);
+    const prior = this.noteTombs.get(key) ?? 0;
+    this.noteTombs.set(key, Math.max(prior, version));
+    // Invalidate in-flight direct GETs so late replies cannot reinstall private text.
+    this.reads.set(`note:${key}`, ++this.serial);
+    this.noteAppliedGen.delete(key);
     const known = {...this.snapshot.knownNoteRefs}; delete known[key];
-    const notes = {...this.snapshot.notes}; delete notes[key];
+    // Keep definitive unavailable so stale feedback.myNotes cannot render/resurrect the row.
+    const notes = {...this.snapshot.notes, [key]: { status: 'unavailable' as const }};
     const noteDrafts = {...this.snapshot.noteDrafts}; delete noteDrafts[key];
     const createDraft = noteDrafts[gameId];
     if (createDraft?.selectedContextId === contextId) {
       noteDrafts[gameId] = { ...createDraft, selectedContextId: undefined, createText: createDraft.createText };
     }
     this.show({ knownNoteRefs: known, notes, noteDrafts });
+  }
+  private shadowKnownNoteAbsence(gameId: string, contextId: string) {
+    const key = noteKey(gameId, contextId);
+    const priorVersion = this.snapshot.notes[key]?.data?.version ?? this.noteTombs.get(key) ?? 0;
+    this.noteTombs.set(key, Math.max(this.noteTombs.get(key) ?? 0, priorVersion));
+    this.noteAppliedGen.delete(key);
+    const known = {...this.snapshot.knownNoteRefs}; delete known[key];
+    this.show({ knownNoteRefs: known });
   }
   loadOwn = async (more = false) => {
     if (this.snapshot.own.status === 'loading') return;
@@ -270,6 +298,7 @@ export class PostgameCoordinator {
     if (append === 'roster' && (!old.data?.attendance?.rosterNextCursor || query.rosterCursor !== old.data.attendance.rosterNextCursor) ||
         append === 'revisions' && (!old.data?.revisionsNextCursor || query.revisionsCursor !== old.data.revisionsNextCursor)) return;
     const {actor,valid}=this.start(`game:${gameId}`); if (!actor) return;
+    const resultsGen = this.reads.get(`game:${gameId}`) ?? 0;
     const selection=this.snapshot.selection?.gameId === gameId ? this.snapshot.selection : this.snapshot.selection;
     const put=(source: Source<Results>)=>this.show({games:{...this.snapshot.games,[gameId]:source}});
     put({...old,status:'loading'});
@@ -305,7 +334,7 @@ export class PostgameCoordinator {
       // A GET never acknowledges or settles a pending command. Roster pagination keeps selection.
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
-      if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes);
+      if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
       if (selection?.gameId === gameId) {
         const rows=[...(data.attendance?.roster ?? []),...(data.attendance?.myAttendance ? [data.attendance.myAttendance] : [])];
         const still=rows.some(r=>r.contextId === selection.contextId && r.dispute?.id === selection.disputeId);
@@ -316,21 +345,37 @@ export class PostgameCoordinator {
       if(valid()) put(this.failure(error,old));
     }
   };
-  /** Direct own-note GET for a known context — independent of results/roster denial. */
+  /** Direct own-note GET for a known/selected context — independent of results/roster denial. */
   loadNote = async (gameId: string, contextId: string) => {
     try { postgameId(gameId); postgameId(contextId); } catch { return; }
     const key = noteKey(gameId, contextId);
     const old = this.snapshot.notes[key] ?? { status: 'idle' };
     const { actor, valid } = this.start(`note:${key}`); if (!actor) return;
+    const noteGen = this.reads.get(`note:${key}`) ?? 0;
     const put = (source: Source<PersonalNote>) => this.show({ notes: { ...this.snapshot.notes, [key]: source } });
     put({ ...old, status: 'loading' });
     try {
       const data = await this.port.note(actor, gameId, contextId); if (!valid()) return;
       if (data.gameId !== gameId || data.contextId !== contextId) throw new PostgameError('invalid');
+      if (this.noteTombs.has(key)) return;
       put({ status: 'ready', data });
-      this.rememberOwnedNotes([data]);
+      this.rememberOwnedNotes([data], noteGen);
+      // Dirty-draft-safe prefill after selected direct GET — never overwrite typed text.
+      const createDraft = this.snapshot.noteDrafts[gameId];
+      if (createDraft?.selectedContextId === contextId && !createDraft.createText) {
+        this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [gameId]: { ...createDraft, createText: data.text } } });
+      }
     } catch (error) {
       if (!valid()) return;
+      const denied = error instanceof PostgameError && error.kind === 'private';
+      const known = !!this.snapshot.knownNoteRefs[key] || this.noteTombs.has(key) || !!old.data;
+      if (denied && known) {
+        // Definitive private 404 of a known/tombstoned own note: shadow stale myNotes; never turn into create.
+        this.shadowKnownNoteAbsence(gameId, contextId);
+        put({ status: 'unavailable' });
+        return;
+      }
+      // Transient errors keep permitted draft via prior data but do not grant write authority (see currentNote).
       put(this.failure(error, old));
     }
   };
@@ -341,18 +386,16 @@ export class PostgameCoordinator {
     const key = contextId ? noteKey(gameId, contextId) : gameId;
     const prior = this.snapshot.noteDrafts[key] ?? {};
     // Switching selected participant must not carry create text into another context.
+    // Bounded myNotes absence is not authority — always direct-GET the chosen context before create/edit.
     if (patch.selectedContextId !== undefined && patch.selectedContextId !== prior.selectedContextId) {
       const nextText = patch.createText !== undefined ? patch.createText : undefined;
-      const existing = patch.selectedContextId
-        ? this.snapshot.notes[noteKey(gameId, patch.selectedContextId)]?.data
-          ?? this.snapshot.games[gameId]?.data?.feedback?.myNotes.find(n => n.contextId === patch.selectedContextId)
-        : undefined;
       this.show({
         noteDrafts: {
           ...this.snapshot.noteDrafts,
-          [key]: { selectedContextId: patch.selectedContextId, createText: nextText ?? existing?.text ?? '', editText: prior.editText },
+          [key]: { selectedContextId: patch.selectedContextId, createText: nextText ?? '', editText: prior.editText },
         },
       });
+      if (patch.selectedContextId) void this.loadNote(gameId, patch.selectedContextId);
       return;
     }
     this.show({ noteDrafts: { ...this.snapshot.noteDrafts, [key]: { ...prior, ...patch } } });
@@ -407,8 +450,17 @@ export class PostgameCoordinator {
   };
   private currentNote(gameId: string, contextId: string): PersonalNote | null {
     const key = noteKey(gameId, contextId);
+    if (this.noteTombs.has(key)) return null;
     const direct = this.snapshot.notes[key];
-    if (direct?.status === 'ready' && direct.data && direct.data.gameId === gameId && direct.data.contextId === contextId) return direct.data;
+    // Definitive unavailable shadows stale feedback.myNotes — never resurrect create/edit from the list.
+    if (direct?.status === 'unavailable') return null;
+    if (direct?.status === 'ready' && direct.data && direct.data.gameId === gameId && direct.data.contextId === contextId) {
+      return direct.data;
+    }
+    // Transient loading/error: keep prior typed data for in-flight refresh, but do not grant authority from myNotes.
+    if (direct?.status === 'loading' || direct?.status === 'error') {
+      return direct.data && direct.data.gameId === gameId && direct.data.contextId === contextId ? direct.data : null;
+    }
     const feedback = this.snapshot.games[gameId]?.data?.feedback;
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
   }
@@ -417,6 +469,7 @@ export class PostgameCoordinator {
       if (intent.kind === 'note-upsert') {
         try { noteText(intent.body.text); } catch { return false; }
       }
+      const key = noteKey(intent.gameId, intent.contextId);
       const note = this.currentNote(intent.gameId, intent.contextId);
       const results = this.snapshot.games[intent.gameId];
       const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
@@ -424,9 +477,12 @@ export class PostgameCoordinator {
         return !!note && note.version === intent.body.expectedVersion && note.allowedActions.canDelete
           && (feedback ? feedback.installed && feedback.writesEnabled : true);
       }
-      // First create: current manager capability from results feedback only.
+      // First create: requires definitive selected direct GET absence — bounded list gap is not authority.
       if (intent.body.expectedVersion === 0) {
         if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreateNote) return false;
+        if (this.noteTombs.has(key) || this.snapshot.knownNoteRefs[key]) return false;
+        const selected = this.snapshot.notes[key];
+        if (selected?.status !== 'unavailable') return false;
         if (note) return false;
         const subjects = feedback.capabilities.peerSubjects;
         const roster = results?.data?.attendance?.roster ?? [];
@@ -434,7 +490,7 @@ export class PostgameCoordinator {
           || roster.some(r => r.contextId === intent.contextId);
         return allowedContext;
       }
-      // Edit: own note rights — independent of create form / roster after revoke.
+      // Edit: own note rights from authoritative current projection — independent of create form / roster after revoke.
       return !!note && note.version === intent.body.expectedVersion && note.allowedActions.canEdit
         && (feedback ? feedback.installed && feedback.writesEnabled : true);
     }
@@ -513,19 +569,22 @@ export class PostgameCoordinator {
         disputes[receipt.id]={status:'ready',data:receipt};
       }
       if (packet.kind === 'note-upsert' && 'text' in receipt && 'allowedActions' in receipt) {
-        this.rememberOwnedNotes([receipt]);
-        // Clear compatible create/edit drafts for the settled context after confirmed ACK.
+        // Historical ACK settles the original packet only — do not repaint receipt as current or unlock writes.
+        const noteKeyId = noteKey(packet.gameId, packet.contextId);
+        this.reads.set(`note:${noteKeyId}`, ++this.serial);
+        const known = { ...this.snapshot.knownNoteRefs, [noteKeyId]: { gameId: packet.gameId, contextId: packet.contextId } };
+        const notes = { ...this.snapshot.notes, [noteKeyId]: { status: 'loading' as const } };
         const createKey = packet.gameId;
-        const editKey = noteKey(packet.gameId, packet.contextId);
+        const editKey = noteKeyId;
         const noteDrafts = { ...this.snapshot.noteDrafts };
         if (noteDrafts[createKey]?.selectedContextId === packet.contextId) {
           noteDrafts[createKey] = { selectedContextId: '', createText: '' };
         }
         if (noteDrafts[editKey]) delete noteDrafts[editKey];
-        this.show({ noteDrafts });
+        this.show({ knownNoteRefs: known, notes, noteDrafts });
       }
       if (packet.kind === 'note-delete' && 'deleted' in receipt && receipt.deleted) {
-        this.forgetOwnedNote(packet.gameId, packet.contextId);
+        this.tombstoneOwnedNote(packet.gameId, packet.contextId, receipt.version);
       }
       // Resolving ACK: verified resolvedDispute stays on the ACK receipt only.
       // Never fabricate dispute timestamps/rights or regress the projection from historical receipt fields.
@@ -546,7 +605,7 @@ export class PostgameCoordinator {
       }
       if (resolvingAck && packet.kind === 'ack') void this.loadDispute(packet.body.resolvingDisputeId!);
       if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
-      // After note ACK: refresh authoritative current note when not tombstoned; never GET-infer write success.
+      // After upsert ACK: typed GET reestablishes rights/version; GET failure is retryable READ, not write success.
       if (noteWrite && packet.kind === 'note-upsert') void this.loadNote(packet.gameId, packet.contextId);
     } catch(error) {
       if(!valid()) return;

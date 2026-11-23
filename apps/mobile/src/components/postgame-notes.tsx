@@ -19,7 +19,12 @@ function useBlocked() {
 
 function collectNotes(gameId: string, data: Results | undefined, notes: Record<string, { status: string; data?: PersonalNote }>, known: Record<string, { gameId: string; contextId: string }>): PersonalNote[] {
   const byContext = new Map<string, PersonalNote>();
-  for (const note of data?.feedback?.myNotes ?? []) byContext.set(note.contextId, note);
+  for (const note of data?.feedback?.myNotes ?? []) {
+    const direct = notes[`${gameId}:${note.contextId}`];
+    // Definitive unavailable/denied shadows stale bounded myNotes for that context.
+    if (direct?.status === 'unavailable') continue;
+    byContext.set(note.contextId, note);
+  }
   for (const ref of Object.values(known)) {
     if (ref.gameId !== gameId) continue;
     const source = notes[`${ref.gameId}:${ref.contextId}`];
@@ -36,6 +41,7 @@ function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote
   const editing = draft.editText !== undefined && note.allowedActions.canEdit;
   const editText = draft.editText ?? note.text;
   const trimmed = normalizeFormReason(editText);
+  const needsRefresh = !!(s.notice && /Обновите заметку/i.test(s.notice));
   return <View style={styles.card} accessibilityLabel={`Заметка · ${note.subjectDisplay}`}>
     <Label style={{ fontWeight: '700' }}>{note.subjectDisplay}</Label>
     {editing ? <>
@@ -45,6 +51,7 @@ function NoteCard({ gameId, note, writes }: { gameId: string; note: PersonalNote
         value={editText} onChangeText={text => owner.setNoteDraft(gameId, note.contextId, { editText: text })}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 100, maxHeight: 180 }]} />
+      {needsRefresh ? <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, note.contextId)} /> : null}
       <ReviewButton title={`Сохранить изменения · ${note.subjectDisplay}`} onPress={() => {
         if (!trimmed) return;
         owner.review({ kind: 'note-upsert', gameId, contextId: note.contextId, body: { expectedVersion: note.version, text: trimmed } });
@@ -84,7 +91,14 @@ export function NotesSection({ gameId, data }: { gameId: string; data?: Results 
   const subjects = feedback?.capabilities.peerSubjects?.length
     ? feedback.capabilities.peerSubjects
     : (data?.attendance?.roster ?? []).map(r => ({ contextId: r.contextId, displayName: r.displayName }));
-  const selectedExisting = selectedId ? list.find(n => n.contextId === selectedId) : undefined;
+  const selectedKey = selectedId ? `${gameId}:${selectedId}` : '';
+  const selectedSource = selectedKey ? s.notes[selectedKey] : undefined;
+  const selectedExisting = selectedSource?.status === 'ready' ? selectedSource.data : undefined;
+  const selectedAbsent = selectedSource?.status === 'unavailable';
+  const selectedLoading = selectedSource?.status === 'loading' || selectedSource?.status === 'idle';
+  const selectedError = selectedSource?.status === 'error';
+  const canSubmitSelected = !!selectedId && !!createTrimmed && (selectedAbsent || !!selectedExisting);
+  const needsSelectedRefresh = !!(s.notice && /Обновите заметку/i.test(s.notice) && selectedId);
 
   useEffect(() => {
     // Recover known own notes via direct GET when results denied or list incomplete.
@@ -125,23 +139,28 @@ export function NotesSection({ gameId, data }: { gameId: string; data?: Results 
       <Label>Участник</Label>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <Choice title="Выберите" selected={!selectedId} onPress={() => owner.setNoteDraft(gameId, null, { selectedContextId: '', createText: '' })} />
-        {subjects.map(s => (
-          <Choice key={s.contextId} title={s.displayName} selected={selectedId === s.contextId}
-            onPress={() => owner.setNoteDraft(gameId, null, { selectedContextId: s.contextId })} />
+        {subjects.map(subject => (
+          <Choice key={subject.contextId} title={subject.displayName} selected={selectedId === subject.contextId}
+            onPress={() => owner.setNoteDraft(gameId, null, { selectedContextId: subject.contextId })} />
         ))}
       </View>
+      {selectedId && selectedLoading ? <Loading title="Загружаем заметку…" /> : null}
+      {selectedId && selectedError ? <>
+        <Label>Не удалось прочитать заметку.</Label>
+        <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, selectedId)} />
+      </> : null}
+      {needsSelectedRefresh ? <TextButton title="Обновить заметку" onPress={() => void owner.loadNote(gameId, selectedId)} /> : null}
       <Label>Текст заметки</Label>
       <TextInput editable={!blocked && writes} multiline scrollEnabled textAlignVertical="top"
-        accessibilityLabel={selectedId ? `Текст заметки · ${subjects.find(s => s.contextId === selectedId)?.displayName ?? 'участник'}` : 'Текст заметки'}
+        accessibilityLabel={selectedId ? `Текст заметки · ${subjects.find(subject => subject.contextId === selectedId)?.displayName ?? 'участник'}` : 'Текст заметки'}
         value={createText} onChangeText={text => owner.setNoteDraft(gameId, null, { createText: text })}
         maxLength={500} autoCorrect={Platform.OS === 'ios' ? false : undefined}
         style={[styles.input, { minHeight: 100, maxHeight: 180 }]} />
       <ReviewButton title={selectedExisting ? `Сохранить заметку · ${selectedExisting.subjectDisplay}` : 'Сохранить заметку'} onPress={() => {
-        if (!selectedId || !createTrimmed) return;
-        const existing = list.find(n => n.contextId === selectedId);
+        if (!canSubmitSelected || !selectedId) return;
         owner.review({
           kind: 'note-upsert', gameId, contextId: selectedId,
-          body: { expectedVersion: existing ? existing.version : 0, text: createTrimmed },
+          body: { expectedVersion: selectedExisting ? selectedExisting.version : 0, text: createTrimmed },
         });
       }} />
     </View> : null}

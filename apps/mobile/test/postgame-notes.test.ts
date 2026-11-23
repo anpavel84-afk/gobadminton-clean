@@ -100,7 +100,7 @@ function setup(overrides: Partial<{ results: Results; note: PersonalNote | null 
   return { coordinator, port, sent, notes };
 }
 
-test('parse personal note + narrow feedback; ignore unimplemented review fields', () => {
+test('parse personal note + narrow feedback; reject nested wrong-game; ignore unimplemented review fields', () => {
   assert.deepEqual(parsePersonalNote(note), note);
   const parsed = parseResults({
     ...result,
@@ -125,6 +125,20 @@ test('parse personal note + narrow feedback; ignore unimplemented review fields'
   assert.throws(() => parsePersonalNote({ ...note, text: '' }));
   assert.throws(() => noteText('  '));
   assert.equal(noteText('ok'), 'ok');
+  assert.throws(() => parseResults({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [{ ...note, gameId: 'other-game-id' }] },
+  }));
+  assert.throws(() => parseResults({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [note, { ...note, version: 2 }] },
+  }));
+  // Omitted / installed=false feedback must not break ordinary outcome parse.
+  assert.equal(parseResults({ ...result, feedback: undefined }).outcome.value, 'held');
+  assert.equal(parseResults({
+    ...result,
+    feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, peerSubjects: [] }, myNotes: [] },
+  }).feedback?.installed, false);
 });
 
 test('wire PUT/DELETE note paths and strict receipts', () => {
@@ -151,24 +165,49 @@ test('native transport DELETE carries exact body and idempotency key', async () 
   assert.equal((calls[0]!.init.headers as Record<string, string>)['Idempotency-Key'], p.key);
 });
 
-test('create requires canCreateNote; edit/delete use note rights; absence from list is not create grant', async () => {
+test('create requires selected direct GET absence; list gap is not create grant; off-list GET enables edit', async () => {
   const s = setup({ results: { ...result, feedback: { ...feedbackReady, myNotes: [], capabilities: { ...feedbackReady.capabilities, canCreateNote: false } } } });
   await s.coordinator.loadResults(game.id);
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'no' } });
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 0);
 
-  const manager = setup({ results: { ...result, feedback: { ...feedbackReady, myNotes: [] } } });
+  const manager = setup({ note: null, results: { ...result, feedback: { ...feedbackReady, myNotes: [] } } });
   await manager.coordinator.loadResults(game.id);
+  // Wrong prior flow: create without selected read must not send.
+  manager.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'create' } });
+  await manager.coordinator.confirm();
+  assert.equal(manager.sent.length, 0, 'create without selected direct GET must not send');
+
+  manager.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB });
+  await manager.coordinator.loadNote(game.id, contextB);
+  assert.equal(manager.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.status, 'unavailable');
   manager.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'create' } });
   await manager.coordinator.confirm();
   assert.equal(manager.sent.length, 1);
   assert.equal(manager.sent[0]!.body.expectedVersion, 0);
+
+  // Off-list existing note (bounded myNotes empty) becomes editable after selected GET — not create0.
+  const offList: PersonalNote = { ...note, contextId: contextB, version: 7, text: 'off-list v7', subjectDisplay: 'Илья' };
+  const edit = setup({ note: null, results: { ...result, feedback: { ...feedbackReady, myNotes: [] } } });
+  edit.notes.set(`${game.id}:${contextB}`, offList);
+  await edit.coordinator.loadResults(game.id);
+  edit.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB });
+  await edit.coordinator.loadNote(game.id, contextB);
+  assert.equal(edit.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.data?.version, 7);
+  edit.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'wrong create' } });
+  await edit.coordinator.confirm();
+  assert.equal(edit.sent.length, 0, 'existing selected note must not create0');
+  edit.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 7, text: 'edit off-list' } });
+  await edit.coordinator.confirm();
+  assert.equal(edit.sent.length, 1);
+  assert.equal(edit.sent[0]!.body.expectedVersion, 7);
 });
 
 test('UNKNOWN retains exact packet; conflict keeps draft; logout wipes private note drafts', async () => {
   const s = setup();
   await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
   s.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextA, createText: 'draft body' });
   s.port.send = async (p) => { s.sent.push(p); throw new PostgameError('network', 503); };
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 1, text: 'draft body' } });
@@ -185,6 +224,7 @@ test('UNKNOWN retains exact packet; conflict keeps draft; logout wipes private n
 
   const conflict = setup();
   await conflict.coordinator.loadResults(game.id);
+  await conflict.coordinator.loadNote(game.id, contextA);
   conflict.coordinator.setNoteDraft(game.id, contextA, { editText: 'kept on conflict' });
   conflict.port.send = async (p) => {
     conflict.sent.push(p);
@@ -224,6 +264,9 @@ test('nonparticipating manager: results denied keeps known own-note GET/edit/del
   await s.coordinator.confirm();
   assert.equal(s.sent.length, 1);
   assert.equal((s.sent[0]!.body as { text: string }).text, 'after revoke');
+  // Post-ACK typed GET reestablishes version before next write.
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 2);
 
   s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'fresh create' } });
   await s.coordinator.confirm();
@@ -251,6 +294,7 @@ test('nonparticipating manager: results denied keeps known own-note GET/edit/del
 test('same-account reauth restores known refs and UNKNOWN without autowrite; installed=false disables notes', async () => {
   const s = setup();
   await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadNote(game.id, contextA);
   s.port.send = async (p) => { s.sent.push(p); throw new PostgameError('network', 503); };
   s.coordinator.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 1 } });
   await s.coordinator.confirm();
@@ -276,4 +320,100 @@ test('same-account reauth restores known refs and UNKNOWN without autowrite; ins
   disabled.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 0, text: 'no' } });
   await disabled.coordinator.confirm();
   assert.equal(disabled.sent.length, 0);
+});
+
+test('late results must not regress newer direct note; late GET after delete must not resurrect', async () => {
+  let releaseResults!: (value: Results) => void;
+  let releaseNote!: (value: PersonalNote) => void;
+  const resultsGate = new Promise<Results>((resolve) => { releaseResults = resolve; });
+  const noteGate = new Promise<PersonalNote>((resolve) => { releaseNote = resolve; });
+  const sent: Packet[] = [];
+  const port = {
+    own: async () => ({ items: [], nextCursor: null }),
+    reminders: async () => ({ items: [], installed: true, writesEnabled: true }),
+    invitations: async () => ({ items: [], nextCursor: null }),
+    results: async () => resultsGate,
+    note: async () => noteGate,
+    send: async (p: Packet): Promise<unknown> => {
+      sent.push(p);
+      if (p.kind === 'note-delete') {
+        return { gameId: p.gameId, contextId: p.contextId, version: p.body.expectedVersion + 1, deleted: true as const };
+      }
+      throw new PostgameError('invalid');
+    },
+  };
+  const c = new PostgameCoordinator(port, () => `key-${sent.length}`);
+  c.setActor(actor);
+
+  // Realistic race: results starts with v2, newer direct v3 completes, late results must not regress 3→2.
+  const loadResultsP = c.loadResults(game.id);
+  const loadNoteP = c.loadNote(game.id, contextA);
+  releaseNote({ ...note, version: 3, text: 'direct-v3' });
+  await loadNoteP;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
+  releaseResults({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [{ ...note, version: 2, text: 'stale-results-v2' }] },
+  });
+  await loadResultsP;
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.version, 3);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data?.text, 'direct-v3');
+
+  // Delete + fresh empty results, then late GET must not reinstate private text/known ref.
+  let lateNote!: (value: PersonalNote) => void;
+  const lateGate = new Promise<PersonalNote>((resolve) => { lateNote = resolve; });
+  port.note = async () => lateGate;
+  port.results = async () => ({
+    ...result,
+    feedback: { ...feedbackReady, myNotes: [] },
+  });
+  const lateGet = c.loadNote(game.id, contextA);
+  c.review({ kind: 'note-delete', gameId: game.id, contextId: contextA, body: { expectedVersion: 3 } });
+  await c.confirm();
+  assert.equal(sent.length, 1);
+  await c.loadResults(game.id);
+  assert.equal(c.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`], undefined);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data, undefined);
+  lateNote({ ...note, version: 1, text: 'Личная заметка' });
+  await lateGet;
+  assert.equal(c.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`], undefined);
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable');
+  assert.equal(c.getSnapshot().notes[`${game.id}:${contextA}`]?.data, undefined);
+});
+
+test('private 404 of known own note shadows myNotes and does not unlock create; ACK is not current projection', async () => {
+  const s = setup();
+  await s.coordinator.loadResults(game.id);
+  assert.ok(s.coordinator.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`]);
+  s.notes.delete(`${game.id}:${contextA}`);
+  await s.coordinator.loadNote(game.id, contextA);
+  assert.equal(s.coordinator.getSnapshot().notes[`${game.id}:${contextA}`]?.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().knownNoteRefs[`${game.id}:${contextA}`], undefined);
+  // Create must stay blocked for tombstoned/known absence even with canCreateNote.
+  s.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextA, body: { expectedVersion: 0, text: 'resurrect' } });
+  await s.coordinator.confirm();
+  assert.equal(s.sent.length, 0);
+
+  // Historical upsert ACK does not unlock writes until typed GET reestablishes.
+  const write = setup({ note: null, results: { ...result, feedback: { ...feedbackReady, myNotes: [] } } });
+  await write.coordinator.loadResults(game.id);
+  write.coordinator.setNoteDraft(game.id, null, { selectedContextId: contextB });
+  await write.coordinator.loadNote(game.id, contextB);
+  write.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 0, text: 'new' } });
+  let releaseGet!: (value: PersonalNote) => void;
+  const getGate = new Promise<PersonalNote>((resolve) => { releaseGet = resolve; });
+  write.port.note = async () => getGate;
+  const confirmP = write.coordinator.confirm();
+  await confirmP;
+  assert.equal(write.sent.length, 1);
+  // Before post-ACK GET settles, further edit must not use receipt as current.
+  write.coordinator.review({ kind: 'note-upsert', gameId: game.id, contextId: contextB, body: { expectedVersion: 1, text: 'too soon' } });
+  await write.coordinator.confirm();
+  assert.equal(write.sent.length, 1, 'ACK receipt must not unlock writes before typed GET');
+  releaseGet({
+    gameId: game.id, contextId: contextB, subjectDisplay: 'Илья', text: 'new', version: 1, updatedAt: date,
+    allowedActions: { canEdit: true, canDelete: true },
+  });
+  await write.coordinator.loadNote(game.id, contextB);
+  assert.equal(write.coordinator.getSnapshot().notes[`${game.id}:${contextB}`]?.data?.version, 1);
 });
