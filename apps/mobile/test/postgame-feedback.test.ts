@@ -754,10 +754,8 @@ test('hard-deny then late reply ACK: no private resurrect on pending/failed GET;
   assert.equal(s.coordinator.getSnapshot().reviewsById[row.id], undefined);
 
   // Post-deny follow-up GET after ACK: hold pending, then fail — must not resurrect.
-  let resolvePostAckGet!: (value: { items: PrivateReview[]; nextCursor: null } | PromiseLike<never>) => void;
   let rejectPostAckGet!: (err: unknown) => void;
-  const postAckGet = new Promise<{ items: PrivateReview[]; nextCursor: null }>((resolve, reject) => {
-    resolvePostAckGet = resolve;
+  const postAckGet = new Promise<{ items: PrivateReview[]; nextCursor: null }>((_, reject) => {
     rejectPostAckGet = reject;
   });
   s.port.reviews = () => postAckGet;
