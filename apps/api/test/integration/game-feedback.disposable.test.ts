@@ -231,6 +231,15 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       headers: n.headers,
     }) as Promise<Response>;
   }
+  async function nativePost(who: Actor, url: string, payload: unknown, idem = key()): Promise<Response> {
+    const n = await nativeHeaders(who, idem);
+    return app.inject({
+      method: "POST",
+      url,
+      payload: payload as object,
+      headers: n.headers,
+    }) as Promise<Response>;
+  }
   async function nativeDel(who: Actor, url: string, payload: unknown, idem = key()): Promise<Response> {
     const n = await nativeHeaders(who, idem);
     return app.inject({
@@ -1259,20 +1268,219 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       ).statusCode,
     ).toBe(401);
 
-    // Neighbor private review create stays cookie-only — native bearer must not succeed.
-    const nativeReview = await app.inject({
-      method: "POST",
-      url: `/v1/games/${gameId}/reviews`,
-      payload: {
+    // Neighbor PATCH review stays cookie-only — native bearer must not succeed on PATCH.
+    const cookiePeer = await post(anna, `/v1/games/${gameId}/reviews`, {
+      kind: "peer",
+      subjectContextId: ilyaContext,
+      peerRating: "neutral",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect([200, 201]).toContain(cookiePeer.statusCode);
+    const nativePatch = await app.inject({
+      method: "PATCH",
+      url: `/v1/reviews/${cookiePeer.json().id}`,
+      payload: { expectedVersion: cookiePeer.json().version, comment: "native patch denied" },
+      headers: (await nativeHeaders(anna)).headers,
+    });
+    expect(nativePatch.statusCode).toBe(403);
+    expect(nativePatch.json().code).toBe("CREDENTIALS_CONFLICT");
+  });
+
+  it("native bearer peer feedback: create/list/reply/report, consent/CAS/replay, writes-off report, PATCH denied", async () => {
+    const { gameId, ilyaContext } = await createEndedGameWithPlayers();
+    const skillsBefore = (
+      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM trainer_profiles")
+    ).rows[0]!.n;
+
+    const createKey = key();
+    const created = await nativePost(
+      anna,
+      `/v1/games/${gameId}/reviews`,
+      {
+        kind: "peer",
+        subjectContextId: ilyaContext,
+        peerRating: "play_again",
+        comment: "Native peer thanks",
+        tags: ["teamwork"],
+        experienceAssertion: "i_experienced_this_game",
+      },
+      createKey,
+    );
+    expect([200, 201]).toContain(created.statusCode);
+    expect(created.json().kind).toBe("peer");
+    expect(created.json().direction).toBe("sent");
+    expect(created.json().peerRating).toBe("play_again");
+    const reviewId = created.json().id as string;
+    const reviewVersion = created.json().version as number;
+
+    const replay = await nativePost(
+      anna,
+      `/v1/games/${gameId}/reviews`,
+      {
+        kind: "peer",
+        subjectContextId: ilyaContext,
+        peerRating: "play_again",
+        comment: "Native peer thanks",
+        tags: ["teamwork"],
+        experienceAssertion: "i_experienced_this_game",
+      },
+      createKey,
+    );
+    expect(replay.statusCode).toBe(created.statusCode);
+    expect(replay.json().id).toBe(reviewId);
+
+    const sent = await nativeGet(anna, `/v1/me/reviews?direction=sent`);
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().items.some((r: { id: string }) => r.id === reviewId)).toBe(true);
+
+    const received = await nativeGet(ilya, `/v1/me/reviews?direction=received`);
+    expect(received.statusCode).toBe(200);
+    const receivedRow = received.json().items.find((r: { id: string }) => r.id === reviewId);
+    expect(receivedRow).toBeTruthy();
+    expect(receivedRow.allowedActions.canReply).toBe(true);
+    expect(receivedRow.allowedActions.canReport).toBe(true);
+
+    const replyKey = key();
+    const replied = await nativePut(
+      ilya,
+      `/v1/reviews/${reviewId}/reply`,
+      { expectedVersion: 0, text: "Native reply" },
+      replyKey,
+    );
+    expect(replied.statusCode).toBe(200);
+    expect(replied.json().reply.text).toBe("Native reply");
+    expect(replied.json().reply.version).toBe(1);
+    const replyReplay = await nativePut(
+      ilya,
+      `/v1/reviews/${reviewId}/reply`,
+      { expectedVersion: 0, text: "Native reply" },
+      replyKey,
+    );
+    expect(replyReplay.statusCode).toBe(200);
+    expect(replyReplay.json().reply.version).toBe(1);
+
+    const staleReply = await nativePut(ilya, `/v1/reviews/${reviewId}/reply`, {
+      expectedVersion: 0,
+      text: "stale reply",
+    });
+    expect(staleReply.statusCode).toBe(409);
+    expect(staleReply.json().code).toBe("VERSION_CONFLICT");
+
+    const reportKey = key();
+    const reported = await nativePost(
+      ilya,
+      `/v1/reviews/${reviewId}/report`,
+      {
+        expectedVersion: reviewVersion,
+        reasonCode: "harassment",
+        detail: "Exact native report",
+        shareReviewWithSupport: true,
+        gameId,
+      },
+      reportKey,
+    );
+    expect([200, 201]).toContain(reported.statusCode);
+    expect(reported.json()).toEqual({
+      reportId: reported.json().reportId,
+      status: "submitted",
+      reviewId,
+      version: reviewVersion,
+    });
+    const reportReplay = await nativePost(
+      ilya,
+      `/v1/reviews/${reviewId}/report`,
+      {
+        expectedVersion: reviewVersion,
+        reasonCode: "harassment",
+        detail: "Exact native report",
+        shareReviewWithSupport: true,
+        gameId,
+      },
+      reportKey,
+    );
+    expect(reportReplay.statusCode).toBe(reported.statusCode);
+    expect(reportReplay.json().reportId).toBe(reported.json().reportId);
+
+    const noConsent = await nativePost(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: reviewVersion,
+      reasonCode: "spam",
+      detail: null,
+      shareReviewWithSupport: false,
+      gameId,
+    });
+    expect([400, 422]).toContain(noConsent.statusCode);
+
+    const staleReport = await nativePost(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: reviewVersion + 99,
+      reasonCode: "spam",
+      detail: null,
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(staleReport.statusCode).toBe(409);
+    expect(staleReport.json().code).toBe("VERSION_CONFLICT");
+
+    const outsiderReport = await nativePost(outsider, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: reviewVersion,
+      reasonCode: "spam",
+      detail: null,
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(outsiderReport.statusCode).toBe(404);
+
+    // Experience lost / create denied does not block historical recipient report when writes off.
+    env.POST_GAME_INTERNAL_ENABLED = false;
+    try {
+      const createOff = await nativePost(anna, `/v1/games/${gameId}/reviews`, {
         kind: "peer",
         subjectContextId: ilyaContext,
         peerRating: "neutral",
         experienceAssertion: "i_experienced_this_game",
-      },
+      });
+      expect(createOff.statusCode).toBe(503);
+      const replyOff = await nativePut(ilya, `/v1/reviews/${reviewId}/reply`, {
+        expectedVersion: 1,
+        text: "writes off reply",
+      });
+      expect(replyOff.statusCode).toBe(503);
+      // Report remains independently available — service has no postgame switch gate for safety.
+      const reportWhileOff = await nativePost(ilya, `/v1/reviews/${reviewId}/report`, {
+        expectedVersion: reviewVersion,
+        reasonCode: "inappropriate",
+        detail: "still reportable",
+        shareReviewWithSupport: true,
+        gameId,
+      });
+      // Same actor/version may return owned receipt; must not be gated by writes switch.
+      expect([200, 201]).toContain(reportWhileOff.statusCode);
+      expect(reportWhileOff.json().reviewId).toBe(reviewId);
+      expect(reportWhileOff.json().version).toBe(reviewVersion);
+    } finally {
+      env.POST_GAME_INTERNAL_ENABLED = true;
+    }
+
+    const nativePatchDenied = await app.inject({
+      method: "PATCH",
+      url: `/v1/reviews/${reviewId}`,
+      payload: { expectedVersion: reviewVersion, comment: "no native patch" },
       headers: (await nativeHeaders(anna)).headers,
     });
-    expect(nativeReview.statusCode).toBe(403);
-    expect(nativeReview.json().code).toBe("CREDENTIALS_CONFLICT");
+    expect(nativePatchDenied.statusCode).toBe(403);
+    expect(nativePatchDenied.json().code).toBe("CREDENTIALS_CONFLICT");
+
+    const mixed = await app.inject({
+      method: "GET",
+      url: `/v1/me/reviews?direction=received`,
+      headers: { ...(await nativeHeaders(ilya)).headers, cookie: ilya.cookie },
+    });
+    expect(mixed.statusCode).toBe(403);
+    expect(mixed.json().code).toBe("CREDENTIALS_CONFLICT");
+
+    const skillsAfter = (
+      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM trainer_profiles")
+    ).rows[0]!.n;
+    expect(skillsAfter).toBe(skillsBefore);
   });
 });
 

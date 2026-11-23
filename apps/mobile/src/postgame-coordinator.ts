@@ -4,6 +4,7 @@ import type { GameInvitation } from './messages.ts';
 import { MessagesError } from './messages.ts';
 import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, mayAcknowledgeCurrent, needsAttention, noteText } from './postgame.ts';
 import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult, AttendanceDispute, AttendanceHistoryPage, PersonalNote } from './postgame.ts';
+import { mergeReviewPages, type MeReviewsPage, type PeerRating, type PeerTag, type PrivateReview, type ReviewReportReason } from './postgame-feedback.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -27,6 +28,22 @@ export type NoteDraft = {
   createDirty?: boolean;
 };
 export type OwnNoteRef = { gameId: string; contextId: string };
+/** Actor-bound peer feedback drafts — wiped on logout / different actor. */
+export type FeedbackDraft = {
+  mode?: 'peer' | 'received' | 'sent';
+  subjectContextId?: string;
+  peerRating?: PeerRating;
+  comment?: string;
+  tags?: PeerTag[];
+  replyText?: Record<string, string>;
+  reportReviewId?: string;
+  reportReason?: ReviewReportReason;
+  reportDetail?: string;
+  /** Explicit consent for exact frozen review.version — reset when revision changes. */
+  reportConsent?: boolean;
+  reportConsentVersion?: number;
+};
+export type ReviewDirection = 'sent' | 'received';
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
 type OwnAck = { gameId: string; contextId: string; version: number };
 function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
@@ -44,7 +61,12 @@ type Snapshot = {
   notes: Record<string,Source<PersonalNote>>;
   /** Exact actor-bound owned contexts remembered this session (no cold discovery). */
   knownNoteRefs: Record<string,OwnNoteRef>;
+  /** Own directional private review history — independent of denied results/roster. */
+  reviewHistory: Record<ReviewDirection, Source<MeReviewsPage>>;
+  /** Latest typed review by id from history/results/receipts — monotonic merge authority. */
+  reviewsById: Record<string, PrivateReview>;
   selection: DisputeSelection | null; drafts: Record<string,DisputeDraft>; noteDrafts: Record<string,NoteDraft>;
+  feedbackDrafts: Record<string, FeedbackDraft>;
   review: Intent | null; command: Command | null; notice: string | null;
 };
 type Port = {
@@ -57,11 +79,16 @@ type Port = {
   history?: (actor: Actor, gameId: string, contextId: string, limit?: number) => Promise<AttendanceHistoryPage>;
   /** Direct own personal note GET — exists independently of results access. */
   note?: (actor: Actor, gameId: string, contextId: string) => Promise<PersonalNote>;
+  /** Own directional private reviews — exists independently of results access. */
+  reviews?: (actor: Actor, direction: ReviewDirection, cursor?: string) => Promise<MeReviewsPage>;
   send: (packet: Packet, authority: Actor) => Promise<unknown>;
 };
 const empty = (actor: Actor | null): Snapshot => ({
   actor, filter: 'all', own: {status:'idle'}, reminders: {status:'idle'}, invitations: {status:'idle'},
-  games: {}, disputes: {}, histories: {}, notes: {}, knownNoteRefs: {}, selection: null, drafts: {}, noteDrafts: {},
+  games: {}, disputes: {}, histories: {}, notes: {}, knownNoteRefs: {},
+  reviewHistory: { received: { status: 'idle' }, sent: { status: 'idle' } },
+  reviewsById: {},
+  selection: null, drafts: {}, noteDrafts: {}, feedbackDrafts: {},
   review:null, command:null, notice:null,
 });
 const unknownNotice = 'Результат действия пока неизвестен. Проверьте исходное действие перед новым изменением.';
@@ -83,9 +110,13 @@ function freezeIntent(intent: Intent): Intent {
     case 'later': copy={...intent,body:{...intent.body}}; break;
     case 'note-upsert': copy={...intent,body:{...intent.body}}; break;
     case 'note-delete': copy={...intent,body:{...intent.body}}; break;
+    case 'peer-create': copy={...intent,body:{...intent.body,...(intent.body.tags ? {tags:[...intent.body.tags]} : {})}}; break;
+    case 'peer-reply': copy={...intent,body:{...intent.body}}; break;
+    case 'peer-report': copy={...intent,body:{...intent.body}}; break;
   }
   if (copy.kind === 'bulk') { copy.body.items.forEach(Object.freeze); Object.freeze(copy.body.items); }
   if (copy.kind === 'respond' && copy.body.correction) Object.freeze(copy.body.correction);
+  if (copy.kind === 'peer-create' && copy.body.tags) Object.freeze(copy.body.tags);
   Object.freeze(copy.body); return Object.freeze(copy);
 }
 export class PostgameCoordinator {
@@ -114,6 +145,12 @@ export class PostgameCoordinator {
   private noteVersionFloor = new Map<string, number>();
   /** After confirmed upsert: only typed direct GET may reestablish ready rights (not historical myNotes). */
   private noteAwaitingTyped = new Set<string>();
+  /** Seen nextCursor values per review direction — reject ABA/replay cursors. */
+  private reviewCursors = new Map<ReviewDirection, Set<string>>();
+  /** Version floor per review id — stale receipts cannot regress. */
+  private reviewVersionFloor = new Map<string, number>();
+  /** Reply version floor per review id. */
+  private replyVersionFloor = new Map<string, number>();
   private port: Required<Port>;
   private random: () => string;
   constructor(port: Port, random: () => string) {
@@ -121,6 +158,7 @@ export class PostgameCoordinator {
     if (!port.dispute) port.dispute = async () => { throw new PostgameError('private', 404); };
     if (!port.history) port.history = async () => ({ items: [] });
     if (!port.note) port.note = async () => { throw new PostgameError('private', 404); };
+    if (!port.reviews) port.reviews = async () => ({ items: [], nextCursor: null });
     this.port = port as Required<Port>;
     this.random = random;
   }
@@ -136,10 +174,12 @@ export class PostgameCoordinator {
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++;
     this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear();
+    this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear();
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     // Same-account reauth restores explicit review/UNKNOWN and compatible drafts, without autowrite.
     // Known own-note refs restore for in-session recovery only — never auto-write / cold discovery.
+    // Feedback drafts restore without auto-send; history must recheck authority via fresh GET.
     if (saved) this.show({
       filter:saved.filter,
       command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,
@@ -147,12 +187,13 @@ export class PostgameCoordinator {
       review:saved.review,
       drafts:saved.drafts,
       noteDrafts:saved.noteDrafts,
+      feedbackDrafts:saved.feedbackDrafts,
       knownNoteRefs:saved.knownNoteRefs,
       selection:saved.selection,
     });
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.invitationsBusy=false; this.invitationsFollowup=false; this.invitationsBusyGen++; this.noteTombs.clear(); this.noteAppliedGen.clear(); this.noteVersionFloor.clear(); this.noteAwaitingTyped.clear(); this.reviewCursors.clear(); this.reviewVersionFloor.clear(); this.replyVersionFloor.clear(); this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate','invites'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -384,6 +425,7 @@ export class PostgameCoordinator {
       put({status:'ready',data});
       this.clearIncompatibleDrafts(gameId, data);
       if (data.feedback?.installed && data.feedback.myNotes.length) this.rememberOwnedNotes(data.feedback.myNotes, resultsGen);
+      if (data.feedback?.gameReviews?.length) this.rememberReviews(data.feedback.gameReviews);
       if (selection?.gameId === gameId) {
         const rows=[...(data.attendance?.roster ?? []),...(data.attendance?.myAttendance ? [data.attendance.myAttendance] : [])];
         const still=rows.some(r=>r.contextId === selection.contextId && r.dispute?.id === selection.disputeId);
@@ -528,6 +570,76 @@ export class PostgameCoordinator {
     const prior=this.snapshot.drafts[key] ?? {};
     this.show({drafts:{...this.snapshot.drafts,[key]:{...prior,...patch}}});
   };
+  setFeedbackDraft = (gameId: string, patch: FeedbackDraft) => {
+    if (!this.snapshot.actor) return;
+    try { postgameId(gameId); } catch { return; }
+    const prior = this.snapshot.feedbackDrafts[gameId] ?? {};
+    const next: FeedbackDraft = { ...prior, ...patch };
+    if (patch.replyText) next.replyText = { ...(prior.replyText ?? {}), ...patch.replyText };
+    // Opening/changing report target resets consent; revision mismatch also resets.
+    if (patch.reportReviewId !== undefined && patch.reportReviewId !== prior.reportReviewId) {
+      next.reportConsent = false;
+      next.reportConsentVersion = undefined;
+    }
+    if (patch.reportConsentVersion !== undefined && prior.reportConsentVersion !== undefined
+      && patch.reportConsentVersion !== prior.reportConsentVersion) {
+      next.reportConsent = false;
+    }
+    this.show({ feedbackDrafts: { ...this.snapshot.feedbackDrafts, [gameId]: next } });
+  };
+  /** Monotonic typed review store — stale lower versions never regress latest. */
+  private rememberReviews(rows: PrivateReview[]) {
+    const byId = { ...this.snapshot.reviewsById };
+    let changed = false;
+    for (const row of rows) {
+      const floor = this.reviewVersionFloor.get(row.id) ?? 0;
+      if (row.version < floor) continue;
+      const prior = byId[row.id];
+      const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
+      const replyVer = row.reply?.version ?? 0;
+      if (prior && row.version === prior.version && replyVer < replyFloor) {
+        byId[row.id] = { ...row, reply: prior.reply };
+      } else {
+        byId[row.id] = row;
+      }
+      this.reviewVersionFloor.set(row.id, Math.max(floor, row.version));
+      this.replyVersionFloor.set(row.id, Math.max(replyFloor, replyVer));
+      changed = true;
+    }
+    if (changed) this.show({ reviewsById: byId });
+  }
+  private currentReview(reviewId: string): PrivateReview | null {
+    return this.snapshot.reviewsById[reviewId] ?? null;
+  }
+  /** Own directional history — independent of denied results; honest cursor/empty/error. */
+  loadReviews = async (direction: ReviewDirection, more = false) => {
+    if (direction !== 'sent' && direction !== 'received') return;
+    const old = this.snapshot.reviewHistory[direction];
+    if (old.status === 'loading') return;
+    const cursor = more ? old.data?.nextCursor : undefined;
+    if (more && !cursor) return;
+    const { actor, valid } = this.start(`reviews:${direction}`);
+    if (!actor) return;
+    const put = (source: Source<MeReviewsPage>) => this.show({
+      reviewHistory: { ...this.snapshot.reviewHistory, [direction]: source },
+    });
+    put({ ...old, status: 'loading' });
+    try {
+      const page = await this.port.reviews(actor, direction, cursor ?? undefined);
+      if (!valid()) return;
+      const seen = more ? this.reviewCursors.get(direction) ?? new Set<string>() : new Set<string>();
+      if (page.nextCursor && (page.nextCursor === cursor || seen.has(page.nextCursor))) throw new PostgameError('invalid');
+      if (page.nextCursor) seen.add(page.nextCursor);
+      this.reviewCursors.set(direction, seen);
+      const priorItems = more ? old.data?.items ?? [] : [];
+      // Retain nextCursor honestly even when page has non-peer rows.
+      const merged = mergeReviewPages(priorItems, page.items, direction);
+      this.rememberReviews(page.items);
+      put({ status: 'ready', data: { items: merged, nextCursor: page.nextCursor } });
+    } catch (error) {
+      if (valid()) put(this.failure(error, old));
+    }
+  };
   private currentNote(gameId: string, contextId: string): PersonalNote | null {
     const key = noteKey(gameId, contextId);
     if (this.noteTombs.has(key)) return null;
@@ -546,6 +658,38 @@ export class PostgameCoordinator {
     return feedback?.myNotes.find(n => n.contextId === contextId && n.gameId === gameId) ?? null;
   }
   private allowed(intent: Intent) {
+    if (intent.kind === 'peer-create') {
+      const results = this.snapshot.games[intent.gameId];
+      const feedback = results?.status === 'ready' ? results.data?.feedback : undefined;
+      if (!feedback?.installed || !feedback.writesEnabled || !feedback.capabilities.canCreatePeer) return false;
+      if (intent.body.kind !== 'peer' || intent.body.experienceAssertion !== 'i_experienced_this_game') return false;
+      return feedback.capabilities.peerSubjects.some(s => s.contextId === intent.body.subjectContextId);
+    }
+    if (intent.kind === 'peer-reply') {
+      const review = this.currentReview(intent.reviewId);
+      if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
+      if (review.direction !== 'received' || !review.allowedActions.canReply) return false;
+      const results = this.snapshot.games[intent.gameId];
+      // When results are ready, fresh writesEnabled gates ordinary reply; history canReply alone is not enough against known writes-off.
+      if (results?.status === 'ready') {
+        const feedback = results.data?.feedback;
+        if (!feedback?.installed || !feedback.writesEnabled) return false;
+      }
+      const replyVer = review.reply?.version ?? 0;
+      return replyVer === intent.body.expectedVersion;
+    }
+    if (intent.kind === 'peer-report') {
+      const review = this.currentReview(intent.reviewId);
+      if (!review || review.id !== intent.reviewId || review.gameId !== intent.gameId) return false;
+      if (review.direction !== 'received' || !review.allowedActions.canReport) return false;
+      // Report is independent of writesEnabled / create experience.
+      if (review.version !== intent.body.expectedVersion) return false;
+      if (intent.body.gameId !== intent.gameId || intent.body.shareReviewWithSupport !== true) return false;
+      const draft = this.snapshot.feedbackDrafts[intent.gameId];
+      if (!draft?.reportConsent || draft.reportReviewId !== intent.reviewId) return false;
+      if (draft.reportConsentVersion !== undefined && draft.reportConsentVersion !== review.version) return false;
+      return true;
+    }
     if (intent.kind === 'note-upsert' || intent.kind === 'note-delete') {
       if (intent.kind === 'note-upsert') {
         try { noteText(intent.body.text); } catch { return false; }
@@ -686,6 +830,41 @@ export class PostgameCoordinator {
       if (packet.kind === 'note-delete' && 'deleted' in receipt && receipt.deleted) {
         this.tombstoneOwnedNote(packet.gameId, packet.contextId, receipt.version);
       }
+      if (packet.kind === 'peer-create' && 'peerRating' in receipt && 'direction' in receipt) {
+        this.rememberReviews([receipt]);
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = {
+          ...prior,
+          peerRating: undefined,
+          comment: '',
+          tags: [],
+          subjectContextId: prior.subjectContextId,
+        };
+        this.show({ feedbackDrafts: drafts });
+      }
+      if (packet.kind === 'peer-reply' && 'reply' in receipt && 'direction' in receipt) {
+        this.rememberReviews([receipt]);
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        const replyText = { ...(prior.replyText ?? {}) };
+        delete replyText[packet.reviewId];
+        drafts[packet.gameId] = { ...prior, replyText };
+        this.show({ feedbackDrafts: drafts });
+      }
+      if (packet.kind === 'peer-report' && 'reportId' in receipt && receipt.status === 'submitted') {
+        // Receipt already bound to original packet by validateReceipt — clear consent, keep detail draft.
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = {
+          ...prior,
+          reportReviewId: undefined,
+          reportConsent: false,
+          reportConsentVersion: undefined,
+          reportDetail: prior.reportDetail,
+        };
+        this.show({ feedbackDrafts: drafts });
+      }
       // Resolving ACK: verified resolvedDispute stays on the ACK receipt only.
       // Never fabricate dispute timestamps/rights or regress the projection from historical receipt fields.
       // Authoritative DTO comes from loadDispute below; follow-up GET failure stays a distinct retryable read error.
@@ -707,21 +886,44 @@ export class PostgameCoordinator {
       if (this.snapshot.selection?.disputeId) void this.loadDispute(this.snapshot.selection.disputeId);
       // After upsert ACK: typed GET reestablishes rights/version; GET failure is retryable READ, not write success.
       if (noteWrite && packet.kind === 'note-upsert') void this.loadNote(packet.gameId, packet.contextId);
+      if (packet.kind === 'peer-create') void this.loadReviews('sent');
+      if (packet.kind === 'peer-reply' || packet.kind === 'peer-report') void this.loadReviews('received');
     } catch(error) {
       if(!valid()) return;
       const definite=!reconciling && error instanceof PostgameError && error.status < 500 && error.kind === 'business' && !['COMMAND_IN_PROGRESS','KEY_REUSED','IDEMPOTENCY_KEY_REUSED'].includes(error.code);
       const noteConflict = definite && packet.kind.startsWith('note-') && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
+      const peerConflict = definite && (packet.kind === 'peer-reply' || packet.kind === 'peer-report')
+        && error instanceof PostgameError && error.code === 'VERSION_CONFLICT';
       const noteUnknown = !definite && (packet.kind === 'note-upsert' || packet.kind === 'note-delete');
+      const peerUnknown = !definite && (packet.kind === 'peer-create' || packet.kind === 'peer-reply' || packet.kind === 'peer-report');
+      if (peerConflict && packet.kind === 'peer-report') {
+        // Preserve detail draft; reset consent after revision change.
+        const drafts = { ...this.snapshot.feedbackDrafts };
+        const prior = drafts[packet.gameId] ?? {};
+        drafts[packet.gameId] = { ...prior, reportConsent: false, reportConsentVersion: undefined };
+        this.show({ feedbackDrafts: drafts });
+        void this.loadReviews('received');
+      }
+      if (peerConflict && packet.kind === 'peer-reply') {
+        void this.loadReviews('received');
+        void this.loadResults(packet.gameId);
+      }
       const notice = definite
         ? (noteConflict
           ? 'Версия заметки изменилась. Обновите заметку и сохраните снова.'
-          : 'Изменение отклонено. Обновите данные и проверьте условия.')
+          : peerConflict
+            ? (packet.kind === 'peer-report'
+              ? 'Версия отзыва изменилась. Проверьте новую редакцию и снова подтвердите согласие.'
+              : 'Версия ответа изменилась. Обновите отзыв и сохраните снова.')
+            : 'Изменение отклонено. Обновите данные и проверьте условия.')
         : (noteUnknown
           ? (packet.kind === 'note-delete'
             ? 'Пока не удалось подтвердить удаление. Проверьте исходное действие.'
             : 'Пока не удалось подтвердить сохранение. Проверьте исходное действие.')
-          : unknownNotice);
-      // Dirty note drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
+          : peerUnknown
+            ? 'Результат отправки пока неизвестен. Проверьте исходное действие.'
+            : unknownNotice);
+      // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
       this.show({command:definite ? null : {packet,status:'unknown'},notice});
     } finally { if(this.inFlight === packet) this.inFlight=null; }
   }

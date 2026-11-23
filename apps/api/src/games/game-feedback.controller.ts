@@ -19,7 +19,7 @@ export class GameFeedbackController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("gameId") gameId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.feedback.createReview(
       actor.userId,
       actor.sessionId,
@@ -57,7 +57,7 @@ export class GameFeedbackController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("reviewId") reviewId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.feedback.putReply(
       actor.userId,
       actor.sessionId,
@@ -76,7 +76,7 @@ export class GameFeedbackController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("reviewId") reviewId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.feedback.reportReview(
       actor.userId,
       actor.sessionId,
@@ -96,7 +96,7 @@ export class GameFeedbackController {
     @Query("cursor") cursor?: string,
     @Query("direction") direction?: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.feedback.listMeReviews(actor.userId, { limit, cursor, direction });
   }
 

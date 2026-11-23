@@ -1,5 +1,28 @@
 import type { Actor } from './participation.ts';
 import { canonicalPostgamePath } from './native-auth-protocol.ts';
+import {
+  parsePrivateReview,
+  parseReviewReportReceipt,
+  reviewComment,
+  reviewReplyText,
+  reportDetailText,
+  PEER_RATINGS,
+  PEER_TAGS,
+  REPORT_REASONS,
+  type PeerCreateReason,
+  type PeerRating,
+  type PeerTag,
+  type PrivateReview,
+  type ReviewReportReason,
+  type ReviewReportReceipt,
+} from './postgame-feedback.ts';
+export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage } from './postgame-feedback.ts';
+export {
+  PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
+  peerRatingLabel, peerCreateReasonLabel, peerReviewsOnly, peerReviewsForGame,
+  feedbackSectionVisible, mergeReviewPages, parsePrivateReview, parseMeReviewsPage,
+  parseReviewReportReceipt, reviewsQuery, reviewComment, reviewReplyText, reportDetailText,
+} from './postgame-feedback.ts';
 
 export class PostgameError extends Error {
   readonly kind: 'invalid' | 'network' | 'business' | 'private' | 'stale';
@@ -52,11 +75,17 @@ export type PersonalNote = {
   allowedActions: { canEdit: boolean; canDelete: boolean };
 };
 export type NoteDeleteReceipt = { gameId: string; contextId: string; version: number; deleted: true };
-/** Narrow feedback slice consumed by native notes — not full private review surface. */
+/** Feedback slice: notes + peer create caps; gameReviews optional same-game projection. */
 export type FeedbackNotes = {
   installed: boolean; writesEnabled: boolean;
-  capabilities: { canCreateNote: boolean; peerSubjects: { contextId: string; displayName: string }[] };
+  capabilities: {
+    canCreateNote: boolean;
+    canCreatePeer: boolean;
+    peerCreateReason: PeerCreateReason | null;
+    peerSubjects: { contextId: string; displayName: string }[];
+  };
   myNotes: PersonalNote[];
+  gameReviews?: PrivateReview[];
 };
 export type Results = {
   gameId: string;
@@ -86,11 +115,20 @@ export type Intent =
   | { kind: 'help'; gameId: string; disputeId: string; body: { expectedVersion: number; explanation: string } }
   | { kind: 'later'; gameId: string; reminderId: string; body: { command: 'later'; expectedVersion: number } }
   | { kind: 'note-upsert'; gameId: string; contextId: string; body: { expectedVersion: number; text: string } }
-  | { kind: 'note-delete'; gameId: string; contextId: string; body: { expectedVersion: number } };
+  | { kind: 'note-delete'; gameId: string; contextId: string; body: { expectedVersion: number } }
+  | { kind: 'peer-create'; gameId: string; body: {
+      kind: 'peer'; subjectContextId: string; peerRating: PeerRating;
+      experienceAssertion: 'i_experienced_this_game'; comment?: string; tags?: PeerTag[];
+    } }
+  | { kind: 'peer-reply'; gameId: string; reviewId: string; body: { expectedVersion: number; text: string } }
+  | { kind: 'peer-report'; gameId: string; reviewId: string; body: {
+      expectedVersion: number; reasonCode: ReviewReportReason; detail: string | null;
+      shareReviewWithSupport: true; gameId: string;
+    } };
 export type Packet = Readonly<Intent & { actor: Actor; key: string; method: 'PUT' | 'POST' | 'DELETE'; path: string }>;
 /** ACK mutation receipt; resolvedDispute is ACK-only proof, never an ordinary Attendance read field. */
 export type AckReceipt = Attendance & { resolvedDispute?: ResolvedDispute };
-export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | { items: Attendance[] } | Reminders;
+export type Receipt = Results | AckReceipt | AttendanceDispute | PersonalNote | NoteDeleteReceipt | PrivateReview | ReviewReportReceipt | { items: Attendance[] } | Reminders;
 const invalid = (): never => { throw new PostgameError('invalid'); };
 export function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function str(v: unknown): string { return typeof v === 'string' ? v : invalid(); }
@@ -213,7 +251,6 @@ export function parseNoteDeleteReceipt(v: unknown): NoteDeleteReceipt {
 }
 function parseFeedbackNotes(v: unknown, gameId: string): FeedbackNotes {
   const r = object(v), caps = object(r.capabilities);
-  // Consume only notes caps/projection — ignore unimplemented review/report fields.
   const myNotes = array(r.myNotes ?? [], parsePersonalNote);
   const seen = new Set<string>();
   for (const note of myNotes) {
@@ -221,10 +258,17 @@ function parseFeedbackNotes(v: unknown, gameId: string): FeedbackNotes {
     if (note.gameId !== gameId || seen.has(note.contextId)) invalid();
     seen.add(note.contextId);
   }
-  return {
+  const peerCreateReason = caps.peerCreateReason === undefined || caps.peerCreateReason === null
+    ? null
+    : choice(caps.peerCreateReason, [
+      'game_not_confirmed', 'attendance_unmarked', 'attendance_clarifying', 'no_eligible_peers',
+    ] as const);
+  const result: FeedbackNotes = {
     installed: bool(r.installed), writesEnabled: bool(r.writesEnabled),
     capabilities: {
       canCreateNote: bool(caps.canCreateNote),
+      canCreatePeer: bool(caps.canCreatePeer ?? false),
+      peerCreateReason,
       peerSubjects: array(caps.peerSubjects ?? [], item => {
         const s = object(item);
         const displayName = str(s.displayName);
@@ -234,6 +278,16 @@ function parseFeedbackNotes(v: unknown, gameId: string): FeedbackNotes {
     },
     myNotes,
   };
+  if (r.gameReviews !== undefined) {
+    const reviews = array(r.gameReviews, parsePrivateReview);
+    const ids = new Set<string>();
+    for (const review of reviews) {
+      if (review.gameId !== gameId || ids.has(review.id)) invalid();
+      ids.add(review.id);
+    }
+    result.gameReviews = reviews;
+  }
+  return result;
 }
 export function parseResults(v: unknown): Results {
   const r = object(v), o = object(r.outcome), a = object(r.allowedActions), p = o.provenance === null ? null : object(o.provenance);
@@ -276,6 +330,39 @@ export function noteText(v: unknown): string {
   return s === s.trim() && s.length > 0 && s.length <= 500 && !hasControl(s) ? s : invalid();
 }
 export function wire(packet: Intent): { method: 'PUT' | 'POST' | 'DELETE'; path: string; body: Intent['body'] } {
+  if (packet.kind === 'peer-create') {
+    const gameId = postgameId(packet.gameId), body = object(packet.body);
+    exact(body, ['kind', 'subjectContextId', 'peerRating', 'experienceAssertion', 'comment', 'tags']);
+    if (body.kind !== 'peer') invalid();
+    postgameId(body.subjectContextId);
+    choice(body.peerRating, PEER_RATINGS);
+    if (body.experienceAssertion !== 'i_experienced_this_game') invalid();
+    if (body.comment !== undefined) reviewComment(body.comment);
+    if (body.tags !== undefined) {
+      const tags = array(body.tags, item => choice(item, PEER_TAGS));
+      if (tags.length > 3) invalid();
+      const seen = new Set<string>();
+      for (const tag of tags) { if (seen.has(tag)) invalid(); seen.add(tag); }
+    }
+    return { method: 'POST', path: `/games/${gameId}/reviews`, body: packet.body };
+  }
+  if (packet.kind === 'peer-reply') {
+    const reviewId = postgameId(packet.reviewId), body = object(packet.body);
+    postgameId(packet.gameId);
+    exact(body, ['expectedVersion', 'text']); num(body.expectedVersion); reviewReplyText(body.text);
+    return { method: 'PUT', path: `/reviews/${reviewId}/reply`, body: packet.body };
+  }
+  if (packet.kind === 'peer-report') {
+    const reviewId = postgameId(packet.reviewId), body = object(packet.body);
+    const gameId = postgameId(packet.gameId);
+    exact(body, ['expectedVersion', 'reasonCode', 'detail', 'shareReviewWithSupport', 'gameId']);
+    num(body.expectedVersion, 1);
+    if (!REPORT_REASONS.some(r => r.code === body.reasonCode)) invalid();
+    reportDetailText(body.detail);
+    if (body.shareReviewWithSupport !== true) invalid();
+    if (postgameId(body.gameId) !== gameId) invalid();
+    return { method: 'POST', path: `/reviews/${reviewId}/report`, body: packet.body };
+  }
   if (packet.kind === 'note-upsert' || packet.kind === 'note-delete') {
     const gameId = postgameId(packet.gameId), contextId = postgameId(packet.contextId), body = object(packet.body);
     if (packet.kind === 'note-upsert') {
@@ -501,6 +588,27 @@ export function collectNotes(
   return [...byContext.values()];
 }
 export function validateReceipt(raw: unknown, p: Packet): Receipt {
+  if (p.kind === 'peer-create') {
+    const r = parsePrivateReview(raw);
+    if (r.gameId !== p.gameId || r.kind !== 'peer' || r.direction !== 'sent') invalid();
+    if (r.subjectContextId !== p.body.subjectContextId || r.peerRating !== p.body.peerRating) invalid();
+    if (r.experienceAssertion !== 'i_experienced_this_game') invalid();
+    if ((p.body.comment ?? null) !== r.comment) invalid();
+    const wanted = p.body.tags ?? [];
+    if (wanted.length !== r.tags.length || wanted.some((t, i) => r.tags[i] !== t)) invalid();
+    return r;
+  }
+  if (p.kind === 'peer-reply') {
+    const r = parsePrivateReview(raw);
+    if (r.id !== p.reviewId || r.gameId !== p.gameId) invalid();
+    if (!r.reply || r.reply.text !== p.body.text || r.reply.version !== p.body.expectedVersion + 1) invalid();
+    return r;
+  }
+  if (p.kind === 'peer-report') {
+    const r = parseReviewReportReceipt(raw);
+    if (r.reviewId !== p.reviewId || r.version !== p.body.expectedVersion || r.status !== 'submitted') invalid();
+    return r;
+  }
   if (p.kind === 'note-upsert') {
     const r = parsePersonalNote(raw);
     if (r.gameId !== p.gameId || r.contextId !== p.contextId || r.version !== p.body.expectedVersion + 1 || r.text !== p.body.text) invalid();

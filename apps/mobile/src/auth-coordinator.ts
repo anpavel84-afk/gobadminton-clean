@@ -66,6 +66,7 @@ export class AuthCoordinator {
       dispute: (actor,disputeId) => this.participationRead(access => deps.api.postgameDispute(access,disputeId),actor),
       history: (actor,gameId,contextId,limit) => this.participationRead(access => deps.api.postgameHistory(access,gameId,contextId,limit),actor),
       note: (actor,gameId,contextId) => this.participationRead(access => deps.api.postgameNote(access,gameId,contextId),actor),
+      reviews: (actor,direction,cursor) => this.participationRead(access => deps.api.postgameReviews(access,direction,cursor),actor),
       send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
     },deps.random);
     this.contact = new ContactCoordinator({

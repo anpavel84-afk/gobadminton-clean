@@ -168,6 +168,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `postgame-notes.test.ts` / postgame; API `game-feedback.disposable` native notes lifecycle (nonplaying secondary manager); source APK counter 31 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private notes source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-06 · Postgame private peer feedback (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameFeedbackPanel` peer + Astra High review; `POST /games/{id}/reviews`, `GET /me/reviews`, `PUT /reviews/{id}/reply`, `POST /reviews/{id}/report`; native same root `PostgameCoordinator` + `postgame-feedback` |
+| Entry | Authenticated `/my-games/[gameId]/results` section «Как вам встреча?» — modes Игроку / Полученные / Отправленные; history also when full Results denied |
+| Trigger | Explicit create (review confirm + experienceAssertion), reply, report with initially-off share consent; no auto-write on mount/reauth; UNKNOWN exact packet retry only |
+| Expected | Create only from current `peerSubjects`/`canCreatePeer`; ratings without preselect; comment≤500 + tags; reply `expectedVersion` = reply.version\|0; report exact `review.version` + `gameId` + `shareReviewWithSupport:true`; canReport independent of writesEnabled; consent reset on revision/409 with detail preserved; non-peer rows parsed not rendered; honest empty/loading/error/cursor; no public rating/skill/attendance change |
+| Accessibility | Named recipient/rating/consent/result; keyboard-safe scroll; busy/UNKNOWN announced; existing tokens/safe areas |
+| Non-scope | PATCH edit UI; org/training create UI; public review/Cases; note listing; PROD; APK32 binary/device/iOS/OTA claim |
+| Evidence | Mobile unit `postgame-feedback.test.ts` / notes·postgame; API `game-feedback.disposable` 7th native peer lifecycle; source APK counter 32 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native peer feedback source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
 | Field | Content |
