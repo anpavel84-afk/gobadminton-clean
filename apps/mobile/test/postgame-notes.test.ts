@@ -343,7 +343,7 @@ test('same-account reauth restores known refs and UNKNOWN without autowrite; ins
   const disabled = setup({
     results: {
       ...result,
-      feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, peerSubjects: [] }, myNotes: [] },
+      feedback: { installed: false, writesEnabled: false, capabilities: { canCreateNote: false, canCreatePeer: false, peerCreateReason: null, peerSubjects: [] }, myNotes: [] },
     },
   });
   await disabled.coordinator.loadResults(game.id);
@@ -828,6 +828,8 @@ test('note subject selector prefers roster over nonempty narrower peerSubjects',
       myNotes: [],
       capabilities: {
         canCreateNote: true,
+        canCreatePeer: false,
+        peerCreateReason: null,
         peerSubjects: [{ contextId: peerOnly, displayName: 'Только peer' }],
       },
     },

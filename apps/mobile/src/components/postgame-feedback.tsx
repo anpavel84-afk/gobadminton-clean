@@ -31,9 +31,9 @@ function useBlocked() {
 }
 
 function ReviewCard({
-  gameId, review, otherGame,
+  review, otherGame,
 }: {
-  gameId: string; review: PrivateReview; otherGame?: boolean;
+  review: PrivateReview; otherGame?: boolean;
 }) {
   const { owner, s } = useOwner();
   const blocked = useBlocked();
@@ -283,14 +283,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         retry={() => void owner.loadReviews('received')}
         empty={received.status === 'ready' && receivedPeer.length === 0}
         emptyText={peerHistoryEmptyText('received', received.data?.nextCursor)} />
-      {receivedPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} />)}
+      {receivedPeer.map(review => <ReviewCard key={review.id} review={review} />)}
       {received.status === 'ready' && received.data?.nextCursor ? (
         <TextButton title="Ещё полученные" onPress={() => void owner.loadReviews('received', true)} />
       ) : null}
       {historyReceivedOther.length ? <>
         <Label style={{ fontWeight: '700' }}>Другие игры</Label>
         {historyReceivedOther.map(review => (
-          <ReviewCard key={review.id} gameId={gameId} review={review} otherGame />
+          <ReviewCard key={review.id} review={review} otherGame />
         ))}
       </> : null}
     </> : null}
@@ -300,14 +300,14 @@ export function FeedbackSection({ gameId, data }: { gameId: string; data?: Resul
         retry={() => void owner.loadReviews('sent')}
         empty={sent.status === 'ready' && sentPeer.length === 0}
         emptyText={peerHistoryEmptyText('sent', sent.data?.nextCursor)} />
-      {sentPeer.map(review => <ReviewCard key={review.id} gameId={gameId} review={review} />)}
+      {sentPeer.map(review => <ReviewCard key={review.id} review={review} />)}
       {sent.status === 'ready' && sent.data?.nextCursor ? (
         <TextButton title="Ещё отправленные" onPress={() => void owner.loadReviews('sent', true)} />
       ) : null}
       {historySentOther.length ? <>
         <Label style={{ fontWeight: '700' }}>Другие игры</Label>
         {historySentOther.map(review => (
-          <ReviewCard key={review.id} gameId={gameId} review={review} otherGame />
+          <ReviewCard key={review.id} review={review} otherGame />
         ))}
       </> : null}
     </> : null}

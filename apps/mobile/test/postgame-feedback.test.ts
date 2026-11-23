@@ -86,7 +86,7 @@ function setup(opts: {
       items: structuredClone(reviews[direction]),
       nextCursor: opts.reviews?.nextCursor ?? null,
     }),
-    send: async (p: Packet): Promise<unknown> => {
+    send: async (p: Packet, _authority?: Actor): Promise<unknown> => {
       sentPkts.push(p);
       if (p.kind === 'peer-create') {
         const row = peerReview({
@@ -163,7 +163,9 @@ test('wire peer create/reply/report and validate receipts; reply uses reply.vers
   });
   assert.deepEqual(wire(create), { method: 'POST', path: `/games/${game.id}/reviews`, body: create.body });
   const created = peerReview({ peerRating: 'neutral', comment: 'ok', tags: ['agreements'], version: 1 });
-  assert.equal(validateReceipt(created, create).kind, 'peer');
+  const createdReceipt = validateReceipt(created, create);
+  assert.ok('kind' in createdReceipt);
+  assert.equal(createdReceipt.kind, 'peer');
 
   const reply = packet({
     kind: 'peer-reply', gameId: game.id, reviewId: 'review-1',
@@ -299,7 +301,7 @@ test('coordinator: peer create requires canCreatePeer+subject; reply expectedVer
   r.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 2 });
   assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
   const originalSend = r.port.send;
-  r.port.send = async (p, a) => {
+  r.port.send = async (p: Packet, a?: Actor) => {
     if (p.kind === 'peer-report') {
       r.sentPkts.push(p);
       throw new PostgameError('business', 409, 'VERSION_CONFLICT');
@@ -350,7 +352,7 @@ test('mergeReviewPages is monotonic; UNKNOWN retry keeps original packet; reauth
   // Force UNKNOWN by failing send once.
   const originalSend = s.port.send;
   let fail = true;
-  s.port.send = async (p, a) => {
+  s.port.send = async (p: Packet, a?: Actor) => {
     if (fail) { fail = false; throw new PostgameError('network', 0); }
     return originalSend(p, a);
   };
