@@ -456,7 +456,7 @@ test('deferred withdraw ACK after newer typed GET keeps v4; same-actor UNKNOWN s
   };
   let ownPhase: 'v2' | 'v4' = 'v2';
   let releaseWithdraw!: (value: unknown) => void;
-  let withdrawPending = new Promise<unknown>(resolve => { releaseWithdraw = resolve; });
+  const withdrawPending = new Promise<unknown>(resolve => { releaseWithdraw = resolve; });
   let mode: 'defer' | 'unknown' | 'ack' = 'defer';
   const owner = new PostgameCoordinator({
     ...idlePort({
