@@ -44,12 +44,14 @@ import {
   publicRoleReviewText,
   replyConsentPreviewBody,
   retireOwnPublicReviewText,
+  samePublicReaderOrigin,
   type OwnEligibility,
   type OwnPublicRoleReview,
   type OwnPublicRoleReviewsPage,
   type PublicRoleAuthorTarget,
   type PublicRoleDraft,
   type PublicRoleMutationReceipt,
+  type PublicRoleReaderOrigin,
   type PublicRoleReaderTarget,
   type PublicRoleReplyDraft,
   type PublicRoleReplyReceipt,
@@ -61,6 +63,20 @@ import {
   type ActorAwareRoleReputationSummary,
   type ActorAwarePublicRoleReviewItem,
 } from './role-reputation.ts';
+type PublicMutationBind = {
+  surfaceGen: number;
+  actorId: string;
+  sessionId: string;
+  roleHandle: string;
+  role: string;
+  gameId: string;
+  editor: string;
+  kind: 'public-role-create' | 'public-role-command' | 'public-role-reply' | 'public-role-report';
+  reviewId?: string;
+  reviewHandle?: string;
+  /** Captured at reply/report dispatch — replacement origin cannot inherit ACK/notice authority. */
+  origin?: PublicRoleReaderOrigin;
+};
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate' | 'invites';
 export type InvitationPage = { items: GameInvitation[]; nextCursor: string | null };
@@ -273,7 +289,12 @@ function freezeIntent(intent: Intent): Intent {
 export class PostgameCoordinator {
   private snapshot = empty(null);
   private listeners = new Set<() => void>();
-  private quarantine: { actorId: string; snapshot: Snapshot } | null = null;
+  private quarantine: {
+    actorId: string;
+    snapshot: Snapshot;
+    /** Original dispatch ownership — never rebuilt from a replacement surface after reopen. */
+    publicMutationBind: PublicMutationBind;
+  } | null = null;
   private serial = 0;
   private reads = new Map<string,number>();
   private seenOwn = new Set<string>();
@@ -323,18 +344,7 @@ export class PostgameCoordinator {
   private publicSurfaceGen = 0;
   /** Captured at public mutate dispatch; journal still settles once even when UI gen no longer matches. */
   private publicReaderGen = 0;
-  private publicMutationBind: {
-    surfaceGen: number;
-    actorId: string;
-    sessionId: string;
-    roleHandle: string;
-    role: string;
-    gameId: string;
-    editor: string;
-    kind: 'public-role-create' | 'public-role-command' | 'public-role-reply' | 'public-role-report';
-    reviewId?: string;
-    reviewHandle?: string;
-  } | null = null;
+  private publicMutationBind: PublicMutationBind | null = null;
   /** Per-review monotonic version floor — stale GET cannot regress after newer ACK/GET. */
   private publicOwnVersionFloor = new Map<string, number>();
   /** After withdraw ACK: only typed own GET may reestablish non-terminal projection. */
@@ -363,8 +373,16 @@ export class PostgameCoordinator {
   private show(patch: Partial<Snapshot>) { this.snapshot={...this.snapshot,...patch}; this.listeners.forEach(fn=>fn()); }
   setActor(actor: Actor | null) {
     if (sameActor(actor,this.snapshot.actor) || !actor && !this.snapshot.actor) return;
-    if (this.snapshot.actor) this.quarantine={actorId:this.snapshot.actor.actorId,snapshot:this.snapshot};
-    const saved=actor && this.quarantine?.actorId === actor.actorId ? this.quarantine.snapshot : null;
+    if (this.snapshot.actor) {
+      this.quarantine = {
+        actorId: this.snapshot.actor.actorId,
+        snapshot: this.snapshot,
+        publicMutationBind: this.publicMutationBind,
+      };
+    }
+    const parked = actor && this.quarantine?.actorId === actor.actorId ? this.quarantine : null;
+    const saved = parked?.snapshot ?? null;
+    const savedBind = parked?.publicMutationBind ?? null;
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     if (actor) this.quarantine=null;
     this.reads.clear(); this.seenOwn.clear(); this.seenInvites.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
@@ -456,62 +474,33 @@ export class PostgameCoordinator {
         ? { ...pendingReader, origin: { ...pendingReader.origin } }
         : null,
     });
-    // Same-actor reauth may retry original UNKNOWN packet — rebind UI generation to restored surface.
-    if (actor && saved?.command) {
+    // Same-actor reauth: restore original dispatch bind only — never invent ACK authority from a replacement surface.
+    // Rebind session + surfaceGen only when the originally owned surface was still current at quarantine.
+    if (actor && saved?.command && isPublicRolePacketKind(saved.command.packet.kind) && savedBind
+      && savedBind.kind === saved.command.packet.kind
+      && savedBind.actorId === actor.actorId
+      && savedBind.actorId === saved.command.packet.actor.actorId) {
       const packet = saved.command.packet;
-      // Explicit discriminant narrow — type predicate on .kind alone does not narrow Packet.
-      if (packet.kind === 'public-role-create') {
+      const handleOk = (
+        (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report')
+          ? savedBind.reviewHandle === packet.reviewHandle
+          : packet.kind === 'public-role-command'
+            ? savedBind.reviewId === packet.reviewId
+            : true
+      );
+      if (handleOk) {
+        const ownedStillCurrent = !!saved.publicSurface
+          && savedBind.surfaceGen === saved.publicSurface.gen
+          && this.publicMutationSurfaceMatches(saved.publicSurface, savedBind);
         this.publicMutationBind = {
-          surfaceGen: this.publicSurfaceGen,
-          actorId: actor.actorId,
+          ...savedBind,
+          origin: savedBind.origin
+            ? (savedBind.origin.kind === 'game'
+              ? { kind: 'game', gameId: savedBind.origin.gameId }
+              : { kind: 'profile', publicPlayerId: savedBind.origin.publicPlayerId })
+            : undefined,
           sessionId: actor.sessionId,
-          roleHandle: packet.roleHandle,
-          role: packet.body.role,
-          gameId: packet.gameId,
-          editor: saved.publicDraft && saved.publicSurface?.target
-            ? draftEditorKey(
-              { ...saved.publicDraft, consent: false },
-              saved.publicSurface.target.roleHandle,
-              saved.publicSurface.target.role,
-            )
-            : '',
-          kind: 'public-role-create',
-        };
-      } else if (packet.kind === 'public-role-command') {
-        this.publicMutationBind = {
-          surfaceGen: this.publicSurfaceGen,
-          actorId: actor.actorId,
-          sessionId: actor.sessionId,
-          roleHandle: 'own',
-          role: saved.publicSurface?.target?.role ?? '',
-          gameId: packet.gameId,
-          editor: `withdraw:${packet.reviewId}`,
-          kind: 'public-role-command',
-          reviewId: packet.reviewId,
-        };
-      } else if (packet.kind === 'public-role-reply') {
-        this.publicMutationBind = {
-          surfaceGen: this.publicSurfaceGen,
-          actorId: actor.actorId,
-          sessionId: actor.sessionId,
-          roleHandle: saved.publicSurface?.reader?.roleHandle ?? '',
-          role: saved.publicSurface?.reader?.role ?? '',
-          gameId: packet.gameId,
-          editor: `reply:${packet.reviewHandle}:${packet.body.expectedVersion}`,
-          kind: 'public-role-reply',
-          reviewHandle: packet.reviewHandle,
-        };
-      } else if (packet.kind === 'public-role-report') {
-        this.publicMutationBind = {
-          surfaceGen: this.publicSurfaceGen,
-          actorId: actor.actorId,
-          sessionId: actor.sessionId,
-          roleHandle: saved.publicSurface?.reader?.roleHandle ?? '',
-          role: saved.publicSurface?.reader?.role ?? '',
-          gameId: packet.gameId,
-          editor: `report:${packet.reviewHandle}:${packet.body.expectedRevision}`,
-          kind: 'public-role-report',
-          reviewHandle: packet.reviewHandle,
+          surfaceGen: ownedStillCurrent ? this.publicSurfaceGen : savedBind.surfaceGen,
         };
       }
     }
@@ -1741,6 +1730,7 @@ export class PostgameCoordinator {
       await this.submitPublicRole(intent, {
         surfaceGen, editor, roleHandle: liveReader.roleHandle, role: liveReader.role,
         gameId: this.readerGameBind(liveReader), reviewHandle: liveItem.reviewHandle,
+        origin: liveReader.origin,
       });
     } catch (error) {
       if (previewGen !== this.publicPreviewGen || surfaceGen !== this.publicSurfaceGen || !sameActor(actor, this.snapshot.actor)) return;
@@ -1808,6 +1798,7 @@ export class PostgameCoordinator {
     await this.submitPublicRole(intent, {
       surfaceGen, editor, roleHandle: reader.roleHandle, role: reader.role,
       gameId: this.readerGameBind(reader), reviewHandle: item.reviewHandle,
+      origin: reader.origin,
     });
   };
   patchPublicDraft = (patch: Partial<PublicRoleDraft>) => {
@@ -2127,7 +2118,7 @@ export class PostgameCoordinator {
     }>,
     bind?: {
       surfaceGen: number; editor: string; roleHandle: string; role: string; gameId: string;
-      reviewId?: string; reviewHandle?: string;
+      reviewId?: string; reviewHandle?: string; origin?: PublicRoleReaderOrigin;
     },
   ) => {
     const actor = this.snapshot.actor;
@@ -2141,6 +2132,12 @@ export class PostgameCoordinator {
         actor: Object.freeze({ ...actor }),
         key: this.random(),
       }) as Packet;
+      const origin = bind?.origin
+        ?? ((intent.kind === 'public-role-reply' || intent.kind === 'public-role-report')
+          && this.snapshot.publicSurface?.mode === 'reader'
+          && this.snapshot.publicSurface.reader
+          ? this.snapshot.publicSurface.reader.origin
+          : undefined);
       this.publicMutationBind = {
         surfaceGen: bind?.surfaceGen ?? this.publicSurfaceGen,
         actorId: actor.actorId,
@@ -2156,6 +2153,13 @@ export class PostgameCoordinator {
           : (intent.kind === 'public-role-reply' || intent.kind === 'public-role-report')
             ? { reviewHandle: intent.reviewHandle }
             : {}),
+        ...(origin
+          ? {
+            origin: origin.kind === 'game'
+              ? { kind: 'game' as const, gameId: origin.gameId }
+              : { kind: 'profile' as const, publicPlayerId: origin.publicPlayerId },
+          }
+          : {}),
       };
       await this.dispatch(packet, actor, false);
     } catch {
@@ -2163,6 +2167,27 @@ export class PostgameCoordinator {
       this.show({ publicNotice: 'Проверьте выбранные данные и обновите допуск.' });
     }
   };
+  /** Whether the live surface still matches the original dispatch ownership (gen checked separately). */
+  private publicMutationSurfaceMatches(
+    surface: NonNullable<Snapshot['publicSurface']>,
+    bind: PublicMutationBind,
+  ): boolean {
+    if (bind.kind === 'public-role-create') {
+      return surface.mode === 'composer' && !!surface.target
+        && surface.target.roleHandle === bind.roleHandle
+        && surface.target.role === bind.role;
+    }
+    if (bind.kind === 'public-role-command') {
+      return surface.mode === 'history';
+    }
+    if (bind.kind === 'public-role-reply' || bind.kind === 'public-role-report') {
+      if (surface.mode !== 'reader' || !surface.reader) return false;
+      if (surface.reader.roleHandle !== bind.roleHandle || surface.reader.role !== bind.role) return false;
+      if (bind.origin && !samePublicReaderOrigin(surface.reader.origin, bind.origin)) return false;
+      return true;
+    }
+    return false;
+  }
   private publicMutationUiCurrent(packet: Packet): boolean {
     const bind = this.publicMutationBind;
     const actor = this.snapshot.actor;
@@ -2172,7 +2197,8 @@ export class PostgameCoordinator {
     if (bind.sessionId !== actor.sessionId) return false;
     if (bind.surfaceGen !== this.publicSurfaceGen) return false;
     const surface = this.snapshot.publicSurface;
-    if (!surface) return false;
+    if (!surface || surface.gen !== bind.surfaceGen) return false;
+    if (!this.publicMutationSurfaceMatches(surface, bind)) return false;
     if (packet.kind === 'public-role-create') {
       if (surface.mode !== 'composer' || !surface.target) return false;
       if (packet.roleHandle !== surface.target.roleHandle || packet.body.role !== surface.target.role) return false;
@@ -2188,12 +2214,10 @@ export class PostgameCoordinator {
       return true;
     }
     if (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report') {
-      if (surface.mode !== 'reader' || !surface.reader) return false;
-      if (surface.reader.roleHandle !== bind.roleHandle || surface.reader.role !== bind.role) return false;
       if (packet.reviewHandle !== bind.reviewHandle) return false;
       return true;
     }
-    return surface.mode === 'history';
+    return true;
   }
   reconcilePublic = async () => {
     const { actor, command } = this.snapshot;
@@ -2693,27 +2717,29 @@ export class PostgameCoordinator {
       // Dirty note/feedback drafts retained on conflict/UNKNOWN; competing writes stay blocked while UNKNOWN.
       // Preserve original owned-packet discrepancy fingerprint across UNKNOWN for reconcile.
       // Public 409/422 retain draft and require reread/reconsent; private CommandReview notice stays unset for public kinds.
+      // Journal settles once; notice/hash/preview/follow-up GET only on original dispatch surface+origin.
       if (isPublicRolePacketKind(packet.kind)) {
-        this.publicPreviewGen++;
+        const paintUi = this.publicMutationUiCurrent(packet);
         if (definite) this.publicMutationBind = null;
-        const paintNotice = definite || this.publicMutationUiCurrent(packet) || !this.snapshot.publicSurface
-          || (this.snapshot.command?.packet.key === packet.key);
+        if (paintUi) this.publicPreviewGen++;
         this.show({
           command: definite ? null : {
             packet,
             status: 'unknown',
           },
           notice: null,
-          publicConsentHash: definite ? null : this.snapshot.publicConsentHash,
-          publicNotice: paintNotice ? notice : this.snapshot.publicNotice,
+          ...(paintUi ? {
+            publicConsentHash: definite ? null : this.snapshot.publicConsentHash,
+            publicNotice: notice,
+          } : {}),
         });
-        if (publicBusiness && packet.kind === 'public-role-create') {
+        if (paintUi && publicBusiness && packet.kind === 'public-role-create') {
           void this.loadPublicEligibility({ preserveNotice: true });
         }
-        if (publicBusiness && packet.kind === 'public-role-command') {
+        if (paintUi && publicBusiness && packet.kind === 'public-role-command') {
           void this.loadOwnPublicReviews({ preserveNotice: true });
         }
-        if (publicBusiness && (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report')) {
+        if (paintUi && publicBusiness && (packet.kind === 'public-role-reply' || packet.kind === 'public-role-report')) {
           void this.loadPublicReader({ preserveNotice: true });
         }
       } else {

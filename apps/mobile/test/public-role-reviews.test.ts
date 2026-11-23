@@ -29,10 +29,13 @@ import {
   parsePublicRoleMutationReceipt,
   publicAuthorReturnPath,
   publicRoleBusinessNotice,
+  publicRoleReplyBusinessNotice,
+  publicRoleReportBusinessNotice,
   publicRoleReviewText,
   publicRoleStatusLabel,
   publicRoleTopics,
   rememberPublicRoleFocusTarget,
+  samePublicReaderOrigin,
   subjectOwnReplyLabel,
   usableOwnRoleHandle,
   PublicRoleError,
@@ -2907,4 +2910,470 @@ test('#522 address8: report receipt revision-bound — ACK then GET N→N+1 reti
   assert.equal(ownerB.getSnapshot().publicReportDraft?.explanation, 'Черновик на v2');
   assert.equal(ownerB.getSnapshot().command, null);
   assert.equal(ownerB.getSnapshot().publicReader.data?.items[0]?.allowedActions.canReport, true);
+});
+
+test('samePublicReaderOrigin distinguishes game vs profile and ids', () => {
+  assert.equal(
+    samePublicReaderOrigin({ kind: 'game', gameId }, { kind: 'game', gameId }),
+    true,
+  );
+  assert.equal(
+    samePublicReaderOrigin({ kind: 'game', gameId }, { kind: 'game', gameId: gameB }),
+    false,
+  );
+  assert.equal(
+    samePublicReaderOrigin(
+      { kind: 'profile', publicPlayerId: 'public-peer-a' },
+      { kind: 'profile', publicPlayerId: 'public-peer-a' },
+    ),
+    true,
+  );
+  assert.equal(
+    samePublicReaderOrigin(
+      { kind: 'game', gameId },
+      { kind: 'profile', publicPlayerId: 'public-peer-a' },
+    ),
+    false,
+  );
+});
+
+test('#522 address10: deferred reply/report 409 on A does not paint or refresh B; same A still notices', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const item = {
+    reviewHandle,
+    role: 'organization' as const,
+    text: 'Текст',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision: 1,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: null as null | { status: string; version: number; pendingRevision: number | null },
+    allowedActions: { canReport: true, canReply: true },
+  };
+  const pageBody = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'q'.repeat(32),
+    items: [item],
+    nextCursor: 'cursor-a' as string | null,
+    availability: 'available',
+  };
+  const conflictReply = publicRoleReplyBusinessNotice('VERSION_CONFLICT');
+  const conflictReport = publicRoleReportBusinessNotice('VERSION_CONFLICT');
+
+  // --- Reply: deferred 409 after A→B (same roleHandle, game→profile) ---
+  let releaseReply: (err: unknown) => void = () => {};
+  const replyGate = new Promise((_, reject) => { releaseReply = reject; });
+  let replyGets = 0;
+  const ownerReply = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async (_a, _h, query) => {
+        replyGets += 1;
+        if (query.cursor) {
+          return {
+            ...pageBody,
+            items: [{ ...item, reviewHandle: 'e'.repeat(32) }],
+            nextCursor: null,
+          };
+        }
+        return { ...pageBody };
+      },
+      publicConsentPreview: async () => ({ consentProjectionHash: 'c'.repeat(64) }),
+      send: async () => replyGate,
+    }),
+  }, () => 'addr10-reply-409');
+  ownerReply.setActor(actor);
+  ownerReply.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  await ownerReply.loadPublicReader({ cursor: 'cursor-a', append: true });
+  await tick();
+  assert.equal(ownerReply.getSnapshot().publicReader.data?.items.length, 2);
+  assert.equal(ownerReply.getSnapshot().publicReader.data?.nextCursor, null);
+  const getsAfterAppend = replyGets;
+  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Ответ A', consent: true });
+  const replySubmit = ownerReply.submitPublicReply(reviewHandle);
+  for (let i = 0; i < 20 && !ownerReply.getSnapshot().command; i++) await tick();
+  assert.equal(ownerReply.getSnapshot().command?.packet.kind, 'public-role-reply');
+  const replyHash = ownerReply.getSnapshot().publicConsentHash;
+  assert.ok(replyHash);
+
+  ownerReply.closePublicSurface();
+  ownerReply.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  });
+  await tick();
+  await ownerReply.loadPublicReader({ cursor: 'cursor-a', append: true });
+  await tick();
+  const getsOnB = replyGets;
+  ownerReply.patchPublicReplyDraft(reviewHandle, { text: 'Черновик B', consent: true });
+  // Drive a consent hash on B so rejection must not clear it.
+  // Preview path needs canReply; use patch only — hash stays null until preview; seed via submit gate already open.
+  assert.equal(ownerReply.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик B');
+  const bRows = ownerReply.getSnapshot().publicReader.data?.items.length;
+  const bCursor = ownerReply.getSnapshot().publicReader.data?.nextCursor;
+
+  releaseReply(new PostgameError('business', 409, 'VERSION_CONFLICT'));
+  await replySubmit.catch(() => {});
+  await tick();
+  await tick();
+  // Journal settled; B must not inherit A's notice/refresh/hash wipe.
+  assert.equal(ownerReply.getSnapshot().command, null);
+  assert.notEqual(ownerReply.getSnapshot().publicNotice, conflictReply);
+  assert.equal(ownerReply.getSnapshot().publicReader.data?.items.length, bRows);
+  assert.equal(ownerReply.getSnapshot().publicReader.data?.nextCursor, bCursor);
+  assert.equal(ownerReply.getSnapshot().publicReplyDrafts[reviewHandle]?.text, 'Черновик B');
+  assert.equal(replyGets, getsOnB); // no rejection follow-up GET on B
+  assert.ok(getsOnB > getsAfterAppend);
+
+  // Same original game surface: deferred 409 paints notice and rereads.
+  let releaseStay: (err: unknown) => void = () => {};
+  const stayGate = new Promise((_, reject) => { releaseStay = reject; });
+  let stayGets = 0;
+  const ownerStay = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => {
+        stayGets += 1;
+        return { ...pageBody, nextCursor: null };
+      },
+      publicConsentPreview: async () => ({ consentProjectionHash: 'd'.repeat(64) }),
+      send: async () => stayGate,
+    }),
+  }, () => 'addr10-reply-stay');
+  ownerStay.setActor(actor);
+  ownerStay.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  const getsReady = stayGets;
+  ownerStay.patchPublicReplyDraft(reviewHandle, { text: 'Остаёмся', consent: true });
+  const staySubmit = ownerStay.submitPublicReply(reviewHandle);
+  for (let i = 0; i < 20 && !ownerStay.getSnapshot().command; i++) await tick();
+  releaseStay(new PostgameError('business', 409, 'VERSION_CONFLICT'));
+  await staySubmit.catch(() => {});
+  await tick();
+  await tick();
+  assert.equal(ownerStay.getSnapshot().command, null);
+  assert.equal(ownerStay.getSnapshot().publicNotice, conflictReply);
+  assert.equal(ownerStay.getSnapshot().publicConsentHash, null);
+  assert.ok(stayGets > getsReady); // permission reread on original surface
+
+  // --- Report: deferred 409 after A→B ---
+  let releaseReport: (err: unknown) => void = () => {};
+  const reportGate = new Promise((_, reject) => { releaseReport = reject; });
+  let reportGets = 0;
+  const ownerReport = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async (_a, _h, query) => {
+        reportGets += 1;
+        if (query.cursor) {
+          return {
+            ...pageBody,
+            items: [{ ...item, reviewHandle: 'f'.repeat(32) }],
+            nextCursor: null,
+          };
+        }
+        return { ...pageBody };
+      },
+      send: async () => reportGate,
+    }),
+  }, () => 'addr10-report-409');
+  ownerReport.setActor(actor);
+  ownerReport.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  await ownerReport.loadPublicReader({ cursor: 'cursor-a', append: true });
+  await tick();
+  ownerReport.beginPublicReport(item);
+  ownerReport.patchPublicReportDraft({ reasonCode: 'spam', explanation: 'A report' });
+  const reportSubmit = ownerReport.submitPublicReport();
+  for (let i = 0; i < 20 && !ownerReport.getSnapshot().command; i++) await tick();
+  assert.equal(ownerReport.getSnapshot().command?.packet.kind, 'public-role-report');
+
+  ownerReport.closePublicSurface();
+  ownerReport.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-b' },
+  });
+  await tick();
+  await ownerReport.loadPublicReader({ cursor: 'cursor-a', append: true });
+  await tick();
+  const reportGetsOnB = reportGets;
+  ownerReport.beginPublicReport(item);
+  ownerReport.patchPublicReportDraft({ reasonCode: 'other', explanation: 'B draft' });
+  const reportRows = ownerReport.getSnapshot().publicReader.data?.items.length;
+
+  releaseReport(new PostgameError('business', 409, 'VERSION_CONFLICT'));
+  await reportSubmit.catch(() => {});
+  await tick();
+  await tick();
+  assert.equal(ownerReport.getSnapshot().command, null);
+  assert.notEqual(ownerReport.getSnapshot().publicNotice, conflictReport);
+  assert.equal(ownerReport.getSnapshot().publicReader.data?.items.length, reportRows);
+  assert.equal(ownerReport.getSnapshot().publicReportDraft?.explanation, 'B draft');
+  assert.equal(reportGets, reportGetsOnB);
+});
+
+test('#522 address10: UNKNOWN quarantine keeps original bind; PROFILE reopen cannot inherit ACK', async () => {
+  const reviewHandle = 'd'.repeat(32);
+  const item = {
+    reviewHandle,
+    role: 'organization' as const,
+    text: 'Текст',
+    topics: ['agreements'],
+    authorLabel: 'Участник игры' as const,
+    experienceState: 'published' as const,
+    publishedRevision: 2,
+    replyAggregateVersion: 0,
+    reply: null,
+    subjectOwnReply: null as null | { status: string; version: number; pendingRevision: number | null },
+    allowedActions: { canReport: true, canReply: true },
+  };
+  const page = {
+    roleHandle: handle,
+    role: 'organization',
+    subjectDisplayName: 'Org',
+    heldGamesCount: 1,
+    countScope: 'confirmed_history',
+    historyMayBeIncomplete: true,
+    publishedReviewCount: 1,
+    projectionVersion: 'q'.repeat(32),
+    items: [item],
+    nextCursor: null as string | null,
+    availability: 'available',
+  };
+
+  // Close/reopen PROFILE then null quarantine: reconcile settles journal but must not paint PROFILE.
+  const keys: string[] = [];
+  let mode: 'unknown' | 'ack' = 'unknown';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => page,
+      publicConsentPreview: async () => ({ consentProjectionHash: 'e'.repeat(64) }),
+      send: async (packet) => {
+        keys.push(packet.key);
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        if (packet.kind === 'public-role-reply') {
+          return { version: packet.body.expectedVersion + 1, status: 'submitted', receiptToken: 'ok' };
+        }
+        if (packet.kind === 'public-role-report') {
+          return {
+            reportId: '88888888-8888-4888-8888-888888888888',
+            receiptToken: 'rok',
+            status: 'submitted',
+          };
+        }
+        throw new PostgameError('invalid');
+      },
+    }),
+  }, () => `q-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  owner.patchPublicReplyDraft(reviewHandle, { text: 'UNKNOWN game', consent: true });
+  await owner.submitPublicReply(reviewHandle);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownPacket = owner.getSnapshot().command!.packet;
+  assert.equal(unknownPacket.kind, 'public-role-reply');
+  if (unknownPacket.kind !== 'public-role-reply') throw new Error('expected reply');
+  const frozen = {
+    key: unknownPacket.key,
+    method: unknownPacket.method,
+    path: unknownPacket.path,
+    body: { ...unknownPacket.body },
+    reviewHandle: unknownPacket.reviewHandle,
+    gameId: unknownPacket.gameId,
+    actorId: unknownPacket.actor.actorId,
+  };
+
+  owner.closePublicSurface();
+  owner.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-a' },
+  });
+  await tick();
+  // Identical-handle PROFILE must not own the old game dispatch.
+  owner.setActor(null);
+  owner.setActor({ ...actor, sessionId: 'session-reauth', generation: 2 });
+  await tick();
+  const restored = owner.getSnapshot().command;
+  assert.ok(restored);
+  assert.equal(restored.status, 'unknown');
+  assert.equal(restored.packet.kind, 'public-role-reply');
+  if (restored.packet.kind !== 'public-role-reply') throw new Error('expected reply');
+  assert.equal(restored.packet.key, frozen.key);
+  assert.equal(restored.packet.method, frozen.method);
+  assert.equal(restored.packet.path, frozen.path);
+  assert.equal(restored.packet.reviewHandle, frozen.reviewHandle);
+  assert.equal(restored.packet.gameId, frozen.gameId);
+  assert.equal(restored.packet.actor.actorId, frozen.actorId);
+  assert.deepEqual(restored.packet.body, frozen.body);
+  assert.equal(owner.getSnapshot().publicReplyReceipt, null);
+
+  mode = 'ack';
+  await owner.reconcilePublic();
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReplyReceipt, null);
+  assert.notEqual(owner.getSnapshot().publicNotice, 'Ответ принят.');
+  // Explicit reconcile used original key once more — no autosend before reconcile.
+  assert.equal(keys.filter(k => k === frozen.key).length, 2);
+
+  // Close/reopen identical game origin also keeps bind invalid across quarantine.
+  mode = 'unknown';
+  const ownerIdent = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => page,
+      publicConsentPreview: async () => ({ consentProjectionHash: 'f'.repeat(64) }),
+      send: async (packet) => {
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        return { version: packet.body.expectedVersion + 1, status: 'submitted', receiptToken: 'id' };
+      },
+    }),
+  }, () => 'ident-q');
+  ownerIdent.setActor(actor);
+  ownerIdent.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  ownerIdent.patchPublicReplyDraft(reviewHandle, { text: 'Ident', consent: true });
+  await ownerIdent.submitPublicReply(reviewHandle);
+  await tick();
+  ownerIdent.closePublicSurface();
+  ownerIdent.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  ownerIdent.setActor(null);
+  ownerIdent.setActor({ ...actor, sessionId: 'session-ident', generation: 2 });
+  await tick();
+  mode = 'ack';
+  await ownerIdent.reconcilePublic();
+  await tick();
+  assert.equal(ownerIdent.getSnapshot().command, null);
+  assert.equal(ownerIdent.getSnapshot().publicReplyReceipt, null);
+
+  // Legitimate same original still-open reader recovers new-session UI after fresh read.
+  mode = 'unknown';
+  const ownerLegit = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => page,
+      publicConsentPreview: async () => ({ consentProjectionHash: 'a'.repeat(64) }),
+      send: async (packet) => {
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        if (packet.kind === 'public-role-report') {
+          return {
+            reportId: '99999999-9999-4999-9999-999999999999',
+            receiptToken: 'legit-rep',
+            status: 'submitted',
+          };
+        }
+        return { version: packet.body.expectedVersion + 1, status: 'submitted', receiptToken: 'legit' };
+      },
+    }),
+  }, () => 'legit-q');
+  ownerLegit.setActor(actor);
+  ownerLegit.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  ownerLegit.patchPublicReplyDraft(reviewHandle, { text: 'Legit recover', consent: true });
+  await ownerLegit.submitPublicReply(reviewHandle);
+  await tick();
+  assert.equal(ownerLegit.getSnapshot().command?.status, 'unknown');
+  // Null quarantine while original game reader still current — then same-account fresh session.
+  ownerLegit.setActor(null);
+  ownerLegit.setActor({ ...actor, sessionId: 'session-legit', generation: 2 });
+  await tick();
+  assert.equal(ownerLegit.getSnapshot().publicSurface?.mode, 'reader');
+  assert.equal(ownerLegit.getSnapshot().publicSurface?.reader?.origin.kind, 'game');
+  mode = 'ack';
+  await ownerLegit.reconcilePublic();
+  await tick();
+  assert.equal(ownerLegit.getSnapshot().command, null);
+  assert.equal(ownerLegit.getSnapshot().publicReplyReceipt?.status, 'submitted');
+  assert.equal(ownerLegit.getSnapshot().publicNotice, 'Ответ принят.');
+
+  // Report UNKNOWN → PROFILE reopen → quarantine: no report receipt on replacement.
+  mode = 'unknown';
+  const ownerRep = new PostgameCoordinator({
+    ...idlePort({
+      publicRoleByHandle: async () => page,
+      send: async (packet) => {
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        return {
+          reportId: '77777777-7777-4777-8777-777777777777',
+          receiptToken: 'rep-q',
+          status: 'submitted',
+        };
+      },
+    }),
+  }, () => 'rep-q');
+  ownerRep.setActor(actor);
+  ownerRep.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'game', gameId },
+  });
+  await tick();
+  ownerRep.beginPublicReport(item);
+  ownerRep.patchPublicReportDraft({ reasonCode: 'threat', explanation: 'Game report' });
+  await ownerRep.submitPublicReport();
+  await tick();
+  const repPacket = ownerRep.getSnapshot().command!.packet;
+  assert.equal(repPacket.kind, 'public-role-report');
+  if (repPacket.kind !== 'public-role-report') throw new Error('expected report');
+  const repKey = repPacket.key;
+  const repBody = { ...repPacket.body };
+  ownerRep.closePublicSurface();
+  ownerRep.openPublicReader({
+    roleHandle: handle,
+    role: 'organization',
+    origin: { kind: 'profile', publicPlayerId: 'public-peer-z' },
+  });
+  await tick();
+  ownerRep.setActor(null);
+  ownerRep.setActor({ ...actor, sessionId: 'session-rep', generation: 2 });
+  await tick();
+  const after = ownerRep.getSnapshot().command!.packet;
+  assert.equal(after.kind, 'public-role-report');
+  if (after.kind !== 'public-role-report') throw new Error('expected report');
+  assert.equal(after.key, repKey);
+  assert.deepEqual(after.body, repBody);
+  mode = 'ack';
+  await ownerRep.reconcilePublic();
+  await tick();
+  assert.equal(ownerRep.getSnapshot().command, null);
+  assert.equal(ownerRep.getSnapshot().publicReportReceipt, null);
 });

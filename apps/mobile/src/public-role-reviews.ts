@@ -90,6 +90,17 @@ export type PublicRoleReaderOrigin =
   | { kind: 'game'; gameId: string }
   | { kind: 'profile'; publicPlayerId: string };
 
+/** Exact game/profile origin equality for dispatch-surface ownership fences. */
+export function samePublicReaderOrigin(
+  a: PublicRoleReaderOrigin,
+  b: PublicRoleReaderOrigin,
+): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'game' && b.kind === 'game') return a.gameId === b.gameId;
+  if (a.kind === 'profile' && b.kind === 'profile') return a.publicPlayerId === b.publicPlayerId;
+  return false;
+}
+
 export type PublicRoleReaderTarget = {
   roleHandle: string;
   role: RoleKind;
