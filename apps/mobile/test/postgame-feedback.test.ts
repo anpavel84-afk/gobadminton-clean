@@ -1025,3 +1025,207 @@ test('reverse parent/reply floor: both orders keep parent v2 and reply v2; conse
   assert.equal(forward?.reply?.version, 2);
   assert.equal(forward?.reply?.text, 'reply-v2');
 });
+
+test('Results raises independent reply onto history-owned same/lower parent; UI expectedVersion advances', async () => {
+  // History owns parent v1/reply v1; later Results same parent + reply v2 must raise reply only.
+  const v1Reply1 = peerReview({
+    id: 'recv-results-reply', direction: 'received', version: 1, comment: 'hist-v1',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [v1Reply1] } },
+    reviews: { received: [v1Reply1], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-results-reply']?.reply?.version, 1);
+  s.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: 'recv-results-reply', reportConsent: false, reportConsentVersion: 1, reportDetail: 'keep',
+  });
+  s.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 1 });
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+
+  const sameParentReply2 = peerReview({
+    id: 'recv-results-reply', direction: 'received', version: 1, comment: 'results-stale-comment',
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  });
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [sameParentReply2] },
+  });
+  await s.coordinator.loadResults(game.id);
+  const same = s.coordinator.getSnapshot().reviewsById['recv-results-reply'];
+  assert.equal(same?.version, 1);
+  assert.equal(same?.comment, 'hist-v1');
+  assert.equal(same?.allowedActions.canReply, true);
+  assert.equal(same?.allowedActions.canReport, true);
+  assert.equal(same?.reply?.version, 2);
+  assert.equal(same?.reply?.text, 'reply-v2');
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 1);
+  const sameUi = projectReviewsFromStore(
+    s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? [],
+    s.coordinator.getSnapshot().reviewsById,
+  );
+  assert.equal(sameUi.find(r => r.id === 'recv-results-reply')?.reply?.version, 2);
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-results-reply',
+    body: { expectedVersion: 1, text: 'stale after results reply v2' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review, null, 'expectedVersion:1 must not arm after Results reply v2');
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-results-reply',
+    body: { expectedVersion: 2, text: 'advance from Results reply floor 2' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-reply');
+  s.coordinator.cancelReview();
+
+  // History owns parent v2/reply v1; Results lower parent + reply v2 keeps parent v2 authority.
+  const v2Reply1 = peerReview({
+    id: 'recv-results-lower', direction: 'received', version: 2, comment: 'hist-v2',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const lower = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [v2Reply1] } },
+    reviews: { received: [v2Reply1], sent: [] },
+  });
+  await lower.coordinator.loadResults(game.id);
+  await lower.coordinator.loadReviews('received');
+  lower.coordinator.setFeedbackDraft(game.id, {
+    reportReviewId: 'recv-results-lower', reportConsent: false, reportConsentVersion: 2, reportDetail: 'keep-v2',
+  });
+  lower.coordinator.setFeedbackDraft(game.id, { reportConsent: true, reportConsentVersion: 2 });
+  const lowerParentReply2 = peerReview({
+    id: 'recv-results-lower', direction: 'received', version: 1, comment: 'results-old-parent',
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  });
+  lower.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [lowerParentReply2] },
+  });
+  await lower.coordinator.loadResults(game.id);
+  const kept = lower.coordinator.getSnapshot().reviewsById['recv-results-lower'];
+  assert.equal(kept?.version, 2);
+  assert.equal(kept?.comment, 'hist-v2');
+  assert.equal(kept?.allowedActions.canReply, true);
+  assert.equal(kept?.allowedActions.canReport, true);
+  assert.equal(kept?.reply?.version, 2);
+  assert.equal(kept?.reply?.text, 'reply-v2');
+  assert.equal(lower.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsent, true);
+  assert.equal(lower.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 2);
+  const lowerUi = projectReviewsFromStore(
+    lower.coordinator.getSnapshot().reviewHistory.received.data?.items ?? [],
+    lower.coordinator.getSnapshot().reviewsById,
+  );
+  assert.equal(lowerUi.find(r => r.id === 'recv-results-lower')?.reply?.version, 2);
+  assert.equal(lowerUi.find(r => r.id === 'recv-results-lower')?.comment, 'hist-v2');
+  lower.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-results-lower',
+    body: { expectedVersion: 1, text: 'stale lower-parent reply floor' },
+  });
+  assert.equal(lower.coordinator.getSnapshot().review, null);
+  lower.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-results-lower',
+    body: { expectedVersion: 2, text: 'advance from lower-parent Results reply v2' },
+  });
+  assert.equal(lower.coordinator.getSnapshot().review?.kind, 'peer-reply');
+});
+
+test('Results cannot raise reply after harddeny or while awaiting typed history', async () => {
+  const row = peerReview({
+    id: 'recv-fence-reply', direction: 'received', version: 1, comment: 'hist',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const denied = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await denied.coordinator.loadResults(game.id);
+  await denied.coordinator.loadReviews('received');
+  denied.port.reviews = async () => { throw new PostgameError('private', 403); };
+  await denied.coordinator.loadReviews('received');
+  assert.equal(denied.coordinator.getSnapshot().reviewHistory.received.status, 'unavailable');
+  assert.equal(denied.coordinator.getSnapshot().reviewsById[row.id], undefined);
+
+  const resurrect = peerReview({
+    id: 'recv-fence-reply', direction: 'received', version: 1, comment: 'results-resurrect',
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  denied.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [resurrect] },
+  });
+  await denied.coordinator.loadResults(game.id);
+  assert.equal(
+    denied.coordinator.getSnapshot().reviewsById[row.id],
+    undefined,
+    'Results reply v2 must not resurrect after hard deny',
+  );
+
+  // Awaiting typed history after reply ACK: Results must not raise reply onto pending store.
+  const awaiting = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await awaiting.coordinator.loadResults(game.id);
+  await awaiting.coordinator.loadReviews('received');
+  awaiting.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: row.id,
+    body: { expectedVersion: 1, text: 'ack reply v2' },
+  });
+  assert.equal(awaiting.coordinator.getSnapshot().review?.kind, 'peer-reply');
+
+  let resolveAck!: (value: unknown) => void;
+  const ackFlight = new Promise<unknown>(r => { resolveAck = r; });
+  const originalSend = awaiting.port.send;
+  awaiting.port.send = async (p: Packet, a?: Actor) => {
+    awaiting.sentPkts.push(p);
+    if (p.kind === 'peer-reply') return ackFlight;
+    return originalSend(p, a);
+  };
+  let resolveTyped!: (value: { items: PrivateReview[]; nextCursor: null }) => void;
+  const typedFlight = new Promise<{ items: PrivateReview[]; nextCursor: null }>(r => { resolveTyped = r; });
+  awaiting.port.reviews = () => typedFlight;
+  const confirmFlight = awaiting.coordinator.confirm();
+  const receipt = {
+    ...row,
+    reply: { text: 'ack reply v2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  };
+  resolveAck(receipt);
+  await confirmFlight;
+  assert.equal(awaiting.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 2);
+  assert.equal(awaiting.coordinator.getSnapshot().reviewHistory.received.status, 'loading');
+
+  const resultsWhileAwaiting = peerReview({
+    id: 'recv-fence-reply', direction: 'received', version: 1, comment: 'results-while-awaiting',
+    reply: { text: 'reply-v3-from-results', version: 3, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  });
+  awaiting.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [resultsWhileAwaiting] },
+  });
+  await awaiting.coordinator.loadResults(game.id);
+  const pending = awaiting.coordinator.getSnapshot().reviewsById[row.id];
+  assert.equal(pending?.comment, 'hist', 'Results must not adopt parent while awaiting typed');
+  assert.equal(pending?.reply?.version, 2, 'Results must not raise reply while awaiting typed');
+  assert.equal(pending?.allowedActions.canReply, false, 'receipt ACK strips writes until typed history');
+
+  resolveTyped({ items: [receipt], nextCursor: null });
+  for (let i = 0; i < 50 && awaiting.coordinator.getSnapshot().reviewHistory.received.status === 'loading'; i++) {
+    await new Promise<void>(res => setImmediate(res));
+  }
+  assert.equal(awaiting.coordinator.getSnapshot().reviewHistory.received.status, 'ready');
+  assert.equal(awaiting.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 2);
+});

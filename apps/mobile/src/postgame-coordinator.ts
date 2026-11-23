@@ -621,6 +621,42 @@ export class PostgameCoordinator {
     if (changed) this.show({ feedbackDrafts: drafts });
   }
   /**
+   * Raise a strictly newer independent reply onto the kept current parent.
+   * Never adopts stale parent comment/rights/direction/game/consent/read-gen from the projection.
+   * Receipt still settles ACK-safe (strip writes, await typed); history clears awaiting and marks owned.
+   * Results leave parent authority/consent/ownership fences unchanged aside from the reply floor.
+   */
+  private applyNewerReplyOntoKeptParent(
+    byId: Record<string, PrivateReview>,
+    row: PrivateReview,
+    prior: PrivateReview,
+    replyVer: number,
+    replyFloor: number,
+    source: 'results' | 'history' | 'receipt',
+  ): boolean {
+    if (!row.reply || replyVer <= replyFloor) return false;
+    let next: PrivateReview = { ...prior, reply: row.reply };
+    if (source === 'receipt') {
+      next = {
+        ...next,
+        allowedActions: {
+          canEdit: false,
+          canReply: false,
+          canReport: next.allowedActions.canReport,
+        },
+      };
+      this.reviewAwaitingTyped.add(row.id);
+      this.reviewHistoryOwned.delete(row.id);
+    }
+    if (source === 'history') {
+      this.reviewAwaitingTyped.delete(row.id);
+      this.reviewHistoryOwned.add(row.id);
+    }
+    byId[row.id] = next;
+    this.replyVersionFloor.set(row.id, replyVer);
+    return true;
+  }
+  /**
    * Monotonic typed review store — version + read-gen authority.
    * Only typed history restores private projection after hard deny; results/receipts cannot
    * resurrect while denied or (results) while awaiting typed GET. Receipt ACK is display-only
@@ -640,33 +676,20 @@ export class PostgameCoordinator {
       const replyVer = row.reply?.version ?? 0;
       if (row.version < floor) {
         // Older parent must not regress content/permissions/read-gen/consent.
-        // Typed history/receipt may still raise the independent reply floor onto the kept parent.
-        if ((source === 'history' || source === 'receipt') && prior && replyVer > replyFloor && row.reply) {
-          let next: PrivateReview = { ...prior, reply: row.reply };
-          if (source === 'receipt') {
-            next = {
-              ...next,
-              allowedActions: {
-                canEdit: false,
-                canReply: false,
-                canReport: next.allowedActions.canReport,
-              },
-            };
-            this.reviewAwaitingTyped.add(row.id);
-            this.reviewHistoryOwned.delete(row.id);
-          }
-          if (source === 'history') {
-            this.reviewAwaitingTyped.delete(row.id);
-            this.reviewHistoryOwned.add(row.id);
-          }
-          byId[row.id] = next;
-          this.replyVersionFloor.set(row.id, replyVer);
+        // Any legitimate typed read (history/receipt/Results) may still raise reply onto kept parent.
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source)) {
           changed = true;
         }
         continue;
       }
       // Typed history owns the current floor — later results cannot same-version regress rights/text.
-      if (source === 'results' && this.reviewHistoryOwned.has(row.id) && row.version <= floor) continue;
+      // Strictly newer independent reply may still raise onto the kept parent (reply-only).
+      if (source === 'results' && this.reviewHistoryOwned.has(row.id) && row.version <= floor) {
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source)) {
+          changed = true;
+        }
+        continue;
+      }
       const applied = this.reviewAppliedGen.get(row.id) ?? 0;
       if (row.version === floor && gen < applied) continue;
       let next: PrivateReview = row;
