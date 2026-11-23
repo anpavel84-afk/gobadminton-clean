@@ -1238,14 +1238,21 @@ export class PostgameCoordinator {
           merged.push(retireOwnPublicReviewText(prior));
         }
       }
-      // Typed GET newer than a painted receipt retires stale status/notice (no resurrection).
+      // Newer typed GET retires stale receipt + matching confirmation (no resurrection).
+      // Current withdraw/command confirmation survives ordinary/stale/same-version list refresh;
+      // unrelated/error notices are not preserved across a successful own-list GET.
       const painted = this.snapshot.publicReceipt;
       const retireReceipt = !!painted && merged.some(
         item => item.id === painted.id && item.version > painted.version,
       );
+      const priorNotice = this.snapshot.publicNotice;
+      const keepConfirm = !retireReceipt && !!painted && (
+        (painted.status === 'withdrawn' && priorNotice === 'Отзыв отозван.')
+        || (painted.status !== 'withdrawn' && priorNotice === 'Команда принята.')
+      );
       this.show({
         publicOwn: { status: 'ready', data: { items: merged } },
-        publicNotice: null,
+        publicNotice: keepConfirm ? priorNotice : null,
         ...(retireReceipt ? { publicReceipt: null } : {}),
       });
     } catch (error) {
