@@ -14,6 +14,7 @@ import {
   type RoleDiscrepancyDecision,
 } from './postgame-feedback.ts';
 import {
+  applyOwnPublicAckToItem,
   buildPublicCreateBody,
   buildPublicWithdrawBody,
   consentPreviewBody,
@@ -1655,6 +1656,7 @@ export class PostgameCoordinator {
         const reviewId = packet.kind === 'public-role-command' ? packet.reviewId : publicReceipt.id;
         this.publicMutationBind = null;
         // Raise floor from receipt; receipt never grants writes — retire text while awaiting typed GET.
+        // Monotonic ACK: settle packet/floor without replacing a newer typed projection with an older receipt.
         this.publicOwnVersionFloor.set(
           reviewId,
           Math.max(this.publicOwnVersionFloor.get(reviewId) ?? 0, publicReceipt.version),
@@ -1662,21 +1664,10 @@ export class PostgameCoordinator {
         if (!this.publicOwnDenied) {
           this.publicOwnAwaitingTyped.add(reviewId);
           const priorItems = this.snapshot.publicOwn.data?.items ?? [];
+          const floor = this.publicOwnVersionFloor.get(reviewId) ?? 0;
           const items = priorItems.map(item => {
             if (item.id !== reviewId) return item;
-            if (publicReceipt.status === 'withdrawn' || publicReceipt.status === 'removed') {
-              return retireOwnPublicReviewText({
-                ...item,
-                status: publicReceipt.status,
-                version: publicReceipt.version,
-                text: null,
-                receiptToken: publicReceipt.receiptToken,
-                pendingIntakeStatus: publicReceipt.pendingIntakeStatus === 'waiting_intake'
-                  ? 'none'
-                  : item.pendingIntakeStatus,
-              });
-            }
-            return { ...item, version: Math.max(item.version, publicReceipt.version) };
+            return applyOwnPublicAckToItem(item, publicReceipt, floor);
           });
           if (this.snapshot.publicOwn.status === 'ready' || priorItems.length) {
             this.show({ publicOwn: { status: 'ready', data: { items } } });

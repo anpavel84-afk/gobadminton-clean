@@ -6,9 +6,13 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import { PostgameError, wire, validateReceipt, reviewComment } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import {
+  applyOwnPublicAckToItem,
+  bindPublicRoleFocusRef,
   buildPublicCreateBody,
   buildPublicWithdrawBody,
+  clearPublicRoleFocusTarget,
   consentPreviewBody,
+  currentPublicRoleFocusTarget,
   draftEditorKey,
   emptyPublicRoleDraft,
   isPublicRolePacketKind,
@@ -24,6 +28,7 @@ import {
   publicRoleReviewText,
   publicRoleStatusLabel,
   publicRoleTopics,
+  rememberPublicRoleFocusTarget,
   usableOwnRoleHandle,
   PublicRoleError,
 } from '../src/public-role-reviews.ts';
@@ -363,6 +368,178 @@ test('business 422 on public create retains draft and clears consent hash', asyn
   assert.ok(owner.getSnapshot().publicNotice);
   assert.doesNotMatch(owner.getSnapshot().publicNotice ?? '', /VERSION_CONFLICT|BASIS_VERSION_CONFLICT/);
   assert.match(owner.getSnapshot().publicNotice ?? '', /Основание устарело|допуск|согласие/);
+});
+
+test('focus bind: attach→remember→detach clears by retained identity; stable held survives null cleanup', () => {
+  const held: { current: { focus: () => void } | null } = { current: null };
+  const a = { focus: () => {} };
+  const b = { focus: () => {} };
+
+  // Realistic callback-ref order: attach, remember on press, detach on unmount (React already nulled ref.current).
+  bindPublicRoleFocusRef(held, a);
+  rememberPublicRoleFocusTarget(held.current);
+  assert.equal(currentPublicRoleFocusTarget(), a);
+  bindPublicRoleFocusRef(held, null);
+  assert.equal(held.current, null);
+  assert.equal(currentPublicRoleFocusTarget(), null);
+
+  bindPublicRoleFocusRef(held, b);
+  rememberPublicRoleFocusTarget(held.current);
+  clearPublicRoleFocusTarget(a);
+  assert.equal(currentPublicRoleFocusTarget(), b);
+  bindPublicRoleFocusRef(held, null);
+  assert.equal(currentPublicRoleFocusTarget(), null);
+
+  // Detach with nothing remembered is safe.
+  bindPublicRoleFocusRef(held, a);
+  bindPublicRoleFocusRef(held, null);
+  assert.equal(currentPublicRoleFocusTarget(), null);
+});
+
+test('applyOwnPublicAckToItem: older withdraw ACK cannot replace newer typed GET; same-version terminal applies', () => {
+  const base = {
+    id: '55555555-5555-4555-8555-555555555555',
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    topics: ['agreements'],
+    receiptToken: 'live',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: null,
+  };
+  const v4 = { ...base, status: 'submitted', version: 4, text: 'После повторной подачи' };
+  const ackV3 = {
+    id: base.id,
+    reviewHandle: base.reviewHandle,
+    version: 3,
+    status: 'withdrawn',
+    receiptToken: 'old-ack',
+    pendingIntakeStatus: 'waiting_intake' as const,
+  };
+  assert.equal(applyOwnPublicAckToItem(v4, ackV3, 4).version, 4);
+  assert.equal(applyOwnPublicAckToItem(v4, ackV3, 4).status, 'submitted');
+  assert.equal(applyOwnPublicAckToItem(v4, ackV3, 4).text, 'После повторной подачи');
+
+  const v3 = { ...base, status: 'submitted', version: 3, text: 'До отзыва' };
+  const applied = applyOwnPublicAckToItem(v3, ackV3, 3);
+  assert.equal(applied.status, 'withdrawn');
+  assert.equal(applied.version, 3);
+  assert.equal(applied.text, null);
+  assert.equal(mayWithdrawOwnPublic(applied), false);
+});
+
+test('deferred withdraw ACK after newer typed GET keeps v4; same-actor UNKNOWN settle does not downgrade', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const v2 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'Исходный текст',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  const v4 = {
+    ...v2,
+    version: 4,
+    text: 'Повторная подача с другого клиента',
+    receiptToken: 'r4',
+    pendingRevision: 2,
+  };
+  let ownPhase: 'v2' | 'v4' = 'v2';
+  let releaseWithdraw!: (value: unknown) => void;
+  let withdrawPending = new Promise<unknown>(resolve => { releaseWithdraw = resolve; });
+  let mode: 'defer' | 'unknown' | 'ack' = 'defer';
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => ({
+        items: ownPhase === 'v4' ? [v4] : [v2],
+      }),
+      send: async () => {
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        if (mode === 'defer') return withdrawPending;
+        return {
+          id: reviewId,
+          reviewHandle: 'c'.repeat(32),
+          version: 3,
+          status: 'withdrawn',
+          receiptToken: 'w-receipt-v3',
+          pendingIntakeStatus: 'waiting_intake',
+        };
+      },
+    }),
+  }, () => 'deferred-ack-v3');
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 2);
+
+  // Delayed withdraw ACK v3 in flight.
+  mode = 'defer';
+  const withdrawPromise = owner.withdrawOwnPublic(v2);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+
+  // Typed GET v4 wins while ACK is still outstanding.
+  ownPhase = 'v4';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.text, v4.text);
+  assert.equal(mayWithdrawOwnPublic(owner.getSnapshot().publicOwn.data!.items[0]!), true);
+
+  releaseWithdraw({
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    version: 3,
+    status: 'withdrawn',
+    receiptToken: 'w-receipt-v3',
+    pendingIntakeStatus: 'waiting_intake',
+  });
+  await withdrawPromise;
+  await tick();
+
+  const afterAck = owner.getSnapshot().publicOwn.data?.items.find(i => i.id === reviewId);
+  assert.equal(afterAck?.version, 4);
+  assert.equal(afterAck?.status, 'submitted');
+  assert.equal(afterAck?.text, v4.text);
+  assert.equal(mayWithdrawOwnPublic(afterAck!), true);
+  assert.equal(owner.getSnapshot().command, null);
+
+  // Same-actor UNKNOWN: original withdraw packet settles later without downgrading accepted v4.
+  mode = 'unknown';
+  await owner.withdrawOwnPublic(v4);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownKey = owner.getSnapshot().command!.packet.key;
+  owner.setActor({ ...actor, generation: 2 });
+  await tick();
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+
+  ownPhase = 'v4';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
+
+  mode = 'ack';
+  await owner.reconcilePublic();
+  await tick();
+  const afterUnknown = owner.getSnapshot().publicOwn.data?.items.find(i => i.id === reviewId);
+  assert.equal(afterUnknown?.version, 4);
+  assert.equal(afterUnknown?.status, 'submitted');
+  assert.equal(afterUnknown?.text, v4.text);
+  assert.equal(mayWithdrawOwnPublic(afterUnknown!), true);
+  assert.equal(owner.getSnapshot().command, null);
 });
 
 test('withdraw order: ACK v3 then stale GET v2 cannot resurrect text or withdraw action', async () => {

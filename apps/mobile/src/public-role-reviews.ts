@@ -243,6 +243,63 @@ export function mergeOwnPublicReviewItem(
   }
   return retireOwnPublicReviewText(incoming);
 }
+/**
+ * Settle a mutation ACK onto an own-list row without replacing a newer typed projection.
+ * Receipt raises authority only when version/status survive the same monotonic floor rules as GET.
+ */
+export function applyOwnPublicAckToItem(
+  prior: OwnPublicRoleReview,
+  receipt: PublicRoleMutationReceipt,
+  floor: number,
+): OwnPublicRoleReview {
+  if (receipt.status === 'withdrawn' || receipt.status === 'removed') {
+    const incoming: OwnPublicRoleReview = {
+      ...prior,
+      status: receipt.status,
+      version: receipt.version,
+      text: null,
+      receiptToken: receipt.receiptToken,
+      pendingIntakeStatus: receipt.pendingIntakeStatus === 'waiting_intake'
+        ? 'none'
+        : prior.pendingIntakeStatus,
+    };
+    return mergeOwnPublicReviewItem(prior, incoming, floor) ?? prior;
+  }
+  if (receipt.version < prior.version || receipt.version < floor) return prior;
+  return { ...prior, version: Math.max(prior.version, receipt.version) };
+}
+
+/** Minimal focusable opener identity for sheet return-focus (Pressable-compatible). */
+export type PublicRoleFocusHandle = { focus: () => void };
+
+let publicRoleFocusTarget: PublicRoleFocusHandle | null = null;
+
+export function rememberPublicRoleFocusTarget(target: PublicRoleFocusHandle | null) {
+  publicRoleFocusTarget = target;
+}
+export function clearPublicRoleFocusTarget(target: PublicRoleFocusHandle | null) {
+  if (target && publicRoleFocusTarget === target) publicRoleFocusTarget = null;
+}
+export function currentPublicRoleFocusTarget(): PublicRoleFocusHandle | null {
+  return publicRoleFocusTarget;
+}
+/**
+ * Callback-ref attach/detach for author/history openers.
+ * Retains instance across React nulling so unmount clears the remembered target by identity.
+ * Callers must reuse one held ref + one stable callback (no per-render recreate).
+ */
+export function bindPublicRoleFocusRef(
+  held: { current: PublicRoleFocusHandle | null },
+  node: PublicRoleFocusHandle | null,
+): void {
+  if (node) {
+    held.current = node;
+    return;
+  }
+  clearPublicRoleFocusTarget(held.current);
+  held.current = null;
+}
+
 /** Empty historical roleHandle is not authoring authority or a guessed recipient. */
 export function usableOwnRoleHandle(roleHandleValue: string): boolean {
   return HANDLE.test(roleHandleValue) && roleHandleValue.length === 32;

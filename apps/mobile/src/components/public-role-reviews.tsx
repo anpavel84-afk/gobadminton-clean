@@ -3,32 +3,35 @@ import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, 
 import { useAuth } from '../auth.tsx';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import {
+  bindPublicRoleFocusRef,
+  clearPublicRoleFocusTarget,
+  currentPublicRoleFocusTarget,
   eligibleBases,
   mayWithdrawOwnPublic,
   publicRoleLabel,
   publicRoleStatusLabel,
+  rememberPublicRoleFocusTarget,
   topicOptionsForRole,
   usableOwnRoleHandle,
   type PublicRoleAuthorTarget,
+  type PublicRoleFocusHandle,
 } from '../public-role-reviews.ts';
 import { colors } from '../theme.ts';
 import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 type FocusTarget = ComponentRef<typeof Pressable>;
 
-/** Shared focus return for catalog + MyGames author/history entries — one live target, cleared on unmount. */
-let publicRoleFocusTarget: FocusTarget | null = null;
-export function rememberPublicRoleFocusTarget(target: FocusTarget | null) {
-  publicRoleFocusTarget = target;
-}
-export function clearPublicRoleFocusTarget(target: FocusTarget | null) {
-  if (target && publicRoleFocusTarget === target) publicRoleFocusTarget = null;
-}
+export {
+  bindPublicRoleFocusRef,
+  clearPublicRoleFocusTarget,
+  rememberPublicRoleFocusTarget,
+};
+
 function restorePublicTriggerFocus() {
-  const current = publicRoleFocusTarget;
+  const current = currentPublicRoleFocusTarget();
   const frame = requestAnimationFrame(() => {
     current?.focus();
-    const node = findNodeHandle(current ?? null);
+    const node = findNodeHandle((current as FocusTarget | null) ?? null);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   });
   return () => cancelAnimationFrame(frame);
@@ -42,13 +45,16 @@ export function PublicRoleAuthorEntryButton({
   title: string;
   onPress: () => void;
 }) {
-  const ref = useRef<FocusTarget>(null);
-  useEffect(() => () => clearPublicRoleFocusTarget(ref.current), []);
+  const held = useRef<PublicRoleFocusHandle | null>(null);
+  // Stable callback identity — recreating per render would detach/attach and clear a live opener.
+  const setRef = useRef((node: FocusTarget | null) => {
+    bindPublicRoleFocusRef(held, node);
+  }).current;
   return <Pressable
-    ref={ref}
+    ref={setRef}
     accessibilityRole="button"
     onPress={() => {
-      rememberPublicRoleFocusTarget(ref.current);
+      rememberPublicRoleFocusTarget(held.current);
       onPress();
     }}
     style={({ pressed }) => [{

@@ -7,14 +7,15 @@ import { hubRows, hubView, hubBucket, sortHubRows, pendingInviteCount } from '..
 import type { HubRow } from '../src/my-games.ts';
 import { attendanceLabel, needsAttention } from '../src/postgame.ts';
 import { PublicApiError } from '../src/public-api.ts';
+import {
+  bindPublicRoleFocusRef,
+  rememberPublicRoleFocusTarget,
+  type PublicRoleFocusHandle,
+} from '../src/public-role-reviews.ts';
 import { colors } from '../src/theme.ts';
 import { GameCard } from '../src/components/game-card.tsx';
 import { MyGameInvitations } from '../src/components/my-game-invitation.tsx';
 import { PostgameSurface, CommandReview, ReminderActions, SourceNotice } from '../src/components/postgame.tsx';
-import {
-  clearPublicRoleFocusTarget,
-  rememberPublicRoleFocusTarget,
-} from '../src/components/public-role-reviews.tsx';
 import { DiscoveryChip, ErrorState, Header, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from '../src/components/ui.tsx';
 const filters = [
   { value: 'all', label: 'Все' },
@@ -97,13 +98,15 @@ export default function MyGames() {
 }
 /** Records initiator for public own-history sheet focus return (shared public-role focus target). */
 function PublicOwnReviewsEntry({ onOpen }: { onOpen: () => void }) {
-  const ref = useRef<ComponentRef<typeof Pressable>>(null);
-  useEffect(() => () => clearPublicRoleFocusTarget(ref.current), []);
+  const held = useRef<PublicRoleFocusHandle | null>(null);
+  const setRef = useRef((node: ComponentRef<typeof Pressable> | null) => {
+    bindPublicRoleFocusRef(held, node);
+  }).current;
   return <Pressable
-    ref={ref}
+    ref={setRef}
     accessibilityRole="button"
     onPress={() => {
-      rememberPublicRoleFocusTarget(ref.current);
+      rememberPublicRoleFocusTarget(held.current);
       onOpen();
     }}
     style={styles.textButton}
