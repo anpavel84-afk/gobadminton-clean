@@ -625,6 +625,7 @@ export class PostgameCoordinator {
    * Never adopts stale parent comment/rights/direction/game/consent/read-gen from the projection.
    * Receipt still settles ACK-safe (strip writes, await typed); history clears awaiting and marks owned.
    * Results leave parent authority/consent/ownership fences unchanged aside from the reply floor.
+   * replyOnly (older-gen discard): raise reply floor only — no ACK settle, awaiting clear, or history ownership.
    */
   private applyNewerReplyOntoKeptParent(
     byId: Record<string, PrivateReview>,
@@ -633,10 +634,11 @@ export class PostgameCoordinator {
     replyVer: number,
     replyFloor: number,
     source: 'results' | 'history' | 'receipt',
+    replyOnly = false,
   ): boolean {
     if (!row.reply || replyVer <= replyFloor) return false;
     let next: PrivateReview = { ...prior, reply: row.reply };
-    if (source === 'receipt') {
+    if (!replyOnly && source === 'receipt') {
       next = {
         ...next,
         allowedActions: {
@@ -648,7 +650,7 @@ export class PostgameCoordinator {
       this.reviewAwaitingTyped.add(row.id);
       this.reviewHistoryOwned.delete(row.id);
     }
-    if (source === 'history') {
+    if (!replyOnly && source === 'history') {
       this.reviewAwaitingTyped.delete(row.id);
       this.reviewHistoryOwned.add(row.id);
     }
@@ -674,10 +676,16 @@ export class PostgameCoordinator {
       const prior = byId[row.id];
       const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
       const replyVer = row.reply?.version ?? 0;
+      const applied = this.reviewAppliedGen.get(row.id) ?? 0;
+      const staleRead = gen < applied;
+      // Older-gen reply-only: raise reply without parent authority / awaiting changes.
+      // Receipt ACK still settles display-only + await typed even on discard.
+      const replyOnly = staleRead && source !== 'receipt';
+      // Before every parent-discard branch: strictly newer reply is an independent dimension.
       if (row.version < floor) {
         // Older parent must not regress content/permissions/read-gen/consent.
         // Any legitimate typed read (history/receipt/Results) may still raise reply onto kept parent.
-        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source)) {
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source, replyOnly)) {
           changed = true;
         }
         continue;
@@ -685,13 +693,17 @@ export class PostgameCoordinator {
       // Typed history owns the current floor — later results cannot same-version regress rights/text.
       // Strictly newer independent reply may still raise onto the kept parent (reply-only).
       if (source === 'results' && this.reviewHistoryOwned.has(row.id) && row.version <= floor) {
-        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source)) {
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source, replyOnly)) {
           changed = true;
         }
         continue;
       }
-      const applied = this.reviewAppliedGen.get(row.id) ?? 0;
-      if (row.version === floor && gen < applied) continue;
+      if (row.version === floor && staleRead) {
+        if (prior && this.applyNewerReplyOntoKeptParent(byId, row, prior, replyVer, replyFloor, source, replyOnly)) {
+          changed = true;
+        }
+        continue;
+      }
       let next: PrivateReview = row;
       // Reply revisions are independent of parent review version — keep highest accepted reply.
       if (prior && replyVer < replyFloor) {

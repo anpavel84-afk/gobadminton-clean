@@ -1229,3 +1229,72 @@ test('Results cannot raise reply after harddeny or while awaiting typed history'
   assert.equal(awaiting.coordinator.getSnapshot().reviewHistory.received.status, 'ready');
   assert.equal(awaiting.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 2);
 });
+
+test('ROOT older-generation history may carry newer independent reply without stale parent rights', async () => {
+  const row = peerReview({
+    id: 'root-gen-reply', direction: 'received', version: 1, comment: 'initial',
+    reply: { text: 'reply1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  let done!: (value: { items: PrivateReview[]; nextCursor: null }) => void;
+  const flight = new Promise<{ items: PrivateReview[]; nextCursor: null }>(r => { done = r; });
+  s.port.reviews = () => flight;
+  const earlier = s.coordinator.loadReviews('received');
+  const latest = {
+    ...row,
+    comment: 'current parent',
+    allowedActions: { canEdit: false, canReply: false, canReport: true },
+  };
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [latest] },
+  });
+  await s.coordinator.loadResults(game.id);
+  done({
+    items: [{
+      ...row,
+      comment: 'stale parent',
+      reply: { text: 'reply2', version: 2, editedAt: date, updatedAt: date },
+    }],
+    nextCursor: null,
+  });
+  await earlier;
+  const actual = s.coordinator.getSnapshot().reviewsById[row.id];
+  assert.equal(actual?.comment, 'current parent');
+  assert.equal(actual?.allowedActions.canReply, false);
+  assert.equal(actual?.reply?.version, 2, 'independent higher reply must survive older parent read-gen');
+  assert.equal(actual?.reply?.text, 'reply2');
+  // Reply-only older-gen must not freeze: subsequent Results / current history remain refreshable.
+  const afterResults = {
+    ...latest,
+    comment: 'results refresh',
+    reply: { text: 'reply2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: false, canReport: true },
+  };
+  s.port.results = async (_a, id) => ({
+    ...structuredClone(result),
+    gameId: id,
+    feedback: { ...feedbackReady, gameReviews: [afterResults] },
+  });
+  await s.coordinator.loadResults(game.id);
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.comment, 'results refresh');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 2);
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.allowedActions.canReply, false);
+  const afterHistory = peerReview({
+    id: 'root-gen-reply', direction: 'received', version: 1, comment: 'history refresh',
+    reply: { text: 'reply2', version: 2, editedAt: date, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  s.reviews.received = [afterHistory];
+  s.port.reviews = async () => ({ items: structuredClone(s.reviews.received), nextCursor: null });
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.comment, 'history refresh');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.allowedActions.canReply, true);
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 2);
+});
