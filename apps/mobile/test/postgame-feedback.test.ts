@@ -336,6 +336,30 @@ test('coordinator: peer create requires canCreatePeer+subject; reply expectedVer
   assert.equal(r.coordinator.getSnapshot().feedbackDrafts[game.id]?.reportConsentVersion, 3);
 });
 
+test('mergeReviewPages keeps highest reply across parent review-version advances', () => {
+  const v1Reply = peerReview({
+    id: 'merge-reply', direction: 'received', version: 1, comment: 'v1',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+  });
+  const v2NoReply = peerReview({
+    id: 'merge-reply', direction: 'received', version: 2, comment: 'v2',
+    reply: null,
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const merged = mergeReviewPages([v1Reply], [v2NoReply], 'received');
+  assert.equal(merged[0]?.version, 2);
+  assert.equal(merged[0]?.comment, 'v2');
+  assert.equal(merged[0]?.reply?.version, 1);
+  assert.equal(merged[0]?.reply?.text, 'reply-v1');
+  const v2Reply2 = {
+    ...v2NoReply,
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+  };
+  const advanced = mergeReviewPages(merged, [v2Reply2], 'received');
+  assert.equal(advanced[0]?.reply?.version, 2);
+  assert.equal(advanced[0]?.reply?.text, 'reply-v2');
+});
+
 test('mergeReviewPages is monotonic; UNKNOWN retry keeps original packet; reauth does not autosend', async () => {
   const older = peerReview({ version: 1, comment: 'old' });
   const newer = peerReview({ version: 2, comment: 'new' });
@@ -694,4 +718,151 @@ test('actor switch clears private review projection and report draft', async () 
   assert.equal(s.coordinator.getSnapshot().reviewsById[row.id], undefined);
   assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'idle');
   assert.equal(s.coordinator.getSnapshot().feedbackDrafts[game.id], undefined);
+});
+
+test('hard-deny then late reply ACK: no private resurrect on pending/failed GET; typed GET restores', async () => {
+  const row = peerReview({
+    id: 'recv-resurrect', direction: 'received',
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [row] } },
+    reviews: { received: [row], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: row.id,
+    body: { expectedVersion: 0, text: 'late ack reply' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-reply');
+
+  let resolveAck!: (value: unknown) => void;
+  const ackFlight = new Promise<unknown>(r => { resolveAck = r; });
+  const originalSend = s.port.send;
+  s.port.send = async (p: Packet, a?: Actor) => {
+    s.sentPkts.push(p);
+    if (p.kind === 'peer-reply') return ackFlight;
+    return originalSend(p, a);
+  };
+  const confirmFlight = s.coordinator.confirm();
+
+  // Direction hard-denied while ACK is still in flight — private rows retired.
+  s.port.reviews = async () => { throw new PostgameError('private', 403); };
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'unavailable');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id], undefined);
+
+  // Post-deny follow-up GET after ACK: hold pending, then fail — must not resurrect.
+  let resolvePostAckGet!: (value: { items: PrivateReview[]; nextCursor: null } | PromiseLike<never>) => void;
+  let rejectPostAckGet!: (err: unknown) => void;
+  const postAckGet = new Promise<{ items: PrivateReview[]; nextCursor: null }>((resolve, reject) => {
+    resolvePostAckGet = resolve;
+    rejectPostAckGet = reject;
+  });
+  s.port.reviews = () => postAckGet;
+
+  const receipt = {
+    ...row,
+    reply: { text: 'late ack reply', version: 1, editedAt: null, updatedAt: date },
+  };
+  s.reviews.received = [receipt];
+  resolveAck(receipt);
+  await confirmFlight;
+  assert.equal(
+    s.coordinator.getSnapshot().command,
+    null,
+    'ACK must settle the original packet even when direction is hard-denied',
+  );
+  assert.equal(
+    s.coordinator.getSnapshot().reviewsById[row.id],
+    undefined,
+    'late receipt must not reintroduce private projection while denied',
+  );
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'loading');
+  const pendingProjected = projectReviewsFromStore(
+    [receipt],
+    s.coordinator.getSnapshot().reviewsById,
+  );
+  assert.equal(pendingProjected[0]?.id, receipt.id);
+  assert.equal(
+    s.coordinator.getSnapshot().reviewsById[row.id],
+    undefined,
+    'pending typed GET must not leave a resurrected store row',
+  );
+
+  rejectPostAckGet(new PostgameError('network', 0));
+  for (let i = 0; i < 50 && s.coordinator.getSnapshot().reviewHistory.received.status === 'loading'; i++) {
+    await new Promise<void>(res => setImmediate(res));
+  }
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'error');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id], undefined);
+
+  // Successful current typed history clears deny and restores projection + reply floor.
+  s.port.reviews = async () => ({ items: structuredClone(s.reviews.received), nextCursor: null });
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().reviewsById[row.id]?.reply?.version, 1);
+  const restored = projectReviewsFromStore(
+    s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? [],
+    s.coordinator.getSnapshot().reviewsById,
+  );
+  assert.equal(restored.find(r => r.id === row.id)?.reply?.version, 1);
+  assert.equal(reviewCommandsOpen(s.coordinator.getSnapshot().reviewHistory.received.status), true);
+});
+
+test('reply revision floor survives parent review v2/null and advances on reply v2', async () => {
+  const v1 = peerReview({
+    id: 'recv-reply-floor', direction: 'received', version: 1, comment: 'v1',
+    reply: { text: 'reply-v1', version: 1, editedAt: null, updatedAt: date },
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  const s = setup({
+    results: { ...result, feedback: { ...feedbackReady, gameReviews: [v1] } },
+    reviews: { received: [v1], sent: [] },
+  });
+  await s.coordinator.loadResults(game.id);
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-reply-floor']?.reply?.version, 1);
+
+  // Out-of-order / partial projection: review advances, reply payload missing.
+  const v2Null = peerReview({
+    id: 'recv-reply-floor', direction: 'received', version: 2, comment: 'v2-edit',
+    reply: null,
+    allowedActions: { canEdit: false, canReply: true, canReport: true },
+  });
+  s.reviews.received = [v2Null];
+  await s.coordinator.loadReviews('received');
+  const kept = s.coordinator.getSnapshot().reviewsById['recv-reply-floor'];
+  assert.equal(kept?.version, 2);
+  assert.equal(kept?.comment, 'v2-edit');
+  assert.equal(kept?.reply?.version, 1);
+  assert.equal(kept?.reply?.text, 'reply-v1');
+  const ui = projectReviewsFromStore(
+    s.coordinator.getSnapshot().reviewHistory.received.data?.items ?? [],
+    s.coordinator.getSnapshot().reviewsById,
+  );
+  assert.equal(ui.find(r => r.id === 'recv-reply-floor')?.reply?.version, 1);
+  // UI expectedVersion for next reply must stay at accepted reply floor, not reset to 0.
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-reply-floor',
+    body: { expectedVersion: 0, text: 'stale zero' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review, null, 'expectedVersion:0 must not arm after reply v1');
+  s.coordinator.review({
+    kind: 'peer-reply', gameId: game.id, reviewId: 'recv-reply-floor',
+    body: { expectedVersion: 1, text: 'advance reply' },
+  });
+  assert.equal(s.coordinator.getSnapshot().review?.kind, 'peer-reply');
+  s.coordinator.cancelReview();
+
+  // Later typed reply v2 advances the independent floor.
+  const v2Reply2 = {
+    ...v2Null,
+    reply: { text: 'reply-v2', version: 2, editedAt: date, updatedAt: date },
+  };
+  s.reviews.received = [v2Reply2];
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-reply-floor']?.reply?.version, 2);
+  assert.equal(s.coordinator.getSnapshot().reviewsById['recv-reply-floor']?.reply?.text, 'reply-v2');
 });

@@ -157,7 +157,7 @@ export class PostgameCoordinator {
   private reviewAwaitingTyped = new Set<string>();
   /** Ids whose current floor was established by typed history — results cannot same-version regress. */
   private reviewHistoryOwned = new Set<string>();
-  /** Hard-denied own-history directions — results gameReviews must not resurrect writes. */
+  /** Hard-denied own-history directions — results/receipts must not resurrect private projection. */
   private reviewDirectionDenied = new Set<ReviewDirection>();
   private port: Required<Port>;
   private random: () => string;
@@ -615,15 +615,17 @@ export class PostgameCoordinator {
   }
   /**
    * Monotonic typed review store — version + read-gen authority.
-   * History restores writes; results cannot resurrect after hard deny or while awaiting typed GET;
-   * receipt ACK is display-only until typed history refresh.
+   * Only typed history restores private projection after hard deny; results/receipts cannot
+   * resurrect while denied or (results) while awaiting typed GET. Receipt ACK is display-only
+   * until typed history refresh. Reply revision is independently monotonic across review edits.
    */
   private rememberReviews(rows: PrivateReview[], gen: number, source: 'results' | 'history' | 'receipt') {
     const byId = { ...this.snapshot.reviewsById };
     let changed = false;
     const revisionAdvances: PrivateReview[] = [];
     for (const row of rows) {
-      if (source === 'results' && this.reviewDirectionDenied.has(row.direction)) continue;
+      // Hard-denied direction: settle packet elsewhere; only successful typed history may restore.
+      if (source !== 'history' && this.reviewDirectionDenied.has(row.direction)) continue;
       if (source === 'results' && this.reviewAwaitingTyped.has(row.id)) continue;
       const floor = this.reviewVersionFloor.get(row.id) ?? 0;
       if (row.version < floor) continue;
@@ -635,7 +637,8 @@ export class PostgameCoordinator {
       const replyFloor = this.replyVersionFloor.get(row.id) ?? 0;
       const replyVer = row.reply?.version ?? 0;
       let next: PrivateReview = row;
-      if (prior && row.version === prior.version && replyVer < replyFloor) {
+      // Reply revisions are independent of parent review version — keep highest accepted reply.
+      if (prior && replyVer < replyFloor) {
         next = { ...row, reply: prior.reply };
       }
       if (source === 'receipt') {
@@ -658,7 +661,7 @@ export class PostgameCoordinator {
       if (source === 'results' && row.version > floor) this.reviewHistoryOwned.delete(row.id);
       byId[row.id] = next;
       this.reviewVersionFloor.set(row.id, Math.max(floor, row.version));
-      this.replyVersionFloor.set(row.id, Math.max(replyFloor, replyVer));
+      this.replyVersionFloor.set(row.id, Math.max(replyFloor, next.reply?.version ?? 0));
       this.reviewAppliedGen.set(row.id, gen);
       if (prior && prior.version !== next.version) revisionAdvances.push(next);
       changed = true;

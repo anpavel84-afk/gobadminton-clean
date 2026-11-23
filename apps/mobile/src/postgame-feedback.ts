@@ -299,7 +299,10 @@ export function feedbackSectionVisible(
   return false;
 }
 
-/** Monotonic merge: same id keeps higher version; same version may refresh reply/rights. */
+/**
+ * Monotonic merge: same id keeps higher review version; reply revision is independent —
+ * adopt legitimate newer review content while preserving the highest accepted reply/text.
+ */
 export function mergeReviewPages(
   prior: PrivateReview[],
   incoming: PrivateReview[],
@@ -318,13 +321,9 @@ export function mergeReviewPages(
       continue;
     }
     if (row.version < old.version) continue;
-    if (row.version > old.version) {
-      byId.set(row.id, row);
-      continue;
-    }
-    // Same review version: prefer newer reply version; refresh rights from typed read.
     const oldReply = old.reply?.version ?? 0;
     const nextReply = row.reply?.version ?? 0;
+    // Across review-version advances and same-version refreshes: keep highest reply.
     if (nextReply < oldReply) {
       byId.set(row.id, { ...row, reply: old.reply });
     } else {
