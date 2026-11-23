@@ -1116,6 +1116,142 @@ test('#522 address14: production probe gate + real GET counts hidden0/refocus1/r
   assert.equal(seen[0], 1);
 });
 
+test('#522 address16: venue ACK skips generic results/reminders; Entry receipt before fresh gates; UNKNOWN recovery', async () => {
+  let resultsCalls = 0;
+  let remindersCalls = 0;
+  let mode: 'ok' | 'unknown' = 'ok';
+  const keys: string[] = [];
+  const owner: PostgameCoordinator = new PostgameCoordinator({
+    ...idlePort({
+      results: async () => {
+        resultsCalls += 1;
+        throw new PostgameError('private', 403);
+      },
+      reminders: async () => {
+        remindersCalls += 1;
+        return { items: [], writesEnabled: true, installed: true };
+      },
+      send: async (packet): Promise<unknown> => {
+        assert.equal(isVenueExperienceCreatePacket(packet), true);
+        if (!isVenueExperienceCreatePacket(packet)) {
+          assert.fail(`expected venue-experience-create, got ${packet.kind}`);
+        }
+        keys.push(packet.key);
+        if (mode === 'unknown') throw new PostgameError('network', 503);
+        return {
+          id: '55555555-5555-4555-8555-555555555555',
+          version: 1,
+          status: packet.body.audience === 'self_draft' ? 'self_draft' : 'submitted_waiting',
+          reviewHandle: 'f'.repeat(32),
+          receiptToken: packet.body.audience === 'self_draft' ? null : 'intake-tok',
+          publicVisible: false,
+          notBefore: null,
+        };
+      },
+    }),
+  }, () => `addr16-${keys.length + 1}`);
+
+  owner.setActor(actor);
+  // Seed unavailable results via real coordinator read error (not a fake write permit).
+  await owner.loadResults(gameId);
+  await tick();
+  assert.equal(owner.getSnapshot().games[gameId]?.status, 'unavailable');
+  const resultsSeed = resultsCalls;
+  const remindersSeed = remindersCalls;
+
+  // Fresh private ACK — zero generic follow-up reads; receipt on owned composer; no global notice.
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ audience: 'self_draft', text: 'Личный опыт покрытия', topics: ['surface'] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(keys.length, 1);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueReceipt?.status, 'self_draft');
+  assert.equal(owner.getSnapshot().venueReceipt?.receiptToken, null);
+  assert.equal(owner.getSnapshot().notice, null);
+  assert.equal(owner.getSnapshot().venueNotice, null);
+  assert.equal(owner.getSnapshot().venueExperience?.gameId, gameId);
+  assert.equal(owner.getSnapshot().venueExperience?.venueId, venueId);
+  assert.ok(owner.getSnapshot().venueDraft);
+  assert.equal(resultsCalls, resultsSeed);
+  assert.equal(remindersCalls, remindersSeed);
+  assert.equal(owner.getSnapshot().games[gameId]?.status, 'unavailable');
+
+  // Fresh public ACK — same zero counters / no global notice; truthful pending receipt.
+  owner.closeVenueExperience();
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ audience: 'public_venue', text: 'Публичный опыт освещения', topics: ['lighting'] });
+  await owner.ensureVenueConsentPreview();
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(keys.length, 2);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueReceipt?.status, 'submitted_waiting');
+  assert.equal(owner.getSnapshot().venueReceipt?.receiptToken, 'intake-tok');
+  assert.equal(owner.getSnapshot().notice, null);
+  assert.equal(resultsCalls, resultsSeed);
+  assert.equal(remindersCalls, remindersSeed);
+
+  // UNKNOWN recovery: reopen readonly original scope → explicit retry valid ACK same key/body/age.
+  owner.closeVenueExperience();
+  mode = 'unknown';
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  owner.patchVenueDraft({ audience: 'self_draft', text: 'Восстановление исходной отправки', topics: ['amenities'] });
+  await owner.submitVenueExperience();
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownPacket = owner.getSnapshot().command!.packet;
+  assert.equal(isVenueExperienceCreatePacket(unknownPacket), true);
+  const unknownKey = unknownPacket.key;
+  const unknownBody = structuredClone(unknownPacket.body);
+  const unknownAge = owner.getSnapshot().command!.firstDispatchedAt;
+  assert.ok(unknownAge);
+  const postsBeforeClose = keys.length;
+  owner.closeVenueExperience();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command!.packet.key, unknownKey);
+  assert.deepEqual(owner.getSnapshot().command!.packet.body, unknownBody);
+  assert.equal(owner.getSnapshot().command!.firstDispatchedAt, unknownAge);
+  owner.openVenueExperience(gameId, venueId);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.deepEqual(owner.getSnapshot().command!.packet.body, unknownBody);
+  assert.equal(owner.getSnapshot().command!.firstDispatchedAt, unknownAge);
+  assert.equal(keys.length, postsBeforeClose);
+  mode = 'ok';
+  await owner.reconcileVenueExperience();
+  await tick();
+  assert.equal(keys.filter(k => k === unknownKey).length >= 1, true);
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().venueReceipt?.status, 'self_draft');
+  assert.equal(owner.getSnapshot().notice, null);
+  assert.equal(owner.getSnapshot().venueExperience?.gameId, gameId);
+  assert.equal(owner.getSnapshot().venueExperience?.venueId, venueId);
+  assert.equal(owner.getSnapshot().venueDraft?.text, 'Восстановление исходной отправки');
+  assert.equal(resultsCalls, resultsSeed);
+  assert.equal(remindersCalls, remindersSeed);
+  // Unavailable results remain — receipt must not depend on refreshing them.
+  assert.equal(owner.getSnapshot().games[gameId]?.status, 'unavailable');
+
+  // Actual Entry receipt branch wiring before fresh liveVenue/results gates (shared frame).
+  const composer = read('../src/components/venue-experience-composer.tsx');
+  assert.match(composer, /confirmedOwnReceipt/);
+  assert.match(composer, /VenueExperienceEntryFrame/);
+  const receiptIdx = composer.indexOf('confirmedOwnReceipt');
+  const liveIdx = composer.indexOf('if (!liveVenueId)');
+  const readyIdx = composer.indexOf("results?.status !== 'ready'");
+  assert.ok(receiptIdx > 0 && liveIdx > receiptIdx && readyIdx > receiptIdx);
+  const coordinator = read('../src/postgame-coordinator.ts');
+  assert.match(
+    coordinator,
+    /venue-experience-create[\s\S]*Receipt card owns success copy[\s\S]*return;[\s\S]*public-role-create/,
+  );
+  assert.match(coordinator, /finally still clears inFlight|venueFreshDispatchBind/);
+});
+
 test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   const results = read('../app/my-games/[gameId]/results.tsx');
   assert.match(results, /VenueExperienceEntry/);
@@ -1134,6 +1270,8 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.doesNotMatch(composer, /без смены ключа|без новой заявки/);
   assert.match(composer, /venueExperienceReceiptSummary/);
   assert.match(composer, /recoveryVenueId|pendingCommand|pendingPacket/);
+  assert.match(composer, /confirmedOwnReceipt/);
+  assert.match(composer, /VenueExperienceEntryFrame/);
   assert.match(composer, /isVenueExperienceCreatePacket/);
   assert.match(composer, /onAccessibilityEscape/);
   assert.match(composer, /FocusContext/);
@@ -1182,6 +1320,10 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(coordinator, /mayDispatchRetention|dispatchPermit/);
   assert.match(coordinator, /venueFreshDispatchBind|freshVenue|mayDispatchFreshVenue/);
   assert.match(coordinator, /Receipt card owns success copy|venueNotice: null/);
+  assert.match(
+    coordinator,
+    /venue-experience-create[\s\S]*Receipt card owns success copy[\s\S]*return;[\s\S]*public-role-create/,
+  );
 
   const api = read('../src/native-api.ts');
   assert.match(api, /venueExperienceEligibility/);

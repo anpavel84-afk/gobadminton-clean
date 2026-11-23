@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
+import { useCallback, useContext, useEffect, useRef, useSyncExternalStore, type ComponentRef, type ReactNode, type RefObject } from 'react';
 import { AccessibilityInfo, findNodeHandle, Modal, Platform, Pressable, Switch, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../auth.tsx';
@@ -322,6 +322,31 @@ function VenueRecoveryButton({
   );
 }
 
+/** Shared Entry card + optional owned composer — one modal surface, no duplicate layouts. */
+function VenueExperienceEntryFrame({
+  gameId,
+  cardBody,
+  composerVenueId,
+  onCloseComposer,
+}: {
+  gameId: string;
+  cardBody: ReactNode;
+  composerVenueId: string | null;
+  onCloseComposer: () => void;
+}) {
+  return (
+    <>
+      <View style={styles.card}>
+        <Label style={{ fontWeight: '700' }}>Отзыв о площадке после игры</Label>
+        {cardBody}
+      </View>
+      {composerVenueId
+        ? <VenueExperienceComposer gameId={gameId} venueId={composerVenueId} onClose={onCloseComposer} />
+        : null}
+    </>
+  );
+}
+
 /**
  * Exact-game results entry — may_submit only for fresh create; guest returns to results after sign-in.
  * Pending original-operation recovery uses immutable packet gameId/venueId and does not require
@@ -497,26 +522,44 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
     );
   }
 
+  const closeComposer = () => owner.closeVenueExperience();
+
   // Original pending recovery: same verified actor + route game; independent of live venue/results.
   if (pendingCommand && recoveryVenueId) {
     return (
-      <>
-        <View style={styles.card}>
-          <Label style={{ fontWeight: '700' }}>Отзыв о площадке после игры</Label>
-          {composerOpen
-            ? <Label accessibilityRole="status">Открыт отзыв по этой игре.</Label>
-            : (
-              <VenueRecoveryButton
-                title="Посмотреть отправку"
-                liveRef={openerRef}
-                onPress={() => owner.openVenueExperience(gameId, recoveryVenueId)}
-              />
-            )}
-        </View>
-        {composerOpen && composerVenueId
-          ? <VenueExperienceComposer gameId={gameId} venueId={composerVenueId} onClose={() => owner.closeVenueExperience()} />
-          : null}
-      </>
+      <VenueExperienceEntryFrame
+        gameId={gameId}
+        composerVenueId={composerOpen ? composerVenueId : null}
+        onCloseComposer={closeComposer}
+        cardBody={composerOpen
+          ? <Label accessibilityRole="status">Открыт отзыв по этой игре.</Label>
+          : (
+            <VenueRecoveryButton
+              title="Посмотреть отправку"
+              liveRef={openerRef}
+              onPress={() => owner.openVenueExperience(gameId, recoveryVenueId)}
+            />
+          )}
+      />
+    );
+  }
+
+  // Confirmed own receipt on active original composer — before fresh liveVenue/results admission gates.
+  // Does not grant fresh submission rights or bypass auth/origin; closes only on user action.
+  const confirmedOwnReceipt = !!s.venueReceipt
+    && composerOpen
+    && !!composerVenueId
+    && !!s.venueDraft
+    && s.venueExperience?.gameId === gameId
+    && s.venueExperience?.venueId === composerVenueId;
+  if (confirmedOwnReceipt && composerVenueId) {
+    return (
+      <VenueExperienceEntryFrame
+        gameId={gameId}
+        composerVenueId={composerVenueId}
+        onCloseComposer={closeComposer}
+        cardBody={<Label accessibilityRole="status">Открыт отзыв по этой игре.</Label>}
+      />
     );
   }
 
@@ -542,26 +585,23 @@ export function VenueExperienceEntry({ gameId }: { gameId: string }) {
   }
 
   return (
-    <>
-      <View style={styles.card}>
-        <Label style={{ fontWeight: '700' }}>Отзыв о площадке после игры</Label>
-        {composerOpen ? <Label accessibilityRole="status">Открыт отзыв по этой игре.</Label>
-          : phase === 'loading' || phase === 'idle' ? <Label>Проверяем допуск по этой игре…</Label>
-            : phase === 'error' || phase === 'unavailable' ? <>
-              <Label>{s.venueNotice ?? 'Не удалось проверить допуск по этой игре.'}</Label>
-              <TextButton title="Обновить допуск" onPress={() => owner.probeVenueEligibility(gameId, liveVenueId)} />
-            </>
-              : basis ? (
-                <VenueRecoveryButton
-                  title="Оставить отзыв о площадке"
-                  liveRef={openerRef}
-                  onPress={() => owner.openVenueExperience(gameId, liveVenueId)}
-                />
-              ) : <Label>{help ?? 'Сейчас нельзя оставить отзыв по этой игре.'}</Label>}
-      </View>
-      {composerOpen && composerVenueId
-        ? <VenueExperienceComposer gameId={gameId} venueId={composerVenueId} onClose={() => owner.closeVenueExperience()} />
-        : null}
-    </>
+    <VenueExperienceEntryFrame
+      gameId={gameId}
+      composerVenueId={composerOpen ? composerVenueId : null}
+      onCloseComposer={closeComposer}
+      cardBody={composerOpen ? <Label accessibilityRole="status">Открыт отзыв по этой игре.</Label>
+        : phase === 'loading' || phase === 'idle' ? <Label>Проверяем допуск по этой игре…</Label>
+          : phase === 'error' || phase === 'unavailable' ? <>
+            <Label>{s.venueNotice ?? 'Не удалось проверить допуск по этой игре.'}</Label>
+            <TextButton title="Обновить допуск" onPress={() => owner.probeVenueEligibility(gameId, liveVenueId)} />
+          </>
+            : basis ? (
+              <VenueRecoveryButton
+                title="Оставить отзыв о площадке"
+                liveRef={openerRef}
+                onPress={() => owner.openVenueExperience(gameId, liveVenueId)}
+              />
+            ) : <Label>{help ?? 'Сейчас нельзя оставить отзыв по этой игре.'}</Label>}
+    />
   );
 }

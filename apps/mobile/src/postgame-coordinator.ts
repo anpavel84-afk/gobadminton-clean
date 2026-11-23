@@ -3383,6 +3383,9 @@ export class PostgameCoordinator {
             venueNotice: null,
           } : {}),
         });
+        // Venue ACK settles once on the owned composer — no generic notice / results / reminders refresh.
+        // finally still clears inFlight + venueFreshDispatchBind.
+        return;
       }
       if (packet.kind === 'public-role-create' && 'receiptToken' in receipt) {
         const publicReceipt = parsePublicRoleMutationReceipt(receipt);
