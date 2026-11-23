@@ -12,6 +12,7 @@ import { PreferencesProvider } from '../src/state.tsx';
 import { motionPolicy } from '../src/theme.ts';
 import { useReduceMotion } from '../src/hooks.ts';
 import { BrandLockup, Label, Page, PrimaryButton } from '../src/components/ui.tsx';
+import { PublicRoleReviewHost } from '../src/components/public-role-reviews.tsx';
 
 export default function RootLayout() {
   const [font, setFont] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -39,16 +40,19 @@ export default function RootLayout() {
   }, [attempt]);
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
-      <AuthProvider><RadarProvider><VenueCommunityProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
-        <Stack.Screen name="games/create/venue/[venueId]" options={{
-          presentation: 'formSheet',
-          headerShown: false,
-          sheetAllowedDetents: [0.9],
-          sheetCornerRadius: 20,
-          sheetGrabberVisible: true,
-          sheetExpandsWhenScrolledToEdge: false,
-        }} />
-      </Stack></MainNavigation></MessagesOwner></VenueCommunityProvider></RadarProvider></AuthProvider>
+      <AuthProvider>
+        <RadarProvider><VenueCommunityProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
+          <Stack.Screen name="games/create/venue/[venueId]" options={{
+            presentation: 'formSheet',
+            headerShown: false,
+            sheetAllowedDetents: [0.9],
+            sheetCornerRadius: 20,
+            sheetGrabberVisible: true,
+            sheetExpandsWhenScrolledToEdge: false,
+          }} />
+        </Stack></MainNavigation></MessagesOwner></VenueCommunityProvider></RadarProvider>
+        <PublicRoleReviewHost />
+      </AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />
       {font === 'error' && <><Label>Не удалось загрузить шрифт приложения.</Label>

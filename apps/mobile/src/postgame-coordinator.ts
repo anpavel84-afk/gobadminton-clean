@@ -1062,6 +1062,17 @@ export class PostgameCoordinator {
     this.show({ pendingPublicAuthor: null });
     return pending;
   };
+  /**
+   * Root host: consume pending once under a live actor and open composer with empty draft
+   * (consent false / text empty). No autosend. Logout / missing actor / empty pending are no-ops.
+   */
+  resumePendingPublicAuthor = (): boolean => {
+    if (!this.snapshot.actor) return false;
+    const pending = this.consumePendingPublicAuthor();
+    if (!pending) return false;
+    this.openPublicComposer(pending);
+    return true;
+  };
   openPublicComposer = (target: PublicRoleAuthorTarget) => {
     if (!this.snapshot.actor) return;
     const draft = emptyPublicRoleDraft(target.gameId);

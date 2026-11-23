@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
+import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
 import { AccessibilityInfo, findNodeHandle, Keyboard, Modal, Pressable, Switch, Text, TextInput, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
@@ -16,20 +16,16 @@ import { iosModalOrientations, Label, Loading, OutlineButton, Page, PrimaryButto
 
 type FocusTarget = ComponentRef<typeof Pressable>;
 
-/** Bound by PostgameSurface / entry hosts — restore initiator focus on sheet close. */
-let publicRoleFocusTrigger: RefObject<FocusTarget | null> | null = null;
-/** Catalog / disclosure entry without PostgameSurface — remember still restores focus. */
-let publicRoleFocusStandalone: FocusTarget | null = null;
-export function bindPublicRoleFocusTrigger(ref: RefObject<FocusTarget | null> | null) {
-  publicRoleFocusTrigger = ref;
-  if (ref) publicRoleFocusStandalone = null;
-}
+/** Shared focus return for catalog + MyGames author/history entries — one live target, cleared on unmount. */
+let publicRoleFocusTarget: FocusTarget | null = null;
 export function rememberPublicRoleFocusTarget(target: FocusTarget | null) {
-  if (publicRoleFocusTrigger) publicRoleFocusTrigger.current = target;
-  else publicRoleFocusStandalone = target;
+  publicRoleFocusTarget = target;
+}
+export function clearPublicRoleFocusTarget(target: FocusTarget | null) {
+  if (target && publicRoleFocusTarget === target) publicRoleFocusTarget = null;
 }
 function restorePublicTriggerFocus() {
-  const current = publicRoleFocusTrigger?.current ?? publicRoleFocusStandalone;
+  const current = publicRoleFocusTarget;
   const frame = requestAnimationFrame(() => {
     current?.focus();
     const node = findNodeHandle(current ?? null);
@@ -38,10 +34,7 @@ function restorePublicTriggerFocus() {
   return () => cancelAnimationFrame(frame);
 }
 
-/**
- * Explicit author entry — same chrome as ui OutlineButton (tokens inlined here so
- * game-role-reputation can avoid a local borderWidth:1 that breaks canonical style asserts).
- */
+/** Explicit author entry — same chrome as ui OutlineButton tokens. */
 export function PublicRoleAuthorEntryButton({
   title,
   onPress,
@@ -50,6 +43,7 @@ export function PublicRoleAuthorEntryButton({
   onPress: () => void;
 }) {
   const ref = useRef<FocusTarget>(null);
+  useEffect(() => () => clearPublicRoleFocusTarget(ref.current), []);
   return <Pressable
     ref={ref}
     accessibilityRole="button"
@@ -71,37 +65,6 @@ export function PublicRoleAuthorEntryButton({
   >
     <Label style={{ fontWeight: '700', textAlign: 'left' }}>{title}</Label>
   </Pressable>;
-}
-
-/** At most one host renders the modal; ownership hands off reactively when the owner unmounts. */
-let publicRoleHostSerial = 0;
-let publicRoleHostOwner = 0;
-let publicRoleHostEpoch = 0;
-const publicRoleHostListeners = new Set<() => void>();
-function notifyPublicRoleHostEpoch() {
-  publicRoleHostEpoch += 1;
-  for (const listener of publicRoleHostListeners) listener();
-}
-
-function usePublicRoleHostOwnership(token: number): boolean {
-  const [epoch, setEpoch] = useState(publicRoleHostEpoch);
-  const [owns, setOwns] = useState(false);
-  useEffect(() => {
-    const onBump = () => setEpoch(publicRoleHostEpoch);
-    publicRoleHostListeners.add(onBump);
-    return () => { publicRoleHostListeners.delete(onBump); };
-  }, []);
-  useLayoutEffect(() => {
-    if (publicRoleHostOwner === 0) publicRoleHostOwner = token;
-    setOwns(publicRoleHostOwner === token);
-    return () => {
-      if (publicRoleHostOwner === token) {
-        publicRoleHostOwner = 0;
-        notifyPublicRoleHostEpoch();
-      }
-    };
-  }, [token, epoch]);
-  return owns;
 }
 
 /** Own history / withdraw sheet — same surface for MyGames entry and create receipt link. */
@@ -326,14 +289,30 @@ export function PublicRoleComposerSheet({ onClose, onOpenHistory }: {
   </Modal>;
 }
 
-/** Hosts public composer/history sheets from PostgameCoordinator surface ownership. */
+/**
+ * Single persistent host under AuthProvider (RootLayout) — opens composer/history from
+ * PostgameCoordinator surface ownership; resumes bounded guest pending once when actor is current.
+ */
 export function PublicRoleReviewHost() {
   const auth = useAuth(), owner = auth.postgame;
   const s = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
-  const [token] = useState(() => ++publicRoleHostSerial);
-  const owns = usePublicRoleHostOwnership(token);
+  useEffect(() => {
+    if (auth.status !== 'authenticated') return;
+    if (!auth.me || !s.actor) return;
+    if (s.actor.actorId !== auth.me.id || s.actor.sessionId !== auth.me.session.id) return;
+    if (!s.pendingPublicAuthor) return;
+    owner.resumePendingPublicAuthor();
+  }, [
+    auth.status,
+    auth.me?.id,
+    auth.me?.session.id,
+    owner,
+    s.actor?.actorId,
+    s.actor?.sessionId,
+    s.pendingPublicAuthor,
+  ]);
   const surface = s.publicSurface;
-  if (!owns || !surface) return null;
+  if (!surface) return null;
   if (surface.mode === 'history') {
     return <PublicRoleOwnHistorySheet onClose={() => owner.closePublicSurface()} />;
   }
@@ -360,18 +339,4 @@ export function beginPublicAuthorEntry(args: {
     return;
   }
   args.open(args.target);
-}
-
-/** Production ownership helpers exercised by unit tests — not mounted visual acceptance. */
-export function publicRoleHostOwnerToken(): number {
-  return publicRoleHostOwner;
-}
-export function publicRoleHostEpochValue(): number {
-  return publicRoleHostEpoch;
-}
-export function forcePublicRoleHostReleaseForTest() {
-  if (publicRoleHostOwner !== 0) {
-    publicRoleHostOwner = 0;
-    notifyPublicRoleHostEpoch();
-  }
 }

@@ -531,7 +531,7 @@ test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-ac
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 
-test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK34 wiring', () => {
+test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK34 root-host source wiring', () => {
   const createPacket = {
     kind: 'public-role-create' as const,
     gameId,
@@ -558,24 +558,33 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   }, createPacket);
   assert.equal('receiptToken' in receipt && receipt.receiptToken, 'tok');
 
+  // Source wiring only — not mounted native acceptance.
+  const root = read('../app/_layout.tsx');
+  assert.match(root, /AuthProvider/);
+  assert.match(root, /PublicRoleReviewHost/);
+  assert.match(root, /<AuthProvider>[\s\S]*<PublicRoleReviewHost\s*\/>/);
+
   const postgameUi = read('../src/components/postgame.tsx');
   assert.match(postgameUi, /isPublicRolePacketKind/);
   assert.match(postgameUi, /publicRole/);
-  assert.match(postgameUi, /PublicRoleReviewHost/);
-  assert.match(postgameUi, /bindPublicRoleFocusTrigger/);
+  assert.doesNotMatch(postgameUi, /PublicRoleReviewHost/);
+  assert.doesNotMatch(postgameUi, /bindPublicRoleFocusTrigger/);
 
   const disclosure = read('../src/components/game-role-reputation.tsx');
   assert.match(disclosure, /Поделиться опытом/);
   assert.match(disclosure, /beginPublicAuthorEntry/);
   assert.match(disclosure, /PublicRoleAuthorEntryButton|rememberPublicRoleFocusTarget/);
-  assert.match(disclosure, /consumePendingPublicAuthor/);
+  assert.doesNotMatch(disclosure, /consumePendingPublicAuthor|resumePendingPublicAuthor/);
+  assert.doesNotMatch(disclosure, /PublicRoleReviewHost/);
   assert.doesNotMatch(disclosure, /canReply|canReport|Сообщить о нарушении/);
   assert.doesNotMatch(disclosure, /borderWidth:\s*1/);
 
   const host = read('../src/components/public-role-reviews.tsx');
-  assert.match(host, /publicRoleHostListeners|notifyPublicRoleHostEpoch/);
-  assert.match(host, /restorePublicTriggerFocus|bindPublicRoleFocusTrigger/);
+  assert.doesNotMatch(host, /publicRoleHostListeners|notifyPublicRoleHostEpoch|forcePublicRoleHostReleaseForTest|usePublicRoleHostOwnership/);
+  assert.match(host, /restorePublicTriggerFocus/);
   assert.match(host, /rememberPublicRoleFocusTarget/);
+  assert.match(host, /clearPublicRoleFocusTarget/);
+  assert.match(host, /resumePendingPublicAuthor/);
   assert.match(host, /PublicRoleAuthorEntryButton/);
   assert.doesNotMatch(host, /без выдуманного исполнителя/);
   assert.match(host, /срок и исполнитель не обещаются/);
@@ -583,7 +592,10 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
   const myGames = read('../app/my-games.tsx');
   assert.match(myGames, /Отзывы/);
   assert.match(myGames, /Мои публичные отзывы о ролях/);
-  assert.match(myGames, /PublicOwnReviewsEntry|FocusContext/);
+  assert.match(myGames, /PublicOwnReviewsEntry|rememberPublicRoleFocusTarget/);
+
+  const coordinator = read('../src/postgame-coordinator.ts');
+  assert.match(coordinator, /resumePendingPublicAuthor/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /publicRoleEligibility/);
@@ -605,6 +617,54 @@ test('validateReceipt accepts public create/withdraw; CommandReview excludes pub
 
   assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 34);
   assert.equal(draftEditorKey(emptyPublicRoleDraft(gameId), handle, 'organization').includes(gameId), true);
+});
+
+test('resumePendingPublicAuthor consumes once under actor; logout/missing actor fences; empty draft no autosend', async () => {
+  const keys: string[] = [];
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      send: async (packet) => {
+        keys.push(packet.key);
+        throw new PostgameError('invalid');
+      },
+    }),
+  }, () => `key-${keys.length + 1}`);
+
+  const target = { roleHandle: handle, role: 'organization' as const, gameId, subjectDisplayName: 'Org' };
+  // No actor: remember ok, resume is a no-op.
+  owner.rememberPendingPublicAuthor(target);
+  assert.equal(owner.resumePendingPublicAuthor(), false);
+  assert.equal(owner.getSnapshot().pendingPublicAuthor?.roleHandle, handle);
+  assert.equal(owner.getSnapshot().publicSurface, null);
+
+  owner.setActor(actor);
+  assert.equal(owner.resumePendingPublicAuthor(), true);
+  assert.equal(owner.getSnapshot().pendingPublicAuthor, null);
+  assert.equal(owner.getSnapshot().publicSurface?.mode, 'composer');
+  assert.equal(owner.getSnapshot().publicSurface?.target?.roleHandle, handle);
+  assert.equal(owner.getSnapshot().publicDraft?.text, '');
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  assert.equal(keys.length, 0);
+
+  // Exactly once — second resume with no pending is false; surface stays open, no autosend.
+  assert.equal(owner.resumePendingPublicAuthor(), false);
+  assert.equal(keys.length, 0);
+
+  // Logout keeps pending if re-remembered after clear; resume without actor fails.
+  owner.closePublicSurface();
+  owner.rememberPendingPublicAuthor(target);
+  owner.setActor(null);
+  assert.equal(owner.resumePendingPublicAuthor(), false);
+  assert.equal(owner.getSnapshot().pendingPublicAuthor?.gameId, gameId);
+  assert.equal(owner.getSnapshot().publicSurface, null);
+
+  // Late auth: same actor resumes once with fresh empty draft.
+  owner.setActor(actor);
+  assert.equal(owner.resumePendingPublicAuthor(), true);
+  assert.equal(owner.getSnapshot().pendingPublicAuthor, null);
+  assert.equal(owner.getSnapshot().publicDraft?.consent, false);
+  assert.equal(owner.getSnapshot().publicDraft?.text, '');
+  assert.equal(keys.length, 0);
 });
 
 test('own list max 50; empty roleHandle not authoring authority', () => {

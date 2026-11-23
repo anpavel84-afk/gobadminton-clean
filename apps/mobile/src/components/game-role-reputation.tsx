@@ -18,7 +18,6 @@ import { publicAuthorReturnPath } from '../public-role-reviews.ts';
 import {
   beginPublicAuthorEntry,
   PublicRoleAuthorEntryButton,
-  PublicRoleReviewHost,
 } from './public-role-reviews.tsx';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
@@ -46,22 +45,11 @@ export function GameRoleReputationDisclosure({
   const [coordinator] = useState(createCardCoordinator);
   const state = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
   const wantTraining = game.activityKind === 'trainer_led';
-  const auth = useAuth();
-  const postgame = auth.postgame;
 
   useEffect(() => {
     coordinator.bind(game.id, { wantTraining });
     return () => { coordinator.collapse(); };
   }, [coordinator, game.id, wantTraining]);
-
-  // Guest auth return: reopen composer for bounded role/game only (no consent/text).
-  useEffect(() => {
-    if (auth.status !== 'authenticated') return;
-    const pending = postgame.getSnapshot().pendingPublicAuthor;
-    if (!pending || pending.gameId !== game.id) return;
-    const target = postgame.consumePendingPublicAuthor();
-    if (target) postgame.openPublicComposer(target);
-  }, [auth.status, game.id, postgame, auth.me?.id, auth.me?.session.id]);
 
   const expanded = state.expanded && state.gameId === game.id;
 
@@ -85,7 +73,6 @@ export function GameRoleReputationDisclosure({
       <RoleLaneView lane={state.organization} gameId={game.id} onRetry={() => coordinator.retry('organization')}
         onMore={() => coordinator.loadMore('organization')} />
     </View> : null}
-    <PublicRoleReviewHost />
   </View>;
 }
 

@@ -7,17 +7,13 @@ import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, 
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
-import { bindPublicRoleFocusTrigger, PublicRoleReviewHost } from './public-role-reviews.tsx';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
 type FocusTarget = ComponentRef<typeof Pressable>;
 export const FocusContext=createContext<RefObject<FocusTarget | null> | null>(null);
+/** Private CommandReview focus owner — public role sheets use shared rememberPublicRoleFocusTarget instead. */
 export function PostgameSurface({children}:PropsWithChildren) {
   const trigger=useRef<FocusTarget>(null);
-  useEffect(() => {
-    bindPublicRoleFocusTrigger(trigger);
-    return () => bindPublicRoleFocusTrigger(null);
-  }, [trigger]);
-  return <FocusContext.Provider value={trigger}>{children}<PublicRoleReviewHost /></FocusContext.Provider>;
+  return <FocusContext.Provider value={trigger}>{children}</FocusContext.Provider>;
 }
 function useBlocked() {
   const owner=useAuth().postgame, s=useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot);
