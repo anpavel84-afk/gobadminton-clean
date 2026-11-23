@@ -6,7 +6,9 @@ import {
   VENUE_TOPIC_OPTIONS,
   exactGameMaySubmitBasis,
   isVenueExperiencePacketKind,
+  postgameIdempotencyReplayBlocked,
   venueReviewEligibilityHelp,
+  POSTGAME_RETENTION_EXPIRED_NOTICE,
   type VenueAudience,
   type VenueReviewTopic,
 } from '../venue-reviews.ts';
@@ -41,6 +43,7 @@ export function VenueExperienceComposer({
   const locked = !!command || !!s.venueReceipt;
   const busy = command?.status === 'sending';
   const unknown = command?.status === 'unknown';
+  const retentionBlocked = unknown && postgameIdempotencyReplayBlocked(command?.firstDispatchedAt);
   const previewHash = open ? s.venueConsentHash : null;
   const canSubmit = open && !locked && !!basis && !!draft
     && draft.text.trim().length >= 1 && draft.text.trim().length <= 500
@@ -59,7 +62,7 @@ export function VenueExperienceComposer({
       onRequestClose={close}>
       <Page keyboard header={<View style={{ gap: 8 }}>
         <TextButton title="Закрыть" onPress={close} />
-        {!s.venueReceipt ? (
+        {!s.venueReceipt && !retentionBlocked ? (
           <PrimaryButton
             title={unknown ? 'Проверить отправку' : 'Сохранить'}
             disabled={busy || (!canSubmit && !unknown)}
@@ -71,6 +74,7 @@ export function VenueExperienceComposer({
         <View style={{ gap: 16 }}>
           <Label accessibilityRole="header" style={{ fontWeight: '700' }}>Как вам площадка?</Label>
           <Label>По умолчанию текст только вам. Публичный отзыв — без профиля, игры и состава.</Label>
+          {retentionBlocked ? <Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label> : null}
           {s.venueEligibility.status === 'loading' ? <Loading title="Проверяем допуск по этой игре…" /> : null}
           {s.venueEligibility.status === 'error' || s.venueEligibility.status === 'unavailable'
             ? <Label accessibilityRole="alert">{s.venueNotice ?? 'Не удалось проверить допуск.'}</Label>
@@ -184,7 +188,7 @@ export function VenueExperienceComposer({
               {s.venueReceipt.receiptToken
                 ? <Label>Квитанция: {s.venueReceipt.receiptToken}</Label>
                 : null}
-              <Label>Нативная история своих отзывов о площадке, правка и пагинация — ещё не готовы; статус на веб-профиле.</Label>
+              <Label>Актуальный статус отзыва о площадке можно посмотреть на сайте.</Label>
             </View>
           ) : null}
         </View>

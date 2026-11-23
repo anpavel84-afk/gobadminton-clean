@@ -72,8 +72,9 @@ import {
   isVenueExperiencePacketKind,
   parseOwnVenueEligibility,
   parseVenueConsentPreview,
-  venueExperienceIdempotencyExpired,
+  postgameIdempotencyReplayBlocked,
   venueExperienceText,
+  POSTGAME_RETENTION_EXPIRED_NOTICE,
   type OwnVenueEligibility,
   type VenueExperienceDraft,
   type VenueReviewMutationReceipt,
@@ -150,7 +151,7 @@ type Command = {
   status: 'sending' | 'unknown';
   /** Attendance/outcome fingerprint at owned-packet send — never on the API wire. */
   roleDiscrepancyContext?: RoleDiscrepancyContext;
-  /** First dispatch clock for venue 24h idempotency client fence — never on the API wire. */
+  /** Original first-dispatch clock for journal 24h idempotency fence — never on the API wire. */
   firstDispatchedAt?: number;
 };
 type OwnAck = { gameId: string; contextId: string; version: number };
@@ -2480,6 +2481,19 @@ export class PostgameCoordinator {
     if (!actor || !command || command.status !== 'unknown' || this.inFlight) return;
     if (!isPublicRolePacketKind(command.packet.kind)) return;
     if (command.packet.actor.actorId !== actor.actorId) return;
+    if (postgameIdempotencyReplayBlocked(command.firstDispatchedAt)) {
+      this.show({
+        command: {
+          packet: command.packet,
+          status: 'unknown',
+          ...(command.firstDispatchedAt !== undefined
+            ? { firstDispatchedAt: command.firstDispatchedAt }
+            : {}),
+        },
+        publicNotice: POSTGAME_RETENTION_EXPIRED_NOTICE,
+      });
+      return;
+    }
     await this.dispatch(command.packet, actor, true);
   };
   /** Probe exact current-game venue eligibility without opening the composer. */
@@ -2713,10 +2727,16 @@ export class PostgameCoordinator {
     if (!actor || !command || command.status !== 'unknown' || this.inFlight) return;
     if (!isVenueExperiencePacketKind(command.packet.kind)) return;
     if (command.packet.actor.actorId !== actor.actorId) return;
-    if (command.firstDispatchedAt !== undefined
-      && venueExperienceIdempotencyExpired(command.firstDispatchedAt)) {
+    if (postgameIdempotencyReplayBlocked(command.firstDispatchedAt)) {
       this.show({
-        venueNotice: 'Срок проверки исходного действия истёк. Статус отзыва о площадке смотрите в веб-профиле — нативная история своих отзывов ещё не готова.',
+        command: {
+          packet: command.packet,
+          status: 'unknown',
+          ...(command.firstDispatchedAt !== undefined
+            ? { firstDispatchedAt: command.firstDispatchedAt }
+            : {}),
+        },
+        venueNotice: POSTGAME_RETENTION_EXPIRED_NOTICE,
       });
       return;
     }
@@ -2861,10 +2881,46 @@ export class PostgameCoordinator {
   };
   reconcile = async (gameId: string) => {
     const {actor,command}=this.snapshot; if(!actor || !command || command.status !== 'unknown' || this.inFlight || command.packet.gameId !== gameId || command.packet.actor.actorId !== actor.actorId) return;
+    if (postgameIdempotencyReplayBlocked(command.firstDispatchedAt)) {
+      this.show({
+        command: {
+          packet: command.packet,
+          status: 'unknown',
+          ...(command.roleDiscrepancyContext
+            ? { roleDiscrepancyContext: command.roleDiscrepancyContext }
+            : {}),
+          ...(command.firstDispatchedAt !== undefined
+            ? { firstDispatchedAt: command.firstDispatchedAt }
+            : {}),
+        },
+        notice: POSTGAME_RETENTION_EXPIRED_NOTICE,
+      });
+      return;
+    }
     await this.dispatch(command.packet,actor,true);
   };
+  private retentionExpiredHold(
+    packet: Packet,
+    firstDispatchedAt: number | undefined,
+    roleDiscrepancyContext?: RoleDiscrepancyContext,
+  ) {
+    const command = {
+      packet,
+      status: 'unknown' as const,
+      ...(roleDiscrepancyContext ? { roleDiscrepancyContext } : {}),
+      ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+    };
+    if (isPublicRolePacketKind(packet.kind)) {
+      this.show({ command, notice: null, publicNotice: POSTGAME_RETENTION_EXPIRED_NOTICE });
+      return;
+    }
+    if (isVenueExperiencePacketKind(packet.kind)) {
+      this.show({ command, notice: null, venueNotice: POSTGAME_RETENTION_EXPIRED_NOTICE });
+      return;
+    }
+    this.show({ command, notice: POSTGAME_RETENTION_EXPIRED_NOTICE });
+  }
   private async dispatch(packet: Packet, authority: Actor, reconciling: boolean) {
-    this.inFlight=packet;
     // Capture role discrepancy fingerprint before send; UNKNOWN retry keeps the original binding.
     const priorCommand = this.snapshot.command;
     const roleDiscrepancyContext =
@@ -2873,9 +2929,15 @@ export class PostgameCoordinator {
           ? priorCommand.roleDiscrepancyContext
           : roleDiscrepancyContextFromResults(this.snapshot.games[packet.gameId]?.data))
         : undefined;
-    const firstDispatchedAt = reconciling && priorCommand?.packet === packet && priorCommand.firstDispatchedAt !== undefined
-      ? priorCommand.firstDispatchedAt
-      : (isVenueExperiencePacketKind(packet.kind) ? Date.now() : undefined);
+    // First actual dispatch stamps age once; reconcile never invents or rotates the clock.
+    const firstDispatchedAt = reconciling
+      ? (priorCommand?.packet === packet ? priorCommand.firstDispatchedAt : undefined)
+      : Date.now();
+    if (reconciling && postgameIdempotencyReplayBlocked(firstDispatchedAt)) {
+      this.retentionExpiredHold(packet, firstDispatchedAt, roleDiscrepancyContext);
+      return;
+    }
+    this.inFlight=packet;
     this.show({
       command: {
         packet,
@@ -3249,7 +3311,11 @@ export class PostgameCoordinator {
         if (settleJournal) this.publicMutationBind = null;
         if (paintUi && hardAuthReplyReport) {
           this.retireOwnedPublicReaderAuthority(error, {
-            command: { packet, status: 'unknown' },
+            command: {
+              packet,
+              status: 'unknown',
+              ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+            },
             notice: null,
           });
         } else {
@@ -3258,6 +3324,7 @@ export class PostgameCoordinator {
             command: settleJournal ? null : {
               packet,
               status: 'unknown',
+              ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
             },
             notice: null,
             ...(paintUi ? {

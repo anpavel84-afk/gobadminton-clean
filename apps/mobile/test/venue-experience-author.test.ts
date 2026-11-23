@@ -15,6 +15,7 @@ import {
   parseVenueConsentPreview,
   parseVenueReviewMutationReceipt,
   venueExperienceIdempotencyExpired,
+  postgameIdempotencyReplayBlocked,
 } from '../src/venue-reviews.ts';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -221,8 +222,9 @@ test('consent race + business retain + UNKNOWN recovery + 24h expiry blocks late
   await owner.reconcileVenueExperience();
   assert.equal(keys.length, before);
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
-  assert.match(owner.getSnapshot().venueNotice ?? '', /веб-профиле|истёк/i);
+  assert.match(owner.getSnapshot().venueNotice ?? '', /неизвестен|недоступен|сайте/i);
   assert.equal(venueExperienceIdempotencyExpired(cmd.firstDispatchedAt!), true);
+  assert.equal(postgameIdempotencyReplayBlocked(cmd.firstDispatchedAt!), true);
   void body;
 });
 
@@ -263,7 +265,7 @@ test('source wiring: results entry + dual-auth guards + APK37 pins', () => {
   assert.match(coordinator, /venue-experience-create/);
   assert.match(coordinator, /firstDispatchedAt/);
   assert.match(coordinator, /reconcileVenueExperience/);
-  assert.match(coordinator, /VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS|venueExperienceIdempotencyExpired/);
+  assert.match(coordinator, /postgameIdempotencyReplayBlocked|VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS|venueExperienceIdempotencyExpired/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /venueExperienceEligibility/);

@@ -66,8 +66,14 @@ export type VenueExperienceDraft = {
   consent: boolean;
 };
 
-/** Client fence matching server idempotency completed/UNKNOWN TTL. */
+/** Client fence matching server idempotency completed/UNKNOWN TTL (journal-wide). */
 export const VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+/** Same 24h TTL for every Postgame journal packet (private / public / venue). */
+export const POSTGAME_IDEMPOTENCY_TTL_MS = VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS;
+
+/** Honest expired UNKNOWN recovery — result unknown; status on site; no GET-success claim. */
+export const POSTGAME_RETENTION_EXPIRED_NOTICE =
+  'Результат исходной отправки неизвестен. Безопасный повтор того же действия уже недоступен. Актуальный статус можно посмотреть на сайте.';
 
 const TOPICS = new Set<string>(['surface', 'lighting', 'amenities']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -321,6 +327,21 @@ export function isVenueExperiencePacketKind(kind: string): kind is 'venue-experi
 
 export function venueExperienceIdempotencyExpired(firstDispatchedAt: number, now = Date.now()): boolean {
   return Number.isFinite(firstDispatchedAt) && now - firstDispatchedAt >= VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS;
+}
+
+/**
+ * Fail-closed UNKNOWN replay gate: missing/invalid/backwards clock or elapsed ≥ 24h.
+ * Controllable via `now` for synthetic transport tests — never restarts original age.
+ */
+export function postgameIdempotencyReplayBlocked(
+  firstDispatchedAt: number | undefined,
+  now = Date.now(),
+): boolean {
+  if (typeof firstDispatchedAt !== 'number' || !Number.isFinite(firstDispatchedAt)) return true;
+  if (!Number.isFinite(now) || now < firstDispatchedAt) return true;
+  const elapsed = now - firstDispatchedAt;
+  if (!Number.isFinite(elapsed) || elapsed < 0) return true;
+  return elapsed >= POSTGAME_IDEMPOTENCY_TTL_MS;
 }
 
 export const TOPIC_LABEL: Record<VenueReviewTopic, string> = {

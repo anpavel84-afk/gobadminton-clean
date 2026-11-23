@@ -5,7 +5,11 @@ import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { attendanceLabel, mayAcknowledge, normalizeFormReason, peerRatingLabel, reviewKindModeLabel, resolvingAckAssertion } from '../postgame.ts';
 import { isPublicRolePacketKind } from '../public-role-reviews.ts';
-import { isVenueExperiencePacketKind } from '../venue-reviews.ts';
+import {
+  isVenueExperiencePacketKind,
+  postgameIdempotencyReplayBlocked,
+  POSTGAME_RETENTION_EXPIRED_NOTICE,
+} from '../venue-reviews.ts';
 import { sameActor } from '../participation.ts';
 import type { Attendance, AttendanceValue, Reminder, Results } from '../postgame.ts';
 import { iosModalOrientations, Label, Loading, TextButton, PrimaryButton, Page, styles } from './ui.tsx';
@@ -93,6 +97,8 @@ export function CommandReview({gameId}: {gameId?:string}) {
     ? resolvingSource.data : undefined;
   const resolvingMatch=selected?.kind === 'ack' && resolvingAck ? resolvingAckAssertion(selected, resolvingDetail) : null;
   const canConfirm=!resolvingAck || !!resolvingMatch;
+  const retentionBlocked = command?.status === 'unknown'
+    && postgameIdempotencyReplayBlocked(command.firstDispatchedAt);
   return <>
     {s.notice && <Label accessibilityRole="alert">{s.notice}</Label>}
     {command && <TextButton title={command.status === 'sending' ? 'Сохраняем… Показать действие' : 'Исход неизвестен. Показать действие'} onPress={()=>setDismissed(null)} />}
@@ -102,7 +108,7 @@ export function CommandReview({gameId}: {gameId?:string}) {
         <TextButton title={review ? 'Отмена' : 'Закрыть'} onPress={close} />
         {review && <PrimaryButton title="Подтвердить" disabled={!canConfirm} onPress={()=>void owner.confirm()} />}
         {command?.status === 'sending' && <Label accessibilityLiveRegion="polite">Сохраняем…</Label>}
-        {command?.status === 'unknown' && <TextButton title="Проверить исходное действие" onPress={()=>void owner.reconcile(command.packet.gameId)} />}
+        {command?.status === 'unknown' && !retentionBlocked && <TextButton title="Проверить исходное действие" onPress={()=>void owner.reconcile(command.packet.gameId)} />}
       </View>}>
         <View accessibilityViewIsModal onAccessibilityEscape={close} style={{gap:16}}>
           <Text ref={heading} accessibilityRole="header" accessibilityLiveRegion="polite" allowFontScaling style={[styles.text,styles.subtitle]}>{review ? 'Проверьте выбранное действие' : command?.status === 'sending' ? 'Сохраняем…' : 'Исход действия неизвестен'}</Text>
@@ -154,7 +160,8 @@ export function CommandReview({gameId}: {gameId?:string}) {
             {selected.kind === 'peer-report' && <><Label>Пожаловаться на отзыв · версия {selected.body.expectedVersion}</Label><Label>Без публикации и без блокировки игрока</Label>{selected.body.detail && <Label>{selected.body.detail}</Label>}</>}
           </>}
           {command?.status === 'sending' && <Loading title="Отправляем выбранное действие…" />}
-          {command?.status === 'unknown' && <><Label>Результат пока неизвестен. Новые изменения недоступны до проверки исходного действия.</Label></>}
+          {command?.status === 'unknown' && !retentionBlocked && <><Label>Результат пока неизвестен. Новые изменения недоступны до проверки исходного действия.</Label></>}
+          {command?.status === 'unknown' && retentionBlocked && <><Label accessibilityRole="status">{POSTGAME_RETENTION_EXPIRED_NOTICE}</Label></>}
         </View>
       </Page>
     </Modal>

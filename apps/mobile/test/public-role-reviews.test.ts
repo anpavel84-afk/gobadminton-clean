@@ -908,7 +908,7 @@ test('late create receipt cannot attach to other composer; ABA + UNKNOWN same-ac
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 
-test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK37 root-host source wiring', () => {
+test('validateReceipt accepts public create/withdraw; CommandReview excludes public kinds; APK36 root-host source wiring', () => {
   const createPacket = {
     kind: 'public-role-create' as const,
     gameId,

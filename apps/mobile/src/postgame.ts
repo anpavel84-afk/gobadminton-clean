@@ -34,13 +34,23 @@ import {
 import {
   isVenueExperienceCreateReceipt,
   parseVenueReviewMutationReceipt,
+  postgameIdempotencyReplayBlocked,
   venueExperienceText,
+  POSTGAME_IDEMPOTENCY_TTL_MS,
+  POSTGAME_RETENTION_EXPIRED_NOTICE,
+  VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS,
   type VenueAudience,
   type VenueExperienceCreateBody,
   type VenueReviewMutationReceipt,
   type VenueReviewTopic,
 } from './venue-reviews.ts';
 import { isVenueId } from './venues.ts';
+export {
+  postgameIdempotencyReplayBlocked,
+  POSTGAME_IDEMPOTENCY_TTL_MS,
+  POSTGAME_RETENTION_EXPIRED_NOTICE,
+  VENUE_EXPERIENCE_IDEMPOTENCY_TTL_MS,
+};
 export type { PeerCreateReason, PeerRating, PeerTag, PrivateReview, ReviewReportReason, ReviewReportReceipt, MeReviewsPage, ReviewKind } from './postgame-feedback.ts';
 export {
   PEER_OPTIONS, TAG_OPTIONS, REPORT_REASONS, PEER_RATINGS, PEER_TAGS,
