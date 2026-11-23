@@ -1283,3 +1283,147 @@ test('eligibility 401 retires consent; UNKNOWN create packet preserved without a
   assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
+
+test('#522 QA4: same-actor reauth keeps version floor; deferred GET then older withdraw ACK cannot paint over v4', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const v2 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'Исходный текст',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  const v4 = {
+    ...v2,
+    version: 4,
+    text: 'Повторная подача с другого клиента',
+    receiptToken: 'r4',
+    pendingRevision: 2,
+  };
+  const ackV3 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    version: 3,
+    status: 'withdrawn' as const,
+    receiptToken: 'w-receipt-v3',
+    pendingIntakeStatus: 'waiting_intake' as const,
+  };
+  let ownPhase: 'v2' | 'v4' | 'defer' = 'v2';
+  let sendMode: 'unknown' | 'ack-v3' = 'unknown';
+  let releaseOwn!: (value: unknown) => void;
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => {
+        if (ownPhase === 'defer') {
+          return new Promise(resolve => { releaseOwn = resolve; });
+        }
+        return { items: ownPhase === 'v4' ? [v4] : [v2] };
+      },
+      send: async () => {
+        if (sendMode === 'ack-v3') return ackV3;
+        throw new PostgameError('network', 503);
+      },
+    }),
+  }, () => 'qa4-reauth-floor');
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 2);
+
+  // Withdraw v2 → UNKNOWN, then typed GET establishes resubmitted v4 (+ floor).
+  await withdrawWithRender(owner, v2);
+  await tick();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  const unknownKey = owner.getSnapshot().command!.packet.key;
+
+  ownPhase = 'v4';
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
+  assert.equal(mayPaintOwnPublicReceipt(ackV3, owner.getSnapshot().publicOwn.data!.items[0], 4), false);
+
+  // Same-actor session/generation rotate; defer automatic history GET so ACK races before typed rows return.
+  ownPhase = 'defer';
+  owner.setActor({ ...actor, sessionId: 'reauth-session', generation: 2 });
+  await tick();
+  assert.equal(owner.getSnapshot().command?.packet.key, unknownKey);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().publicOwn.status, 'loading');
+
+  // Explicit reconciliation of original withdrawn ACK v3 must not paint over established v4 floor
+  // even while the reauth GET is still outstanding (typed rows not yet restored).
+  sendMode = 'ack-v3';
+  ownPhase = 'v4'; // ACK follow-up GET may complete; deferred reauth GET stays stale.
+  await owner.reconcilePublic();
+  await tick();
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.notEqual(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 4);
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.status, 'submitted');
+
+  // Resolve stale reauth GET (gen fenced) — must not resurrect withdrawn paint.
+  releaseOwn({ items: [v4] });
+  await tick();
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.notEqual(owner.getSnapshot().publicNotice, 'Отзыв отозван.');
+});
+
+test('#522 QA4: withdraw 409 VERSION_CONFLICT notice survives owning follow-up own-list GET', async () => {
+  const reviewId = '55555555-5555-4555-8555-555555555555';
+  const v2 = {
+    id: reviewId,
+    reviewHandle: 'c'.repeat(32),
+    role: 'organization' as const,
+    roleHandle: handle,
+    subjectDisplayName: 'Org',
+    status: 'submitted',
+    version: 2,
+    text: 'Живой текст',
+    topics: ['agreements'],
+    receiptToken: 'r2',
+    pendingIntakeStatus: 'none' as const,
+    approvedRevision: null,
+    pendingRevision: 1,
+  };
+  const conflictNotice = publicRoleBusinessNotice('VERSION_CONFLICT', 'command');
+  const owner = new PostgameCoordinator({
+    ...idlePort({
+      publicOwnReviews: async () => ({ items: [v2] }),
+      send: async () => {
+        throw new PostgameError('business', 409, 'VERSION_CONFLICT');
+      },
+    }),
+  }, () => 'qa4-withdraw-409');
+
+  owner.setActor(actor);
+  owner.openOwnPublicHistory();
+  await tick();
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 2);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+
+  await withdrawWithRender(owner, v2);
+  await tick();
+
+  assert.equal(owner.getSnapshot().command, null);
+  assert.equal(owner.getSnapshot().publicReceipt, null);
+  assert.equal(owner.getSnapshot().publicNotice, conflictNotice);
+  assert.equal(owner.getSnapshot().publicOwn.status, 'ready');
+  assert.equal(owner.getSnapshot().publicOwn.data?.items[0]?.version, 2);
+  // Owning automatic reread must not erase the actionable rejection explanation.
+  assert.match(owner.getSnapshot().publicNotice ?? '', /Версия отзыва изменилась/);
+
+  // Unrelated manual refresh without preserveNotice may clear a stale notice.
+  await owner.loadOwnPublicReviews();
+  await tick();
+  assert.equal(owner.getSnapshot().publicNotice, null);
+});

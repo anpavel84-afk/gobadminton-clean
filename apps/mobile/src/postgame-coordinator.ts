@@ -305,7 +305,14 @@ export class PostgameCoordinator {
     this.reviewsBusy={sent:false,received:false}; this.reviewsFollowup={sent:false,received:false};
     this.reviewsBusyGen={sent:this.reviewsBusyGen.sent+1,received:this.reviewsBusyGen.received+1};
     this.publicEligibilityGen++; this.publicOwnGen++; this.publicPreviewGen++; this.publicSurfaceGen++;
-    this.publicMutationBind=null; this.publicOwnVersionFloor.clear(); this.publicOwnAwaitingTyped.clear(); this.publicOwnDenied=false;
+    this.publicMutationBind=null; this.publicOwnDenied=false;
+    // Same-account reauth: keep actor-scoped version/awaiting fences so a deferred own GET
+    // cannot let an older ACK repaint over a floor already established this session.
+    // Different actor / logout still drops fences; write authority reestablishes via fresh GET only.
+    if (!saved) {
+      this.publicOwnVersionFloor.clear();
+      this.publicOwnAwaitingTyped.clear();
+    }
     const pendingPublic = this.snapshot.pendingPublicAuthor;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
@@ -1208,9 +1215,15 @@ export class PostgameCoordinator {
       });
     }
   };
-  loadOwnPublicReviews = async () => {
+  /**
+   * @param opts.preserveNotice Keep actionable withdraw/command business rejection through its
+   * owning follow-up own-list GET (mirrors create eligibility preserveNotice). Manual refresh omits this.
+   */
+  loadOwnPublicReviews = async (opts?: { preserveNotice?: boolean }) => {
     const actor = this.snapshot.actor;
     if (!actor) return;
+    const preserveNotice = opts?.preserveNotice === true;
+    const priorNotice = this.snapshot.publicNotice;
     const gen = ++this.publicOwnGen;
     this.show({ publicOwn: { status: 'loading', data: this.snapshot.publicOwn.data } });
     try {
@@ -1240,19 +1253,19 @@ export class PostgameCoordinator {
       }
       // Newer typed GET retires stale receipt + matching confirmation (no resurrection).
       // Current withdraw/command confirmation survives ordinary/stale/same-version list refresh;
-      // unrelated/error notices are not preserved across a successful own-list GET.
+      // owning follow-up after business rejection keeps that notice; unrelated manual refresh clears.
       const painted = this.snapshot.publicReceipt;
       const retireReceipt = !!painted && merged.some(
         item => item.id === painted.id && item.version > painted.version,
       );
-      const priorNotice = this.snapshot.publicNotice;
       const keepConfirm = !retireReceipt && !!painted && (
         (painted.status === 'withdrawn' && priorNotice === 'Отзыв отозван.')
         || (painted.status !== 'withdrawn' && priorNotice === 'Команда принята.')
       );
+      const keepNotice = keepConfirm || (preserveNotice && !!priorNotice);
       this.show({
         publicOwn: { status: 'ready', data: { items: merged } },
-        publicNotice: keepConfirm ? priorNotice : null,
+        publicNotice: keepNotice ? priorNotice : null,
         ...(retireReceipt ? { publicReceipt: null } : {}),
       });
     } catch (error) {
@@ -1265,7 +1278,9 @@ export class PostgameCoordinator {
       }
       this.show({
         publicOwn: denied || auth ? { status: 'unavailable' } : { status: 'error' },
-        publicNotice: auth ? 'Войдите, чтобы увидеть свои отзывы о ролях.' : 'Не удалось загрузить.',
+        publicNotice: preserveNotice && priorNotice
+          ? priorNotice
+          : (auth ? 'Войдите, чтобы увидеть свои отзывы о ролях.' : 'Не удалось загрузить.'),
       });
     }
   };
@@ -1922,7 +1937,9 @@ export class PostgameCoordinator {
         if (publicBusiness && packet.kind === 'public-role-create') {
           void this.loadPublicEligibility({ preserveNotice: true });
         }
-        if (publicBusiness && packet.kind === 'public-role-command') void this.loadOwnPublicReviews();
+        if (publicBusiness && packet.kind === 'public-role-command') {
+          void this.loadOwnPublicReviews({ preserveNotice: true });
+        }
       } else {
         this.show({
           command: definite ? null : {
