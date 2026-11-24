@@ -85,7 +85,9 @@ function emptyPublicVenueReviewsGallery(): PublicVenueReviewsGallerySnapshot {
 /**
  * Production public gallery owner — independent first page (limit 20), exact nextCursor,
  * reviewHandle dedupe, double-tap/cursor busy fence, late close/venue-change retirement,
- * more-error retry without dropping rows/cursor. Credential-omit transport only.
+ * more-error retry without dropping rows/cursor. A successful page whose nextCursor equals
+ * the request cursor or any already consumed token normalizes to terminal null (no dead More).
+ * Credential-omit transport only.
  */
 export class PublicVenueReviewsGallery {
   private state: PublicVenueReviewsGallerySnapshot = emptyPublicVenueReviewsGallery();
@@ -166,7 +168,8 @@ export class PublicVenueReviewsGallery {
 
   /**
    * «Ещё» / more-error retry — exact server nextCursor, busy + consumed-cursor fence,
-   * preserves prior rows on failure for the same GET retry.
+   * preserves prior rows on failure for the same GET retry. Repeated/already-consumed
+   * success nextCursor becomes terminal null so More cannot stay enabled as a no-op.
    */
   loadMore(): void {
     if (!this.state.open || this.inflight !== null || this.state.loadingMore) return;
@@ -185,9 +188,11 @@ export class PublicVenueReviewsGallery {
       if (this.inflight !== cursor) return;
       this.inflight = null;
       this.consumed.add(cursor);
+      const rawNext = page.nextCursor;
+      const nextCursor = rawNext !== null && this.consumed.has(rawNext) ? null : rawNext;
       this.show({
         items: appendPublicVenueReviewItems(this.state.items, page.items),
-        nextCursor: page.nextCursor,
+        nextCursor,
         loadingMore: false,
         moreError: false,
       });

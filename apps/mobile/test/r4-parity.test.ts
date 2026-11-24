@@ -248,6 +248,121 @@ test('#522 PublicVenueReviewsGallery: first20, exact cursor, dedupe, busy, late 
   assert.ok(crossCalls.some(c => c.venueId === otherVenue && c.cursor === undefined));
 });
 
+test('#522 PublicVenueReviewsGallery: same-cursor + A→B→A normalize; first-page fence', async () => {
+  // Same request cursor echoed as nextCursor → terminal null, rows kept, More dead-CTA gone.
+  const sameCalls: Array<string | undefined> = [];
+  const same = new PublicVenueReviewsGallery({
+    experienceReviews: async (_id, cursor) => {
+      sameCalls.push(cursor);
+      if (cursor === undefined) return page([item('1')], 'cur-same', 2);
+      assert.equal(cursor, 'cur-same');
+      return page([item('1'), item('2')], 'cur-same', 2);
+    },
+  });
+  same.open(venueId);
+  await flush();
+  same.loadMore();
+  await flush();
+  assert.equal(same.getSnapshot().items.length, 2);
+  assert.equal(same.getSnapshot().nextCursor, null);
+  assert.equal(same.getSnapshot().moreError, false);
+  same.loadMore();
+  assert.equal(sameCalls.length, 2);
+
+  // A → B → A cycle: returning already-consumed A must terminal-null without dropping rows.
+  const cycleCalls: Array<string | undefined> = [];
+  const cycle = new PublicVenueReviewsGallery({
+    experienceReviews: async (_id, cursor) => {
+      cycleCalls.push(cursor);
+      if (cursor === undefined) return page([item('a')], 'cur-A', 3);
+      if (cursor === 'cur-A') return page([item('a'), item('b')], 'cur-B', 3);
+      if (cursor === 'cur-B') return page([item('a'), item('b'), item('c')], 'cur-A', 3);
+      throw new PublicApiError('invalid');
+    },
+  });
+  cycle.open(venueId);
+  await flush();
+  cycle.loadMore();
+  await flush();
+  assert.equal(cycle.getSnapshot().nextCursor, 'cur-B');
+  cycle.loadMore();
+  await flush();
+  assert.equal(cycle.getSnapshot().items.map(i => i.reviewHandle).join('|'), [
+    item('a').reviewHandle,
+    item('b').reviewHandle,
+    item('c').reviewHandle,
+  ].join('|'));
+  assert.equal(cycle.getSnapshot().nextCursor, null);
+  cycle.loadMore();
+  assert.equal(cycleCalls.length, 3);
+
+  // Network more-error keeps same cursor for honest retry (not consumed).
+  let failNet = true;
+  let releaseNet: () => void = () => {};
+  const net = new PublicVenueReviewsGallery({
+    experienceReviews: async (_id, cursor) => {
+      if (cursor === undefined) return page([item('n1')], 'cur-net', 2);
+      await new Promise<void>(resolve => { releaseNet = resolve; });
+      if (failNet) throw new PublicApiError('network');
+      return page([item('n1'), item('n2')], null, 2);
+    },
+  });
+  net.open(venueId);
+  await flush();
+  net.loadMore();
+  releaseNet();
+  await flush();
+  assert.equal(net.getSnapshot().moreError, true);
+  assert.equal(net.getSnapshot().nextCursor, 'cur-net');
+  assert.equal(net.getSnapshot().items.length, 1);
+  failNet = false;
+  net.loadMore();
+  releaseNet();
+  await flush();
+  assert.equal(net.getSnapshot().moreError, false);
+  assert.equal(net.getSnapshot().nextCursor, null);
+  assert.equal(net.getSnapshot().items.length, 2);
+
+  // First-page error → retryFirst; late close fences in-flight first GET.
+  let firstFail = true;
+  let releaseFirst: () => void = () => {};
+  const firstCalls: number[] = [];
+  const first = new PublicVenueReviewsGallery({
+    experienceReviews: async () => {
+      firstCalls.push(1);
+      await new Promise<void>(resolve => { releaseFirst = resolve; });
+      if (firstFail) throw new PublicApiError('network');
+      return page([item('f1')], 'cur-f', 1);
+    },
+  });
+  first.open(venueId);
+  releaseFirst();
+  await flush();
+  assert.equal(first.getSnapshot().phase, 'error');
+  firstFail = false;
+  first.retryFirst();
+  assert.equal(first.getSnapshot().phase, 'loading');
+  releaseFirst();
+  await flush();
+  assert.equal(first.getSnapshot().phase, 'ready');
+  assert.equal(first.getSnapshot().items.length, 1);
+  assert.equal(firstCalls.length, 2);
+
+  const lateFirst = new PublicVenueReviewsGallery({
+    experienceReviews: async () => {
+      await new Promise<void>(resolve => { releaseFirst = resolve; });
+      return page([item('late')], null, 1);
+    },
+  });
+  lateFirst.open(venueId);
+  lateFirst.close();
+  releaseFirst();
+  await flush();
+  assert.equal(lateFirst.getSnapshot().open, false);
+  assert.equal(lateFirst.getSnapshot().items.length, 0);
+  assert.equal(lateFirst.getSnapshot().phase, 'idle');
+});
+
 test('#598 #606 #624 #522 R4 source assertions', () => {
   const reviews = read('../src/components/venue-reviews.tsx');
   const photos = read('../src/components/venue-photos.tsx');
