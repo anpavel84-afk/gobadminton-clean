@@ -164,6 +164,8 @@ const COPY = {
   removed: 'Своё фото удалено. Используется текущая обложка площадки или стандартная.',
   /** CURRENT replay / authoritative state without own photo — never claim a successful save. */
   currentNoOwn: 'Сейчас своё фото не установлено. Можно выбрать изображение снова.',
+  /** CURRENT remove replay while own slot remains — never claim successful removal / venue fallback. */
+  currentOwn: 'Сейчас своё фото установлено. Можно оставить его или выбрать другое.',
   refreshed: 'Данные обновлены. Можно повторить сохранение.',
   denied: 'Редактирование фото недоступно. Обновите страницу и проверьте вход.',
   held: 'Есть неподтверждённое сохранение фото другой игры. Вернитесь к ней, чтобы проверить результат.',
@@ -722,9 +724,9 @@ export class GameCoverCoordinator {
       if (receipt.version < packet.gameVersion) throw new ProfileError('invalid');
       this.uncertain = false;
       this.gate.onReceipt?.(packet.gameId, receipt);
-      // CURRENT replay with hasCover=false must not claim "photo saved".
+      // CURRENT replay: hasCover must gate success copy for both replace and remove.
       const notice = packet.action === 'remove'
-        ? COPY.removed
+        ? (receipt.hasCover ? COPY.currentOwn : COPY.removed)
         : receipt.hasCover
           ? COPY.saved
           : COPY.currentNoOwn;

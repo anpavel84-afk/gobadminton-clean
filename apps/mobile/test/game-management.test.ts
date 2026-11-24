@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { CoverLockNoSendError, GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
 import type { ManagementPort, ManagementPacket, Venue } from '../src/game-management.ts';
-import { ParticipationError } from '../src/participation.ts';
+import { ParticipationError, type ManagedGame } from '../src/participation.ts';
 import { ProfileCoordinator } from '../src/profile.ts';
 import type { OwnProfile } from '../src/profile.ts';
 import { gameLocalToIso, gameSchedule } from '../src/game-form.ts';
@@ -637,6 +637,66 @@ test('late failed selection cannot replace later edits, newer valid selection or
     const current = s.owner.getSnapshot(); gate.resolve(true); assert.equal(await work,false);
     assert.strictEqual(s.owner.getSnapshot(),current); assert.equal(s.sent.length,0);
   }
+});
+
+test('#522 FIX6: ready loadDetail soft-refresh keeps game shell (no loading unmount flash)', async () => {
+  const draft = { ...g, id: 'game-cover-soft', status: 'draft' as const, version: 2 };
+  let version = 2;
+  const managedGate = deferred<{ items: ManagedGame[]; nextCursor: null }>();
+  let managedCalls = 0;
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => {
+      managedCalls += 1;
+      if (managedCalls === 1) {
+        return { items: [{ ...draft, version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+      }
+      return managedGate.promise;
+    },
+    game: async () => ({ ...draft, version }),
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async () => draft,
+  }, () => 'soft-key', () => now);
+  owner.setActor(actor);
+  await owner.loadDetail('game-cover-soft');
+  const ready = owner.getSnapshot().details['game-cover-soft'];
+  assert.equal(ready?.status, 'ready');
+  assert.ok(ready?.game);
+  const gameRef = ready!.game;
+
+  version = 3;
+  const refresh = owner.loadDetail('game-cover-soft');
+  await new Promise(r => setImmediate(r));
+  const mid = owner.getSnapshot().details['game-cover-soft'];
+  assert.equal(mid?.status, 'ready', 'receipt refresh must not flash loading');
+  assert.strictEqual(mid?.game, gameRef);
+  managedGate.resolve({
+    items: [{ ...draft, version: 3, management: { role: 'owner', createdByMe: true } }],
+    nextCursor: null,
+  });
+  await refresh;
+  assert.equal(owner.getSnapshot().details['game-cover-soft']?.status, 'ready');
+  assert.equal(owner.getSnapshot().details['game-cover-soft']?.game?.version, 3);
+
+  // Cold load (no ready shell) still uses loading.
+  const cold = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async () => draft,
+  }, () => 'cold-key', () => now);
+  cold.setActor(actor);
+  const coldWork = cold.loadDetail('game-cover-soft');
+  assert.equal(cold.getSnapshot().details['game-cover-soft']?.status, 'loading');
+  await coldWork;
+  assert.equal(cold.getSnapshot().details['game-cover-soft']?.status, 'ready');
 });
 
 test('#522 APK51 management dispatch gate blocks publish while cover unresolved for same game', async () => {

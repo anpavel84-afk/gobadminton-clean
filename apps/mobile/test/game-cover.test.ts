@@ -471,3 +471,35 @@ test('#522 FIX2: CURRENT replay hasCover=false is honest; success helper exclude
   assert.equal(gameCoverMutationSucceeded(unknown.getSnapshot()), false);
   assert.ok(unknown.getSnapshot().notice);
 });
+
+test('#522 FIX6: CURRENT remove replay with remaining own cover is honest; no removal success/close', async () => {
+  const port: GameCoverPort = {
+    read: async () => ({ version: 5, hasCover: true, cover: { uploadedUrl: gameUrl } }),
+    // Idempotent CURRENT: another manager re-uploaded — own slot still present.
+    mutate: async () => ({ version: 6, hasCover: true, cover: { uploadedUrl: gameUrl } }),
+  };
+  const owner = new GameCoverCoordinator(port, () => 'rm-current', { accessToken: () => 'tok' });
+  owner.setActor(actor);
+  await owner.load('game-rm-current');
+  assert.equal(owner.getSnapshot().access?.hasCover, true);
+  await owner.remove();
+  const snap = owner.getSnapshot();
+  assert.equal(snap.access?.hasCover, true);
+  assert.equal(snap.notice, 'Сейчас своё фото установлено. Можно оставить его или выбрать другое.');
+  assert.match(snap.notice ?? '', /установлено/i);
+  assert.doesNotMatch(snap.notice ?? '', /удалено|площадки|стандартная/i);
+  assert.equal(gameCoverMutationSucceeded(snap), false);
+
+  // Definite remove (hasCover=false) still succeeds and closes-worthy.
+  const cleared: GameCoverPort = {
+    read: async () => ({ version: 2, hasCover: true, cover: { uploadedUrl: gameUrl } }),
+    mutate: async () => ({ version: 3, hasCover: false, cover: { uploadedUrl: venueUrl } }),
+  };
+  const gone = new GameCoverCoordinator(cleared, () => 'rm-ok', { accessToken: () => 'tok' });
+  gone.setActor(actor);
+  await gone.load('game-rm-ok');
+  await gone.remove();
+  assert.equal(gone.getSnapshot().access?.hasCover, false);
+  assert.equal(gone.getSnapshot().notice, 'Своё фото удалено. Используется текущая обложка площадки или стандартная.');
+  assert.equal(gameCoverMutationSucceeded(gone.getSnapshot()), true);
+});

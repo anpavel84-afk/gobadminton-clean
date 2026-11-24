@@ -222,25 +222,42 @@ export function avatarDownsampleCrop(
 }
 
 /**
+ * Best-effort delete of an app-owned picker cache URI. Caller owns draft lifetime —
+ * never delete non-cache / user library URIs.
+ */
+export function releaseOwnedPickerAsset(
+  deps: Pick<AvatarRuntimeDeps, 'deleteTracked' | 'isOwnedCacheUri'>,
+  asset: PickedAvatarAsset | null | undefined,
+): void {
+  if (!asset?.uri || !deps.isOwnedCacheUri(asset.uri)) return;
+  void Promise.resolve(deps.deleteTracked(asset.uri)).catch(() => {
+    /* Best-effort app-owned cache only. */
+  });
+}
+
+/**
  * Cover derivative: same source gates as avatar, 3:1 crop at (x,y), output exactly 1200×400 ≤ maxBytes.
+ * `retainSource` keeps the picker asset for repeated crop/preview (game editor draft lifetime);
+ * transient rendered/saved files still clean up per preparation. Default avatar/cover cleanup unchanged.
  */
 export async function prepareOwnCoverDerivative(
   deps: AvatarRuntimeDeps,
   asset: PickedAvatarAsset,
   position: { x: number; y: number },
   retired: () => boolean,
-  options?: { maxBytes?: number },
+  options?: { maxBytes?: number; retainSource?: boolean },
 ): Promise<AvatarDerivative> {
   const maxBytes = options?.maxBytes ?? COVER_DERIVATIVE_MAX_BYTES;
+  const retainSource = options?.retainSource === true;
   const tracked: string[] = [];
   let localRetired = false;
   const effectivelyRetired = () => retired() || localRetired;
   const track = (uri: string) => {
     if (!uri) return;
-    if (uri === asset.uri && !deps.isOwnedCacheUri(uri)) return;
+    if (uri === asset.uri && (retainSource || !deps.isOwnedCacheUri(uri))) return;
     if (!tracked.includes(uri)) tracked.push(uri);
   };
-  if (deps.isOwnedCacheUri(asset.uri)) track(asset.uri);
+  if (deps.isOwnedCacheUri(asset.uri) && !retainSource) track(asset.uri);
   const cleanup = async () => {
     for (const uri of tracked.splice(0)) {
       try {
@@ -323,9 +340,11 @@ export async function prepareGameCoverDerivative(
   asset: PickedAvatarAsset,
   position: { x: number; y: number },
   retired: () => boolean,
+  options?: { retainSource?: boolean },
 ): Promise<AvatarDerivative> {
   return prepareOwnCoverDerivative(deps, asset, position, retired, {
     maxBytes: GAME_COVER_DERIVATIVE_MAX_BYTES,
+    retainSource: options?.retainSource,
   });
 }
 

@@ -11,6 +11,7 @@ import { runInNewContext } from 'node:vm';
 import { headerAvatarPresentation } from '../src/header-avatar.ts';
 import { playerInitials } from '../src/presentation.ts';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
+import { gameCoverMutationSucceeded } from '../src/game-cover.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
 import { game as fixture } from './fixtures.ts';
@@ -2038,6 +2039,67 @@ test('#522 FIX3: AuthCoordinator delayed-token cover-lock throws CoverLockNoSend
   assert.equal(management.getSnapshot().command?.packet.key, original.key);
   assert.strictEqual(management.getSnapshot().command?.packet, original);
   assert.match(management.getSnapshot().notice ?? '', /фото/);
+});
+
+test('#522 FIX6: cover receipt onReceipt soft-refreshes management detail without loading flash', async () => {
+  const gameId = '10000000-0000-4000-8000-000000000056';
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const cover = s.auth.gameCover;
+  const management = s.auth.gameManagement;
+  const hex = 'ef'.repeat(32);
+  const gameUrl = `/v1/media/game-covers/${hex}.png`;
+  let row = { version: 2, hasCover: false, cover: { uploadedUrl: null as string | null } };
+  let managedCalls = 0;
+  const secondManaged = deferred<{ items: unknown[]; nextCursor: null }>();
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}/cover`) {
+      if ((init.method ?? 'GET') === 'PUT') {
+        row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+        return row;
+      }
+      return row;
+    }
+    if (path.startsWith('/me/games')) {
+      managedCalls += 1;
+      const item = { id: gameId, version: row.version, management: { role: 'owner', createdByMe: true } };
+      if (managedCalls === 1) return { items: [item], nextCursor: null };
+      await secondManaged.promise;
+      return { items: [{ ...item, version: row.version }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) {
+      return { ...fixture, id: gameId, version: row.version, status: 'draft' };
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+
+  await management.loadDetail(gameId);
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready');
+  assert.ok(management.getSnapshot().details[gameId]?.game);
+
+  const release = cover.openView(gameId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(cover.getSnapshot().status, 'ready');
+
+  const save = cover.change(async () => Object.freeze({
+    mime: 'image/jpeg' as const,
+    bytes: new Uint8Array([255, 216, 255, 217]),
+  }));
+  await save;
+  // onReceipt started the second managed read and is held — shell must stay ready.
+  for (let i = 0; i < 40 && managedCalls < 2; i += 1) await new Promise(r => setImmediate(r));
+  assert.equal(managedCalls, 2);
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready', 'onReceipt must not flash loading');
+  assert.ok(management.getSnapshot().details[gameId]?.game);
+  assert.equal(cover.getSnapshot().access?.hasCover, true);
+  assert.equal(gameCoverMutationSucceeded(cover.getSnapshot()), true);
+  secondManaged.resolve({ items: [], nextCursor: null });
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready');
+  release();
 });
 
 test('#522 FIX2: game-cover deferred-token admission — close/background/ABA/account → zero mutate', async () => {

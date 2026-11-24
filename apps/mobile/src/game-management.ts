@@ -327,7 +327,12 @@ export class GameManagementCoordinator {
     if (!actor) return;
     const valid = () => this.current(actor) && this.detailReads.get(id) === serial;
     const put = (detail: Detail) => { if (detail.status === 'denied') this.denyCreated(id); this.show({ details: { ...this.state.details,[id]: detail } }); };
-    put({ status: 'loading', participants: [], cursor: null, roster: 'loading' });
+    // Soft refresh when already ready: keep game shell mounted so an open cover editor
+    // is not unmounted by a receipt-driven reload (loading flash would drop its view lease).
+    const prior = this.state.details[id];
+    if (!(prior?.status === 'ready' && prior.game)) {
+      put({ status: 'loading', participants: [], cursor: null, roster: 'loading' });
+    }
     try {
       let managed: ManagedGame | undefined, cursor: string | undefined; const seen = new Set<string>();
       do { const page = await this.port.managed(cursor); if (!valid()) return; managed = page.items.find(g => g.id === id);

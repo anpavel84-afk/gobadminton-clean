@@ -53,7 +53,13 @@ export function GameManagement({ id }: { id: string }) {
   const mutable = d?.status === 'ready' && d.roster === 'ready' && d.game?.status === 'published' && Date.parse(d.game.startsAt) > Date.now() && !locked;
   const photoEditable = d?.status === 'ready' && !!d.game && (d.game.status === 'draft' || d.game.status === 'published');
   const canOpenCover = photoEditable && (!managementBusy || coverOpen || coverLocked);
+  // Keep the open cover editor mounted across receipt-driven detail refresh / loading flash so its
+  // view lease and draft survive; denial/error still tear it down with the summary.
+  const coverEditorLive = current && coverOpen && d?.status !== 'denied' && d?.status !== 'error';
   return <Page keyboard header={<Header />}><BackLink title="← Мои игры" onPress={() => router.replace('/my-games')} /><Label style={styles.title}>Управление игрой</Label>
+    {coverEditorLive ? (
+      <GameCoverEditor gameId={id} open={coverOpen} onOpenChange={setCoverOpen} returnFocusRef={coverFocusRef} />
+    ) : null}
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <><Label>Сводка доступна создателю или менеджеру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(`/games/manage/${id}`)} /></>
       : !d || d.status === 'loading' ? <Loading title="Загружаем сводку…" />
       : d.status !== 'ready' || !d.game ? <><Label>{d.status === 'denied' ? 'Игра не в вашем списке управления. Возможно, доступ изменился.' : 'Не удалось загрузить сводку.'}</Label><TextButton title="Обновить" onPress={() => void owner.loadDetail(id)} /></>
@@ -79,7 +85,6 @@ export function GameManagement({ id }: { id: string }) {
             ]}>
             <Label style={{ color: colors.ink, textAlign: 'center', fontWeight: '600' }}>{GAME_COVER_EDITOR_COPY.open}</Label>
           </Pressable>
-          <GameCoverEditor gameId={id} open={coverOpen} onOpenChange={setCoverOpen} returnFocusRef={coverFocusRef} />
         </> : null}
         <GameCourtBookingPanel gameId={id} proof="managed" />
         <ManagementCommand />
