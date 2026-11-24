@@ -624,6 +624,33 @@ export function feedbackRevealResultsLayoutSettled(
     || resultsStatus === 'unavailable';
 }
 
+/**
+ * Actor/session/game + results settlement that own a cached feedback onLayout.y.
+ * `openFeedback` is intentionally absent — ordinary entry → section=feedback on the
+ * same settled mount keeps geometry when the section key does not remount.
+ */
+export type FeedbackRevealLayoutScope = {
+  gameId: string | null;
+  actor?: string | null;
+  session?: string | null;
+  resultsStatus: FeedbackRevealResultsStatus | undefined;
+};
+
+/**
+ * Keep valid same-target content Y across deep-link section flips without a new
+ * onLayout. Retire only when visit identity or results settlement changes —
+ * above-feedback growth then needs a fresh native layout (no blind measure loop).
+ */
+export function feedbackRevealCachedLayoutRetained(
+  prior: FeedbackRevealLayoutScope,
+  next: FeedbackRevealLayoutScope,
+): boolean {
+  return prior.gameId === next.gameId
+    && (prior.actor ?? null) === (next.actor ?? null)
+    && (prior.session ?? null) === (next.session ?? null)
+    && prior.resultsStatus === next.resultsStatus;
+}
+
 export type FeedbackRevealAttemptGate = {
   openFeedback: boolean;
   showFeedback: boolean;

@@ -9,11 +9,13 @@ import { NotesSection } from '../../../src/components/postgame-notes.tsx';
 import { FeedbackSection } from '../../../src/components/postgame-feedback.tsx';
 import { VenueExperienceEntry } from '../../../src/components/venue-experience-composer.tsx';
 import {
+  feedbackRevealCachedLayoutRetained,
   feedbackRevealTargetStillLive,
   nextFeedbackRevealCompletedKey,
   parseResultsFeedbackSection,
   planFeedbackRevealFromLayout,
   planFeedbackSectionReveal,
+  type FeedbackRevealLayoutScope,
 } from '../../../src/postgame-feedback.ts';
 import { feedbackSectionVisible, notesSectionVisible } from '../../../src/postgame.ts';
 import { BackLink, Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
@@ -30,13 +32,18 @@ export default function GameResults() {
   const focusedKey=useRef<string | null>(null);
   const feedbackLayoutY=useRef<number | null>(null);
   const revealLive=useRef({openFeedback,showFeedback:false as boolean,gameId,actor,session});
+  const layoutScope=useRef<FeedbackRevealLayoutScope>({gameId,actor,session,resultsStatus:undefined});
   useEffect(()=>{if(!current || !gameId) return; void owner.loadResults(gameId);void owner.loadReminders();void auth.participation.loadGame(gameId);},[current,gameId,owner,auth.participation,actor,session]);
   const state=current && gameId ? s.games[gameId] : undefined, data=state?.data, game=gameId ? p.games[gameId]?.game : undefined;
   const showNotes=!!gameId && notesSectionVisible(gameId, data, s.notes, s.knownNoteRefs);
   const showFeedback=!!gameId && (openFeedback || feedbackSectionVisible(gameId, data?.feedback, s.reviewHistory));
   revealLive.current={openFeedback,showFeedback,gameId,actor,session};
-  // Drop prior content Y when visit identity or results settlement changes — above-feedback growth needs a fresh onLayout.
-  useEffect(()=>{feedbackLayoutY.current=null;},[openFeedback,gameId,actor,session,state?.status]);
+  // Drop prior content Y only when visit identity or results settlement changes — same-target section=feedback keeps geometry.
+  useEffect(()=>{
+    const next:FeedbackRevealLayoutScope={gameId,actor,session,resultsStatus:state?.status};
+    if(!feedbackRevealCachedLayoutRetained(layoutScope.current,next)) feedbackLayoutY.current=null;
+    layoutScope.current=next;
+  },[gameId,actor,session,state?.status]);
   const tryReveal=()=>{
     const live=revealLive.current;
     const plan=planFeedbackSectionReveal({
