@@ -15,6 +15,20 @@ import {
 } from '../src/postgame.ts';
 import {
   boundRoleDiscrepancyFieldError,
+  FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS,
+  feedbackResultsNavParams,
+  feedbackRevealFocusKey,
+  feedbackRevealResultsLayoutSettled,
+  feedbackRevealShouldRetryMeasurement,
+  feedbackRevealTargetStillLive,
+  formatPrivateReviewWhen,
+  nextFeedbackRevealCompletedKey,
+  parseResultsFeedbackSection,
+  peerReviewHistoryLabel,
+  planFeedbackSectionReveal,
+  privateHubHistoryEmptyText,
+  privateReviewHistoryDetail,
+  privateReviewKindHistoryLabel,
   roleDiscrepancyActiveDecision,
   roleDiscrepancyContextFromResults,
   roleDiscrepancyDecisionFromError,
@@ -2110,5 +2124,167 @@ test('ROOT: UNKNOWN role retry keeps original owned packet discrepancy context',
     heldContext,
     'UNKNOWN retry must keep original owned-packet context, not recapture not_held',
   );
+});
+
+test('#522 hub private feedback history helpers + read-only loadReviews (no write)', async () => {
+  assert.deepEqual(feedbackResultsNavParams(game.id), { gameId: game.id, section: 'feedback' });
+  assert.throws(() => feedbackResultsNavParams('bad id'));
+  assert.equal(parseResultsFeedbackSection('feedback'), 'feedback');
+  assert.equal(parseResultsFeedbackSection('clarification'), null);
+  assert.equal(peerReviewHistoryLabel('neutral'), 'Нейтрально');
+  assert.equal(privateReviewKindHistoryLabel('peer'), 'Отзыв игроку');
+  assert.equal(privateReviewKindHistoryLabel('training'), 'Тренировочный отзыв');
+  assert.equal(privateHubHistoryEmptyText('sent'), 'Пока нет отправленных отзывов');
+  assert.equal(privateReviewHistoryDetail(peerReview({ kind: 'peer', peerRating: 'difficulties' })), 'Были трудности');
+  assert.match(formatPrivateReviewWhen(date), /\d/);
+
+  const ui = readFileSync(new NodeURL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /draft\.mode \?\? \(openFeedback \? 'received' : undefined\)/);
+  assert.match(ui, /PrivateFeedbackHistorySheet/);
+  const rowFn = ui.match(/function PrivateHistoryRow\([\s\S]*?\n\}\n\n\/\*\*/)?.[0] ?? '';
+  assert.match(rowFn, /PrivateHistoryRow/);
+  assert.doesNotMatch(rowFn, /owner\.review|setFeedbackDraft/);
+
+  let writes = 0;
+  const calls: Array<{ direction: string; cursor?: string }> = [];
+  const page1 = {
+    items: [
+      peerReview({ id: 'hub-1', direction: 'received', comment: 'private-text', recipientDisplay: 'Name' }),
+      peerReview({
+        id: 'hub-2', gameId: 'other-game', direction: 'received', kind: 'organization',
+        subjectContextId: null, peerRating: null, organizationScore: 5, reply: {
+          text: 'row-reply', version: 1, editedAt: null, updatedAt: date,
+        },
+      }),
+    ],
+    nextCursor: 'cur-1' as string | null,
+  };
+  const s = setup({ reviews: { received: [] } });
+  s.port.reviews = async (_a, direction, cursor) => {
+    calls.push({ direction, cursor });
+    if (!cursor) return { items: structuredClone(page1.items), nextCursor: page1.nextCursor };
+    return { items: [peerReview({ id: 'hub-3', direction: 'received' })], nextCursor: null };
+  };
+  s.port.send = async () => { writes++; throw new PostgameError('invalid'); };
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.items.length, 2);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, 'cur-1');
+  assert.equal(
+    s.coordinator.getSnapshot().reviewsById['hub-2']?.reply?.text,
+    'row-reply',
+  );
+  await s.coordinator.loadReviews('received', true);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.items.length, 3);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, null);
+  assert.deepEqual(calls.map(c => c.cursor), [undefined, 'cur-1']);
+  assert.equal(writes, 0);
+});
+
+test('#522 QA1 delayed results feedback reveal lifecycle — wait layout, retry measure, no late jump', () => {
+  const resultsUi = readFileSync(new NodeURL('../app/my-games/[gameId]/results.tsx', import.meta.url), 'utf8');
+  assert.match(resultsUi, /planFeedbackSectionReveal/);
+  assert.match(resultsUi, /feedbackRevealTargetStillLive/);
+  assert.match(resultsUi, /nextFeedbackRevealCompletedKey/);
+  assert.match(resultsUi, /feedbackRevealShouldRetryMeasurement/);
+  assert.match(resultsUi, /resultsStatus:\s*state\?\.status/);
+  assert.match(resultsUi, /nextFeedbackRevealCompletedKey\(focusedKey\.current,key,\{ok:true\}\)/);
+  assert.match(resultsUi, /nextFeedbackRevealCompletedKey\(focusedKey\.current,key,\{ok:false\}\)/);
+  assert.doesNotMatch(resultsUi, /focusedKey\.current\s*=\s*key\s*;/);
+  assert.match(resultsUi, /type ComponentRef/);
+
+  const key = feedbackRevealFocusKey(actor.actorId, actor.sessionId, game.id);
+  assert.equal(key, `${actor.actorId}:${actor.sessionId}:${game.id}:feedback`);
+
+  assert.equal(feedbackRevealResultsLayoutSettled(undefined), false);
+  assert.equal(feedbackRevealResultsLayoutSettled('idle'), false);
+  assert.equal(feedbackRevealResultsLayoutSettled('loading'), false);
+  assert.equal(feedbackRevealResultsLayoutSettled('ready'), true);
+  assert.equal(feedbackRevealResultsLayoutSettled('error'), true);
+  assert.equal(feedbackRevealResultsLayoutSettled('unavailable'), true);
+
+  const base = {
+    openFeedback: true,
+    showFeedback: true,
+    gameId: game.id,
+    completedKey: null as string | null,
+    actor: actor.actorId,
+    session: actor.sessionId,
+  };
+  // Uncached delayed results: must not consume the visit before layout settles.
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, resultsStatus: 'loading' }),
+    { kind: 'wait_layout' },
+  );
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, resultsStatus: 'idle' }),
+    { kind: 'wait_layout' },
+  );
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, resultsStatus: 'ready' }),
+    { kind: 'attempt', key },
+  );
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, resultsStatus: 'unavailable' }),
+    { kind: 'attempt', key },
+  );
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, resultsStatus: 'ready', completedKey: key }),
+    { kind: 'already_complete' },
+  );
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, openFeedback: false, resultsStatus: 'ready' }),
+    { kind: 'idle' },
+  );
+  assert.deepEqual(
+    planFeedbackSectionReveal({ ...base, gameId: null, resultsStatus: 'ready' }),
+    { kind: 'idle' },
+  );
+
+  // Failed measurement does not consume the key — later retry can still complete.
+  assert.equal(nextFeedbackRevealCompletedKey(null, key, { ok: false }), null);
+  assert.equal(nextFeedbackRevealCompletedKey(null, key, { ok: true }), key);
+  assert.equal(nextFeedbackRevealCompletedKey('other', key, { ok: false }), 'other');
+
+  assert.equal(feedbackRevealShouldRetryMeasurement(0), true);
+  assert.equal(feedbackRevealShouldRetryMeasurement(FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS - 2), true);
+  assert.equal(feedbackRevealShouldRetryMeasurement(FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS - 1), false);
+  assert.equal(feedbackRevealShouldRetryMeasurement(-1), false);
+
+  // Retired route / target must not apply a late scroll after async measure.
+  assert.equal(feedbackRevealTargetStillLive({
+    expectedKey: key, openFeedback: true, showFeedback: true, gameId: game.id,
+    actor: actor.actorId, session: actor.sessionId,
+  }), true);
+  assert.equal(feedbackRevealTargetStillLive({
+    expectedKey: key, openFeedback: false, showFeedback: true, gameId: game.id,
+    actor: actor.actorId, session: actor.sessionId,
+  }), false);
+  assert.equal(feedbackRevealTargetStillLive({
+    expectedKey: key, openFeedback: true, showFeedback: true, gameId: 'other-game',
+    actor: actor.actorId, session: actor.sessionId,
+  }), false);
+  assert.equal(feedbackRevealTargetStillLive({
+    expectedKey: key, openFeedback: true, showFeedback: false, gameId: game.id,
+    actor: actor.actorId, session: actor.sessionId,
+  }), false);
+
+  // Simulated delayed-results visit: wait → attempt → fail leaves key open → success completes.
+  let completed: string | null = null;
+  assert.equal(planFeedbackSectionReveal({
+    ...base, resultsStatus: 'loading', completedKey: completed,
+  }).kind, 'wait_layout');
+  let plan = planFeedbackSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
+  assert.equal(plan.kind, 'attempt');
+  completed = nextFeedbackRevealCompletedKey(completed, key, { ok: false });
+  assert.equal(completed, null);
+  assert.equal(feedbackRevealShouldRetryMeasurement(0), true);
+  plan = planFeedbackSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
+  assert.equal(plan.kind, 'attempt');
+  completed = nextFeedbackRevealCompletedKey(completed, key, { ok: true });
+  assert.equal(completed, key);
+  assert.equal(planFeedbackSectionReveal({
+    ...base, resultsStatus: 'ready', completedKey: completed,
+  }).kind, 'already_complete');
 });
 

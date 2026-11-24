@@ -597,6 +597,99 @@ export function displayOnlyReview(row: PrivateReview): PrivateReview {
   };
 }
 
+/** Exact-game results source statuses used to gate feedback deep-link reveal. */
+export type FeedbackRevealResultsStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
+
+/** Finite measure attempts for one reveal visit (first try + retries). */
+export const FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS = 3;
+
+/** Stable focus key for one actor/session/game feedback deep-link visit. */
+export function feedbackRevealFocusKey(
+  actor: string | null | undefined,
+  session: string | null | undefined,
+  gameId: string,
+): string {
+  return `${actor ?? ''}:${session ?? ''}:${gameId}:feedback`;
+}
+
+/**
+ * Results content above feedback can still grow while idle/loading.
+ * Ready/error/unavailable means the initial destination layout has settled.
+ */
+export function feedbackRevealResultsLayoutSettled(
+  resultsStatus: FeedbackRevealResultsStatus | undefined,
+): boolean {
+  return resultsStatus === 'ready'
+    || resultsStatus === 'error'
+    || resultsStatus === 'unavailable';
+}
+
+export type FeedbackRevealAttemptGate = {
+  openFeedback: boolean;
+  showFeedback: boolean;
+  gameId: string | null;
+  resultsStatus: FeedbackRevealResultsStatus | undefined;
+  completedKey: string | null;
+  actor?: string | null;
+  session?: string | null;
+};
+
+export type FeedbackRevealAttempt =
+  | { kind: 'idle' }
+  | { kind: 'wait_layout' }
+  | { kind: 'already_complete' }
+  | { kind: 'attempt'; key: string };
+
+/**
+ * Plan deep-link feedback reveal: wait for settled results layout; never consume the
+ * visit key before a successful measure/scroll (caller marks complete separately).
+ */
+export function planFeedbackSectionReveal(gate: FeedbackRevealAttemptGate): FeedbackRevealAttempt {
+  if (!gate.openFeedback || !gate.showFeedback || !gate.gameId) return { kind: 'idle' };
+  const key = feedbackRevealFocusKey(gate.actor, gate.session, gate.gameId);
+  if (gate.completedKey === key) return { kind: 'already_complete' };
+  if (!feedbackRevealResultsLayoutSettled(gate.resultsStatus)) return { kind: 'wait_layout' };
+  return { kind: 'attempt', key };
+}
+
+/**
+ * attemptIndex is 0-based for the try that just failed / lacked nodes.
+ * Allows a finite retry so a transient measure miss can recover.
+ */
+export function feedbackRevealShouldRetryMeasurement(
+  attemptIndex: number,
+  maxAttempts: number = FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS,
+): boolean {
+  return attemptIndex + 1 < maxAttempts && attemptIndex >= 0 && maxAttempts > 0;
+}
+
+/**
+ * Mark the visit complete only after successful measurement/scroll.
+ * Failed measurement leaves the prior completed key unchanged for retry.
+ */
+export function nextFeedbackRevealCompletedKey(
+  completedKey: string | null,
+  attemptKey: string,
+  outcome: { ok: true } | { ok: false },
+): string | null {
+  return outcome.ok ? attemptKey : completedKey;
+}
+
+/**
+ * Suppress late scroll/focus when the route or feedback target retired mid-measure.
+ */
+export function feedbackRevealTargetStillLive(args: {
+  expectedKey: string;
+  openFeedback: boolean;
+  showFeedback: boolean;
+  gameId: string | null;
+  actor?: string | null;
+  session?: string | null;
+}): boolean {
+  if (!args.openFeedback || !args.showFeedback || !args.gameId) return false;
+  return feedbackRevealFocusKey(args.actor, args.session, args.gameId) === args.expectedKey;
+}
+
 export type PeerSubjectOption = { contextId: string; displayName: string };
 
 /**
@@ -625,6 +718,72 @@ export function peerHistoryEmptyText(
   return direction === 'received'
     ? 'Пока нет полученных отзывов по этой игре.'
     : 'Пока нет отправленных отзывов по этой игре.';
+}
+
+/** Hub private history empty copy (cross-game; not same-game lane). */
+export function privateHubHistoryEmptyText(direction: 'received' | 'sent'): string {
+  return direction === 'received'
+    ? 'Пока нет полученных отзывов'
+    : 'Пока нет отправленных отзывов';
+}
+
+/**
+ * Validated results deep-link section from My Games private history.
+ * Only `feedback` is admitted — unknown/array noise falls back to null.
+ */
+export function parseResultsFeedbackSection(
+  raw: string | string[] | null | undefined,
+): 'feedback' | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === 'feedback' ? 'feedback' : null;
+}
+
+/**
+ * Expo-router params for exact-game results with feedback section.
+ * Never carries comment, recipient name, or other private review fields.
+ */
+export function feedbackResultsNavParams(gameId: string): { gameId: string; section: 'feedback' } {
+  return { gameId: postgameId(gameId), section: 'feedback' };
+}
+
+/** History-surface peer rating labels (web GameReviewsHistory parity; distinct from create titles). */
+export function peerReviewHistoryLabel(rating: PeerRating | null | undefined): string {
+  if (rating === 'play_again') return 'Сыграл бы снова';
+  if (rating === 'neutral') return 'Нейтрально';
+  if (rating === 'difficulties') return 'Были трудности';
+  return '—';
+}
+
+/** History-surface kind eyebrow (web reviewKindLabel parity). */
+export function privateReviewKindHistoryLabel(kind: ReviewKind): string {
+  if (kind === 'peer') return 'Отзыв игроку';
+  if (kind === 'organization') return 'Отзыв организации';
+  return 'Тренировочный отзыв';
+}
+
+/** Rating/score line for a hub private-history row. */
+export function privateReviewHistoryDetail(review: PrivateReview): string {
+  if (review.kind === 'peer') return peerReviewHistoryLabel(review.peerRating);
+  if (review.kind === 'organization' && review.organizationScore != null) {
+    return `Оценка ${review.organizationScore} из 5`;
+  }
+  return 'Без оценки';
+}
+
+/** Russian date line for hub private-history rows; invalid Date falls back to raw ISO. */
+export function formatPrivateReviewWhen(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return iso;
+  }
 }
 
 export function organizationScoreValue(v: unknown): number {

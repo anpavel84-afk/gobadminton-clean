@@ -10,6 +10,14 @@ import { hubRows, hubView, matchesFilter, pendingInviteCount, isPendingInvite, i
 import type { Actor } from '../src/participation.ts';
 import type { OwnResult, Reminder } from '../src/postgame.ts';
 import { PostgameError } from '../src/postgame.ts';
+import {
+  feedbackResultsNavParams,
+  parseResultsFeedbackSection,
+  peerReviewHistoryLabel,
+  privateHubHistoryEmptyText,
+  privateReviewHistoryDetail,
+  privateReviewKindHistoryLabel,
+} from '../src/postgame-feedback.ts';
 import { game as publicGame } from './fixtures.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
 
@@ -419,7 +427,46 @@ test('#522 MyGames compact Отзывы section after refresh; same own-history 
   assert.match(screen, /\{ value: 'participate', label: 'Заявки и участие' \}/);
   assert.match(screen, /\{ value: 'invites', label: 'Приглашения' \}/);
   assert.doesNotMatch(screen, /value: 'reviews'/);
-  assert.match(screen, /Обновить мои игры[\s\S]*Отзывы[\s\S]*Мои публичные отзывы о ролях/);
+  assert.match(screen, /Обновить мои игры[\s\S]*Отзывы[\s\S]*PrivateFeedbackHistoryEntry[\s\S]*Мои публичные отзывы о ролях/);
   assert.match(screen, /openOwnPublicHistory/);
   assert.match(screen, /upcoming[\s\S]*draft[\s\S]*past[\s\S]*terminal[\s\S]*unknown/);
+});
+
+test('#522 MyGames private feedback history entry + exact section=feedback results nav (no private URL fields)', () => {
+  const panel = read('../src/components/postgame-feedback.tsx');
+  assert.match(panel, /export function PrivateFeedbackHistoryEntry/);
+  assert.match(panel, /loadReviews\(direction\)/);
+  assert.match(panel, /loadReviews\(direction, true\)/);
+  assert.match(panel, /feedbackResultsNavParams\(gameId\)/);
+  assert.match(panel, /К итогам · обратная связь/);
+  assert.match(panel, /Показать ещё/);
+  assert.match(panel, /privateHubHistoryEmptyText/);
+  assert.doesNotMatch(panel, /params:\s*\{[^}]*comment/);
+  assert.doesNotMatch(panel, /params:\s*\{[^}]*recipientDisplay/);
+
+  const results = read('../app/my-games/[gameId]/results.tsx');
+  assert.match(results, /parseResultsFeedbackSection\(params\.section\)/);
+  assert.match(results, /openFeedback=\{openFeedback\}/);
+  assert.match(results, /sectionRef=\{feedbackAnchor\}/);
+  assert.match(results, /openFeedback \|\| feedbackSectionVisible/);
+
+  const params = feedbackResultsNavParams('game-abc_1');
+  assert.deepEqual(params, { gameId: 'game-abc_1', section: 'feedback' });
+  assert.equal(Object.keys(params).sort().join(','), 'gameId,section');
+  assert.equal(parseResultsFeedbackSection('feedback'), 'feedback');
+  assert.equal(parseResultsFeedbackSection('attendance'), null);
+  assert.equal(parseResultsFeedbackSection(['feedback', 'x']), 'feedback');
+  assert.equal(parseResultsFeedbackSection(undefined), null);
+  assert.equal(privateHubHistoryEmptyText('received'), 'Пока нет полученных отзывов');
+  assert.equal(privateHubHistoryEmptyText('sent'), 'Пока нет отправленных отзывов');
+  assert.equal(peerReviewHistoryLabel('play_again'), 'Сыграл бы снова');
+  assert.equal(privateReviewKindHistoryLabel('organization'), 'Отзыв организации');
+  assert.equal(privateReviewHistoryDetail({
+    id: 'r', gameId: 'g', kind: 'organization', subjectContextId: null, recipientDisplay: 'X',
+    peerRating: null, organizationScore: 4, comment: 'secret', tags: [],
+    experienceAssertion: 'i_experienced_this_game', discrepancyExplanation: null,
+    attendanceContext: 'present', outcomeContext: 'held', version: 1, editedAt: null,
+    createdAt: '2026-11-14T10:00:00Z', direction: 'sent', reply: null,
+    allowedActions: { canEdit: false, canReply: false, canReport: false },
+  }), 'Оценка 4 из 5');
 });
