@@ -103,7 +103,13 @@ describe("Issue47 cover wire contract",()=>{
     expect(contract.components.schemas.Game.properties.cover.$ref).toBe("#/components/schemas/GameCover");
     expect(contract.components.schemas.GameMapPreview.properties.cover.$ref).toBe("#/components/schemas/GameCover");
     expect(contract.paths["/media/game-covers/{key}"].get.responses["404"]).toBeDefined();
-    expect(contract.paths["/media/game-covers/{key}"].get.security).toEqual(avatarSecurity);
+    // Optional guest {} preserved for public published reads; manager metadata/mutations stay cookie/bearer.
+    expect(contract.paths["/media/game-covers/{key}"].get.security).toEqual([
+      {},
+      { cookieSession: [] },
+      { NativeBearer: [] },
+    ]);
+    expect(contract.paths["/games/{gameId}/cover"].get.security).toEqual(avatarSecurity);
   });
   it("requires an exact integer CAS command agreeing with the header",()=>{
     expect(coverDeleteVersion({expectedVersion:1},"1")).toBe("1");

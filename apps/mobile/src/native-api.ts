@@ -42,7 +42,7 @@ import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-m
 import type { ManagementPacket } from './game-management.ts';
 import { gameContactPreferenceWire } from './game-contact-preference.ts';
 import { courtBookingWire, parseGameCourtBooking, type CourtBookingPacket } from './game-court-booking.ts';
-import { parseGameCoverReceipt, type GameCoverPacket } from './game-cover.ts';
+import { admitGameCoverUpload, parseGameCoverReceipt, type GameCoverPacket } from './game-cover.ts';
 import { parsePrivateGameVenueContacts } from './private-game-venue-contacts.ts';
 import { invitationCreateWire, type InvitationCreatePacket } from './invitation-authoring.ts';
 import type { GameContactPacket } from './game-contact-preference.ts';
@@ -645,8 +645,9 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
       try {
         const replace = packet.action === 'replace';
-        if (replace && (!packet.derivative || !packet.derivative.bytes.byteLength)) throw new ProfileError('invalid');
-        if (!replace && packet.derivative) throw new ProfileError('invalid');
+        // Enforce 0 < bytes ≤ 512KiB and accepted MIME before any mutation fetch (profile 5MiB unchanged).
+        if (replace) admitGameCoverUpload(packet.derivative);
+        else if (packet.derivative) throw new ProfileError('invalid');
         let body: Uint8Array<ArrayBuffer> | string | undefined;
         if (replace) {
           const src = packet.derivative!.bytes;

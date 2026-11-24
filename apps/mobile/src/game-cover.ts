@@ -8,6 +8,10 @@ import {
   type AvatarDerivative,
 } from './profile-avatar.ts';
 
+/** Closed game-cover upload budget — enforced by the native mutate port before fetch. */
+export const GAME_COVER_UPLOAD_MAX_BYTES = 512 * 1024;
+const GAME_COVER_MIMES = new Set<AvatarDerivative['mime']>(['image/jpeg', 'image/png', 'image/webp']);
+
 export type GameCoverReceipt = Readonly<{
   version: number;
   hasCover: boolean;
@@ -29,12 +33,27 @@ export type GameCoverPort = {
   mutate: (packet: GameCoverPacket, authority: Actor) => Promise<GameCoverReceipt>;
 };
 
+export type GameCoverFocus = Readonly<{ gameId: string; viewGen: number }>;
+
+/** Immutable actor/game/view/foreground fence captured at render for editor callbacks. */
+export type GameCoverRenderedPermit = Readonly<{
+  actor: Readonly<Actor>;
+  gameId: string;
+  viewGen: number;
+  foregroundGen: number;
+}>;
+
 export type GameCoverSnapshot = {
   actor: Actor | null;
   gameId: string | null;
+  focus: GameCoverFocus | null;
+  foreground: boolean;
+  foregroundGen: number;
   status: 'idle' | 'loading' | 'ready' | 'denied' | 'picking' | 'processing' | 'sending' | 'unknown';
   access: GameCoverReceipt | null;
   command?: { packet: GameCoverPacket; status: 'sending' | 'unknown' };
+  /** Other-game unresolved work parked across focus/navigation — not an endless spinner. */
+  heldGameId: string | null;
   notice: string | null;
   error: string | null;
   uncertain: boolean;
@@ -80,6 +99,7 @@ export function parseGameCoverReceipt(value: unknown): GameCoverReceipt {
   if (cover.uploadedUrl === null || cover.uploadedUrl === undefined) uploadedUrl = null;
   else if (typeof cover.uploadedUrl !== 'string') throw new ProfileError('invalid');
   else uploadedUrl = parseGameCoverUrl(cover.uploadedUrl);
+  // hasCover is own-slot presence — CURRENT replay may return a safe venue/null URL with hasCover false.
   return Object.freeze({
     version: row.version as number,
     hasCover: row.hasCover,
@@ -89,12 +109,30 @@ export function parseGameCoverReceipt(value: unknown): GameCoverReceipt {
 
 /** Exact game-covers path only — bearer never attaches to venue/fallback or foreign URLs. */
 export function gameCoverMediaPath(value: unknown): string | null {
-  return publicCoverPath(value, 'game');
+  if (typeof value !== 'string') return null;
+  return /^\/v1\/media\/game-covers\/[a-f0-9]{64}\.png$/.test(value) ? value : null;
 }
 
-const initial = (): GameCoverSnapshot => ({
-  actor: null, gameId: null, status: 'idle', access: null,
-  notice: null, error: null, uncertain: false,
+/** Closed binary admit before mutate fetch — 0 < bytes ≤ 512KiB and accepted image MIME. */
+export function admitGameCoverUpload(derivative: AvatarDerivative | null | undefined): AvatarDerivative {
+  if (!derivative || !GAME_COVER_MIMES.has(derivative.mime)) throw new ProfileError('invalid');
+  const n = derivative.bytes.byteLength;
+  if (!Number.isSafeInteger(n) || n < 1 || n > GAME_COVER_UPLOAD_MAX_BYTES) throw new ProfileError('invalid');
+  return derivative;
+}
+
+const initial = (actor: Actor | null = null): GameCoverSnapshot => ({
+  actor,
+  gameId: null,
+  focus: null,
+  foreground: true,
+  foregroundGen: 0,
+  status: 'idle',
+  access: null,
+  heldGameId: null,
+  notice: null,
+  error: null,
+  uncertain: false,
 });
 
 const COPY = {
@@ -105,27 +143,39 @@ const COPY = {
   removed: 'Своё фото удалено. Используется текущая обложка площадки или стандартная.',
   refreshed: 'Данные обновлены. Можно повторить сохранение.',
   denied: 'Редактирование фото недоступно. Обновите страницу и проверьте вход.',
+  held: 'Есть неподтверждённое сохранение фото другой игры. Вернитесь к ней, чтобы проверить результат.',
 } as const;
 
 const coverError = (status: number) =>
   status === 429 ? COPY.error429 : status === 422 ? COPY.error422 : COPY.errorOther;
 
+type HeldCover = Readonly<{
+  packet: GameCoverPacket | null;
+  access: GameCoverReceipt | null;
+  uncertain: boolean;
+}>;
+
 type GameCoverGate = {
   /** Refresh managed detail after a known receipt so later publish uses the new game version. */
   onReceipt?: (gameId: string, receipt: GameCoverReceipt) => void;
   accessToken: () => string | null;
+  /** Same-game unresolved management publish/roster blocks new cover writes. */
+  managementBlocksWrites?: (gameId: string) => boolean;
 };
 
 /**
  * Root-lifetime managed-game photo owner.
  * One packet per dispatch; uncertain → authoritative GET only; hasCover gates remove (not venue URL).
+ * Cross-game journal parks unresolved work; view/foreground permits fence editor mutations.
  */
 export class GameCoverCoordinator {
   private state = initial();
   private listeners = new Set<() => void>();
   private serial = 0;
+  private viewSerial = 0;
   private uncertain = false;
   private quarantined: GameCoverPacket | null = null;
+  private holds = new Map<string, HeldCover>();
   private readonly port: GameCoverPort;
   private readonly random: () => string;
   private readonly gate: GameCoverGate;
@@ -142,10 +192,17 @@ export class GameCoverCoordinator {
     };
   };
   private show(p: Partial<GameCoverSnapshot>) {
-    this.state = { ...this.state, ...p, uncertain: p.uncertain ?? this.uncertain };
+    const heldGameId = this.nextHeldGameId(p.gameId !== undefined ? p.gameId : this.state.gameId);
+    this.state = { ...this.state, ...p, heldGameId, uncertain: p.uncertain ?? this.uncertain };
     this.listeners.forEach(f => f());
   }
-  private current(actor: Actor) {
+  private nextHeldGameId(activeGameId: string | null) {
+    for (const gameId of this.holds.keys()) {
+      if (gameId !== activeGameId) return gameId;
+    }
+    return null;
+  }
+  private current(actor: Actor | null) {
     return sameActor(actor, this.state.actor);
   }
   busy = () =>
@@ -155,37 +212,108 @@ export class GameCoverCoordinator {
     this.state.command?.status === 'sending';
   blocksEdits = () =>
     this.busy() || this.state.status === 'unknown' || this.state.command?.status === 'unknown' || this.uncertain;
-  /** Unresolved cover work blocks incompatible managed publish/roster writes for this game. */
-  blocksManagedWrites = (gameId: string) =>
-    !!gameId && this.state.gameId === gameId && this.blocksEdits();
+  /** Unresolved cover work (active or journaled) blocks incompatible managed publish/roster writes for that game. */
+  blocksManagedWrites = (gameId: string) => {
+    if (!gameId) return false;
+    if (this.state.gameId === gameId && this.blocksEdits()) return true;
+    return this.holds.has(gameId);
+  };
+  /** True when the focused game may open the editor to reconcile existing unresolved work. */
+  canOpenEditor = (gameId: string) =>
+    !!gameId && (this.state.gameId === gameId || this.holds.has(gameId));
+
+  renderedPermit = (): GameCoverRenderedPermit | null => {
+    const { actor, focus, foreground, foregroundGen } = this.state;
+    if (!actor || !focus || !foreground) return null;
+    return Object.freeze({
+      actor: Object.freeze({ ...actor }),
+      gameId: focus.gameId,
+      viewGen: focus.viewGen,
+      foregroundGen,
+    });
+  };
+
+  /** Pure production permit check — usable from editor and tests without lazy authority gaps. */
+  permitLive = (permit: GameCoverRenderedPermit) =>
+    this.current(permit.actor)
+    && this.state.foreground
+    && this.state.focus?.gameId === permit.gameId
+    && this.state.focus?.viewGen === permit.viewGen
+    && this.state.foregroundGen === permit.foregroundGen;
+
+  private managementBlocked(gameId: string) {
+    return !!this.gate.managementBlocksWrites?.(gameId);
+  }
+
+  private parkActiveIfNeeded(nextGameId: string) {
+    const { gameId, command, access } = this.state;
+    if (!gameId || gameId === nextGameId) return;
+    if (!(command || this.uncertain)) return;
+    this.holds.set(gameId, Object.freeze({
+      packet: command?.packet ?? null,
+      access,
+      uncertain: this.uncertain || command?.status === 'unknown',
+    }));
+  }
+
+  private restoreHold(gameId: string): boolean {
+    const held = this.holds.get(gameId);
+    if (!held) return false;
+    this.holds.delete(gameId);
+    this.uncertain = held.uncertain;
+    this.serial++;
+    this.show({
+      gameId,
+      status: held.packet ? 'unknown' : (held.uncertain ? 'ready' : 'idle'),
+      access: held.access,
+      command: held.packet ? { packet: held.packet, status: 'unknown' as const } : undefined,
+      notice: held.uncertain ? COPY.errorOther : null,
+      error: held.uncertain ? coverError(0) : null,
+      uncertain: held.uncertain,
+    });
+    return true;
+  }
+
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || (!actor && !this.state.actor)) return;
     if (this.state.command) this.quarantined = this.state.command.packet;
+    for (const held of this.holds.values()) {
+      if (!this.quarantined && held.packet) this.quarantined = held.packet;
+    }
+    this.holds.clear();
     if (actor && this.quarantined?.actor.actorId !== actor.actorId) this.quarantined = null;
+    // Preserve original packet/key/version/bytes; do not rebind actor. Retry requires sameActor.
     const packet = actor ? this.quarantined : null;
     if (actor) this.quarantined = null;
     this.serial++;
+    this.viewSerial++;
     this.uncertain = false;
-    this.state = initial();
-    this.show({
-      actor: actor ? Object.freeze({ ...actor }) : null,
-      ...(packet
-        ? {
-            gameId: packet.gameId,
-            command: { packet, status: 'unknown' as const },
-            status: 'unknown' as const,
-            notice: COPY.errorOther,
-          }
-        : {}),
-    });
+    const foreground = this.state.foreground;
+    const foregroundGen = this.state.foregroundGen + 1;
+    this.state = { ...initial(actor ? Object.freeze({ ...actor }) : null), foreground, foregroundGen };
+    if (packet) {
+      this.uncertain = true;
+      this.show({
+        gameId: packet.gameId,
+        command: { packet, status: 'unknown' },
+        status: 'unknown',
+        notice: COPY.errorOther,
+        uncertain: true,
+      });
+    } else {
+      this.show({});
+    }
   }
   forget = () => {
     this.quarantined = null;
+    this.holds.clear();
     this.uncertain = false;
     this.serial++;
+    this.viewSerial++;
     this.state = initial();
     this.show({});
   };
+
   /**
    * Bearer headers only for exact /v1/media/game-covers/<64hex>.png on NATIVE_ORIGIN.
    * Venue fallback / public URLs stay credential-omit; never attach bearer to foreign hosts.
@@ -201,27 +329,107 @@ export class GameCoverCoordinator {
     if (!venuePath) return null;
     return { uri: `${NATIVE_ORIGIN}${venuePath}` };
   };
+
+  /**
+   * App foreground fence. Background retires private view/previews and in-flight sending → UNKNOWN;
+   * returning refreshes rights when focused without auto-mutation.
+   */
+  setForeground = (active: boolean) => {
+    if (active === this.state.foreground) return;
+    this.serial++;
+    const foregroundGen = this.state.foregroundGen + 1;
+    const focus = this.state.focus;
+    if (!active) {
+      if (this.state.command?.status === 'sending') {
+        this.uncertain = true;
+        this.show({
+          foreground: false,
+          foregroundGen,
+          command: { packet: this.state.command.packet, status: 'unknown' },
+          status: 'unknown',
+          notice: COPY.errorOther,
+          error: coverError(0),
+          uncertain: true,
+        });
+        return;
+      }
+      const unknown = this.state.command?.status === 'unknown' ? this.state.command : undefined;
+      this.show({
+        foreground: false,
+        foregroundGen,
+        status: unknown ? 'unknown' : 'idle',
+        access: unknown ? this.state.access : null,
+        notice: unknown ? COPY.errorOther : null,
+        error: unknown ? coverError(0) : null,
+      });
+      return;
+    }
+    const unknown = this.state.command?.status === 'unknown' ? this.state.command : undefined;
+    this.show({
+      foreground: true,
+      foregroundGen,
+      status: unknown ? 'unknown' : (focus ? 'idle' : this.state.status),
+      notice: unknown ? COPY.errorOther : this.state.notice,
+    });
+    if (focus && !this.state.command && !this.uncertain) {
+      void this.load(focus.gameId);
+    }
+  };
+
+  /**
+   * Bind editor view lease to a managed game. Release retires only this viewGen.
+   * Parks unresolved work for another game; restores journaled hold on return.
+   */
+  openView = (gameId: string): (() => void) => {
+    const actor = this.state.actor;
+    if (!actor || !gameId) return () => {};
+    const viewGen = ++this.viewSerial;
+    this.parkActiveIfNeeded(gameId);
+    if (this.restoreHold(gameId)) {
+      this.show({ focus: Object.freeze({ gameId, viewGen }) });
+    } else if (this.state.gameId === gameId && (this.state.status === 'loading' || this.blocksEdits())) {
+      this.show({ focus: Object.freeze({ gameId, viewGen }) });
+    } else {
+      this.show({ focus: Object.freeze({ gameId, viewGen }) });
+      void this.load(gameId);
+    }
+    return () => {
+      if (this.state.focus?.viewGen !== viewGen) return;
+      this.serial++;
+      this.show({ focus: null });
+    };
+  };
+
+  /** @deprecated Prefer openView for lease; retained for focused load without sheet lease. */
   focus = (gameId: string) => {
     const actor = this.state.actor;
     if (!actor || !gameId) return;
-    // Keep unresolved UNKNOWN / in-flight work; otherwise (re)load access for this managed game.
     if (this.state.gameId === gameId && (this.state.status === 'loading' || this.blocksEdits())) return;
+    this.parkActiveIfNeeded(gameId);
+    if (this.restoreHold(gameId)) return;
     void this.load(gameId);
   };
-  load = async (gameId: string) => {
+
+  load = async (gameId: string, permit?: GameCoverRenderedPermit) => {
     const actor = this.state.actor;
     if (!actor || !gameId) return;
+    if (permit && !this.permitLive(permit)) return;
+    if (permit && permit.gameId !== gameId) return;
+    // Never wipe another game's unresolved packet/key/version/bytes via a public load.
+    this.parkActiveIfNeeded(gameId);
+    if (this.restoreHold(gameId)) return;
+    if (this.state.gameId === gameId && this.blocksEdits() && this.state.status !== 'loading') return;
     const serial = ++this.serial;
     const retired = () => serial !== this.serial || !this.current(actor) || this.state.gameId !== gameId;
-    this.uncertain = false;
     this.show({
       gameId, status: 'loading', access: null, command: undefined,
-      notice: null, error: null, uncertain: false,
+      notice: this.holds.size ? COPY.held : null, error: null, uncertain: false,
     });
+    this.uncertain = false;
     try {
       const access = await this.port.read(gameId, actor);
       if (retired()) return;
-      this.show({ status: 'ready', access, error: null, notice: null });
+      this.show({ status: 'ready', access, error: null, notice: this.holds.size ? COPY.held : null });
     } catch (error) {
       if (retired()) return;
       const denied = error instanceof ProfileError && [401, 403, 404].includes(error.status);
@@ -233,17 +441,23 @@ export class GameCoverCoordinator {
       });
     }
   };
-  change = async (prepare: (retired: () => boolean) => Promise<AvatarDerivative | 'cancelled'>) => {
-    await this.run('replace', prepare);
+
+  change = async (
+    prepare: (retired: () => boolean) => Promise<AvatarDerivative | 'cancelled'>,
+    permit?: GameCoverRenderedPermit,
+  ) => {
+    await this.run('replace', prepare, permit);
   };
-  remove = async () => {
-    await this.run('remove', async () => null);
+  remove = async (permit?: GameCoverRenderedPermit) => {
+    await this.run('remove', async () => null, permit);
   };
   /** Uncertain path: authoritative GET only — never invent a mutation or auto-publish. */
-  reconcile = async () => {
+  reconcile = async (permit?: GameCoverRenderedPermit) => {
     const actor = this.state.actor;
     const gameId = this.state.gameId;
     if (!actor || !gameId || this.busy()) return;
+    if (permit && !this.permitLive(permit)) return;
+    if (permit && permit.gameId !== gameId) return;
     const serial = ++this.serial;
     const retired = () => serial !== this.serial || !this.current(actor) || this.state.gameId !== gameId;
     this.show({ status: 'processing', notice: null, error: null });
@@ -265,23 +479,37 @@ export class GameCoverCoordinator {
       });
     }
   };
-  retry = async () => {
+  retry = async (permit?: GameCoverRenderedPermit) => {
     const { actor, command } = this.state;
-    if (actor && command?.status === 'unknown' && command.packet.actor.actorId === actor.actorId) {
-      await this.dispatch(command.packet, actor);
-    }
+    // Exact same-session identity — never dispatch an old-session packet because actorId matches.
+    if (!actor || !command || command.status !== 'unknown' || !sameActor(command.packet.actor, actor)) return;
+    if (permit && !this.permitLive(permit)) return;
+    if (permit && permit.gameId !== command.packet.gameId) return;
+    await this.dispatch(command.packet, actor, permit);
   };
   private async run(
     action: GameCoverAction,
     prepare: (retired: () => boolean) => Promise<AvatarDerivative | 'cancelled' | null>,
+    permit?: GameCoverRenderedPermit,
   ) {
     const actor = this.state.actor;
     const gameId = this.state.gameId;
     const access = this.state.access;
     if (!actor || !gameId || !access || this.blocksEdits()) return;
+    if (permit && !this.permitLive(permit)) return;
+    if (permit && permit.gameId !== gameId) return;
+    if (this.managementBlocked(gameId)) return;
     if (action === 'remove' && !access.hasCover) return;
     const serial = ++this.serial;
-    const retired = () => serial !== this.serial || !this.current(actor) || this.state.gameId !== gameId;
+    const viewGen = this.state.focus?.viewGen;
+    const foregroundGen = this.state.foregroundGen;
+    const retired = () =>
+      serial !== this.serial
+      || !this.current(actor)
+      || this.state.gameId !== gameId
+      || (viewGen !== undefined && this.state.focus?.viewGen !== viewGen)
+      || this.state.foregroundGen !== foregroundGen
+      || !this.state.foreground;
     this.show({
       status: action === 'replace' ? 'picking' : 'processing',
       notice: null,
@@ -305,6 +533,10 @@ export class GameCoverCoordinator {
       }
       derivative = prepared;
       const current = this.state.access ?? access;
+      if (this.managementBlocked(gameId)) {
+        this.show({ status: 'ready', notice: null, error: COPY.errorOther });
+        return;
+      }
       const packet = freezeGameCoverPacket({
         actor,
         key: this.random(),
@@ -313,7 +545,7 @@ export class GameCoverCoordinator {
         gameVersion: current.version,
         derivative,
       });
-      await this.dispatch(packet, actor);
+      await this.dispatch(packet, actor, permit);
     } catch (error) {
       if (retired()) return;
       const message =
@@ -323,14 +555,21 @@ export class GameCoverCoordinator {
       this.show({ status: 'ready', command: undefined, error: message, notice: null });
     }
   }
-  private async dispatch(packet: GameCoverPacket, authority: Actor) {
+  private async dispatch(packet: GameCoverPacket, authority: Actor, permit?: GameCoverRenderedPermit) {
+    if (permit && !this.permitLive(permit)) return;
+    if (this.managementBlocked(packet.gameId)) return;
     this.serial++;
     this.show({ command: { packet, status: 'sending' }, status: 'sending', notice: null, error: null });
+    const viewGen = this.state.focus?.viewGen;
+    const foregroundGen = this.state.foregroundGen;
     const valid = () =>
-      this.current(authority) &&
-      this.state.gameId === packet.gameId &&
-      this.state.command?.packet === packet &&
-      this.state.command.status === 'sending';
+      this.current(authority)
+      && this.state.gameId === packet.gameId
+      && this.state.command?.packet === packet
+      && this.state.command.status === 'sending'
+      && this.state.foreground
+      && this.state.foregroundGen === foregroundGen
+      && (viewGen === undefined || this.state.focus?.viewGen === viewGen);
     try {
       const receipt = await this.port.mutate(packet, authority);
       if (!valid()) return;
@@ -372,39 +611,26 @@ export class GameCoverCoordinator {
           });
           return;
         }
-        this.uncertain = error.status === 0 || error.status >= 500 || error.status === 409;
+        this.uncertain = error.status === 409;
         this.show({
           command: undefined,
           status: 'ready',
           error: coverError(error.status),
           notice: null,
+          uncertain: this.uncertain,
         });
         return;
       }
+      // Network / invalid / 5xx / COMMAND_IN_PROGRESS: retain original packet until explicit reconcile
+      // or exact same-session retry. Successful background GET must not clear uncertainty or authorize a write.
       this.uncertain = true;
-      try {
-        const fresh = await this.port.read(packet.gameId, authority);
-        if (!valid()) return;
-        this.uncertain = false;
-        this.gate.onReceipt?.(packet.gameId, fresh);
-        this.show({
-          command: undefined,
-          status: 'ready',
-          access: fresh,
-          error: coverError(error instanceof ProfileError ? error.status : 0),
-          notice: null,
-          uncertain: false,
-        });
-      } catch {
-        if (!valid()) return;
-        this.show({
-          command: { packet, status: 'unknown' },
-          status: 'unknown',
-          notice: COPY.errorOther,
-          error: coverError(0),
-          uncertain: true,
-        });
-      }
+      this.show({
+        command: { packet, status: 'unknown' },
+        status: 'unknown',
+        notice: COPY.errorOther,
+        error: coverError(error instanceof ProfileError ? error.status : 0),
+        uncertain: true,
+      });
     }
   }
 }
@@ -429,4 +655,5 @@ export const GAME_COVER_EDITOR_COPY = {
   cancel: 'Отмена',
   open: 'Изменить фото игры',
   loading: 'Проверяем право изменения фото…',
+  retryLoad: 'Повторить проверку',
 } as const;

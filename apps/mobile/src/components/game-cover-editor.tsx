@@ -1,8 +1,8 @@
-import { useEffect, useState, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
-import { Image, Pressable, View } from 'react-native';
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
+import { AppState, Image, Pressable, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { nativeAuth } from '../auth-runtime.ts';
-import { GAME_COVER_EDITOR_COPY } from '../game-cover.ts';
+import { GAME_COVER_EDITOR_COPY, type GameCoverRenderedPermit } from '../game-cover.ts';
 import {
   createExpoAvatarRuntime,
   pickOwnAvatarAsset,
@@ -24,6 +24,20 @@ function bytesToDataUri(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${globalThis.btoa(binary)}`;
 }
 
+function clearSelection(
+  setAsset: (v: PickedAvatarAsset | null) => void,
+  setPreviewUri: (v: string | null) => void,
+  setPreviewBytes: (v: { bytes: Uint8Array; mime: 'image/jpeg' | 'image/png' | 'image/webp' } | null) => void,
+  setConfirmed: (v: boolean) => void,
+  setPrepareError: (v: string | null) => void,
+) {
+  setAsset(null);
+  setPreviewUri(null);
+  setPreviewBytes(null);
+  setConfirmed(false);
+  setPrepareError(null);
+}
+
 /** Native managed-game photo editor — accepted web GameCoverEditor / GamePhotoSelection copy. */
 export function GameCoverEditor({
   gameId,
@@ -39,6 +53,7 @@ export function GameCoverEditor({
   const auth = useAuth();
   const owner = nativeAuth.gameCover;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
+  const leaseRef = useRef<number | null>(null);
   const [asset, setAsset] = useState<PickedAvatarAsset | null>(null);
   const [crop, setCrop] = useState({ x: 0.5, y: 0.5 });
   const [previewUri, setPreviewUri] = useState<string | null>(null);
@@ -48,25 +63,67 @@ export function GameCoverEditor({
   const [prepareError, setPrepareError] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState(false);
 
-  const focused = state.gameId === gameId;
+  const focused = state.focus?.gameId === gameId && state.focus.viewGen === leaseRef.current
+    && state.gameId === gameId;
   const access = focused ? state.access : null;
   const saving = owner.busy() || state.status === 'sending' || reconciling;
   const uncertain = focused && (state.uncertain || state.status === 'unknown');
   const hasCover = !!access?.hasCover;
   const coverSource = access ? owner.coverImageSource(access.cover.uploadedUrl) : null;
 
-  useEffect(() => {
-    if (!open || auth.status !== 'authenticated' || !gameId) return;
-    owner.focus(gameId);
-  }, [open, owner, gameId, auth.status, state.actor?.actorId, state.actor?.sessionId, state.actor?.generation]);
+  // Actor/session/game identity for scoping local selection — clear when any changes under an open sheet.
+  const actorKey = `${state.actor?.actorId ?? ''}:${state.actor?.sessionId ?? ''}:${state.actor?.generation ?? ''}`;
 
   useEffect(() => {
-    if (!open || !asset) {
+    if (!open || auth.status !== 'authenticated' || !gameId) {
+      leaseRef.current = null;
+      return;
+    }
+    const release = owner.openView(gameId);
+    leaseRef.current = owner.getSnapshot().focus?.viewGen ?? null;
+    owner.setForeground(AppState.currentState === 'active');
+    const sub = AppState.addEventListener('change', next => {
+      owner.setForeground(next === 'active');
+      if (next !== 'active') {
+        clearSelection(setAsset, setPreviewUri, setPreviewBytes, setConfirmed, setPrepareError);
+      }
+    });
+    return () => {
+      sub.remove();
+      release();
+      leaseRef.current = null;
+    };
+  }, [open, owner, gameId, auth.status, actorKey]);
+
+  // Parent-forced close / game / account change must not leave stale preview under another owner.
+  useEffect(() => {
+    if (!open) {
+      clearSelection(setAsset, setPreviewUri, setPreviewBytes, setConfirmed, setPrepareError);
+      setPreparing(false);
+      setReconciling(false);
+    }
+  }, [open, gameId, actorKey]);
+
+  // Permit captured for this render — checked before paint of prepared preview.
+  const permit: GameCoverRenderedPermit | null = state.actor && state.focus && state.foreground
+    && state.focus.gameId === gameId
+    && state.focus.viewGen === leaseRef.current
+    ? Object.freeze({
+      actor: Object.freeze({ ...state.actor }),
+      gameId,
+      viewGen: state.focus.viewGen,
+      foregroundGen: state.foregroundGen,
+    })
+    : null;
+
+  useEffect(() => {
+    if (!open || !asset || !permit) {
       setPreviewUri(null);
       setPreviewBytes(null);
       setPreparing(false);
       return;
     }
+    const captured = permit;
     let cancelled = false;
     setPreparing(true);
     setPrepareError(null);
@@ -75,15 +132,15 @@ export function GameCoverEditor({
     setConfirmed(false);
     const runtime = createExpoAvatarRuntime();
     const timer = setTimeout(() => {
-      void prepareGameCoverDerivative(runtime, asset, crop, () => cancelled).then(
+      void prepareGameCoverDerivative(runtime, asset, crop, () => cancelled || !owner.permitLive(captured)).then(
         derivative => {
-          if (cancelled) return;
+          if (cancelled || !owner.permitLive(captured)) return;
           setPreviewBytes({ bytes: derivative.bytes, mime: derivative.mime });
           setPreviewUri(bytesToDataUri(derivative.bytes, derivative.mime));
           setPreparing(false);
         },
         failure => {
-          if (cancelled) return;
+          if (cancelled || !owner.permitLive(captured)) return;
           setPreparing(false);
           setPrepareError(failure instanceof Error ? failure.message : 'Не удалось подготовить фото. Выберите другое изображение.');
         },
@@ -93,25 +150,17 @@ export function GameCoverEditor({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [asset, crop, open]);
+  }, [asset, crop, open, permit?.viewGen, permit?.foregroundGen, permit?.gameId, actorKey, owner]);
 
   function close() {
     if (saving) return;
+    clearSelection(setAsset, setPreviewUri, setPreviewBytes, setConfirmed, setPrepareError);
     onOpenChange(false);
-    setAsset(null);
-    setPreviewUri(null);
-    setPreviewBytes(null);
-    setConfirmed(false);
-    setPrepareError(null);
   }
 
   function resetSelection() {
     if (saving) return;
-    setAsset(null);
-    setPreviewUri(null);
-    setPreviewBytes(null);
-    setConfirmed(false);
-    setPrepareError(null);
+    clearSelection(setAsset, setPreviewUri, setPreviewBytes, setConfirmed, setPrepareError);
   }
 
   return <>
@@ -121,20 +170,34 @@ export function GameCoverEditor({
       <Label>{GAME_COVER_EDITOR_COPY.fallback}</Label>
       {!focused || state.status === 'loading' ? (
         <Label accessibilityLiveRegion="polite">{GAME_COVER_EDITOR_COPY.loading}</Label>
-      ) : state.status === 'denied' || !access ? (
+      ) : state.status === 'denied' ? (
         <Label accessibilityRole="alert">{state.error ?? GAME_COVER_EDITOR_COPY.loading}</Label>
+      ) : state.status === 'idle' && !access ? (
+        <>
+          <Label accessibilityRole="alert">{state.error ?? GAME_COVER_EDITOR_COPY.loading}</Label>
+          <TextButton title={GAME_COVER_EDITOR_COPY.retryLoad} onPress={() => {
+            if (permit) void owner.load(gameId, permit);
+            else void owner.load(gameId);
+          }} />
+        </>
+      ) : !access ? (
+        <Label accessibilityLiveRegion="polite">{GAME_COVER_EDITOR_COPY.loading}</Label>
       ) : <>
         <TextButton title={GAME_COVER_EDITOR_COPY.pick} onPress={() => {
-          if (saving || uncertain) return;
+          if (saving || uncertain || !permit) return;
+          const captured = permit;
           const runtime = createExpoAvatarRuntime();
-          void pickOwnAvatarAsset(runtime, () => false).then(picked => {
-            if (picked === 'cancelled') return;
+          void pickOwnAvatarAsset(runtime, () => !owner.permitLive(captured)).then(picked => {
+            if (!owner.permitLive(captured) || picked === 'cancelled') return;
             setAsset(picked);
             setCrop({ x: 0.5, y: 0.5 });
             setConfirmed(false);
             setPreviewUri(null);
             setPreviewBytes(null);
             setPrepareError(null);
+          }, failure => {
+            if (!owner.permitLive(captured)) return;
+            setPrepareError(failure instanceof Error ? failure.message : 'Не удалось выбрать фото. Попробуйте ещё раз.');
           });
         }} />
         {asset ? <>
@@ -159,12 +222,12 @@ export function GameCoverEditor({
               style={styles.textButton}><Label>+</Label></Pressable>
           </View>
           {!confirmed && previewBytes && !preparing ? (
-            <PrimaryButton title={GAME_COVER_EDITOR_COPY.confirmPick} disabled={saving || uncertain}
-              onPress={() => setConfirmed(true)} />
+            <PrimaryButton title={GAME_COVER_EDITOR_COPY.confirmPick} disabled={saving || uncertain || !permit}
+              onPress={() => { if (permit && owner.permitLive(permit)) setConfirmed(true); }} />
           ) : null}
         </> : null}
         {preparing ? <Label accessibilityLiveRegion="polite">{GAME_COVER_EDITOR_COPY.preparing}</Label> : null}
-        {previewUri ? <View accessibilityLabel="Предпросмотр фото игры" style={{ gap: 8 }}>
+        {previewUri && permit && owner.permitLive(permit) ? <View accessibilityLabel="Предпросмотр фото игры" style={{ gap: 8 }}>
           <Label>{GAME_COVER_EDITOR_COPY.previewCaption}</Label>
           <View style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden', borderRadius: 12 }}>
             <Image source={{ uri: previewUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" accessibilityLabel="Выбранный фрагмент фото игры" />
@@ -180,20 +243,27 @@ export function GameCoverEditor({
         </Label> : null}
         {(prepareError || state.error) ? <Label accessibilityRole="alert">{prepareError ?? state.error}</Label> : null}
         {uncertain ? (
-          <PrimaryButton title={GAME_COVER_EDITOR_COPY.reconcile} disabled={saving} onPress={() => {
+          <PrimaryButton title={GAME_COVER_EDITOR_COPY.reconcile} disabled={saving || !permit} onPress={() => {
+            if (!permit) return;
+            const captured = permit;
             setReconciling(true);
-            void owner.reconcile().finally(() => setReconciling(false));
+            void owner.reconcile(captured).finally(() => {
+              if (owner.permitLive(captured)) setReconciling(false);
+              else setReconciling(false);
+            });
           }} />
         ) : <>
           <PrimaryButton title={GAME_COVER_EDITOR_COPY.save}
-            disabled={saving || preparing || !confirmed || !previewBytes}
+            disabled={saving || preparing || !confirmed || !previewBytes || !permit}
             onPress={() => {
-              if (!previewBytes || !confirmed) return;
+              if (!previewBytes || !confirmed || !permit) return;
+              const captured = permit;
               const derivative = previewBytes;
-              void owner.change(async () => Object.freeze({
-                mime: derivative.mime,
-                bytes: derivative.bytes,
-              })).then(() => {
+              void owner.change(async retired => {
+                if (retired() || !owner.permitLive(captured)) return 'cancelled';
+                return Object.freeze({ mime: derivative.mime, bytes: derivative.bytes });
+              }, captured).then(() => {
+                if (!owner.permitLive(captured)) return;
                 if (owner.getSnapshot().notice) {
                   resetSelection();
                   close();
@@ -201,7 +271,10 @@ export function GameCoverEditor({
               });
             }} />
           {hasCover ? <TextButton title={GAME_COVER_EDITOR_COPY.remove} onPress={() => {
-            void owner.remove().then(() => {
+            if (!permit) return;
+            const captured = permit;
+            void owner.remove(captured).then(() => {
+              if (!owner.permitLive(captured)) return;
               if (owner.getSnapshot().notice) {
                 resetSelection();
                 close();
@@ -210,7 +283,7 @@ export function GameCoverEditor({
           }} /> : null}
         </>}
         {asset ? <TextButton title="Без своего фото" onPress={resetSelection} /> : null}
-      </>}
+      </>
       <TextButton title={GAME_COVER_EDITOR_COPY.cancel} onPress={close} />
     </DiscoverySheet>
   </>;

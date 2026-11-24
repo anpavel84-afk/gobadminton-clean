@@ -639,15 +639,35 @@ test('late failed selection cannot replace later edits, newer valid selection or
   }
 });
 
-test('#522 APK51 managed summary mounts game photo editor for draft/published only', () => {
-  const ui = readFileSync(new URL('../src/components/game-management.tsx', import.meta.url), 'utf8');
-  assert.match(ui, /GameCoverEditor/);
-  assert.match(ui, /photoEditable/);
-  assert.match(ui, /blocksManagedWrites/);
-  assert.match(ui, /draft.*published|published.*draft/);
-  assert.doesNotMatch(ui, /prepareOwnCoverDerivative/);
-  const domain = readFileSync(new URL('../src/game-cover.ts', import.meta.url), 'utf8');
-  assert.match(domain, /hasCover/);
-  assert.match(domain, /blocksManagedWrites/);
-  assert.match(domain, /gameCoverMediaPath/);
+test('#522 APK51 management dispatch gate blocks publish while cover unresolved for same game', async () => {
+  let coverBlocked = true;
+  const sent: ManagementPacket[] = [];
+  let serial = 0;
+  const draft = { ...g, id: 'game-cover-lock', status: 'draft' as const, version: 2 };
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      return { ...draft, status: 'published', version: draft.version + 1 };
+    },
+  }, () => `key-${++serial}`, () => now, {
+    coverBlocksWrites: gameId => coverBlocked && gameId === 'game-cover-lock',
+  });
+  owner.setActor(actor);
+  await owner.loadDetail('game-cover-lock');
+  assert.equal(owner.getSnapshot().details['game-cover-lock']?.status, 'ready');
+  await owner.publishDraft('game-cover-lock');
+  assert.equal(sent.length, 0);
+  assert.match(owner.getSnapshot().notice ?? '', /фото/);
+  coverBlocked = false;
+  await owner.publishDraft('game-cover-lock');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.kind, 'publish');
+  assert.equal(sent[0]!.kind === 'publish' ? sent[0].gameId : '', 'game-cover-lock');
 });

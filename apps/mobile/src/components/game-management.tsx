@@ -43,10 +43,16 @@ export function GameManagement({ id }: { id: string }) {
   const coverFocusRef = useRef<ComponentRef<typeof Pressable> | null>(null);
   useEffect(() => { setReason(''); setCoverOpen(false); if (auth.status === 'authenticated') void owner.loadDetail(id); }, [owner,id,auth.status,state.actor?.actorId,state.actor?.sessionId,state.actor?.generation]);
   const current = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
-  const coverLocked = coverOwner.blocksManagedWrites(id) || (coverState.gameId === id && coverState.status === 'unknown');
+  const coverLocked = coverOwner.blocksManagedWrites(id) || (coverState.gameId === id && coverState.status === 'unknown')
+    || (coverState.heldGameId === id);
+  // Unresolved cover may reopen to reconcile; only block opening while a non-cover management send is in flight for this game.
+  const managementBusy = ['sending','unknown'].includes(state.command?.status ?? '')
+    && state.command?.packet.kind !== 'create'
+    && state.command?.packet.gameId === id;
   const locked = ['sending','unknown'].includes(state.command?.status ?? '') || coverLocked;
   const mutable = d?.status === 'ready' && d.roster === 'ready' && d.game?.status === 'published' && Date.parse(d.game.startsAt) > Date.now() && !locked;
   const photoEditable = d?.status === 'ready' && !!d.game && (d.game.status === 'draft' || d.game.status === 'published');
+  const canOpenCover = photoEditable && (!managementBusy || coverOpen || coverLocked);
   return <Page keyboard header={<Header />}><BackLink title="← Мои игры" onPress={() => router.replace('/my-games')} /><Label style={styles.title}>Управление игрой</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <><Label>Сводка доступна создателю или менеджеру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(`/games/manage/${id}`)} /></>
       : !d || d.status === 'loading' ? <Loading title="Загружаем сводку…" />
@@ -60,15 +66,15 @@ export function GameManagement({ id }: { id: string }) {
             ref={coverFocusRef}
             accessibilityRole="button"
             accessibilityLabel={GAME_COVER_EDITOR_COPY.open}
-            disabled={coverLocked && !coverOpen}
-            onPress={() => { if (!coverLocked) setCoverOpen(true); }}
+            disabled={!canOpenCover && !coverOpen}
+            onPress={() => { if (canOpenCover || coverLocked) setCoverOpen(true); }}
             style={({ pressed }) => [
               styles.textButton,
               {
                 borderWidth: 1,
                 borderColor: colors.lineDark,
                 backgroundColor: pressed ? colors.paper : colors.card,
-                opacity: coverLocked && !coverOpen ? 0.5 : 1,
+                opacity: !canOpenCover && !coverOpen ? 0.5 : 1,
               },
             ]}>
             <Label style={{ color: colors.ink, textAlign: 'center', fontWeight: '600' }}>{GAME_COVER_EDITOR_COPY.open}</Label>

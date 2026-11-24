@@ -6,6 +6,8 @@ import { createNativeApi } from '../src/native-api.ts';
 import { ProfileError } from '../src/profile.ts';
 import {
   GameCoverCoordinator,
+  GAME_COVER_UPLOAD_MAX_BYTES,
+  admitGameCoverUpload,
   freezeGameCoverPacket,
   gameCoverMediaPath,
   parseGameCoverReceipt,
@@ -24,12 +26,11 @@ const gameUrl = `/v1/media/game-covers/${hex64}.png`;
 const venueUrl = `/v1/media/venue-covers/${hex64}.png`;
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 
-function jpegDerivative(): AvatarDerivative {
-  const bytes = new Uint8Array([255, 216, 255, 217]);
+function jpegDerivative(bytes = new Uint8Array([255, 216, 255, 217])): AvatarDerivative {
   return Object.freeze({ mime: 'image/jpeg' as const, bytes: cloneDerivativeBytes(bytes) });
 }
 
-test('game cover port wire: PUT binary, DELETE JSON CAS, X-Game-Version, bearer-only', async () => {
+test('game cover port wire: PUT binary, DELETE JSON CAS, X-Game-Version, bearer-only; oversize zero fetch', async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const api = createNativeApi(async (url, init) => {
     calls.push({ url: String(url), init: init ?? {} });
@@ -79,9 +80,20 @@ test('game cover port wire: PUT binary, DELETE JSON CAS, X-Game-Version, bearer-
     () => failing.mutateGameCover('t', replace),
     (e: unknown) => e instanceof ProfileError && e.kind === 'business' && e.status === 429,
   );
+
+  const before = calls.length;
+  const oversize = freezeGameCoverPacket({
+    actor, key: 'oversize', gameId: '11111111-1111-1111-1111-111111111111',
+    action: 'replace', gameVersion: 1,
+    derivative: jpegDerivative(new Uint8Array(GAME_COVER_UPLOAD_MAX_BYTES + 1)),
+  });
+  await assert.rejects(() => api.mutateGameCover('access-token', oversize), ProfileError);
+  assert.equal(calls.length, before);
+  assert.throws(() => admitGameCoverUpload(jpegDerivative(new Uint8Array(0))), ProfileError);
+  assert.throws(() => admitGameCoverUpload(null), ProfileError);
 });
 
-test('receipt parse keeps hasCover independent of venue fallback URL', () => {
+test('receipt parse keeps hasCover independent of venue fallback URL; rejects foreign hosts', () => {
   assert.deepEqual(parseGameCoverReceipt({
     version: 2, hasCover: false, cover: { uploadedUrl: venueUrl },
   }), { version: 2, hasCover: false, cover: { uploadedUrl: venueUrl } });
@@ -96,17 +108,13 @@ test('receipt parse keeps hasCover independent of venue fallback URL', () => {
   assert.equal(gameCoverMediaPath(venueUrl), null);
 });
 
-test('coordinator: save/remove/hasCover fence; uncertain blocks writes; late actor ignore; no auto-publish', async () => {
+test('coordinator: save/remove/hasCover fence; uncertain blocks writes; no auto-publish', async () => {
   let version = 4;
   let hasCover = false;
   const sent: GameCoverPacket[] = [];
-  let reads = 0;
   const receipts: Array<{ gameId: string; version: number }> = [];
   const port: GameCoverPort = {
-    read: async () => {
-      reads += 1;
-      return { version, hasCover, cover: { uploadedUrl: hasCover ? gameUrl : venueUrl } };
-    },
+    read: async () => ({ version, hasCover, cover: { uploadedUrl: hasCover ? gameUrl : venueUrl } }),
     mutate: async (packet) => {
       sent.push(packet);
       version += 1;
@@ -122,7 +130,6 @@ test('coordinator: save/remove/hasCover fence; uncertain blocks writes; late act
   await owner.load('game-1');
   assert.equal(owner.getSnapshot().status, 'ready');
   assert.equal(owner.getSnapshot().access?.hasCover, false);
-  // Remove disabled when hasCover=false even with venue fallback URL present.
   await owner.remove();
   assert.equal(sent.length, 0);
   await owner.change(async () => jpegDerivative());
@@ -135,10 +142,12 @@ test('coordinator: save/remove/hasCover fence; uncertain blocks writes; late act
   assert.equal(sent[0]!.gameVersion, 4);
   assert.equal(owner.getSnapshot().access?.hasCover, false);
 
-  // Unknown → new write blocked until explicit reconcile; no auto-publish.
+  // Unknown retains packet; successful GET must not clear; reconcile is explicit.
   let failRead = false;
+  let reads = 0;
   const flaky: GameCoverPort = {
     read: async () => {
+      reads += 1;
       if (failRead) throw new ProfileError('network', 503);
       return { version: 10, hasCover: false, cover: { uploadedUrl: null } };
     },
@@ -149,33 +158,120 @@ test('coordinator: save/remove/hasCover fence; uncertain blocks writes; late act
   });
   uncertain.setActor(actor);
   await uncertain.load('game-2');
-  failRead = true;
+  const readsAfterLoad = reads;
+  failRead = false; // even if GET would succeed, dispatch must not auto-clear via background read
   await uncertain.change(async () => jpegDerivative());
   assert.equal(uncertain.getSnapshot().status, 'unknown');
+  assert.equal(uncertain.getSnapshot().command?.packet.key, 'u-key');
+  assert.equal(uncertain.getSnapshot().uncertain, true);
+  assert.equal(reads, readsAfterLoad); // no automatic GET after failed mutate
   assert.equal(uncertain.blocksManagedWrites('game-2'), true);
   assert.equal(uncertain.blocksManagedWrites('other'), false);
   await uncertain.change(async () => jpegDerivative());
   assert.equal(uncertain.getSnapshot().command?.packet.key, 'u-key');
-  failRead = false;
   await uncertain.reconcile();
   assert.equal(uncertain.getSnapshot().uncertain, false);
   assert.equal(uncertain.getSnapshot().status, 'ready');
   assert.equal(uncertain.getSnapshot().notice, 'Данные обновлены. Можно повторить сохранение.');
+  // CURRENT replay: hasCover false with safe null/venue URL is accepted without inventing retained own photo.
+  assert.equal(uncertain.getSnapshot().access?.hasCover, false);
+});
 
-  // Late actor change retires in-flight paint.
+test('F1 journal: focus/load other game parks unresolved A; return restores packet; retry needs sameActor', async () => {
+  const sent: GameCoverPacket[] = [];
+  const port: GameCoverPort = {
+    read: async (gameId) => ({ version: gameId === 'game-A' ? 2 : 5, hasCover: false, cover: { uploadedUrl: null } }),
+    mutate: async (packet) => {
+      sent.push(packet);
+      throw new ProfileError('network', 503);
+    },
+  };
+  const owner = new GameCoverCoordinator(port, () => 'journal-key', { accessToken: () => 'tok' });
+  owner.setActor(actor);
+  await owner.load('game-A');
+  await owner.change(async () => jpegDerivative());
+  assert.equal(owner.getSnapshot().status, 'unknown');
+  const parked = owner.getSnapshot().command!.packet;
+  assert.equal(parked.key, 'journal-key');
+  assert.ok(parked.derivative);
+
+  owner.focus('game-B');
+  await Promise.resolve();
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.blocksManagedWrites('game-A'), true);
+  assert.notEqual(owner.getSnapshot().command?.packet.key, 'journal-key');
+  assert.equal(owner.getSnapshot().heldGameId, 'game-A');
+
+  owner.focus('game-A');
+  assert.equal(owner.getSnapshot().status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, 'journal-key');
+  assert.equal(owner.getSnapshot().command?.packet.gameVersion, parked.gameVersion);
+  assert.deepEqual(
+    [...owner.getSnapshot().command!.packet.derivative!.bytes],
+    [...parked.derivative!.bytes],
+  );
+
+  // New session same actorId must not dispatch the old-session packet.
+  owner.setActor({ actorId: 'A', sessionId: 'session-A2', generation: 1 });
+  assert.equal(owner.getSnapshot().status, 'unknown');
+  const before = sent.length;
+  await owner.retry();
+  assert.equal(sent.length, before);
+  // Explicit reconcile (read-only) still works.
+  await owner.reconcile();
+  assert.equal(owner.getSnapshot().uncertain, false);
+});
+
+test('F2/F5 late preparation zero send; already-started result no paint; permit fence', async () => {
+  let resolvePrepare!: (v: AvatarDerivative) => void;
+  let resolveStarted!: () => void;
+  const started = new Promise<void>(r => { resolveStarted = r; });
   let resolveMutate!: (v: ReturnType<typeof parseGameCoverReceipt>) => void;
+  const sent: GameCoverPacket[] = [];
   const delayed: GameCoverPort = {
     read: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
-    mutate: () => new Promise(resolve => { resolveMutate = resolve; }),
+    mutate: (packet) => {
+      sent.push(packet);
+      resolveStarted();
+      return new Promise(resolve => { resolveMutate = resolve; });
+    },
   };
   const late = new GameCoverCoordinator(delayed, () => 'late-key', { accessToken: () => 'tok' });
   late.setActor(actor);
   await late.load('game-3');
-  const pending = late.change(async () => jpegDerivative());
+
+  // Late preparation: actor changes before prepare resolves → zero send.
+  const prepPending = late.change(async (retired) => {
+    const d = await new Promise<AvatarDerivative>(r => { resolvePrepare = r; });
+    if (retired()) return 'cancelled';
+    return d;
+  });
+  late.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
+  resolvePrepare!(jpegDerivative());
+  await prepPending;
+  assert.equal(sent.length, 0);
+
+  // Already-started mutate: result must not paint under the new actor.
+  late.setActor(actor);
+  await late.load('game-3');
+  const mutatePending = late.change(async () => jpegDerivative());
+  await started;
+  assert.equal(sent.length, 1);
   late.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
   resolveMutate!({ version: 99, hasCover: true, cover: { uploadedUrl: gameUrl } });
-  await pending;
+  await mutatePending;
   assert.notEqual(late.getSnapshot().access?.version, 99);
+
+  // Permit helpers are production exports (no lazy authority gap).
+  late.setActor(actor);
+  await late.load('game-4');
+  const release = late.openView('game-4');
+  const permit = late.renderedPermit();
+  assert.ok(permit);
+  assert.equal(late.permitLive(permit!), true);
+  late.setForeground(false);
+  assert.equal(late.permitLive(permit!), false);
+  release();
 });
 
 test('bearer image source only for game-covers path; venue fallback stays credential-omit', () => {
@@ -193,22 +289,9 @@ test('bearer image source only for game-covers path; venue fallback stays creden
   assert.equal(owner.coverImageSource('https://evil.example/x.png'), null);
 });
 
-test('#522 APK51 managed game photo wiring, 512KiB budget, counter pin', () => {
+test('#522 APK51 managed game photo budget pin (no source-regex mirror)', () => {
   assert.equal(GAME_COVER_DERIVATIVE_MAX_BYTES, 512 * 1024);
+  assert.equal(GAME_COVER_UPLOAD_MAX_BYTES, GAME_COVER_DERIVATIVE_MAX_BYTES);
   assert.ok(COVER_DERIVATIVE_MAX_BYTES > GAME_COVER_DERIVATIVE_MAX_BYTES);
-  const runtime = read('../src/profile-avatar-runtime.ts');
-  assert.match(runtime, /prepareGameCoverDerivative/);
-  assert.match(runtime, /GAME_COVER_DERIVATIVE_MAX_BYTES/);
-  const management = read('../src/components/game-management.tsx');
-  assert.match(management, /GameCoverEditor/);
-  assert.match(management, /blocksManagedWrites/);
-  const editor = read('../src/components/game-cover-editor.tsx');
-  assert.match(editor, /prepareGameCoverDerivative/);
-  assert.match(editor, /Подтвердить выбор фото/);
-  assert.match(editor, /hasCover/);
-  assert.doesNotMatch(editor, /auto.?publish|publishDraft/i);
-  const api = read('../src/native-api.ts');
-  assert.match(api, /mutateGameCover/);
-  assert.match(api, /X-Game-Version/);
   assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 51);
 });

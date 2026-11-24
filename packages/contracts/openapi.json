@@ -16740,6 +16740,7 @@
           }
         },
         "security": [
+          {},
           {
             "cookieSession": []
           },
@@ -16747,7 +16748,7 @@
             "NativeBearer": []
           }
         ],
-        "description": "Cookie session or NativeBearer may authorize private/draft/unlisted game-cover reads. Invalid explicit bearer is 401 and never falls back to guest. Public published game media remain readable without credentials. no-store; Vary includes Authorization, Cookie, Accept. Reauthorizes the owning game and current approved key on every read."
+        "description": "Optional guest {} plus cookieSession or NativeBearer. Cookie/NativeBearer authorize private/draft/unlisted game-cover reads. Invalid explicit bearer is 401 and never falls back to guest. Public published game media remain readable without credentials. no-store; Vary includes Authorization, Cookie, Accept. Reauthorizes the owning game and current approved key on every read."
       }
     },
     "/games/{gameId}/recommendations": {
