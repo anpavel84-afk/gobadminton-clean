@@ -70,6 +70,23 @@ export type ManagementPort = { profile: () => Promise<CreatorProfile>; preferenc
 function initial(): ManagementSnapshot { return { actor: null, form: emptyCreationForm(), context: 'idle', profile: null, preferences: null, trainer: null, venues: [], cityId: null, preview: null, created: null, creationReference: null, details: {} }; }
 function freeze<T>(v: T): T { if (v && typeof v === 'object') { Object.values(v).forEach(freeze); Object.freeze(v); } return v; }
 /** Persistent root domain: route changes do not reset packets. No disk/auth-envelope migration. */
+export type ManagementGate = {
+  /** Unresolved managed-game photo blocks publish/roster writes for that game (not create / other games). */
+  coverBlocksWrites?: (gameId: string) => boolean;
+};
+
+/**
+ * Auth/port cover-lock no-send — distinct from unrelated ParticipationError('stale').
+ * Thrown before/after token when managed-game photo blocks publish/roster; never a network result.
+ */
+export class CoverLockNoSendError extends Error {
+  readonly kind = 'cover_lock_no_send' as const;
+  constructor() {
+    super('cover_lock_no_send');
+    this.name = 'CoverLockNoSendError';
+  }
+}
+
 export class GameManagementCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private contextRead = 0; private publishRead = 0; private contactEdited = false; private resumeKnown: { actorId: string; id: string; version: number } | null = null; private detailReads = new Map<string, number>();
   // Quarantined while identity is unavailable; never part of the guest snapshot.
@@ -77,7 +94,13 @@ export class GameManagementCoordinator {
   // A domain-local continuation, fenced by identity, context generation and observed search city.
   private ordinaryResume: { actor: Actor; serial: number; cityId: string | null } | null = null;
   private port: ManagementPort; private random: () => string; private now: () => number;
-  constructor(port: ManagementPort, random: () => string, now: () => number = Date.now) { this.port = port; this.random = random; this.now = now; }
+  private gate: ManagementGate;
+  constructor(port: ManagementPort, random: () => string, now: () => number = Date.now, gate: ManagementGate = {}) {
+    this.port = port; this.random = random; this.now = now; this.gate = gate;
+  }
+  private coverBlocked(gameId: string) {
+    return !!gameId && !!this.gate.coverBlocksWrites?.(gameId);
+  }
   getSnapshot = () => this.state;
   subscribe = (f: () => void) => { this.listeners.add(f); return () => { this.listeners.delete(f); }; };
   private show(p: Partial<ManagementSnapshot>) { this.state = { ...this.state, ...p }; this.listeners.forEach(f => f()); }
@@ -248,6 +271,15 @@ export class GameManagementCoordinator {
   reconcile = async () => { const command = this.state.command; if (command?.status === 'unknown' && this.current(command.packet.actor)) await this.dispatch(command.packet); };
   private async dispatch(packet: ManagementPacket): Promise<boolean> {
     if (!this.current(packet.actor) || this.state.command?.status === 'sending') return false;
+    // Actual gate (not UI-only): delayed token / saved publish/roster callbacks cannot dispatch while cover unresolved.
+    if (packet.kind !== 'create' && this.coverBlocked(packet.gameId)) {
+      this.show({ notice: 'Сначала завершите или проверьте сохранение фото этой игры.' });
+      return false;
+    }
+    // Preserve prior UNKNOWN identity across a prevented no-send retry (cover-lock stale after token).
+    const priorUnknown = this.state.command?.status === 'unknown' && this.state.command.packet === packet
+      ? this.state.command.packet
+      : null;
     this.show({ command: { packet, status: 'sending' }, notice: undefined });
     try {
       const result = await this.port.send(packet); if (!this.current(packet.actor)) return false;
@@ -265,6 +297,23 @@ export class GameManagementCoordinator {
       return true;
     } catch (e) {
       if (!this.current(packet.actor)) return false;
+      // Only the dedicated cover-lock no-send class — unrelated stale follows accepted50 UNKNOWN below.
+      if (e instanceof CoverLockNoSendError) {
+        if (priorUnknown) {
+          // Prevented delayed retry: keep exact prior UNKNOWN regardless of later cover-lock state.
+          this.show({
+            command: { packet: priorUnknown, status: 'unknown' },
+            notice: 'Сначала завершите или проверьте сохранение фото этой игры.',
+          });
+          return false;
+        }
+        // First definitely prevented send — clear safely (no network mutation occurred).
+        this.show({
+          command: undefined,
+          notice: 'Сначала завершите или проверьте сохранение фото этой игры.',
+        });
+        return false;
+      }
       const definite = e instanceof ParticipationError && (e.kind === 'business' || e.kind === 'authority') && e.code !== 'COMMAND_IN_PROGRESS';
       this.show({ command: { packet, status: definite ? 'rejected' : 'unknown', code: e instanceof ParticipationError ? e.code : undefined },
         notice: definite ? 'Действие отклонено. Обновите данные перед новой попыткой.' : 'Результат неизвестен. Проверка повторит только эту же команду с тем же ключом.' });
@@ -278,7 +327,12 @@ export class GameManagementCoordinator {
     if (!actor) return;
     const valid = () => this.current(actor) && this.detailReads.get(id) === serial;
     const put = (detail: Detail) => { if (detail.status === 'denied') this.denyCreated(id); this.show({ details: { ...this.state.details,[id]: detail } }); };
-    put({ status: 'loading', participants: [], cursor: null, roster: 'loading' });
+    // Soft refresh when already ready: keep game shell mounted so an open cover editor
+    // is not unmounted by a receipt-driven reload (loading flash would drop its view lease).
+    const prior = this.state.details[id];
+    if (!(prior?.status === 'ready' && prior.game)) {
+      put({ status: 'loading', participants: [], cursor: null, roster: 'loading' });
+    }
     try {
       let managed: ManagedGame | undefined, cursor: string | undefined; const seen = new Set<string>();
       do { const page = await this.port.managed(cursor); if (!valid()) return; managed = page.items.find(g => g.id === id);

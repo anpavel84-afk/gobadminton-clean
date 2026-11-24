@@ -308,5 +308,5 @@ test('#522 APK44 source wiring: profile card, coordinator, PATCH opt-in, counter
   assert.match(controller, /requirePrincipalMutation\(request\)/);
   assert.doesNotMatch(controller, /requireCookieMutation\(request\)/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 50);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 51);
 });

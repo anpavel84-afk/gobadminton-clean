@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
+import { CoverLockNoSendError, GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
 import type { ManagementPort, ManagementPacket, Venue } from '../src/game-management.ts';
-import { ParticipationError } from '../src/participation.ts';
+import { ParticipationError, type ManagedGame } from '../src/participation.ts';
 import { ProfileCoordinator } from '../src/profile.ts';
 import type { OwnProfile } from '../src/profile.ts';
 import { gameLocalToIso, gameSchedule } from '../src/game-form.ts';
@@ -637,4 +637,171 @@ test('late failed selection cannot replace later edits, newer valid selection or
     const current = s.owner.getSnapshot(); gate.resolve(true); assert.equal(await work,false);
     assert.strictEqual(s.owner.getSnapshot(),current); assert.equal(s.sent.length,0);
   }
+});
+
+test('#522 FIX6: ready loadDetail soft-refresh keeps game shell (no loading unmount flash)', async () => {
+  const draft = { ...g, id: 'game-cover-soft', status: 'draft' as const, version: 2 };
+  let version = 2;
+  const managedGate = deferred<{ items: ManagedGame[]; nextCursor: null }>();
+  let managedCalls = 0;
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => {
+      managedCalls += 1;
+      if (managedCalls === 1) {
+        return { items: [{ ...draft, version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+      }
+      return managedGate.promise;
+    },
+    game: async () => ({ ...draft, version }),
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async () => draft,
+  }, () => 'soft-key', () => now);
+  owner.setActor(actor);
+  await owner.loadDetail('game-cover-soft');
+  const ready = owner.getSnapshot().details['game-cover-soft'];
+  assert.equal(ready?.status, 'ready');
+  assert.ok(ready?.game);
+  const gameRef = ready!.game;
+
+  version = 3;
+  const refresh = owner.loadDetail('game-cover-soft');
+  await new Promise(r => setImmediate(r));
+  const mid = owner.getSnapshot().details['game-cover-soft'];
+  assert.equal(mid?.status, 'ready', 'receipt refresh must not flash loading');
+  assert.strictEqual(mid?.game, gameRef);
+  managedGate.resolve({
+    items: [{ ...draft, version: 3, management: { role: 'owner', createdByMe: true } }],
+    nextCursor: null,
+  });
+  await refresh;
+  assert.equal(owner.getSnapshot().details['game-cover-soft']?.status, 'ready');
+  assert.equal(owner.getSnapshot().details['game-cover-soft']?.game?.version, 3);
+
+  // Cold load (no ready shell) still uses loading.
+  const cold = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async () => draft,
+  }, () => 'cold-key', () => now);
+  cold.setActor(actor);
+  const coldWork = cold.loadDetail('game-cover-soft');
+  assert.equal(cold.getSnapshot().details['game-cover-soft']?.status, 'loading');
+  await coldWork;
+  assert.equal(cold.getSnapshot().details['game-cover-soft']?.status, 'ready');
+});
+
+test('#522 APK51 management dispatch gate blocks publish while cover unresolved for same game', async () => {
+  let coverBlocked = true;
+  const sent: ManagementPacket[] = [];
+  let serial = 0;
+  const draft = { ...g, id: 'game-cover-lock', status: 'draft' as const, version: 2 };
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      return { ...draft, status: 'published', version: draft.version + 1 };
+    },
+  }, () => `key-${++serial}`, () => now, {
+    coverBlocksWrites: gameId => coverBlocked && gameId === 'game-cover-lock',
+  });
+  owner.setActor(actor);
+  await owner.loadDetail('game-cover-lock');
+  assert.equal(owner.getSnapshot().details['game-cover-lock']?.status, 'ready');
+  await owner.publishDraft('game-cover-lock');
+  assert.equal(sent.length, 0);
+  assert.match(owner.getSnapshot().notice ?? '', /фото/);
+  coverBlocked = false;
+  await owner.publishDraft('game-cover-lock');
+  assert.equal(sent.length, 1);
+  const packet = sent[0];
+  assert.ok(packet);
+  assert.equal(packet.kind, 'publish');
+  assert.equal(packet.kind === 'publish' ? packet.gameId : '', 'game-cover-lock');
+});
+
+test('#522 FIX3: CoverLockNoSendError on UNKNOWN retry preserves packet/key; unrelated stale → UNKNOWN', async () => {
+  let coverBlocked = false;
+  let portStale: 'cover' | 'other' | null = null;
+  const sent: ManagementPacket[] = [];
+  let serial = 0;
+  let rejectSend!: (e: unknown) => void;
+  let pendingSend: Promise<Game> | null = null;
+  const draft = { ...g, id: 'game-cover-unknown', status: 'draft' as const, version: 2 };
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      if (pendingSend) {
+        await pendingSend;
+      }
+      if (portStale === 'cover') {
+        // Simulate AuthCoordinator cover gate after delayed token — arm lock then dedicated no-send.
+        coverBlocked = true;
+        throw new CoverLockNoSendError();
+      }
+      if (portStale === 'other') throw new ParticipationError('stale');
+      sent.push(p);
+      return { ...draft, status: 'published', version: draft.version + 1 };
+    },
+  }, () => `key-${++serial}`, () => now, {
+    coverBlocksWrites: gameId => coverBlocked && gameId === 'game-cover-unknown',
+  });
+  owner.setActor(actor);
+  await owner.loadDetail('game-cover-unknown');
+
+  // Force UNKNOWN publish via delayed network loss.
+  pendingSend = new Promise<Game>((_, reject) => { rejectSend = reject; });
+  const publishWork = owner.publishDraft('game-cover-unknown');
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+  const original = owner.getSnapshot().command!.packet;
+  rejectSend(new ParticipationError('network'));
+  await publishWork;
+  pendingSend = null;
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, original.key);
+
+  // Delayed CoverLockNoSendError on retry: early gate off, port arms lock + throws → keep UNKNOWN.
+  portStale = 'cover';
+  coverBlocked = false;
+  const before = sent.length;
+  await owner.reconcile();
+  assert.equal(sent.length, before);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, original.key);
+  assert.strictEqual(owner.getSnapshot().command?.packet, original);
+  assert.match(owner.getSnapshot().notice ?? '', /фото/);
+  // Later unlocking cover must not erase the preserved UNKNOWN packet.
+  coverBlocked = false;
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(owner.getSnapshot().command?.packet, original);
+
+  // Unrelated stale follows accepted50 UNKNOWN — never lose packet.
+  portStale = 'other';
+  coverBlocked = false;
+  await owner.reconcile();
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, original.key);
+  assert.strictEqual(owner.getSnapshot().command?.packet, original);
+  assert.match(owner.getSnapshot().notice ?? '', /неизвестен|Проверка повторит/);
 });

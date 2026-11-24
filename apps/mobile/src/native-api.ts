@@ -42,6 +42,7 @@ import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-m
 import type { ManagementPacket } from './game-management.ts';
 import { gameContactPreferenceWire } from './game-contact-preference.ts';
 import { courtBookingWire, parseGameCourtBooking, type CourtBookingPacket } from './game-court-booking.ts';
+import { admitGameCoverUpload, parseGameCoverReceipt, type GameCoverPacket } from './game-cover.ts';
 import { parsePrivateGameVenueContacts } from './private-game-venue-contacts.ts';
 import { invitationCreateWire, type InvitationCreatePacket } from './invitation-authoring.ts';
 import type { GameContactPacket } from './game-contact-preference.ts';
@@ -635,6 +636,64 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     },
     ownCover: async (access: string): Promise<CoverReceipt> =>
       parseCoverReceipt(await request('/me/cover', 'GET', undefined, access, undefined, false, false, false, true)),
+
+    /** Closed GET managed game cover — NativeBearer via requirePrincipal; hasCover is own-slot presence. */
+    gameCover: async (access: string, gameId: string) =>
+      parseGameCoverReceipt(await request(`/games/${encodeURIComponent(gameId)}/cover`, 'GET', undefined, access, undefined, false, false, false, true)),
+    /** Closed RAW BINARY game-cover port — PUT binary / DELETE JSON CAS; X-Game-Version; never multipart. */
+    mutateGameCover: async (access: string, packet: GameCoverPacket) => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const replace = packet.action === 'replace';
+        // Enforce 0 < bytes ≤ 512KiB and accepted MIME before any mutation fetch (profile 5MiB unchanged).
+        if (replace) admitGameCoverUpload(packet.derivative);
+        else if (packet.derivative) throw new ProfileError('invalid');
+        let body: Uint8Array<ArrayBuffer> | string | undefined;
+        if (replace) {
+          const src = packet.derivative!.bytes;
+          const bytes = new Uint8Array(src.byteLength);
+          bytes.set(src);
+          body = bytes;
+        } else {
+          body = JSON.stringify({ expectedVersion: packet.gameVersion });
+        }
+        const response = await fetcher(`${NATIVE_ORIGIN}/v1/games/${encodeURIComponent(packet.gameId)}/cover`, {
+          method: replace ? 'PUT' : 'DELETE',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${access}`,
+            'Idempotency-Key': packet.key,
+            'X-Game-Version': String(packet.gameVersion),
+            ...(replace
+              ? { 'Content-Type': packet.derivative!.mime }
+              : { 'Content-Type': 'application/json' }),
+          },
+          ...(body !== undefined ? { body } : {}),
+        });
+        if (!response.ok) {
+          let code = 'UNKNOWN';
+          try {
+            const problem = await response.json();
+            if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code;
+          } catch { /* No raw text retained. */ }
+          throw new ProfileError(
+            response.status >= 500 ? 'network' : response.status === 401 ? 'authority'
+              : code !== 'COMMAND_IN_PROGRESS' && [400, 403, 404, 409, 413, 415, 422, 429].includes(response.status) ? 'business' : 'network',
+            response.status,
+            code,
+          );
+        }
+        return parseGameCoverReceipt(await response.json());
+      } catch (error) {
+        if (error instanceof ProfileError) throw error;
+        throw new ProfileError(error instanceof SyntaxError ? 'invalid' : 'network');
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
 
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),

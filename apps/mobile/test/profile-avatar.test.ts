@@ -28,8 +28,11 @@ import {
   avatarDownsampleCrop,
   isClosedSdkAppCacheUri,
   pickOwnAvatarAsset,
+  prepareGameCoverDerivative,
   prepareOwnAvatarDerivative,
+  prepareOwnCoverDerivative,
   readBoundedAvatarBytes,
+  releaseOwnedPickerAsset,
   type AvatarRuntimeDeps,
 } from '../src/profile-avatar-runtime.ts';
 import { ProfileCoordinator, ProfileError, parseOwnAvatar, parseOwnProfile } from '../src/profile.ts';
@@ -371,7 +374,7 @@ test('raw binary native avatar port never JSON.stringifies body; logout forgets 
   assert.equal(pkg.dependencies['expo-image-manipulator'], '58.0.16');
   assert.equal(pkg.dependencies['expo-file-system'], '58.0.13');
   const app = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8'));
-  assert.equal(app.expo.android.versionCode, 50);
+  assert.equal(app.expo.android.versionCode, 51);
   const picker = app.expo.plugins.find((p: unknown) => Array.isArray(p) && p[0] === 'expo-image-picker');
   assert.deepEqual(picker[1], { photosPermission: false, cameraPermission: false, microphonePermission: false });
   assert.ok(app.expo.android.blockedPermissions.includes('android.permission.RECORD_AUDIO'));
@@ -767,4 +770,70 @@ test('local timeout retires ownership; late render/save/oversize clean app-owned
   await prepareOwnAvatarDerivative(cacheDeps, { uri: 'file://cache/ImagePicker/copy.jpg', mimeType: 'image/jpeg' }, () => false);
   assert.ok(cacheDeleted.includes('file://cache/ImagePicker/copy.jpg'));
   assert.ok(cacheDeleted.includes('file://cache/rendered2.jpg') || !cacheFiles.has('file://cache/rendered2.jpg'));
+});
+
+test('#522 FIX6: game cover retainSource keeps picker cache across crop prepares; retire deletes owned source', async () => {
+  const sourceUri = 'file://cache/ImagePicker/game-cover.jpg';
+  const files = new Map<string, Uint8Array>([[sourceUri, jpeg(800, 600)]]);
+  const deleted: string[] = [];
+  let coverFrames = 0;
+  const deps: AvatarRuntimeDeps = {
+    launchLibrary: async () => ({ canceled: false, assets: [{ uri: sourceUri, mimeType: 'image/jpeg' }] }),
+    openReadOnly: uri => {
+      const data = files.get(uri);
+      if (!data) throw new Error(`missing ${uri}`);
+      let offset = 0;
+      return {
+        readBytes: async (n) => {
+          const slice = data.slice(offset, offset + n);
+          offset += slice.length;
+          return slice;
+        },
+        close: () => undefined,
+      };
+    },
+    deleteTracked: async uri => {
+      deleted.push(uri);
+      files.delete(uri);
+    },
+    isOwnedCacheUri: uri => uri.startsWith('file://cache/'),
+    centerSquare512: async () => {
+      throw new Error('avatar square unused');
+    },
+    coverFrame1200x400: async (_uri, _meta, position) => {
+      coverFrames += 1;
+      const uri = `file://cache/cover-frame-${coverFrames}.jpg`;
+      files.set(uri, jpeg(1200, 400));
+      assert.ok(files.has(_uri), `source must survive crop ${position.x},${position.y}`);
+      return { uri, width: 1200, height: 400 };
+    },
+    saveDerivative: async (_uri, format) => {
+      const uri = `file://cache/cover-out-${coverFrames}.${format}`;
+      files.set(uri, jpeg(1200, 400));
+      return { uri };
+    },
+  };
+  const asset = { uri: sourceUri, mimeType: 'image/jpeg' as const };
+  const first = await prepareGameCoverDerivative(deps, asset, { x: 0.5, y: 0.5 }, () => false, { retainSource: true });
+  assert.equal(first.mime, 'image/jpeg');
+  assert.equal(files.has(sourceUri), true);
+  assert.equal(deleted.includes(sourceUri), false);
+  const second = await prepareGameCoverDerivative(deps, asset, { x: 0.6, y: 0.4 }, () => false, { retainSource: true });
+  assert.equal(second.mime, 'image/jpeg');
+  assert.equal(coverFrames, 2);
+  assert.equal(files.has(sourceUri), true);
+  assert.equal(deleted.includes(sourceUri), false);
+  // Transient frames/saves still cleaned; only picker source retained.
+  assert.ok(deleted.some(u => u.includes('cover-frame') || u.includes('cover-out')));
+
+  releaseOwnedPickerAsset(deps, asset);
+  assert.ok(deleted.includes(sourceUri));
+  assert.equal(files.has(sourceUri), false);
+
+  // Default cover prepare (no retain) still deletes owned picker source — avatar/profile path unchanged.
+  const defaultSource = 'file://cache/ImagePicker/default-cover.jpg';
+  files.set(defaultSource, jpeg(800, 600));
+  const before = deleted.length;
+  await prepareOwnCoverDerivative(deps, { uri: defaultSource, mimeType: 'image/jpeg' }, { x: 0.5, y: 0.5 }, () => false);
+  assert.ok(deleted.slice(before).includes(defaultSource));
 });

@@ -11,6 +11,7 @@ import { runInNewContext } from 'node:vm';
 import { headerAvatarPresentation } from '../src/header-avatar.ts';
 import { playerInitials } from '../src/presentation.ts';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
+import { gameCoverMutationSucceeded } from '../src/game-cover.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
 import { game as fixture } from './fixtures.ts';
@@ -1905,6 +1906,266 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
   owner.updateDraft('not_arranged');
   await owner.save();
   assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
+});
+
+test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, no auto-publish', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameCover;
+  const gameId = '10000000-0000-4000-8000-000000000051';
+  const hex = 'cd'.repeat(32);
+  const gameUrl = `/v1/media/game-covers/${hex}.png`;
+  const calls: { path: string; method?: string; key?: string; version?: string; contentType?: string }[] = [];
+  let row = { version: 3, hasCover: false, cover: { uploadedUrl: null as string | null } };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}/cover`) {
+      const headers = init.headers as Record<string, string> | undefined;
+      calls.push({
+        path,
+        method: init.method,
+        key: headers?.['Idempotency-Key'],
+        version: headers?.['X-Game-Version'],
+        contentType: headers?.['Content-Type'],
+      });
+      if ((init.method ?? 'GET') === 'PUT') {
+        row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+        return row;
+      }
+      if (init.method === 'DELETE') {
+        row = { version: row.version + 1, hasCover: false, cover: { uploadedUrl: null } };
+        return row;
+      }
+      return row;
+    }
+    if (path.startsWith('/me/games')) {
+      return { items: [{ id: gameId, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) {
+      return { ...fixture, id: gameId, version: row.version, status: 'draft' };
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  await owner.load(gameId);
+  assert.equal(calls.some(c => c.method === 'PUT' || c.method === 'DELETE'), false);
+  assert.equal(owner.getSnapshot().access?.hasCover, false);
+  await owner.change(async () => Object.freeze({
+    mime: 'image/jpeg' as const,
+    bytes: new Uint8Array([255, 216, 255, 217]),
+  }));
+  const put = calls.find(c => c.method === 'PUT');
+  assert.ok(put);
+  assert.equal(put!.version, '3');
+  assert.equal(put!.contentType, 'image/jpeg');
+  assert.ok(put!.key && put!.key.length >= 16);
+  assert.equal(owner.getSnapshot().access?.hasCover, true);
+  assert.equal(owner.getSnapshot().access?.version, 4);
+  await owner.remove();
+  const del = calls.find(c => c.method === 'DELETE');
+  assert.ok(del);
+  assert.equal(del!.contentType, 'application/json');
+  assert.equal(owner.getSnapshot().access?.hasCover, false);
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.gameCover, owner);
+
+  const mutCount = calls.filter(c => c.method === 'PUT' || c.method === 'DELETE').length;
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(owner.getSnapshot().access, null);
+  await owner.change(async () => Object.freeze({
+    mime: 'image/jpeg' as const,
+    bytes: new Uint8Array([255, 216, 255, 217]),
+  }));
+  assert.equal(calls.filter(c => c.method === 'PUT' || c.method === 'DELETE').length, mutCount);
+});
+
+test('#522 FIX3: AuthCoordinator delayed-token cover-lock throws CoverLockNoSendError; preserves UNKNOWN', async () => {
+  const gameId = '10000000-0000-4000-8000-000000000053';
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const management = s.auth.gameManagement;
+  const cover = s.auth.gameCover;
+  const refreshGate = deferred<unknown>();
+  const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 2 };
+  const publishPosts: string[] = [];
+  let failPublish = true;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshGate.promise;
+    if (path.startsWith('/me/games')) {
+      return { items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}` && (init.method ?? 'GET') === 'GET') return draft;
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    if (path === '/me/social-profile') {
+      return { cityId: fixture.venue.cityId, trainer: false, displayName: 'Хозяин' };
+    }
+    if (path === `/games/${gameId}/publish`) {
+      publishPosts.push(path);
+      if (failPublish) throw Object.assign(new Error('network lost'), { name: 'TypeError' });
+      return { ...draft, status: 'published', version: 3 };
+    }
+    return { ok: true };
+  });
+  await management.loadDetail(gameId);
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready');
+  await management.publishDraft(gameId);
+  assert.equal(management.getSnapshot().command?.status, 'unknown');
+  const original = management.getSnapshot().command!.packet;
+  assert.equal(original.kind, 'publish');
+  assert.equal(publishPosts.length, 1);
+  failPublish = false;
+
+  // Flip the same blocksManagedWrites the auth port rechecks after token (not incidental catch inference).
+  let lockAfterToken = false;
+  const realBlocks = cover.blocksManagedWrites.bind(cover);
+  cover.blocksManagedWrites = (id: string) => lockAfterToken || realBlocks(id);
+
+  const refreshWork = s.auth.refresh();
+  await new Promise(r => setImmediate(r));
+  const reconcileWork = management.reconcile();
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.getSnapshot().command?.status, 'sending');
+  lockAfterToken = true;
+  refreshGate.resolve(credentials);
+  await Promise.all([reconcileWork, refreshWork.catch(() => {})]);
+
+  assert.equal(publishPosts.length, 1);
+  assert.equal(management.getSnapshot().command?.status, 'unknown');
+  assert.equal(management.getSnapshot().command?.packet.key, original.key);
+  assert.strictEqual(management.getSnapshot().command?.packet, original);
+  assert.match(management.getSnapshot().notice ?? '', /фото/);
+});
+
+test('#522 FIX6: cover receipt onReceipt soft-refreshes management detail without loading flash', async () => {
+  const gameId = '10000000-0000-4000-8000-000000000056';
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const cover = s.auth.gameCover;
+  const management = s.auth.gameManagement;
+  const hex = 'ef'.repeat(32);
+  const gameUrl = `/v1/media/game-covers/${hex}.png`;
+  let row = { version: 2, hasCover: false, cover: { uploadedUrl: null as string | null } };
+  let managedCalls = 0;
+  const secondManaged = deferred<{ items: unknown[]; nextCursor: null }>();
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}/cover`) {
+      if ((init.method ?? 'GET') === 'PUT') {
+        row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+        return row;
+      }
+      return row;
+    }
+    if (path.startsWith('/me/games')) {
+      managedCalls += 1;
+      const item = { ...fixture, id: gameId, status: 'draft' as const, version: row.version, management: { role: 'owner', createdByMe: true } };
+      if (managedCalls === 1) return { items: [item], nextCursor: null };
+      await secondManaged.promise;
+      return { items: [{ ...item, version: row.version }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) {
+      return { ...fixture, id: gameId, version: row.version, status: 'draft' };
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+
+  await management.loadDetail(gameId);
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready');
+  assert.ok(management.getSnapshot().details[gameId]?.game);
+
+  const release = cover.openView(gameId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(cover.getSnapshot().status, 'ready');
+
+  const save = cover.change(async () => Object.freeze({
+    mime: 'image/jpeg' as const,
+    bytes: new Uint8Array([255, 216, 255, 217]),
+  }));
+  await save;
+  // onReceipt started the second managed read and is held — shell must stay ready.
+  for (let i = 0; i < 40 && managedCalls < 2; i += 1) await new Promise(r => setImmediate(r));
+  assert.equal(managedCalls, 2);
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready', 'onReceipt must not flash loading');
+  assert.ok(management.getSnapshot().details[gameId]?.game);
+  assert.equal(cover.getSnapshot().access?.hasCover, true);
+  assert.equal(gameCoverMutationSucceeded(cover.getSnapshot()), true);
+  secondManaged.resolve({ items: [], nextCursor: null });
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready');
+  release();
+});
+
+test('#522 FIX2: game-cover deferred-token admission — close/background/ABA/account → zero mutate', async () => {
+  const gameId = '10000000-0000-4000-8000-000000000052';
+  async function run(interrupt: 'background' | 'close-view' | 'game-ABA' | 'account') {
+    const s = setup(sessionEnvelope());
+    await s.auth.hydrate();
+    const owner = s.auth.gameCover;
+    const mutates: string[] = [];
+    const refreshGate = deferred<unknown>();
+    let row = { version: 2, hasCover: false, cover: { uploadedUrl: null as string | null } };
+    s.setHandler(async (path, init) => {
+      if (path === '/me') return me;
+      if (path === '/auth/native/refresh') return refreshGate.promise;
+      if (path === `/games/${gameId}/cover`) {
+        if ((init.method ?? 'GET') === 'PUT' || init.method === 'DELETE') {
+          mutates.push(String(init.method));
+          row = { version: row.version + 1, hasCover: init.method === 'PUT', cover: { uploadedUrl: null } };
+          return row;
+        }
+        return row;
+      }
+      if (path.startsWith('/games/other-game/cover')) {
+        return { version: 1, hasCover: false, cover: { uploadedUrl: null } };
+      }
+      if (path.startsWith('/me/games')) {
+        return { items: [{ id: gameId, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+      }
+      if (path === `/games/${gameId}`) {
+        return { ...fixture, id: gameId, version: row.version, status: 'draft' };
+      }
+      if (path.includes('/participations')) return { items: [], nextCursor: null };
+      return { ok: true };
+    });
+
+    const release = owner.openView(gameId);
+    await new Promise(r => setImmediate(r));
+    assert.equal(owner.getSnapshot().status, 'ready', interrupt);
+
+    const refreshWork = s.auth.refresh();
+    await new Promise(r => setImmediate(r));
+    const changeWork = owner.change(async () => Object.freeze({
+      mime: 'image/jpeg' as const,
+      bytes: new Uint8Array([255, 216, 255, 217]),
+    }));
+    await new Promise(r => setImmediate(r));
+    assert.equal(owner.getSnapshot().command?.status, 'sending', interrupt);
+
+    if (interrupt === 'background') owner.setForeground(false);
+    else if (interrupt === 'close-view') release();
+    else if (interrupt === 'game-ABA') owner.openView('other-game');
+    else owner.setActor({ actorId: 'other', sessionId: 's2', generation: 99 });
+
+    refreshGate.resolve(credentials);
+    await Promise.all([changeWork, refreshWork.catch(() => {})]);
+    assert.equal(mutates.length, 0, interrupt);
+    if (interrupt === 'background' || interrupt === 'close-view') {
+      assert.equal(owner.getSnapshot().command?.status, 'unknown', interrupt);
+      assert.equal(owner.getSnapshot().uncertain, true, interrupt);
+    }
+  }
+
+  await run('background');
+  await run('close-view');
+  await run('game-ABA');
+  await run('account');
 });
 
 test('#522 APK48: delayed token actor/view permit yields zero PUT', async () => {

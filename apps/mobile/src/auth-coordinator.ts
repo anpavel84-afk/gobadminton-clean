@@ -9,10 +9,11 @@ import { ContactCoordinator } from './contact-coordinator.ts';
 import { ProfileCoordinator, ProfileError } from './profile.ts';
 import { ProfileAvatarCoordinator } from './profile-avatar.ts';
 import { ProfileCoverCoordinator } from './profile-cover.ts';
-import { GameManagementCoordinator } from './game-management.ts';
+import { CoverLockNoSendError, GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
+import { GameCoverCoordinator } from './game-cover.ts';
 import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
 import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
@@ -69,6 +70,7 @@ export class AuthCoordinator {
   readonly trainer: TrainerProfileCoordinator;
   readonly gameContactPreference: GameContactPreferenceCoordinator;
   readonly gameCourtBooking: GameCourtBookingCoordinator;
+  readonly gameCover: GameCoverCoordinator;
   readonly privateGameVenueContacts: PrivateGameVenueContactsCoordinator;
   readonly invitationAuthoring: InvitationAuthoringCoordinator;
   readonly contact: ContactCoordinator;
@@ -286,7 +288,16 @@ export class AuthCoordinator {
       game: id => this.participationRead(access => deps.api.gameDetail(access,id)),
       participants: (id,cursor) => this.participationRead(access => deps.api.gameParticipants(access,id,cursor)),
       send: async packet => {
-        const result = await this.participationRead(access => deps.api.managementMutation(access,packet),packet.actor);
+        // Port-level recheck after delayed token acquisition — UI disabled is not sufficient.
+        if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
+          throw new CoverLockNoSendError();
+        }
+        const result = await this.participationRead(access => {
+          if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
+            throw new CoverLockNoSendError();
+          }
+          return deps.api.managementMutation(access,packet);
+        },packet.actor);
         if (packet.kind !== 'create') {
           // Reconcile existing My Games rows after a known receipt, preserving its independent packets.
           void this.participation.loadManaged();
@@ -294,7 +305,37 @@ export class AuthCoordinator {
         }
         return result;
       },
-    },deps.random,this.now);
+    },deps.random,this.now,{
+      coverBlocksWrites: gameId => this.gameCover.blocksManagedWrites(gameId),
+    });
+    // Managed game photo: GET/PUT/DELETE principal opt-in; hasCover gates remove; receipt refreshes managed detail version.
+    this.gameCover = new GameCoverCoordinator({
+      read: (gameId, authority) => this.participationRead(access => deps.api.gameCover(access, gameId), authority),
+      mutate: (packet, authority) => {
+        // Capture original photo-command admission BEFORE token await — no minting a new permit later.
+        const admission = this.gameCover.captureDispatchAdmission(packet);
+        return this.participationRead(access => {
+          // Recheck actor/session/game/view/foreground generation + packet identity after token, before API.
+          if (!this.gameCover.dispatchAdmissionLive(admission, packet)) {
+            throw new ParticipationError('stale');
+          }
+          const command = this.gameManagement.getSnapshot().command;
+          if (command && ['sending','unknown'].includes(command.status)
+            && command.packet.kind !== 'create' && command.packet.gameId === packet.gameId) {
+            throw new ParticipationError('stale');
+          }
+          return deps.api.mutateGameCover(access, packet);
+        }, authority);
+      },
+    }, deps.random, {
+      onReceipt: (gameId) => { void this.gameManagement.loadDetail(gameId); },
+      accessToken: () => this.access?.token ?? null,
+      managementBlocksWrites: gameId => {
+        const command = this.gameManagement.getSnapshot().command;
+        return !!command && ['sending','unknown'].includes(command.status)
+          && command.packet.kind !== 'create' && command.packet.gameId === gameId;
+      },
+    });
     this.participation = new ParticipationCoordinator({
       own: cursor => this.participationRead(access => deps.api.ownParticipations(access, cursor)),
       managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
@@ -394,6 +435,7 @@ export class AuthCoordinator {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
       this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
       this.gameContactPreference.setActor(actor); this.gameCourtBooking.setActor(actor);
+      this.gameCover.setActor(actor);
       this.privateGameVenueContacts.setActor(actor);
       this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
     }
@@ -794,6 +836,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.trainer.forget();
     if (forgetCreation) this.gameContactPreference.forget();
     if (forgetCreation) this.gameCourtBooking.forget();
+    if (forgetCreation) this.gameCover.forget();
     if (forgetCreation) this.privateGameVenueContacts.forget();
     if (forgetCreation) this.invitationAuthoring.forget();
     if (forgetCreation) this.contact.forget();
