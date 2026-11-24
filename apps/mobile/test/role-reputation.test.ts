@@ -7,12 +7,14 @@ import {
   RoleReputationCoordinator,
   actorAwareRoleReputationPath,
   compactHistoryLabel,
+  gameDetailWantsTrainingRole,
   gameRoleReputationPath,
   heldHistoryLabel,
   parseActorAwareRoleReputationSummary,
   parseRoleReputationSummary,
   playerRoleReputationPath,
   publishedReviewsLabel,
+  roleLaneCanAuthor,
   roleReputationPath,
 } from '../src/role-reputation.ts';
 import type { RoleReputationSummary } from '../src/role-reputation.ts';
@@ -681,9 +683,119 @@ test('#522 profile bindPlayer loads both lanes, paginates on player path, fences
   assert.equal(hidden.getSnapshot().training.phase, 'unavailable');
 });
 
-test('#522 native role-history source wiring, composition slot, APK26 counter', () => {
+test('#522 APK43 game-detail training selection + author policy helpers', () => {
+  assert.equal(gameDetailWantsTrainingRole({ activityKind: 'regular', trainer: null }), false);
+  assert.equal(gameDetailWantsTrainingRole({ activityKind: 'trainer_led', trainer: null }), false);
+  assert.equal(gameDetailWantsTrainingRole({
+    activityKind: 'trainer_led',
+    trainer: { profileId: 'p', displayName: 'T', declarationSource: 'self' },
+  }), true);
+  // Discovery keep: activityKind alone still selects training on expand; details require trainer.
+  assert.equal(roleLaneCanAuthor({ gameId, roleHandle: orgHandle }), true);
+  assert.equal(roleLaneCanAuthor({ canWrite: true, gameId, roleHandle: orgHandle }), true);
+  assert.equal(roleLaneCanAuthor({ canWrite: false, gameId, roleHandle: orgHandle }), false);
+  assert.equal(roleLaneCanAuthor({ canWrite: false, gameId, roleHandle: null }), false);
+  assert.equal(roleLaneCanAuthor({ gameId: undefined, roleHandle: orgHandle }), false);
+});
+
+test('#522 APK43 ordinary game org-only; trainer_led+trainer both roles; absent trainer no training GET', async () => {
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const roles: string[] = [];
+  const ports = {
+    gameRole: async (_gameId: string, role: 'organization' | 'training') => {
+      roles.push(`${_gameId}:${role}`);
+      return summary({
+        role,
+        roleHandle: role === 'organization' ? orgHandle : trainHandle,
+        subjectDisplayName: role === 'organization' ? 'Org' : 'Train',
+        publishedReviewCount: 0,
+      });
+    },
+    byHandle: async () => {
+      throw new Error('pagination not expected in selection test');
+    },
+  };
+
+  const ordinary = new RoleReputationCoordinator(ports);
+  ordinary.bind(gameId, { wantTraining: gameDetailWantsTrainingRole({ activityKind: 'regular', trainer: null }) });
+  ordinary.expand();
+  await flush();
+  assert.deepEqual(roles, [`${gameId}:organization`]);
+  assert.equal(ordinary.getSnapshot().organization.phase, 'ready');
+  assert.equal(ordinary.getSnapshot().training.phase, 'idle');
+
+  roles.length = 0;
+  const noTrainer = new RoleReputationCoordinator(ports);
+  noTrainer.bind(gameId, {
+    wantTraining: gameDetailWantsTrainingRole({ activityKind: 'trainer_led', trainer: null }),
+  });
+  noTrainer.expand();
+  await flush();
+  assert.deepEqual(roles, [`${gameId}:organization`]);
+  assert.equal(noTrainer.getSnapshot().wantTraining, false);
+
+  roles.length = 0;
+  const both = new RoleReputationCoordinator(ports);
+  both.bind(gameId, {
+    wantTraining: gameDetailWantsTrainingRole({
+      activityKind: 'trainer_led',
+      trainer: { profileId: 'same', displayName: 'Same Person', declarationSource: 'self' },
+    }),
+  });
+  both.expand();
+  await flush();
+  assert.equal(both.getSnapshot().wantTraining, true);
+  assert.equal(both.getSnapshot().organization.phase, 'ready');
+  assert.equal(both.getSnapshot().training.phase, 'ready');
+  assert.equal(both.getSnapshot().organization.summary?.roleHandle, orgHandle);
+  assert.equal(both.getSnapshot().training.summary?.roleHandle, trainHandle);
+  assert.ok(roles.includes(`${gameId}:organization`));
+  assert.ok(roles.includes(`${gameId}:training`));
+});
+
+test('#522 APK43 game-origin pagination + late A→B fence retained for details bind/expand', async () => {
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  let moreGameId: string | undefined;
+  let releaseMore: () => void = () => {};
+  const coordinator = new RoleReputationCoordinator({
+    gameRole: async (id, role) => summary({
+      role,
+      roleHandle: role === 'organization' ? orgHandle : trainHandle,
+      publishedReviewCount: 1,
+      items: [review('1'.repeat(32), role, 'A')],
+      nextCursor: role === 'organization' ? 'cursor-a' : null,
+    }),
+    byHandle: async (handle, query) => {
+      moreGameId = query.gameId;
+      assert.equal(handle, orgHandle);
+      await new Promise<void>(resolve => { releaseMore = resolve; });
+      return summary({
+        role: 'organization',
+        roleHandle: orgHandle,
+        publishedReviewCount: 2,
+        items: [review('2'.repeat(32), 'organization', 'Late-A')],
+        nextCursor: null,
+      });
+    },
+  });
+  coordinator.bind(gameId, { wantTraining: false });
+  coordinator.expand();
+  await flush();
+  coordinator.loadMore('organization');
+  const otherGame = '22222222-2222-4222-8222-222222222222';
+  coordinator.bind(otherGame, { wantTraining: false });
+  releaseMore();
+  await flush();
+  assert.equal(moreGameId, gameId);
+  assert.equal(coordinator.getSnapshot().gameId, otherGame);
+  assert.equal(coordinator.getSnapshot().organization.phase, 'idle');
+  assert.equal(coordinator.getSnapshot().organization.summary, null);
+});
+
+test('#522 native role-history source wiring, composition slot, APK43 counter', () => {
   const card = read('../src/components/game-card.tsx');
   const disclosure = read('../src/components/game-role-reputation.tsx');
+  const gameDetails = read('../app/games/[id].tsx');
   const profile = read('../src/components/player-role-reputation.tsx');
   const detail = read('../app/players/[publicPlayerId].tsx');
   const nav = read('../src/components/main-navigation.tsx');
@@ -699,6 +811,11 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   // Toggle, then actions slot, then expanded details region (not actions after body).
   assert.match(disclosure, /<\/Pressable>\s*\{actions\}\s*\{expanded \? <View style=\{styles\.details\}/);
   assert.match(disclosure, /export function RoleLaneView/);
+  assert.match(disclosure, /export function GameDetailRoleReputation/);
+  assert.match(disclosure, /export function GameDetailRoleLane/);
+  assert.match(disclosure, /gameDetailWantsTrainingRole/);
+  assert.match(disclosure, /roleLaneCanAuthor/);
+  assert.match(disclosure, /canWrite/);
   assert.match(disclosure, /Не удалось загрузить следующие отзывы/);
   assert.match(disclosure, /Отзывы и история/);
   assert.match(disclosure, /basis_under_review/);
@@ -718,6 +835,14 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(disclosure, /Ответить или пожаловаться|beginPublicReaderEntry|openPublicReader/);
   assert.match(disclosure, /publicReaderLocalGoal|publicReaderReturnPath/);
   assert.doesNotMatch(disclosure, /allowedActions\.canReply|allowedActions\.canReport|Сообщить о нарушении/);
+  // Direct game details: read parity, no author CTA, org always + training only with specified trainer.
+  assert.match(gameDetails, /GameDetailRoleReputation/);
+  assert.match(gameDetails, /canWrite=\{false\}/);
+  assert.match(gameDetails, /GameDetailRoleLane role="organization"/);
+  assert.match(gameDetails, /GameDetailRoleLane role="training"/);
+  assert.match(gameDetails, /game\.trainer \? <GameDetailRoleLane role="training"/);
+  assert.doesNotMatch(gameDetails, /Поделиться опытом/);
+  assert.doesNotMatch(gameDetails, /PostgameSurface/);
   const readerHost = read('../src/components/public-role-reviews.tsx');
   assert.match(readerHost, /PublicRoleReaderSheet/);
   assert.match(readerHost, /canReply|canReport|Сообщить о нарушении/);
@@ -727,6 +852,7 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(profile, /publicPlayerId/);
   assert.doesNotMatch(profile, /Отзывы и история|Поделиться опытом/);
   assert.match(module, /parseActorAwareRoleReputationSummary|actorAwareRoleReputationPath/);
+  assert.match(module, /gameDetailWantsTrainingRole|roleLaneCanAuthor/);
   assert.match(detail, /PlayerRoleReputation/);
   assert.match(detail, /NativeContactAction[\s\S]*PlayerRoleReputation[\s\S]*NativeSafety/);
   assert.match(api, /gameRoleReputation/);
@@ -747,5 +873,5 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(nav, /flexBasis: 'auto'/);
   assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
   assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 42);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 43);
 });

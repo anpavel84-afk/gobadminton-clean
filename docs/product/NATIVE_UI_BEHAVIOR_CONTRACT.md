@@ -230,9 +230,21 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Trigger | Explicit create (CommandReview + `experienceAssertion=i_experienced_this_game`); hub history remains GET-only; no public consent; no auto-write on mount/reauth/login; UNKNOWN exact packet retry only |
 | Expected | Caps from current `canCreateOrganization`/`canCreateTraining`/`organizationRecipientDisplay` + `writesEnabled`; org score1–5 unset initially or comment≤500; training comment required, no score/peerRating/tags; recipient server-derived; kind-separated drafts; discrepancy omit when present/not_participant_manager, optional otherwise; FEEDBACK_DISCREPANCY_REQUIRED/UNEXPECTED preserve draft + Russian field message + re-review; reply reply.version\|0 all kinds; report remains received peer only; hub row reply stays bound to that review; no public reputation/skill copy |
 | Accessibility | Named mode/recipient/score/comment/discrepancy; keyboard-safe scroll; busy/UNKNOWN announced; existing tokens/safe areas |
-| Non-scope | Public role authoring/consent; PATCH edit UI; backend/OpenAPI/schema; PROD; APK41 binary/device/iOS/OTA claim |
+| Non-scope | Public role authoring/consent on this private surface; PATCH edit UI; backend/OpenAPI/schema; PROD; APK41 binary/device/iOS/OTA claim |
 | Evidence | Mobile unit `my-games.test.ts` + `postgame-feedback.test.ts`; API `game-feedback.disposable` 8th native organization/training lifecycle (cases 1–7 bodies exact); source APK counter 41 |
-| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private role feedback + hub private history source; full app still PARTIAL; public role authoring unfinished; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private role feedback + hub private history source; full app still PARTIAL; Discovery public role authoring already exists (R-06) — do not re-implement here; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
+## R-10 · Direct game details public organizer/trainer history read (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameDetailComposition` + `RoleReputationPanel` with `canWrite` omitted; PUBLIC `GET /games/:gameId/role-reputations/:role` + cursor handle GET; existing native `RoleReputationCoordinator` / `RoleLaneView` |
+| Entry | Native `/games/:id` — training lane beside specified trainer identity; organization lane beside organizer; direct link, no Discovery expand required |
+| Trigger | Mount on loaded public/private game detail; game/role change retires late replies; guest credential-omit |
+| Expected | Organization always; training only `trainer_led` with actual `game.trainer`; separate lanes even when same person; null/unavailable ≠ 0 games; loading/error/retry/empty/`nextCursor` with exact gameId+roleHandle; no «Поделиться опытом» on this surface; «Ответить или пожаловаться» keeps game origin; Discovery author CTA + profile read-only unchanged |
+| Non-scope | New author mode; ParticipationArea/rights changes; backend/auth/contracts; PROD; device/APK43 binary claim |
+| Evidence | Mobile unit `role-reputation.test.ts`; source APK counter 43 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL game-detail read parity; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
@@ -290,4 +302,4 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 - Emulator success is not Xiaomi success; Owner Xiaomi FAIL stays separate.
 - This scope does not close full native parity for the rest of #522.
 - code14 is planned source `versionCode` only — new native modules require a fresh code14 binary; code13 cannot gain modules through OTA/export; no build/device/iOS/OTA acceptance claim.
-- R-01 role-history is source-only PARTIAL; authoring and private surfaces remain unfinished.
+- R-01 Discovery role-history and R-10 game-detail read are source-only PARTIAL; Discovery public authoring already ships in R-06 (not unfinished); device/binary acceptance is not claimed from source.

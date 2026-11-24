@@ -400,6 +400,29 @@ export function roleSectionTitle(role: RoleKind): string {
   return role === 'organization' ? 'Об организации' : 'О тренировках';
 }
 
+/**
+ * Direct game-details training lane — web parity: only trainer_led with a specified trainer.
+ * Discovery expand still uses activityKind alone; do not reuse this for card disclosure.
+ */
+export function gameDetailWantsTrainingRole(game: {
+  activityKind: string;
+  trainer: unknown;
+}): boolean {
+  return game.activityKind === 'trainer_led' && game.trainer != null;
+}
+
+/**
+ * Author CTA policy for a role lane. Omitted/undefined canWrite keeps Discovery default
+ * (gameId + handle enables «Поделиться опытом»). Explicit false is game-details read parity.
+ */
+export function roleLaneCanAuthor(input: {
+  canWrite?: boolean;
+  gameId?: string;
+  roleHandle?: string | null;
+}): boolean {
+  return input.canWrite !== false && !!input.gameId && !!input.roleHandle;
+}
+
 /** Organization confirmed-history label — null stays null (never invent zero). */
 export function heldHistoryLabel(count: number | null, incomplete: boolean): string | null {
   if (count == null) return null;
