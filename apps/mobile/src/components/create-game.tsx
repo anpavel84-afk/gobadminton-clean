@@ -19,6 +19,9 @@ import {
   OutlineButton,
   StepIndicator,
 } from './create-game-controls.tsx';
+import { GamePhotoSelection } from './game-photo-selection.tsx';
+import { GAME_PHOTO_SELECTION_COPY } from '../game-cover.ts';
+import type { AvatarDerivative } from '../profile-avatar.ts';
 
 export { GameField } from './create-game-controls.tsx';
 
@@ -30,6 +33,8 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const view = useRef(0);
   const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const [selecting, setSelecting] = useState(false);
+  const [photoReady, setPhotoReady] = useState(true);
+  const [hasConfirmedPhoto, setHasConfirmedPhoto] = useState(false);
   // Blur/refocus fences local reads; returning to a mounted form must not reload or replace its draft.
   useFocusEffect(useCallback(() => { view.current++; setSelecting(false); return () => { view.current++; }; }, []));
   const [selectedIntent, setSelected] = useState<string | null>(null), [attemptedIntent, setAttempted] = useState<string | null>(null);
@@ -101,9 +106,21 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   </ScreenFrame>;
   const shell = (body: ReactNode, opts?: { footer?: ReactNode }) => sheet ? <IosSheetSafeArea>{frame(body, opts)}</IosSheetSafeArea> : frame(body, opts);
 
+  const photoScopeKey = `${actor?.actorId ?? ''}:${actor?.sessionId ?? ''}:${actor?.generation ?? ''}:${view.current}`;
+  useEffect(() => {
+    // Actor/session reset or newCreation clears coordinator photo — keep React flags honest.
+    if (!owner.hasCreationPhoto()) setHasConfirmedPhoto(false);
+  }, [owner, actor?.actorId, actor?.sessionId, actor?.generation, state.created, state.creationReference, state.preview]);
+  const onPhotoChange = useCallback((derivative: AvatarDerivative | null) => {
+    owner.setCreationPhoto(derivative);
+    setHasConfirmedPhoto(!!derivative);
+  }, [owner]);
+  const onPhotoReady = useCallback((ready: boolean) => {
+    setPhotoReady(ready);
+  }, []);
   const formFooter = <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.card }}>
     <OutlineButton title="Отмена" onPress={() => sheet ? closeSheet() : (router.canGoBack() ? router.back() : router.replace('/games'))} />
-    <View style={{ flex: 1 }}><PrimaryButton title="Далее — к созданию" onPress={owner.preview} /></View>
+    <View style={{ flex: 1 }}><PrimaryButton title="Далее — к созданию" disabled={!photoReady || blocked} onPress={() => { if (photoReady) owner.preview(); }} /></View>
   </View>;
   const showFormFooter = active && auth.status !== 'hydrating' && !(blocked && state.command) && !awaitingVenue
     && state.context === 'ready' && !state.created && !state.creationReference && !state.preview;
@@ -135,8 +152,13 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       <ManagedTerms game={state.created} />
       <Label>{state.created.activityKind === 'regular' ? 'Создатель обычной игры занимает место по правилам сервиса.' : 'Тренер не занимает место участника автоматически.'}</Label>
       <ManagementCommand />
-      {state.created.status === 'draft' && !blocked && <PrimaryButton title="Опубликовать черновик" onPress={() => void owner.publishDraft(state.created!.id)} />}
-      {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => void owner.newCreation(contextCity)} />}
+      {state.created.status === 'draft' && !blocked && <PrimaryButton title="Опубликовать черновик"
+        onPress={() => void owner.publishDraft(state.created!.id)} />}
+      {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => {
+        setHasConfirmedPhoto(false);
+        setPhotoReady(true);
+        void owner.newCreation(contextCity);
+      }} />}
       <TextButton title="Открыть сводку" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.created!.id } })} />
     </> : state.creationReference ? <>
       <Label>Игра уже создана. Сначала проверьте её сводку; повторное создание недоступно.</Label>
@@ -157,10 +179,18 @@ export function CreateGame({ venueId }: { venueId?: string }) {
         <Label style={{ textAlign: 'left' }}>Публичный контакт: {state.preview.hostPublicContact}</Label>
         {!!previewTerms && <Label style={{ textAlign: 'left' }}>{`${termsLabel}${previewTerms}`}</Label>}
         {!!state.preview.trainingDescription && <Label style={{ textAlign: 'left' }}>{state.preview.trainingDescription}</Label>}
+        <Label style={{ textAlign: 'left' }}>
+          {hasConfirmedPhoto || owner.hasCreationPhoto()
+            ? GAME_PHOTO_SELECTION_COPY.previewSelected
+            : GAME_PHOTO_SELECTION_COPY.previewOmitted}
+        </Label>
       </View>
       <ManagementCommand />
       <LeftLink title="Назад к редактированию" onPress={owner.edit} />
-      <PrimaryButton title="Создать игру" disabled={blocked} onPress={() => void owner.publishPreview()} />
+      <PrimaryButton title="Создать игру" disabled={blocked || !photoReady} onPress={() => {
+        if (!photoReady) return;
+        void owner.publishPreview();
+      }} />
     </> : <>
       <StepIndicator step={1} />
       <Label accessibilityRole="header" style={[styles.title, { textAlign: 'left' }]}>Создать игру</Label>
@@ -177,6 +207,12 @@ export function CreateGame({ venueId }: { venueId?: string }) {
           const content = scrollRef.current?.getInnerViewRef?.();
           if (content) anchor.measureLayout(content, (_x, y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true }), () => undefined);
         }}
+        photoSlot={<GamePhotoSelection
+          scopeKey={photoScopeKey}
+          disabled={blocked}
+          onChange={onPhotoChange}
+          onReady={onPhotoReady}
+        />}
       />
       {state.notice && <Label accessibilityRole="alert" onLayout={e => {
         // Empty-contact path scrolls to the field-level alert; do not steal that with the bottom notice.

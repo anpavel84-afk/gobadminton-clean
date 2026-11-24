@@ -805,3 +805,188 @@ test('#522 FIX3: CoverLockNoSendError on UNKNOWN retry preserves packet/key; unr
   assert.strictEqual(owner.getSnapshot().command?.packet, original);
   assert.match(owner.getSnapshot().notice ?? '', /неизвестен|Проверка повторит/);
 });
+
+test('#522 APK52 omit photo keeps create→publish; no cover stage', async () => {
+  const s = setup();
+  await preview(s.owner);
+  assert.equal(s.owner.hasCreationPhoto(), false);
+  await s.owner.publishPreview();
+  assert.equal(s.sent.length, 2);
+  assert.equal(s.sent[0]?.kind, 'create');
+  assert.equal(s.sent[1]?.kind, 'publish');
+  assert.equal(s.owner.getSnapshot().created?.status, 'published');
+});
+
+test('#522 APK52 confirmed photo: exactly one create, one cover save, one publish with fresh versions', async () => {
+  const coverCalls: { gameId: string; gameVersion: number }[] = [];
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const published = { ...g, status: 'published' as const, version: 9 };
+  const sent: ManagementPacket[] = [];
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return draft;
+      if (p.kind === 'publish') {
+        assert.equal(p.body.expectedVersion, 8);
+        return published;
+      }
+      throw new Error('unexpected');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async ({ gameId, gameVersion, live }) => {
+      coverCalls.push({ gameId, gameVersion });
+      assert.equal(live(), true);
+      assert.equal(gameId, draft.id);
+      assert.equal(gameVersion, 7);
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes });
+  assert.equal(owner.hasCreationPhoto(), true);
+  const first = owner.publishPreview();
+  const second = owner.publishPreview();
+  await Promise.all([first, second]);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(sent[1]?.kind, 'publish');
+  assert.equal(coverCalls.length, 1);
+  assert.equal(owner.hasCreationPhoto(), false);
+  assert.equal(owner.getSnapshot().created?.status, 'published');
+  assert.equal(owner.getSnapshot().created?.version, 9);
+});
+
+test('#522 APK52 cover reject/UNKNOWN leaves draft and never publishes; reconcile does not chain', async () => {
+  for (const outcome of ['reject', 'unknown'] as const) {
+    let serial = 0;
+    const draft = { ...g, version: 7 };
+    const sent: ManagementPacket[] = [];
+    const owner = new GameManagementCoordinator({
+      profile: async () => profile,
+      preferences: async () => preferences,
+      trainer: async () => { throw new ParticipationError('business', 404); },
+      venues: async () => ({ items: [venue], nextCursor: null }),
+      managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+      game: async () => draft,
+      participants: async () => ({ items: [], nextCursor: null }),
+      send: async p => {
+        sent.push(p);
+        if (p.kind === 'create') return draft;
+        throw new Error('publish must not run');
+      },
+    }, () => `key-${++serial}`, () => now, {
+      saveCreationCover: async () => null,
+      coverBlocksWrites: () => outcome === 'unknown',
+    });
+    owner.setActor(actor);
+    await owner.loadContext('city-1');
+    owner.update(form);
+    owner.preview();
+    owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([9]) });
+    await owner.publishPreview();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.kind, 'create');
+    assert.equal(owner.getSnapshot().created?.status, 'draft');
+    assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
+    assert.match(owner.getSnapshot().notice ?? '', /Фото не сохранено|черновик/i);
+    await owner.reconcile();
+    assert.equal(sent.length, 1);
+    await owner.publishDraft(draft.id);
+    assert.equal(sent.length, outcome === 'unknown' ? 1 : 2);
+    if (outcome === 'reject') {
+      assert.equal(sent[1]?.kind, 'publish');
+    }
+  }
+});
+
+test('#522 APK52 failed create never calls cover save; reconcile settles create only', async () => {
+  let coverCalls = 0;
+  let serial = 0;
+  const sent: ManagementPacket[] = [];
+  let failOnce = true;
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...g, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => g,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (failOnce) { failOnce = false; throw new ParticipationError('network'); }
+      return g;
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async () => {
+      coverCalls += 1;
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  await owner.publishPreview();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(coverCalls, 0);
+  assert.equal(owner.getSnapshot().created, null);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.hasCreationPhoto(), true);
+  await owner.reconcile();
+  assert.equal(coverCalls, 0);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]?.kind, 'create');
+  assert.equal(sent.some(p => p.kind === 'publish'), false);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.equal(owner.hasCreationPhoto(), false);
+});
+
+test('#522 APK52 expired start after create stops before publish; draft kept', async () => {
+  let tick = now;
+  let serial = 0;
+  const draft = { ...g, version: 7, startsAt: '2026-11-20T17:30:00Z' };
+  const sent: ManagementPacket[] = [];
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') {
+        tick = Date.parse('2026-11-21T00:00:00Z');
+        return draft;
+      }
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => tick, {
+    saveCreationCover: async () => ({ version: 8 }),
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  await owner.publishPreview();
+  assert.equal(sent.length, 1);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.match(owner.getSnapshot().notice ?? '', /Начало уже прошло/);
+});

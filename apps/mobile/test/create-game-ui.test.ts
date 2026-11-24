@@ -57,9 +57,20 @@ test('create-game UI source: section cards, sticky footer, no intermediate venue
   const game = read('../app/games/[id].tsx');
   const venueRoute = read('../app/games/create/venue/[venueId].tsx');
 
-  for (const title of ['Основное', 'Место и время', 'Для кого', 'Условия участия', 'Фото этой игры']) {
+  for (const title of ['Основное', 'Место и время', 'Для кого', 'Условия участия']) {
     assert.match(controls, new RegExp(`title="${title}"`));
   }
+  assert.match(controls, /title="Фото этой игры · необязательно"/);
+  assert.match(create, /GamePhotoSelection/);
+  assert.match(create, /photoReady/);
+  assert.match(create, /setCreationPhoto/);
+  assert.match(create, /publishPreview/);
+  assert.match(controls, /photoSlot/);
+  const photoSelection = read('../src/components/game-photo-selection.tsx');
+  assert.match(photoSelection, /Подтвердить выбор фото/);
+  assert.match(photoSelection, /Без своего фото/);
+  assert.match(photoSelection, /prepareGameCoverDerivative/);
+  assert.doesNotMatch(photoSelection, /owner\.change|mutateGameCover|gameCover\.change/);
   assert.match(create, /title="Отмена"/);
   assert.match(create, /title="Далее — к созданию"/);
   assert.match(create, /footer: formFooter/);

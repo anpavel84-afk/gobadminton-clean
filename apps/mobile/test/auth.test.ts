@@ -1908,6 +1908,18 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
   assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
 });
 
+test('#522 APK52: AuthCoordinator wires saveCreationCover through existing gameCover owner', async () => {
+  const source = readFileSync(new URL('../src/auth-coordinator.ts', import.meta.url), 'utf8');
+  assert.match(source, /saveCreationCover:/);
+  assert.match(source, /gameCover\.load\(/);
+  assert.match(source, /gameCover\.change\(/);
+  assert.match(source, /gameCoverMutationSucceeded/);
+  assert.doesNotMatch(source, /mutateGameCover\(access,\s*\{[^}]*creation/);
+  const management = readFileSync(new URL('../src/game-management.ts', import.meta.url), 'utf8');
+  assert.match(management, /create→cover→publish|saveCreationCover/);
+  assert.match(management, /GAME_PHOTO_SELECTION_COPY\.saveFailed/);
+});
+
 test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, no auto-publish', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

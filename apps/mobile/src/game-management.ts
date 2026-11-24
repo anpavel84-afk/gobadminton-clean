@@ -2,6 +2,8 @@ import type { CreateGame, Game, GamePreferences, Participation } from '@gobadmin
 import { ParticipationError, sameActor } from './participation.ts';
 import type { Actor, CursorPage, ManagedGame } from './participation.ts';
 import { gameSchedule, gameStartIsFuture } from './game-form.ts';
+import { GAME_PHOTO_SELECTION_COPY } from './game-cover.ts';
+import { cloneDerivativeBytes, type AvatarDerivative } from './profile-avatar.ts';
 
 export type CreatorProfile = { cityId: string | null; trainer: boolean; displayName: string };
 export type OwnTrainer = { id: string; status: 'active' | 'inactive'; displayName: string };
@@ -73,6 +75,17 @@ function freeze<T>(v: T): T { if (v && typeof v === 'object') { Object.values(v)
 export type ManagementGate = {
   /** Unresolved managed-game photo blocks publish/roster writes for that game (not create / other games). */
   coverBlocksWrites?: (gameId: string) => boolean;
+  /**
+   * Optional create→cover stage — existing game-cover owner only.
+   * Returns fresh version on definite save; null on reject/UNKNOWN/stale (never auto-publish).
+   */
+  saveCreationCover?: (input: {
+    gameId: string;
+    gameVersion: number;
+    derivative: Readonly<AvatarDerivative>;
+    actor: Actor;
+    live: () => boolean;
+  }) => Promise<{ version: number } | null>;
 };
 
 /**
@@ -93,6 +106,8 @@ export class GameManagementCoordinator {
   private resumePending: ManagementPacket | null = null;
   // A domain-local continuation, fenced by identity, context generation and observed search city.
   private ordinaryResume: { actor: Actor; serial: number; cityId: string | null } | null = null;
+  /** Confirmed local creation photo — immutable bytes until create succeeds or actor/form reset. */
+  private creationPhoto: Readonly<AvatarDerivative> | null = null;
   private port: ManagementPort; private random: () => string; private now: () => number;
   private gate: ManagementGate;
   constructor(port: ManagementPort, random: () => string, now: () => number = Date.now, gate: ManagementGate = {}) {
@@ -104,6 +119,15 @@ export class GameManagementCoordinator {
   getSnapshot = () => this.state;
   subscribe = (f: () => void) => { this.listeners.add(f); return () => { this.listeners.delete(f); }; };
   private show(p: Partial<ManagementSnapshot>) { this.state = { ...this.state, ...p }; this.listeners.forEach(f => f()); }
+  /** Optional confirmed game photo for create→cover→publish. Omission clears. */
+  setCreationPhoto = (derivative: AvatarDerivative | null) => {
+    if (!this.state.actor || this.locked() || this.state.creationReference) return;
+    this.creationPhoto = derivative
+      ? Object.freeze({ mime: derivative.mime, bytes: cloneDerivativeBytes(derivative.bytes) })
+      : null;
+  };
+  /** Test/read helper — confirmed creation photo presence only (never raw bytes). */
+  hasCreationPhoto = () => this.creationPhoto !== null;
   setActor(actor: Actor | null) {
     if (sameActor(actor,this.state.actor) || !actor && !this.state.actor) return;
     if (this.state.actor) {
@@ -115,13 +139,15 @@ export class GameManagementCoordinator {
     if (actor && this.resumePending?.actor.actorId !== actor.actorId) this.resumePending = null;
     const pending = actor && this.resumePending ? freeze({ ...this.resumePending, actor: { ...actor } }) : null;
     if (actor) this.resumePending = null;
+    this.creationPhoto = null;
     this.ordinaryResume = null; this.contextRead++; this.contactEdited = false; this.detailReads.clear(); this.state = initial(); this.show({ actor: actor ? Object.freeze({ ...actor }) : null,
       creationReference: actor && this.resumeKnown ? { id: this.resumeKnown.id, version: this.resumeKnown.version } : null,
       ...(pending ? { command: { packet: pending, status: 'unknown' as const }, notice: 'Результат прежнего действия неизвестен. Проверка повторит только его с прежними условиями и ключом; публикация после создания потребует отдельного подтверждения.' } : {}) });
   }
   /** Explicit logout wipes quarantined packets and active private data before fencing auth. */
   forgetCreation = () => {
-    this.resumeKnown = null; this.resumePending = null; this.ordinaryResume = null; this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
+    this.resumeKnown = null; this.resumePending = null; this.ordinaryResume = null; this.creationPhoto = null;
+    this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
     this.state = initial(); this.show({});
   };
   private current(actor: Actor | null) { return sameActor(actor,this.state.actor); }
@@ -226,21 +252,64 @@ export class GameManagementCoordinator {
   };
   newCreation = async (cityId: string | null) => {
     if (this.state.created?.status !== 'published' || this.locked()) return;
-    this.resumeKnown = null; this.contactEdited = false;
+    this.resumeKnown = null; this.contactEdited = false; this.creationPhoto = null;
     this.show({ form: emptyCreationForm(), preview: null, created: null, creationReference: null, command: undefined, notice: undefined });
     await this.loadContext(cityId);
   };
   edit = () => { if (!this.locked() && !this.state.created) this.show({ preview: null }); };
-  /** Explicit preview confirmation owns normal draft→publish. Reconciliation never chains. */
+  /**
+   * Explicit preview confirmation: omit → create→publish; confirmed photo → create→cover→publish.
+   * Failed/UNKNOWN create never uploads. Failed/UNKNOWN cover leaves draft and never publishes.
+   * Reconciliation never chains publication.
+   */
   publishPreview = async () => {
     const actor = this.state.actor, input = this.state.preview;
     if (!actor || !input || this.state.context !== 'ready' || this.locked() || this.state.creationReference) return;
     if (!gameStartIsFuture(input.startsAt,this.now())) {
       this.show({ preview: null, notice: 'Время начала уже прошло. Укажите будущие дату и время.' }); return;
     }
+    const photo = this.creationPhoto;
     const packet: ManagementPacket = freeze({ actor, kind: 'create', key: this.random(), body: input });
     const result = await this.dispatch(packet);
-    if (result && this.current(actor) && this.state.created?.status === 'draft') await this.publishDraft(this.state.created.id);
+    if (!result || !this.current(actor) || this.state.created?.status !== 'draft') return;
+    const created = this.state.created;
+    if (!gameStartIsFuture(created.startsAt, this.now())) {
+      this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
+      return;
+    }
+    if (photo) {
+      const live = () => this.current(actor) && this.state.created?.id === created.id
+        && this.state.creationReference?.id === created.id;
+      const cover = this.gate.saveCreationCover
+        ? await this.gate.saveCreationCover({
+          gameId: created.id,
+          gameVersion: created.version,
+          derivative: photo,
+          actor,
+          live,
+        })
+        : null;
+      if (!live()) return;
+      if (!cover) {
+        this.show({ notice: GAME_PHOTO_SELECTION_COPY.saveFailed });
+        return;
+      }
+      const current = this.state.created;
+      if (current?.id === created.id && current.version < cover.version) {
+        this.show({
+          created: { ...current, version: cover.version },
+          creationReference: { id: created.id, version: cover.version },
+        });
+      }
+      const forPublish = this.state.created ?? created;
+      if (!gameStartIsFuture(forPublish.startsAt, this.now())) {
+        this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
+        return;
+      }
+    }
+    if (this.current(actor) && this.state.created?.status === 'draft' && !this.coverBlocked(this.state.created.id)) {
+      await this.publishDraft(this.state.created.id);
+    }
   };
   publishDraft = async (id: string) => {
     const actor = this.state.actor, d = this.state.details[id], game = this.state.created?.id === id ? this.state.created : d?.game;
@@ -286,6 +355,9 @@ export class GameManagementCoordinator {
       if (packet.kind === 'create' || packet.kind === 'publish') {
         const game = result as Game;
         if (!game.id || !Number.isInteger(game.version) || (packet.kind === 'create' ? game.status !== 'draft' : game.id !== packet.gameId || game.status !== 'published' || game.version <= packet.body.expectedVersion)) throw new ParticipationError('invalid');
+        // Drop local selection once create is acknowledged — cover stage uses the captured local copy only.
+        // Reconcile settle never chains cover/publish.
+        if (packet.kind === 'create') this.creationPhoto = null;
         this.show({ created: game, creationReference: { id: game.id, version: game.version }, command: { packet, status: 'settled' } });
         if (packet.kind === 'publish') await this.loadDetail(game.id);
       } else {

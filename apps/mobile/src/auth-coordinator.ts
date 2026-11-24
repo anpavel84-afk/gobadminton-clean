@@ -13,7 +13,8 @@ import { CoverLockNoSendError, GameManagementCoordinator } from './game-manageme
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
-import { GameCoverCoordinator } from './game-cover.ts';
+import { GameCoverCoordinator, gameCoverMutationSucceeded } from './game-cover.ts';
+import { cloneDerivativeBytes } from './profile-avatar.ts';
 import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
 import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
@@ -307,6 +308,25 @@ export class AuthCoordinator {
       },
     },deps.random,this.now,{
       coverBlocksWrites: gameId => this.gameCover.blocksManagedWrites(gameId),
+      saveCreationCover: async ({ gameId, gameVersion, derivative, actor, live }) => {
+        if (!live() || !sameActor(actor, this.gameCover.getSnapshot().actor)) return null;
+        await this.gameCover.load(gameId);
+        if (!live()) return null;
+        const before = this.gameCover.getSnapshot();
+        if (before.gameId !== gameId || before.status !== 'ready' || !before.access) return null;
+        if (before.access.version < gameVersion) return null;
+        await this.gameCover.change(async retired => {
+          if (retired() || !live()) return 'cancelled';
+          return Object.freeze({
+            mime: derivative.mime,
+            bytes: cloneDerivativeBytes(derivative.bytes),
+          });
+        });
+        if (!live()) return null;
+        const after = this.gameCover.getSnapshot();
+        if (!gameCoverMutationSucceeded(after) || !after.access || after.access.version < gameVersion) return null;
+        return { version: after.access.version };
+      },
     });
     // Managed game photo: GET/PUT/DELETE principal opt-in; hasCover gates remove; receipt refreshes managed detail version.
     this.gameCover = new GameCoverCoordinator({
