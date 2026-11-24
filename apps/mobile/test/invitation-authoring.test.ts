@@ -339,7 +339,7 @@ test('same-actor remount restores UNKNOWN; different actor clears private packet
   assert.equal(s.owner.getSnapshot().actor, null);
 });
 
-test('#522 APK45 source wiring: DM chooser, create opt-in, counter 45', () => {
+test('#522 APK45 source wiring: DM chooser, create opt-in (create retained; revoke APK46)', () => {
   const authoring = read('../src/invitation-authoring.ts');
   assert.match(authoring, /InvitationAuthoringCoordinator/);
   assert.match(authoring, /isGameOpenForInvitation/);
@@ -385,8 +385,11 @@ test('#522 APK45 source wiring: DM chooser, create opt-in, counter 45', () => {
   const createBlock = controller.slice(controller.indexOf('async create('), controller.indexOf('async listForGame('));
   assert.match(createBlock, /requirePrincipalMutation\(request\)/);
   assert.doesNotMatch(createBlock, /requireCookieMutation\(request\)/);
-  assert.match(controller, /Outgoing GET game invitations and revoke remain cookie-only/);
-  assert.match(controller, /async revoke\([\s\S]*requireCookieMutation\(request\)/);
+  // APK46: revoke opts into requirePrincipalMutation; organizer list GET remains cookie-only.
+  assert.match(controller, /Outgoing GET game invitations remain cookie-only/);
+  const revokeBlock = controller.slice(controller.indexOf('async revoke('), controller.length);
+  assert.match(revokeBlock, /requirePrincipalMutation\(request\)/);
+  assert.doesNotMatch(revokeBlock, /requireCookieMutation\(request\)/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 45);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 46);
 });

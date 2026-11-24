@@ -182,6 +182,8 @@ export class AuthCoordinator {
       members: id => this.participationRead(access => deps.api.chatMembers(access,id)),
       invitation: id => this.participationRead(access => deps.api.invitation(access,id)),
       history: (r,before,after) => this.participationRead(access => deps.api.messageHistory(access,r,before,after)),
+      // Current managed-game projection for manager revoke eligibility — same /me/games port as chooser.
+      managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
       send: packet => {
         const permit = this.messages.safetyPermit(packet);
         return this.participationRead(access => {

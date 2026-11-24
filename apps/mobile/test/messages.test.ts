@@ -16,6 +16,7 @@ function setup(overrides: Partial<MessagesPort> = {}, clock?: MessagesClock) {
   let serial=0; const sent: MessagePacket[]=[];
   const port: MessagesPort = { inbox: async () => page, counts: async () => counts, identity: async () => 'public-a', direct: async () => header,
     game: async () => { throw Error('unexpected'); }, members: async () => [], invitation: async () => { throw Error('unexpected'); },
+    managed: async () => ({ items: [], nextCursor: null }),
     history: async () => ({ items: [message('9007199254740993'),message('9007199254740994',true),message('9007199254740995')], nextCursor: '9007199254740993' }),
     send: async p => { sent.push(p); return {}; }, ...overrides };
   const owner = new MessagesCoordinator(port,() => 'random-'+(++serial),clock); owner.setActor(actor);
@@ -622,4 +623,89 @@ test('invitation decision body: zero seats disable accept, clock expiry honest, 
   };
   assert.equal(isInviteClockExpired(expired, Date.parse('2026-11-14T12:00:00Z')), true);
   assert.equal(isInviteClockExpired({ ...expired, expiresAt: null }, Date.parse('2026-11-14T12:00:00Z')), false);
+});
+
+test('#522 APK46 manager revoke: managed projection eligibility, selected revoke only, UNKNOWN exact retry', async () => {
+  const invite = { kind: 'invitation', id: 'invite-mgr' } as const;
+  const base = {
+    id: 'invite-mgr', gameId: 'game-managed', status: 'pending' as const, version: 4,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  let managedCalls = 0;
+  let includeManaged = true;
+  let pagePhase: 'first' | 'more' | 'done' = 'first';
+  const { owner, sent, port } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base }),
+    managed: async (cursor?: string) => {
+      managedCalls++;
+      if (!includeManaged) return { items: [{ id: 'other-game' }], nextCursor: null };
+      // Bounded pagination: first page misses, second page hits game-managed.
+      if (!cursor && pagePhase === 'first') { pagePhase = 'more'; return { items: [{ id: 'other-game' }], nextCursor: 'c1' }; }
+      pagePhase = 'done';
+      return { items: [{ id: 'game-managed' }], nextCursor: null };
+    },
+    send: async p => { sent.push(p); return { ...base, status: 'revoked', version: 5 }; },
+  });
+  owner.focus(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, true);
+  assert.ok(managedCalls >= 2);
+  // Recipient accept/decline path must stay closed for manager.
+  await owner.act(invite, 'accept'); assert.equal(sent.length, 0);
+  await owner.act(invite, 'decline'); assert.equal(sent.length, 0);
+  pagePhase = 'first';
+  await owner.act(invite, 'revoke');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.action, 'revoke');
+  assert.equal(sent[0]!.path, '/invitations/invite-mgr/revoke');
+  assert.deepEqual(sent[0]!.body, { expectedVersion: 4 });
+  assert.ok(Object.isFrozen(sent[0]!.body));
+  assert.equal(owner.getSnapshot().detail?.header && 'status' in owner.getSnapshot().detail!.header!
+    ? owner.getSnapshot().detail!.header.status : null, 'revoked');
+
+  // Rights loss fail-closed: no POST when managed projection no longer includes the game.
+  port.invitation = async () => ({ ...base, id: 'invite-mgr', version: 6 });
+  includeManaged = false;
+  await owner.loadDetail(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, false);
+  const before = sent.length;
+  await owner.act(invite, 'revoke');
+  assert.equal(sent.length, before);
+
+  // UNKNOWN exact packet retry — no auto after refresh; explicit retry only.
+  let fail = true;
+  const unknownSent: MessagePacket[] = [];
+  const unknown = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base, id: 'invite-u', version: 2 }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => { unknownSent.push(p); if (fail) throw new MessagesError('network'); return { ...base, id: 'invite-u', status: 'revoked', version: 3 }; },
+  });
+  const u = { kind: 'invitation' as const, id: 'invite-u' };
+  unknown.owner.focus(u); await tick();
+  await unknown.owner.act(u, 'revoke');
+  assert.equal(unknownSent.length, 1);
+  const packet = unknownSent[0]!;
+  assert.equal(unknown.owner.getSnapshot().pending['invitation:invite-u']?.state, 'unknown');
+  unknown.owner.setActor({ ...actor }); // same actor refresh must not auto-retry
+  await unknown.owner.act(u, 'revoke');
+  assert.equal(unknownSent.length, 1);
+  fail = false;
+  await unknown.owner.retry(u);
+  assert.strictEqual(unknownSent[1], packet);
+});
+
+test('#522 APK46 invitation UI: manager revoke + Open game wiring, role-appropriate pending', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { URL } = await import('node:url');
+  const body = readFileSync(new URL('../src/components/messages.tsx', import.meta.url), 'utf8');
+  assert.match(body, /Отозвать приглашение/);
+  assert.match(body, /managerEligible/);
+  assert.match(body, /onRevoke/);
+  assert.match(body, /Ожидает ответа/);
+  assert.match(body, /owner\.act\(resource, 'revoke'\)/);
+  assert.match(body, /detail\.managerEligible/);
+  assert.match(body, /onOpenGame \? <TextButton title="Открыть игру"/);
+  assert.equal(JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8')).expo.android.versionCode, 46);
 });

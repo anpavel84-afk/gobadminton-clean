@@ -79,17 +79,17 @@ export type MessageResource = { kind: 'direct' | 'game' | 'invitation'; id: stri
 export function resourcePath(r: MessageResource): `/conversations/${string}` | `/games/${string}/chat` | `/invitations/${string}` {
   const id = messageId(r.id); return r.kind === 'direct' ? `/conversations/${id}` : r.kind === 'game' ? `/games/${id}/chat` : `/invitations/${id}`;
 }
-export type MessageAction = 'send' | 'read' | 'accept' | 'decline';
+export type MessageAction = 'send' | 'read' | 'accept' | 'decline' | 'revoke';
 export type MessageBody = Readonly<{ kind: 'text'; text: string; clientMessageId: string }> | Readonly<{ throughSeq: string }> | Readonly<{ expectedVersion: number; expectedGameVersion?: number }>;
 export function mutationPath(r: MessageResource, action: MessageAction): string {
-  if (r.kind === 'invitation' ? !['accept','decline'].includes(action) : r.kind === 'game' && ['accept','decline'].includes(action)) invalid();
+  if (r.kind === 'invitation' ? !['accept','decline','revoke'].includes(action) : r.kind === 'game' && ['accept','decline','revoke'].includes(action)) invalid();
   return `${resourcePath(r)}/${action === 'send' ? 'messages' : action}`;
 }
 
 /** Validate authoritative command receipts before the owner may settle an UNKNOWN packet. */
 export function parseMessageMutation(r: MessageResource, action: MessageAction, value: unknown): unknown {
   if (r.kind === 'invitation') {
-    if (action === 'decline') return parseInvitation(value);
+    if (action === 'decline' || action === 'revoke') return parseInvitation(value);
     const row = obj(value), invitation = parseInvitation(row.invitation);
     if (action !== 'accept' || invitation.status !== 'accepted' || !invitation.participationId) return invalid();
     const participation = obj(row.participation);
