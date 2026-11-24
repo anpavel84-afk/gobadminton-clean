@@ -79,11 +79,14 @@ export function GameCoverEditor({
   const hasCover = !!access?.hasCover;
   const coverSource = access ? owner.coverImageSource(access.cover.uploadedUrl) : null;
 
-  // Actor/session/game identity for scoping local selection — clear when any changes under an open sheet.
+  // Actor/session/game/view lease identity — same-game reopen must not inherit prior draft handlers.
   const actorKey = `${state.actor?.actorId ?? ''}:${state.actor?.sessionId ?? ''}:${state.actor?.generation ?? ''}`;
-  const draftScope = `${actorKey}:${gameId}`;
+  const liveViewGen = state.focus?.gameId === gameId && state.focus.viewGen === leaseRef.current
+    ? state.focus.viewGen
+    : null;
+  const draftScope = `${actorKey}:${gameId}:${liveViewGen ?? 'none'}`;
 
-  // Synchronous draft binding — previous-game/account private image must not render or submit under a new permit.
+  // Synchronous draft binding — previous-game/account/view private image must not render or submit under a new permit.
   if (draft.scope !== draftScope) {
     setDraft(emptyDraft(draftScope));
   }
@@ -95,7 +98,8 @@ export function GameCoverEditor({
   const scopedPrepareError = draft.scope === draftScope ? draft.prepareError : null;
   const scopedCrop = draft.scope === draftScope ? draft.crop : { x: 0.5, y: 0.5 };
 
-  useEffect(() => {
+  // Route focus owns the openView lease (shared with open/auth/game). Real blur releases; picker AppState is separate.
+  useFocusEffect(useCallback(() => {
     if (!open || auth.status !== 'authenticated' || !gameId) {
       leaseRef.current = null;
       endPickerRef.current?.();
@@ -105,22 +109,28 @@ export function GameCoverEditor({
     const release = owner.openView(gameId);
     leaseRef.current = owner.getSnapshot().focus?.viewGen ?? null;
     owner.setForeground(AppState.currentState === 'active');
+    const scopeForBg = `${actorKey}:${gameId}:${leaseRef.current ?? 'none'}`;
     const sub = AppState.addEventListener('change', next => {
       owner.setForeground(next === 'active');
       // Ordinary background clears draft; expected picker handoff retains legitimate selection.
       if (next !== 'active' && !owner.expectingPickerHandoff()) {
-        setDraft(d => (d.scope === draftScope ? emptyDraft(draftScope) : d));
+        setDraft(d => (d.scope === scopeForBg ? emptyDraft(scopeForBg) : d));
         setPreparing(false);
       }
     });
     return () => {
       sub.remove();
+      if (owner.expectingPickerHandoff()) return;
       endPickerRef.current?.();
       endPickerRef.current = null;
       release();
       leaseRef.current = null;
+      setDraft(d => emptyDraft(d.scope));
+      setPreparing(false);
+      setReconciling(false);
+      reconcileViewRef.current = null;
     };
-  }, [open, owner, gameId, auth.status, actorKey, draftScope]);
+  }, [open, owner, gameId, auth.status, actorKey]));
 
   // Parent-forced close / game / account change must not leave stale preview under another owner.
   useEffect(() => {
@@ -133,17 +143,6 @@ export function GameCoverEditor({
       reconcileViewRef.current = null;
     }
   }, [open, gameId, actorKey, draftScope]);
-
-  // Retained route blur: drop private draft (picker AppState handoff is separate).
-  useFocusEffect(useCallback(() => {
-    return () => {
-      if (owner.expectingPickerHandoff()) return;
-      endPickerRef.current?.();
-      endPickerRef.current = null;
-      setDraft(d => emptyDraft(d.scope));
-      setPreparing(false);
-    };
-  }, [owner]));
 
   // Permit captured for this render — checked before paint of prepared preview.
   const permit: GameCoverRenderedPermit | null = state.actor && state.focus && state.foreground
@@ -204,14 +203,16 @@ export function GameCoverEditor({
 
   function close() {
     if (saving) return;
+    const live = !!permit && owner.permitLive(permit);
     endPickerRef.current?.();
     endPickerRef.current = null;
-    setDraft(emptyDraft(draftScope));
+    if (live) setDraft(d => d.scope === draftScope ? emptyDraft(draftScope) : d);
     onOpenChange(false);
   }
 
   function resetSelection() {
     if (saving) return;
+    if (!permit || !owner.permitLive(permit)) return;
     // Old reset must not clear a newer context's draft.
     setDraft(d => d.scope === draftScope ? emptyDraft(draftScope) : d);
     setPreparing(false);
@@ -222,6 +223,10 @@ export function GameCoverEditor({
   const previewLive = !!(scopedPreviewUri && permit && owner.permitLive(permit));
   // Key private image identity to the immutable draft scope + uri.
   const previewImageKey = previewLive ? `${draftScope}:${scopedPreviewUri!.slice(0, 64)}` : null;
+  const coverLive = !!(coverSource && !scopedAsset && permit && owner.permitLive(permit));
+  const coverImageKey = coverLive
+    ? `${draftScope}:${access?.cover.uploadedUrl ?? ''}:${access?.version ?? ''}`
+    : null;
 
   return (
     <>
@@ -255,17 +260,13 @@ export function GameCoverEditor({
                   reconcileViewRef.current = { gameId: captured.gameId, viewGen: captured.viewGen };
                   setReconciling(true);
                   void owner.reconcile(captured).finally(() => {
-                    // Avoid late finally setting reconciling for a new view.
+                    // Only clear matching original reconcile marker — never null a newer view's marker.
                     const marked = reconcileViewRef.current;
-                    if (marked
-                      && marked.gameId === captured.gameId
-                      && marked.viewGen === captured.viewGen
-                      && owner.permitLive(captured)) {
-                      setReconciling(false);
-                    } else if (!owner.permitLive(captured)) {
-                      setReconciling(false);
-                      reconcileViewRef.current = null;
-                    }
+                    if (!marked
+                      || marked.gameId !== captured.gameId
+                      || marked.viewGen !== captured.viewGen) return;
+                    setReconciling(false);
+                    if (!owner.permitLive(captured)) reconcileViewRef.current = null;
                   });
                 }} />
               </>
@@ -313,21 +314,33 @@ export function GameCoverEditor({
                     <Label>{GAME_COVER_EDITOR_COPY.horizontal}</Label>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                       <Pressable accessibilityRole="button" accessibilityLabel="По горизонтали меньше"
-                        disabled={saving || uncertain} onPress={() => setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, x: step(d.crop.x, -0.1) } } : d)}
+                        disabled={saving || uncertain} onPress={() => {
+                          if (!permit || !owner.permitLive(permit)) return;
+                          setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, x: step(d.crop.x, -0.1) } } : d);
+                        }}
                         style={styles.textButton}><Label>−</Label></Pressable>
                       <Label accessibilityLabel={`По горизонтали ${scopedCrop.x.toFixed(1)}`}>{scopedCrop.x.toFixed(1)}</Label>
                       <Pressable accessibilityRole="button" accessibilityLabel="По горизонтали больше"
-                        disabled={saving || uncertain} onPress={() => setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, x: step(d.crop.x, 0.1) } } : d)}
+                        disabled={saving || uncertain} onPress={() => {
+                          if (!permit || !owner.permitLive(permit)) return;
+                          setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, x: step(d.crop.x, 0.1) } } : d);
+                        }}
                         style={styles.textButton}><Label>+</Label></Pressable>
                     </View>
                     <Label>{GAME_COVER_EDITOR_COPY.vertical}</Label>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                       <Pressable accessibilityRole="button" accessibilityLabel="По вертикали меньше"
-                        disabled={saving || uncertain} onPress={() => setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, y: step(d.crop.y, -0.1) } } : d)}
+                        disabled={saving || uncertain} onPress={() => {
+                          if (!permit || !owner.permitLive(permit)) return;
+                          setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, y: step(d.crop.y, -0.1) } } : d);
+                        }}
                         style={styles.textButton}><Label>−</Label></Pressable>
                       <Label accessibilityLabel={`По вертикали ${scopedCrop.y.toFixed(1)}`}>{scopedCrop.y.toFixed(1)}</Label>
                       <Pressable accessibilityRole="button" accessibilityLabel="По вертикали больше"
-                        disabled={saving || uncertain} onPress={() => setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, y: step(d.crop.y, 0.1) } } : d)}
+                        disabled={saving || uncertain} onPress={() => {
+                          if (!permit || !owner.permitLive(permit)) return;
+                          setDraft(d => d.scope === draftScope ? { ...d, crop: { ...d.crop, y: step(d.crop.y, 0.1) } } : d);
+                        }}
                         style={styles.textButton}><Label>+</Label></Pressable>
                     </View>
                     {!scopedConfirmed && scopedPreviewBytes && !preparingScoped ? (
@@ -345,8 +358,8 @@ export function GameCoverEditor({
                     </View>
                   </View>
                 ) : null}
-                {!scopedAsset && coverSource ? (
-                  <View style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden', borderRadius: 12 }}>
+                {coverLive && coverImageKey && coverSource ? (
+                  <View key={coverImageKey} style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden', borderRadius: 12 }}>
                     <Image source={coverSource} style={{ width: '100%', height: '100%' }} resizeMode="cover" accessibilityLabel="Текущее фото игры" />
                   </View>
                 ) : null}

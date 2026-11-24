@@ -9,7 +9,7 @@ import { ContactCoordinator } from './contact-coordinator.ts';
 import { ProfileCoordinator, ProfileError } from './profile.ts';
 import { ProfileAvatarCoordinator } from './profile-avatar.ts';
 import { ProfileCoverCoordinator } from './profile-cover.ts';
-import { GameManagementCoordinator } from './game-management.ts';
+import { CoverLockNoSendError, GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
@@ -290,11 +290,11 @@ export class AuthCoordinator {
       send: async packet => {
         // Port-level recheck after delayed token acquisition — UI disabled is not sufficient.
         if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
-          throw new ParticipationError('stale');
+          throw new CoverLockNoSendError();
         }
         const result = await this.participationRead(access => {
           if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
-            throw new ParticipationError('stale');
+            throw new CoverLockNoSendError();
           }
           return deps.api.managementMutation(access,packet);
         },packet.actor);

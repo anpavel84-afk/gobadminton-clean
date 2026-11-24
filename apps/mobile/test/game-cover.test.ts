@@ -409,6 +409,81 @@ test('#522 FIX2: expected picker handoff survives AppState; close/account/game A
   release();
 });
 
+test('#522 FIX3: GameCoverEditor route-focus cleanup uses production openView release', async () => {
+  const source = read('../src/components/game-cover-editor.tsx');
+  // Single lease owner: useFocusEffect opens/releases; no duplicate openView lifecycle effect.
+  assert.match(source, /useFocusEffect\(useCallback\(\(\) => \{[\s\S]*const release = owner\.openView\(gameId\)/);
+  assert.match(source, /useFocusEffect\(useCallback\(\(\) => \{[\s\S]*release\(\)/);
+  assert.equal([...source.matchAll(/owner\.openView\(/g)].length, 1);
+  // Picker AppState handoff stays distinct from route-blur retirement.
+  assert.match(source, /if \(owner\.expectingPickerHandoff\(\)\) return;/);
+  assert.match(source, /AppState\.addEventListener/);
+  // Draft identity includes view lease; own cover uses live permit + keyed identity.
+  assert.match(source, /draftScope = `\$\{actorKey\}:\$\{gameId\}:\$\{liveViewGen/);
+  assert.match(source, /coverLive[\s\S]*coverImageKey[\s\S]*permitLive/);
+
+  const owner = new GameCoverCoordinator({
+    read: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
+    mutate: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
+  }, () => 'k', { accessToken: () => 'tok' });
+  owner.setActor(actor);
+
+  // Same production owner.release path the editor focus-cleanup invokes.
+  let open = true;
+  let authStatus: 'authenticated' | 'guest' = 'authenticated';
+  let leaseRef: number | null = null;
+  let releaseFn: (() => void) | null = null;
+  let focusCleanup: (() => void) | null = null;
+  const runFocusEffect = () => {
+    focusCleanup?.();
+    focusCleanup = null;
+    if (!open || authStatus !== 'authenticated') {
+      leaseRef = null;
+      return;
+    }
+    releaseFn = owner.openView('game-route');
+    leaseRef = owner.getSnapshot().focus?.viewGen ?? null;
+    focusCleanup = () => {
+      if (owner.expectingPickerHandoff()) return;
+      releaseFn?.();
+      releaseFn = null;
+      leaseRef = null;
+    };
+  };
+  runFocusEffect();
+  await new Promise(r => setImmediate(r));
+  assert.ok(owner.getSnapshot().focus);
+  assert.equal(owner.getSnapshot().focus?.viewGen, leaseRef);
+  // Route blur → production release (editor useFocusEffect cleanup).
+  focusCleanup?.();
+  focusCleanup = null;
+  assert.equal(owner.getSnapshot().focus, null);
+  assert.equal(leaseRef, null);
+
+  // Clean reopen/refocus acquires a fresh lease.
+  runFocusEffect();
+  await new Promise(r => setImmediate(r));
+  assert.ok(owner.getSnapshot().focus);
+  const reopened = owner.getSnapshot().focus!.viewGen;
+  assert.equal(reopened, leaseRef);
+  // Picker handoff: blur cleanup must not release.
+  const permit = owner.renderedPermit();
+  assert.ok(permit);
+  const endPicker = owner.beginExpectedPickerHandoff(permit!);
+  const kept = owner.getSnapshot().focus!.viewGen;
+  focusCleanup?.();
+  assert.equal(owner.getSnapshot().focus?.viewGen, kept);
+  endPicker();
+  focusCleanup = () => {
+    if (owner.expectingPickerHandoff()) return;
+    releaseFn?.();
+    releaseFn = null;
+    leaseRef = null;
+  };
+  focusCleanup();
+  assert.equal(owner.getSnapshot().focus, null);
+});
+
 test('#522 FIX2: CURRENT replay hasCover=false is honest; success helper excludes UNKNOWN notice', async () => {
   const port: GameCoverPort = {
     read: async () => ({ version: 3, hasCover: false, cover: { uploadedUrl: venueUrl } }),

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
+import { CoverLockNoSendError, GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
 import type { ManagementPort, ManagementPacket, Venue } from '../src/game-management.ts';
 import { ParticipationError } from '../src/participation.ts';
 import { ProfileCoordinator } from '../src/profile.ts';
@@ -672,7 +672,7 @@ test('#522 APK51 management dispatch gate blocks publish while cover unresolved 
   assert.equal(sent[0]!.kind === 'publish' ? sent[0].gameId : '', 'game-cover-lock');
 });
 
-test('#522 FIX2: cover-lock stale on UNKNOWN retry preserves packet/key; unrelated stale clears', async () => {
+test('#522 FIX3: CoverLockNoSendError on UNKNOWN retry preserves packet/key; unrelated stale → UNKNOWN', async () => {
   let coverBlocked = false;
   let portStale: 'cover' | 'other' | null = null;
   const sent: ManagementPacket[] = [];
@@ -693,9 +693,9 @@ test('#522 FIX2: cover-lock stale on UNKNOWN retry preserves packet/key; unrelat
         await pendingSend;
       }
       if (portStale === 'cover') {
-        // Simulate AuthCoordinator cover gate after delayed token — arm lock then stale.
+        // Simulate AuthCoordinator cover gate after delayed token — arm lock then dedicated no-send.
         coverBlocked = true;
-        throw new ParticipationError('stale');
+        throw new CoverLockNoSendError();
       }
       if (portStale === 'other') throw new ParticipationError('stale');
       sent.push(p);
@@ -719,7 +719,7 @@ test('#522 FIX2: cover-lock stale on UNKNOWN retry preserves packet/key; unrelat
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
   assert.equal(owner.getSnapshot().command?.packet.key, original.key);
 
-  // Delayed cover-lock stale on retry: early gate off, port arms lock + throws → keep UNKNOWN.
+  // Delayed CoverLockNoSendError on retry: early gate off, port arms lock + throws → keep UNKNOWN.
   portStale = 'cover';
   coverBlocked = false;
   const before = sent.length;
@@ -729,11 +729,17 @@ test('#522 FIX2: cover-lock stale on UNKNOWN retry preserves packet/key; unrelat
   assert.equal(owner.getSnapshot().command?.packet.key, original.key);
   assert.strictEqual(owner.getSnapshot().command?.packet, original);
   assert.match(owner.getSnapshot().notice ?? '', /фото/);
+  // Later unlocking cover must not erase the preserved UNKNOWN packet.
+  coverBlocked = false;
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(owner.getSnapshot().command?.packet, original);
 
-  // Unrelated stale (not cover-lock) clears the command slot.
+  // Unrelated stale follows accepted50 UNKNOWN — never lose packet.
   portStale = 'other';
   coverBlocked = false;
   await owner.reconcile();
-  assert.equal(owner.getSnapshot().command, undefined);
-  assert.match(owner.getSnapshot().notice ?? '', /устарело/);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, original.key);
+  assert.strictEqual(owner.getSnapshot().command?.packet, original);
+  assert.match(owner.getSnapshot().notice ?? '', /неизвестен|Проверка повторит/);
 });

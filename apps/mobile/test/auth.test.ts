@@ -1982,6 +1982,68 @@ test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, n
   assert.equal(calls.filter(c => c.method === 'PUT' || c.method === 'DELETE').length, mutCount);
 });
 
+test('#522 FIX3: AuthCoordinator delayed-token cover-lock throws CoverLockNoSendError; preserves UNKNOWN', async () => {
+  const gameId = '10000000-0000-4000-8000-000000000053';
+  const authSource = readFileSync(new URL('../src/auth-coordinator.ts', import.meta.url), 'utf8');
+  assert.match(authSource, /CoverLockNoSendError/);
+  assert.match(authSource, /blocksManagedWrites\(packet\.gameId\)\) \{\s*throw new CoverLockNoSendError\(\);/);
+
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const management = s.auth.gameManagement;
+  const cover = s.auth.gameCover;
+  const refreshGate = deferred<unknown>();
+  const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 2 };
+  const publishPosts: string[] = [];
+  let failPublish = true;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshGate.promise;
+    if (path.startsWith('/me/games')) {
+      return { items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}` && (init.method ?? 'GET') === 'GET') return draft;
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    if (path === '/me/social-profile') {
+      return { cityId: fixture.venue.cityId, trainer: false, displayName: 'Хозяин' };
+    }
+    if (path === `/games/${gameId}/publish`) {
+      publishPosts.push(path);
+      if (failPublish) throw Object.assign(new Error('network lost'), { name: 'TypeError' });
+      return { ...draft, status: 'published', version: 3 };
+    }
+    return { ok: true };
+  });
+  await management.loadDetail(gameId);
+  assert.equal(management.getSnapshot().details[gameId]?.status, 'ready');
+  await management.publishDraft(gameId);
+  assert.equal(management.getSnapshot().command?.status, 'unknown');
+  const original = management.getSnapshot().command!.packet;
+  assert.equal(original.kind, 'publish');
+  assert.equal(publishPosts.length, 1);
+  failPublish = false;
+
+  // Flip the same blocksManagedWrites the auth port rechecks after token (not incidental catch inference).
+  let lockAfterToken = false;
+  const realBlocks = cover.blocksManagedWrites.bind(cover);
+  cover.blocksManagedWrites = (id: string) => lockAfterToken || realBlocks(id);
+
+  const refreshWork = s.auth.refresh();
+  await new Promise(r => setImmediate(r));
+  const reconcileWork = management.reconcile();
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.getSnapshot().command?.status, 'sending');
+  lockAfterToken = true;
+  refreshGate.resolve(credentials);
+  await Promise.all([reconcileWork, refreshWork.catch(() => {})]);
+
+  assert.equal(publishPosts.length, 1);
+  assert.equal(management.getSnapshot().command?.status, 'unknown');
+  assert.equal(management.getSnapshot().command?.packet.key, original.key);
+  assert.strictEqual(management.getSnapshot().command?.packet, original);
+  assert.match(management.getSnapshot().notice ?? '', /фото/);
+});
+
 test('#522 FIX2: game-cover deferred-token admission — close/background/ABA/account → zero mutate', async () => {
   const gameId = '10000000-0000-4000-8000-000000000052';
   async function run(interrupt: 'background' | 'close-view' | 'game-ABA' | 'account') {

@@ -75,6 +75,18 @@ export type ManagementGate = {
   coverBlocksWrites?: (gameId: string) => boolean;
 };
 
+/**
+ * Auth/port cover-lock no-send — distinct from unrelated ParticipationError('stale').
+ * Thrown before/after token when managed-game photo blocks publish/roster; never a network result.
+ */
+export class CoverLockNoSendError extends Error {
+  readonly kind = 'cover_lock_no_send' as const;
+  constructor() {
+    super('cover_lock_no_send');
+    this.name = 'CoverLockNoSendError';
+  }
+}
+
 export class GameManagementCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private contextRead = 0; private publishRead = 0; private contactEdited = false; private resumeKnown: { actorId: string; id: string; version: number } | null = null; private detailReads = new Map<string, number>();
   // Quarantined while identity is unavailable; never part of the guest snapshot.
@@ -285,22 +297,20 @@ export class GameManagementCoordinator {
       return true;
     } catch (e) {
       if (!this.current(packet.actor)) return false;
-      // Distinguish cover-lock preflight stale (no network send) from unrelated stale.
-      if (e instanceof ParticipationError && e.kind === 'stale') {
-        const coverLock = packet.kind !== 'create' && this.coverBlocked(packet.gameId);
-        if (coverLock && priorUnknown) {
-          // Prevented delayed retry must NOT erase prior UNKNOWN packet/key.
+      // Only the dedicated cover-lock no-send class — unrelated stale follows accepted50 UNKNOWN below.
+      if (e instanceof CoverLockNoSendError) {
+        if (priorUnknown) {
+          // Prevented delayed retry: keep exact prior UNKNOWN regardless of later cover-lock state.
           this.show({
             command: { packet: priorUnknown, status: 'unknown' },
             notice: 'Сначала завершите или проверьте сохранение фото этой игры.',
           });
           return false;
         }
+        // First definitely prevented send — clear safely (no network mutation occurred).
         this.show({
           command: undefined,
-          notice: coverLock
-            ? 'Сначала завершите или проверьте сохранение фото этой игры.'
-            : 'Действие устарело. Обновите данные перед новой попыткой.',
+          notice: 'Сначала завершите или проверьте сохранение фото этой игры.',
         });
         return false;
       }
