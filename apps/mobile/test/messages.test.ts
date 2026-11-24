@@ -736,6 +736,34 @@ test('#522 APK46 revoke-only path: reject unsupported direct revoke; blur after 
   assert.equal(owner.getSnapshot().notice, null);
 });
 
+test('#522 APK46 revoke fence: captured foreground lifecycle invalidates after background→return; live boolean alone is not enough', () => {
+  const invite = { kind: 'invitation', id: 'invite-aba' } as const;
+  const { owner } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({
+      id: 'invite-aba', gameId: 'game-managed', status: 'pending', version: 1,
+      inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+      expiresAt: null, participationId: null, acceptanceContext: null,
+    }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+  });
+  owner.focus(invite);
+  const packet = Object.freeze({
+    actor: Object.freeze({ ...actor }), resource: Object.freeze({ ...invite }), action: 'revoke' as const,
+    method: 'POST' as const, path: '/invitations/invite-aba/revoke',
+    body: Object.freeze({ expectedVersion: 1 }), key: 'k-aba',
+  });
+  const view = owner.getSnapshot().viewGeneration;
+  const life = owner.foregroundLifecycle();
+  assert.equal(owner.mayDispatchRevoke(packet, 0, view, life), true);
+  owner.setForeground(false);
+  owner.setForeground(true);
+  assert.equal(owner.getSnapshot().viewGeneration, view);
+  assert.notEqual(owner.foregroundLifecycle(), life);
+  assert.equal(owner.mayDispatchRevoke(packet, 0, view, life), false);
+  assert.equal(owner.mayDispatchRevoke(packet, 0, view, owner.foregroundLifecycle()), true);
+});
+
 test('#522 APK46 revoke fence: proven-zero stale clears initial sending; UNKNOWN network retained; reconcile stale keeps packet', async () => {
   const invite = { kind: 'invitation', id: 'invite-fence' } as const;
   const base = {

@@ -2028,11 +2028,30 @@ test('#522 APK46: revoke deferred token fence — blur/focus/account → zero PO
   assert.equal(messages.getSnapshot().pending['invitation:invite-apk46'], undefined);
   assert.equal(messages.getSnapshot().notice, null);
 
+  // (1b) ABA: background→foreground while token still pending must not revive the old initial revoke.
+  managedReads = 0;
+  await s.auth.refresh();
+  messages.setForeground(true);
+  messages.focus(invite);
+  await new Promise(r => setImmediate(r));
+  const abaGate = deferred<typeof credentials>();
+  refreshResult = abaGate.promise;
+  const aba = messages.act(invite, 'revoke');
+  await new Promise(r => setImmediate(r));
+  assert.equal(revokePosts.length, 0);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46']?.state, 'sending');
+  messages.setForeground(false);
+  messages.setForeground(true);
+  abaGate.resolve(credentials);
+  await aba;
+  assert.equal(revokePosts.length, 0);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46'], undefined);
+  assert.equal(messages.getSnapshot().notice, null);
+
   // Seed UNKNOWN via real AuthCoordinator revoke POST (503 → network).
   managedReads = 0;
   refreshResult = credentials;
   await s.auth.refresh();
-  messages.setForeground(true);
   messages.focus(invite);
   await new Promise(r => setImmediate(r));
   await messages.act(invite, 'revoke');

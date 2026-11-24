@@ -47,6 +47,8 @@ export class MessagesCoordinator {
   private directPeers = new Map<string, string>();
   private accessLoss: { revision: number; key: string } | null = null;
   private foreground = true;
+  /** Monotonic lifecycle epoch; any background/foreground transition bumps it. Revoke wire captures before token await. */
+  private foregroundGeneration = 0;
   private focused: string | null = null;
   private focusResource: MessageResource | null = null;
   private roots = new Set<symbol>();
@@ -171,7 +173,8 @@ export class MessagesCoordinator {
   setForeground(active: boolean) {
     if (active === this.foreground) return;
     this.clearSafetyReads();
-    this.foreground = active; ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
+    this.foreground = active; ++this.foregroundGeneration;
+    ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
     this.resetDue();
     this.show({ loadingMore: false, countsLoading: false, detail: this.snapshot.detail ? { ...this.snapshot.detail, loadingMore: false } : null });
     if (active && !this.blocked()) {
@@ -183,6 +186,8 @@ export class MessagesCoordinator {
       } else this.runPendingDetail();
     }
   }
+  /** Captured per selected-revoke dispatch attempt; background→return invalidates the old attempt. */
+  foregroundLifecycle = () => this.foregroundGeneration;
   focus(resource: MessageResource | null) {
     this.clearSafetyReads();
     ++this.detailRevision; ++this.listRevision; ++this.focusLease; this.pendingDetail = null;
@@ -344,15 +349,17 @@ export class MessagesCoordinator {
   mayDispatchSafety = (packet: MessagePacket, permit = this.safetyPermit(packet)) => permit === this.safetyPermit(packet) && !this.safetyHeld(packet.resource, packet.action);
   /**
    * Revoke-only final wire permit (post token await): same dispatch attempt + current
-   * actor/session + captured view + focused invitation route + foreground.
+   * actor/session + captured view + focused invitation route + captured foreground lifecycle.
+   * Background→return bumps lifecycle even when viewGeneration is unchanged; live boolean alone is not enough.
    * Accept/send/read keep mayDispatchSafety only.
    */
-  mayDispatchRevoke = (packet: MessagePacket, permit: number, viewGeneration: number) =>
+  mayDispatchRevoke = (packet: MessagePacket, permit: number, viewGeneration: number, foregroundGeneration: number) =>
     packet.action === 'revoke'
     && packet.resource.kind === 'invitation'
     && this.mayDispatchSafety(packet, permit)
     && sameActor(packet.actor, this.snapshot.actor)
     && this.foreground
+    && this.foregroundGeneration === foregroundGeneration
     && this.focused === resourceKey(packet.resource)
     && this.snapshot.viewGeneration === viewGeneration;
   private safetyHeld(resource: MessageResource, action: MessageAction) {
