@@ -5,6 +5,7 @@ import type { Game } from '@gobadminton/contracts/game-types';
 import { useAuth } from '../auth.tsx';
 import { formatLabel, levelLabel, gameTime, deadline, settlementLabel } from '../presentation.ts';
 import { participationLabels } from '../participation.ts';
+import { GameCourtBookingPanel } from './game-court-booking.tsx';
 import { BackLink, Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 import { colors, typography } from '../theme.ts';
 export function ManagedTerms({ game }: { game: Game }) {
@@ -45,6 +46,7 @@ export function GameManagement({ id }: { id: string }) {
         <ManagedTerms game={d.game} />
         <Label>{({ draft: 'Черновик', published: 'Опубликовано', cancelled: 'Игра отменена', completed: 'Завершена' })[d.game.status]}</Label>
         <Label>{d.management?.role === 'owner' ? 'Создаю и управляю' : 'Управляю'}</Label>
+        <GameCourtBookingPanel gameId={id} proof="managed" />
         <ManagementCommand />
         {d.game.status === 'draft' && <PrimaryButton title="Опубликовать черновик" disabled={locked} onPress={() => void owner.publishDraft(id)} />}
         <Label>Изменение вместимости и отмена игры пока недоступны.</Label>

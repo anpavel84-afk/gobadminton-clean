@@ -1837,6 +1837,66 @@ test('#522 APK44: game-contact preference AuthCoordinator fences, PATCH transpor
   await owner.save();
   assert.equal(calls.filter(c => c.method === 'PATCH').length, patchCount);
 });
+test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no auto-write', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameCourtBooking;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const calls: { path: string; method?: string; body?: unknown; key?: string }[] = [];
+  let row = {
+    gameId, status: 'unspecified', version: 0, updatedAt: null as string | null,
+    declarationSource: 'organizer_declared', allowedActions: { canUpdate: true },
+  };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}/court-booking`) {
+      calls.push({
+        path,
+        method: init.method,
+        body: init.body ? JSON.parse(String(init.body)) : undefined,
+        key: (init.headers as Record<string, string> | undefined)?.['Idempotency-Key'],
+      });
+      if ((init.method ?? 'GET') === 'PUT') {
+        const body = JSON.parse(String(init.body)) as { expectedVersion: number; status: string };
+        row = {
+          ...row,
+          status: body.status,
+          version: body.expectedVersion + 1,
+          updatedAt: '2026-11-24T12:00:00.000Z',
+        };
+        return row;
+      }
+      return row;
+    }
+    if (path.startsWith('/me/games')) return { items: [{ id: gameId, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    return { ok: true };
+  });
+  owner.focus(gameId, 'managed');
+  await owner.load();
+  assert.equal(calls.some(c => c.method === 'PUT'), false);
+  assert.equal(owner.getSnapshot().booking?.version, 0);
+  owner.updateDraft('arranging');
+  await owner.save();
+  const put = calls.find(c => c.method === 'PUT');
+  assert.ok(put);
+  assert.deepEqual(put!.body, { expectedVersion: 0, status: 'arranging' });
+  assert.ok(put!.key && put!.key.length >= 16);
+  assert.equal(owner.getSnapshot().booking?.status, 'arranging');
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.gameCourtBooking, owner);
+  assert.equal(owner.getSnapshot().booking?.status, 'arranging');
+
+  const putCount = calls.filter(c => c.method === 'PUT').length;
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(owner.getSnapshot().booking, null);
+  owner.updateDraft('not_arranged');
+  await owner.save();
+  assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
+});
 test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

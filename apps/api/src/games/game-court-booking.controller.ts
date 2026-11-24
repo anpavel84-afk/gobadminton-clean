@@ -15,7 +15,7 @@ export class GameCourtBookingController {
   @Get("games/:gameId/court-booking")
   @Header("Cache-Control", "no-store")
   async get(@Req() request: FastifyRequest, @Param("gameId") gameId: string) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.booking.get(gameId, actor.userId);
   }
 
@@ -26,7 +26,7 @@ export class GameCourtBookingController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("gameId") gameId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.booking.put(
       actor.userId,
       actor.sessionId,

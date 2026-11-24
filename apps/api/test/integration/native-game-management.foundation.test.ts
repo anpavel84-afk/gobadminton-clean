@@ -265,6 +265,62 @@ run("native game management · self-migrating isolated database", () => {
     await app.get(SessionService).revokeSession(owner.sessionId);
     for(const route of routes) expect((await app.inject({...route,headers:bearer(owner)})).statusCode).toBe(401);
   });
+  it('native bearer court-booking GET/PUT: manager+participant read, write/replay/CAS, revocation, cookie CSRF, bearer boundaries; closed cancel neighbor', async () => {
+    const owner = await actor(), player = await actor(), outsider = await actor();
+    const made = await creation(owner); expect(made.result.statusCode).toBe(201);
+    const g = await publish(owner, made.result.json());
+    const pending = await request(player, g);
+    const confirm = await app.inject({
+      method: 'POST', url: `/v1/participations/${pending.id}/confirm`,
+      headers: bearer(owner), payload: { expectedVersion: pending.version },
+    });
+    expect(confirm.statusCode).toBe(200);
+    const url = `/v1/games/${g.id}/court-booking`;
+    const managerGet = await app.inject({ url, headers: bearer(owner) });
+    expect(managerGet.statusCode).toBe(200);
+    expect(managerGet.json()).toMatchObject({
+      gameId: g.id, status: 'unspecified', version: 0, updatedAt: null,
+      declarationSource: 'organizer_declared', allowedActions: { canUpdate: true },
+    });
+    expect((await app.inject({ url, headers: { cookie: owner.cookie } })).json()).toEqual(managerGet.json());
+    const participantGet = await app.inject({ url, headers: bearer(player) });
+    expect(participantGet.statusCode).toBe(200);
+    expect(participantGet.json()).toMatchObject({ status: 'unspecified', version: 0, allowedActions: { canUpdate: false } });
+    expect((await app.inject({ url, headers: bearer(outsider) })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(player), payload: { expectedVersion: 0, status: 'arranging' } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(outsider), payload: { expectedVersion: 0, status: 'arranging' } })).statusCode).toBe(404);
+    const key = randomUUID(), payload = { expectedVersion: 0, status: 'arranging' as const };
+    const written = await app.inject({ method: 'PUT', url, headers: bearer(owner, key), payload });
+    expect(written.statusCode).toBe(200);
+    expect(written.json()).toMatchObject({ status: 'arranging', version: 1, allowedActions: { canUpdate: true } });
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(owner, key), payload })).json()).toEqual(written.json());
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(owner, key), payload: { expectedVersion: 0, status: 'not_arranged' } })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(owner), payload: { expectedVersion: 0, status: 'organizer_confirmed' } })).statusCode).toBe(409);
+    const cookieKey = randomUUID();
+    expect((await app.inject({ method: 'PUT', url, headers: { origin, cookie: owner.cookie, 'idempotency-key': cookieKey }, payload: { expectedVersion: 1, status: 'organizer_confirmed' } })).json().code).toBe('CSRF_REQUIRED');
+    expect((await app.inject({ method: 'PUT', url, headers: { ...browser(owner), origin: 'https://evil.test' }, payload: { expectedVersion: 1, status: 'organizer_confirmed' } })).json().code).toBe('ORIGIN_REJECTED');
+    const cookiePut = await app.inject({ method: 'PUT', url, headers: browser(owner), payload: { expectedVersion: 1, status: 'organizer_confirmed' } });
+    expect(cookiePut.statusCode).toBe(200);
+    expect(cookiePut.json()).toMatchObject({ status: 'organizer_confirmed', version: 2 });
+    expect((await app.inject({ method: 'PUT', url, headers: { ...bearer(owner), cookie: owner.cookie }, payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(403);
+    for (const authorization of ['', 'Basic invalid', 'Bearer invalid', `Bearer ${'x'.repeat(43)}`]) {
+      expect((await app.inject({ url, headers: { authorization } })).statusCode).toBe(401);
+      expect((await app.inject({ method: 'PUT', url, headers: { authorization, 'idempotency-key': randomUUID() }, payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(401);
+    }
+    expect((await disabledApp.inject({ url, headers: bearer(owner) })).statusCode).toBe(404);
+    expect((await disabledApp.inject({ method: 'PUT', url, headers: bearer(owner), payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(404);
+    // Closed neighbor stays cookie-only / bearer-denied.
+    expect((await app.inject({ method: 'POST', url: `/v1/games/${g.id}/cancel`, headers: bearer(owner), payload: { expectedVersion: g.version, reason: 'Not admitted' } })).statusCode).toBe(403);
+    await pool.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1 AND user_id=$2", [g.id, owner.id]);
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(owner, key), payload })).statusCode).toBe(403);
+    // Creator remains confirmed participant → readonly GET retained.
+    const revokedGet = await app.inject({ url, headers: bearer(owner) });
+    expect(revokedGet.statusCode).toBe(200);
+    expect(revokedGet.json()).toMatchObject({ status: 'organizer_confirmed', version: 2, allowedActions: { canUpdate: false } });
+    await app.get(SessionService).revokeSession(owner.sessionId);
+    expect((await app.inject({ url, headers: bearer(owner) })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'PUT', url, headers: bearer(owner), payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(401);
+  });
   it('native bearer game-preferences PATCH lifecycle: save/remove, CAS409, key replay/mismatch, cookie CSRF and revoked bearer', async () => {
     const owner = await actor(), outsider = await actor();
     const empty = await app.inject({url:'/v1/me/game-preferences',headers:bearer(owner)});

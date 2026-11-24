@@ -12,6 +12,7 @@ import {
 } from '../../src/components/game-role-reputation.tsx';
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { canApply, dominantParticipation, participationLabels } from '../../src/participation.ts';
+import { GameCourtBookingPanel } from '../../src/components/game-court-booking.tsx';
 import { BackLink, ErrorState, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from '../../src/components/ui.tsx';
 
 export default function PublicGameDetails() {
@@ -73,6 +74,7 @@ export default function PublicGameDetails() {
         <GameDetailRoleLane role="organization" />
       </View>
       <ParticipationArea gameId={game.id} />
+      {authenticated ? <GameCourtBookingPanel gameId={game.id} proof="detail" /> : null}
     </GameDetailRoleReputation>}
   </Page>;
 }
