@@ -2064,7 +2064,7 @@ test('#522 FIX6: cover receipt onReceipt soft-refreshes management detail withou
     }
     if (path.startsWith('/me/games')) {
       managedCalls += 1;
-      const item = { id: gameId, version: row.version, management: { role: 'owner', createdByMe: true } };
+      const item = { ...fixture, id: gameId, status: 'draft' as const, version: row.version, management: { role: 'owner', createdByMe: true } };
       if (managedCalls === 1) return { items: [item], nextCursor: null };
       await secondManaged.promise;
       return { items: [{ ...item, version: row.version }], nextCursor: null };
