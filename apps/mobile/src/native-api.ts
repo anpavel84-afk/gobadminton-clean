@@ -41,6 +41,7 @@ import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
 import { gameContactPreferenceWire } from './game-contact-preference.ts';
+import { courtBookingWire, parseGameCourtBooking, type CourtBookingPacket } from './game-court-booking.ts';
 import { invitationCreateWire, type InvitationCreatePacket } from './invitation-authoring.ts';
 import type { GameContactPacket } from './game-contact-preference.ts';
 import {
@@ -639,6 +640,22 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     /** Closed PATCH own game-contact preference — Idempotency-Key + expectedVersion CAS; cookie CSRF stays on requirePrincipalMutation. */
     mutateGamePreferences: async (access: string, packet: GameContactPacket) =>
       parsePreferences(await request('/me/game-preferences', 'PATCH', gameContactPreferenceWire(packet.body), access, packet.key, true)),
+    /** Closed GET organizer-declared court booking — NativeBearer via requirePrincipal; private 404 when ineligible. */
+    gameCourtBooking: async (access: string, gameId: string) =>
+      parseGameCourtBooking(await request(`/games/${encodeURIComponent(gameId)}/court-booking`, 'GET', undefined, access, undefined, true), gameId),
+    /** Closed PUT court booking — Idempotency-Key + court-record expectedVersion CAS; cookie Origin/CSRF on requirePrincipalMutation. */
+    mutateGameCourtBooking: async (access: string, packet: CourtBookingPacket) =>
+      parseGameCourtBooking(
+        await request(
+          `/games/${encodeURIComponent(packet.gameId)}/court-booking`,
+          'PUT',
+          courtBookingWire(packet.body),
+          access,
+          packet.key,
+          true,
+        ),
+        packet.gameId,
+      ),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),
     /** Full own TrainerProfile DTO for editor CAS — genuine 404 → null; other failures stay errors. */
     ownTrainerProfile: async (access: string) => {

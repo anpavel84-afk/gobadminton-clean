@@ -20817,10 +20817,13 @@
           "Games"
         ],
         "summary": "Read organizer-declared court-booking status for a game",
-        "description": "#386. Active session required. Current active owner/manager or confirmed participant (same private venue-contacts audience). Returns singleton DTO; missing row projects unspecified/version 0/updatedAt null. no-store. Foreign/missing → indistinguishable private 404. Never public/list/map projection. Status is organizer_declared only — not provider-verified.",
+        "description": "#386 + #522. Active session required. Current active owner/manager or confirmed participant (same private venue-contacts audience). Returns singleton DTO; missing row projects unspecified/version 0/updatedAt null. no-store. Foreign/missing → indistinguishable private 404. Never public/list/map projection. Status is organizer_declared only — not provider-verified. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -20883,10 +20886,13 @@
           "Games"
         ],
         "summary": "Update organizer-declared court-booking status",
-        "description": "#386. Current active owner/manager only via GameAuthority. expectedVersion + Idempotency-Key + cookie/Origin/CSRF + MutationRunner. Same-key same-body recovers one effect; stale expectedVersion → conflict. Statuses: unspecified|arranging|organizer_confirmed|not_arranged. declarationSource always organizer_declared. No booking provider/payments.",
+        "description": "#386 + #522. Current active owner/manager only via GameAuthority. expectedVersion + Idempotency-Key + MutationRunner. Same-key same-body recovers one effect; stale expectedVersion → conflict. Statuses: unspecified|arranging|organizer_confirmed|not_arranged. declarationSource always organizer_declared. No booking provider/payments. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -20905,19 +20911,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "requestBody": {

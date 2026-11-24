@@ -195,6 +195,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `invitation-game-navigation.test.ts` + Messages/MyGames wiring; source APK counter 47 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native Open game readable-game parity; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-14 · Native court arrangement status read + manager update (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameCourtBooking` / GameDetail + OwnedGameSummary; GET/PUT `/games/:gameId/court-booking` requirePrincipal / requirePrincipalMutation + OpenAPI NativeBearer; court-record CAS version; four organizer-declared statuses; disclaimer «Со слов организатора. Приложение не проверяет бронь.» |
+| Entry | Authenticated `/games/[id]` after confirmed or managed eligibility; managed summary when membership already resolved |
+| Trigger | Explicit panel load after eligibility; manager save with frozen Idempotency-Key + expectedVersion; manual UNKNOWN exact retry; focus/foreground/actor fences; no auto-write after login |
+| Expected | Manager edit vs participant readonly via `allowedActions.canUpdate`; denied/failed eligibility skips private GET; stale 409 requires authoritative reread; route/actor change retains unresolved UNKNOWN without repainting another game; cookie Origin/CSRF preserved for browser path |
+| Accessibility | Existing Russian labels + DiscoveryChip / PrimaryButton tokens; large-text/safe-area retained |
+| Non-scope | Booking provider/payments/capacity/participation policy; deps/migrations; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Mobile unit `game-court-booking.test.ts` + `auth.test.ts`; API unit mock rename + `native-game-management.foundation` native court case; source APK counter 48 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native court arrangement; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

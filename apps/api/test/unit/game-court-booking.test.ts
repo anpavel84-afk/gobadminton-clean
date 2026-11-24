@@ -58,8 +58,8 @@ describe("#386 court-booking policy and transport", () => {
     { headers: { origin: env.PUBLIC_WEB_ORIGIN, "x-csrf-token": "bad" }, cookies: { [SESSION_COOKIE]: "s" } },
   ])("auth rejects PUT before service: %j", async (request) => {
     const auth = {
-      requireCookieMutation: vi.fn().mockRejectedValue(new Error("auth")),
-      requireSession: vi.fn(),
+      requirePrincipalMutation: vi.fn().mockRejectedValue(new Error("auth")),
+      requirePrincipal: vi.fn(),
     };
     const put = vi.fn();
     const controller = new GameCourtBookingController(
@@ -71,12 +71,12 @@ describe("#386 court-booking policy and transport", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  it("preserves actor/session/idempotency key on PUT and session on GET", async () => {
+  it("preserves actor/session/idempotency key on PUT and principal on GET", async () => {
     const a = "10000000-0000-4000-8000-000000000001";
     const s = "10000000-0000-4000-8000-000000000002";
     const auth = {
-      requireCookieMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }),
-      requireSession: vi.fn().mockResolvedValue({ userId: a, sessionId: s }),
+      requirePrincipalMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }),
+      requirePrincipal: vi.fn().mockResolvedValue({ userId: a, sessionId: s }),
     };
     const put = vi.fn().mockResolvedValue({
       statusCode: 200,

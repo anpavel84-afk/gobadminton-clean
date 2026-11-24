@@ -12,6 +12,7 @@ import { ProfileCoverCoordinator } from './profile-cover.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
+import { GameCourtBookingCoordinator } from './game-court-booking.ts';
 import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
@@ -58,6 +59,7 @@ export class AuthCoordinator {
   readonly cover: ProfileCoverCoordinator;
   readonly trainer: TrainerProfileCoordinator;
   readonly gameContactPreference: GameContactPreferenceCoordinator;
+  readonly gameCourtBooking: GameCourtBookingCoordinator;
   readonly invitationAuthoring: InvitationAuthoringCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
@@ -171,6 +173,34 @@ export class AuthCoordinator {
     this.gameContactPreference = new GameContactPreferenceCoordinator({
       read: () => this.participationRead(access => deps.api.gamePreferences(access)),
       send: (packet, authority) => this.participationRead(access => deps.api.mutateGamePreferences(access, packet), authority),
+    }, deps.random);
+    // Organizer-declared court arrangement: GET/PUT principal opt-in; eligibility before private GET.
+    // Permit rechecked after token await on managed pages, private GET, and PUT — not PUT-only.
+    this.gameCourtBooking = new GameCourtBookingCoordinator({
+      detailParts: gameId => {
+        const detail = this.participation.getSnapshot().details[gameId];
+        // null = not ready yet (no speculative GET); error falls through to managed lookup.
+        if (!detail || detail.status === 'loading') return null;
+        if (detail.status === 'error') return [];
+        return detail.parts;
+      },
+      managedMembership: gameId => {
+        const detail = this.gameManagement.getSnapshot().details[gameId];
+        if (!detail || detail.status === 'loading') return null;
+        return detail.status === 'ready' && !!detail.management;
+      },
+      managed: (cursor, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.managedGames(access, cursor);
+      }),
+      read: (gameId, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.gameCourtBooking(access, gameId);
+      }),
+      send: (packet, authority, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.mutateGameCourtBooking(access, packet);
+      }, authority),
     }, deps.random);
     // avatar ↔ cover ↔ trainer busy fences are closed over `this` and resolve after fields exist.
     this.messages = new MessagesCoordinator({
@@ -343,7 +373,8 @@ export class AuthCoordinator {
     if (this.snapshot.status !== 'hydrating') {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
       this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
-      this.gameContactPreference.setActor(actor); this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
+      this.gameContactPreference.setActor(actor); this.gameCourtBooking.setActor(actor);
+      this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
     }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
@@ -741,6 +772,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.cover.forget();
     if (forgetCreation) this.trainer.forget();
     if (forgetCreation) this.gameContactPreference.forget();
+    if (forgetCreation) this.gameCourtBooking.forget();
     if (forgetCreation) this.invitationAuthoring.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
