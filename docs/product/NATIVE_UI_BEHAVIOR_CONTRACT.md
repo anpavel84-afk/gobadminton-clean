@@ -208,6 +208,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `game-court-booking.test.ts` + `auth.test.ts`; API unit mock rename + `native-game-management.foundation` native court case; source APK counter 48 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native court arrangement; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-15 · Native private game venue contacts (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameVenueContacts` / GameDetailPage; existing authenticated GET `/games/:id` (no new endpoint); server emits `contactPhone` / `contactWebsite` / `bookingNote` only for active owner/manager or confirmed participation; public omission authoritative |
+| Entry | Authenticated `/games/[id]` for current actor + validated displayed game/venue; issues its own bearer detail read even when public game read already succeeded |
+| Trigger | Focus lease load; foreground return refreshes; blur/unmount/logout/actor/session/game/venue change clears in-memory private projection; rendered link handlers carry actor/game/venue/focus/read/foreground + exact validated action |
+| Expected | Separate private projection never merges into `parseAuthenticatedGame` / publicApi / participation.games / managed lists / venue catalog; safe tel: and original-authority HTTP(S) only; booking note plain text ≤500; successful empty omits section; loading/error never advertise old private values; retired callbacks open zero URLs |
+| Accessibility | Labels «Контакты площадки» / «Телефон» / «Сайт» / «Информация о бронировании»; existing TextButton/Label tokens; open-failure copy from venue public links |
+| Non-scope | New API/deps/business policy; persistent private cache; frontend rights inference; device/OTA/iOS/full parity; PROD; Mode B READY claim |
+| Evidence | Mobile unit `private-game-venue-contacts.test.ts` + `auth.test.ts` + participation strip assertion; API `native-participation.foundation` bounded contacts case; source APK counter 49 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL private game venue contacts; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED / Device/OTA/iOS NOT_COMPLETE |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

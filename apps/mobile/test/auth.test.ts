@@ -29,7 +29,7 @@ const pending: PendingLogin = { generation: token('g'), clientId: NATIVE_CLIENT_
 const envelope: SecureEnvelope = { version: 1, generation: token('g'), returnPath: '/games/same-game', pending };
 const callback = `${NATIVE_REDIRECT}?code=${token('c')}&state=${token('s')}`;
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; };
-function setup(initial: unknown = null) {
+function setup(initial: unknown = null, options?: { openExternalUrl?: (url: string) => Promise<void> }) {
   let stored = initial === null ? null : JSON.stringify(initial), serial = 0;
   const calls: { path: string; init: RequestInit }[] = [];
   let handler = async (path: string, _init: RequestInit): Promise<unknown> => {
@@ -49,7 +49,8 @@ function setup(initial: unknown = null) {
     return value instanceof Response ? value : new Response(JSON.stringify(value));
   });
   const auth = new AuthCoordinator({ api, store, random: () => String.fromCharCode(65 + serial++).repeat(43),
-    challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'), now: () => now });
+    challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'), now: () => now,
+    openExternalUrl: options?.openExternalUrl });
   return { auth, store, calls, api, stored: () => stored, setHandler: (value: typeof handler) => { handler = value; } };
 }
 const sessionEnvelope = () => ({ version: 1, generation: token('g'), returnPath: '/games/same-game', session: {
@@ -1954,6 +1955,163 @@ test('#522 APK48: delayed token actor/view permit yields zero PUT', async () => 
   assert.equal(puts.length, 0);
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
+
+test('#522 APK49: private venue contacts AuthCoordinator fences, separate GET, logout clear', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.privateGameVenueContacts;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const venueId = '20000000-0000-4000-8000-000000000020';
+  const calls: { path: string; method?: string; auth?: string; credentials?: RequestCredentials }[] = [];
+  const detail = {
+    id: gameId, version: 1, title: 'Fixture', status: 'published', visibility: 'public',
+    organizer: { id: me.id, displayName: 'Host', publicContact: 'tg' },
+    venue: {
+      id: venueId, name: 'Hall', address: 'Addr', cityId: 'c', timezone: 'Europe/Moscow',
+      contactPhone: '+7 (999) 123-45-67', contactWebsite: 'https://example.org/booking', bookingNote: 'Note',
+    },
+    startsAt: '2026-12-01T10:00:00.000Z', endsAt: '2026-12-01T12:00:00.000Z',
+    applicationDeadlineAt: '2026-11-30T10:00:00.000Z', timezone: 'Europe/Moscow',
+    capacity: 4, confirmedCount: 1, externalReservedCount: 0, availablePlaces: 3,
+    formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+    settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'x' },
+    activityKind: 'regular', trainingDescription: null, trainer: null,
+  };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}`) {
+      const headers = (init.headers ?? {}) as Record<string, string>;
+      calls.push({
+        path,
+        method: init.method ?? 'GET',
+        auth: headers.Authorization,
+        credentials: init.credentials,
+      });
+      return detail;
+    }
+    return { ok: true };
+  });
+  owner.focus(gameId, venueId);
+  await owner.load();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.path, `/games/${gameId}`);
+  assert.equal(calls[0]!.auth, `Bearer ${credentials.accessToken}`);
+  assert.equal(calls[0]!.credentials, 'omit');
+  assert.equal(owner.getSnapshot().projection?.phone?.url, 'tel:+79991234567');
+  assert.equal(owner.getSnapshot().projection?.bookingNote, 'Note');
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.privateGameVenueContacts, owner);
+  assert.equal(owner.getSnapshot().projection?.phone?.url, 'tel:+79991234567');
+
+  const getCount = calls.length;
+  const permit = owner.renderedPermit(owner.getSnapshot().projection!.phone!);
+  assert.ok(permit);
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().projection, null);
+  assert.equal(await owner.open(permit!), 'blocked');
+  assert.equal(calls.length, getCount);
+});
+
+test('#522 APK49: delayed token surface permit yields zero private contacts GET', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.privateGameVenueContacts;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const venueId = '20000000-0000-4000-8000-000000000020';
+  const gets: string[] = [];
+  const refreshGate = deferred<unknown>();
+  s.setHandler(async (path) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshGate.promise;
+    if (path === `/games/${gameId}`) {
+      gets.push(path);
+      return {
+        id: gameId, version: 1, title: 'Fixture', status: 'published', visibility: 'public',
+        organizer: { id: me.id, displayName: 'Host', publicContact: 'tg' },
+        venue: { id: venueId, name: 'Hall', address: 'Addr', cityId: 'c', timezone: 'Europe/Moscow' },
+        startsAt: '2026-12-01T10:00:00.000Z', endsAt: '2026-12-01T12:00:00.000Z',
+        applicationDeadlineAt: '2026-11-30T10:00:00.000Z', timezone: 'Europe/Moscow',
+        capacity: 4, confirmedCount: 0, externalReservedCount: 0, availablePlaces: 4,
+        formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+        settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'x' },
+        activityKind: 'regular', trainingDescription: null, trainer: null,
+      };
+    }
+    return { ok: true };
+  });
+  // Force token rotation path so permit rechecks after await.
+  const refreshWork = s.auth.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.focus(gameId, venueId);
+  const loadWork = owner.load();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.setForeground(false);
+  refreshGate.resolve(credentials);
+  await Promise.all([loadWork, refreshWork]);
+  assert.equal(gets.length, 0);
+  assert.equal(owner.getSnapshot().projection, null);
+});
+
+test('#522 APK49: AuthCoordinator injected opener — current callback opens exact URL; actor/logout stale open zero', async () => {
+  const opens: string[] = [];
+  const s = setup(sessionEnvelope(), {
+    openExternalUrl: async url => { opens.push(url); },
+  });
+  await s.auth.hydrate();
+  const owner = s.auth.privateGameVenueContacts;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const venueId = '20000000-0000-4000-8000-000000000020';
+  const detail = {
+    id: gameId, version: 1, title: 'Fixture', status: 'published', visibility: 'public',
+    organizer: { id: me.id, displayName: 'Host', publicContact: 'tg' },
+    venue: {
+      id: venueId, name: 'Hall', address: 'Addr', cityId: 'c', timezone: 'Europe/Moscow',
+      contactPhone: '+7 (999) 123-45-67', contactWebsite: 'https://example.org/booking', bookingNote: 'Note',
+    },
+    startsAt: '2026-12-01T10:00:00.000Z', endsAt: '2026-12-01T12:00:00.000Z',
+    applicationDeadlineAt: '2026-11-30T10:00:00.000Z', timezone: 'Europe/Moscow',
+    capacity: 4, confirmedCount: 1, externalReservedCount: 0, availablePlaces: 3,
+    formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+    settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'x' },
+    activityKind: 'regular', trainingDescription: null, trainer: null,
+  };
+  s.setHandler(async (path) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}`) return detail;
+    return { ok: true };
+  });
+  owner.focus(gameId, venueId);
+  await owner.load();
+  const phone = owner.getSnapshot().projection?.phone;
+  const website = owner.getSnapshot().projection?.website;
+  assert.ok(phone);
+  assert.ok(website);
+  const phoneHandler = owner.createContactOpenHandler(phone);
+  const siteHandler = owner.createContactOpenHandler(website);
+  assert.ok(phoneHandler);
+  assert.ok(siteHandler);
+  // Admitted current AuthCoordinator callbacks invoke exact URLs via injected openExternalUrl.
+  phoneHandler();
+  siteHandler();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(opens, ['tel:+79991234567', 'https://example.org/booking']);
+
+  // AuthCoordinator logout clears actor/session and forgets projection; saved callbacks open zero more.
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().projection, null);
+  phoneHandler();
+  siteHandler();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(opens, ['tel:+79991234567', 'https://example.org/booking']);
+});
+
 test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

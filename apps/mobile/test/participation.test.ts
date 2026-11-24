@@ -143,9 +143,21 @@ test('coordinator boundary retains login on business rejection but clears all pr
 
 test('closed exact detail read validates real private Game without management and keeps public transport strict', async () => {
   const privateGame = { ...game, status: 'draft', visibility: 'unlisted' };
-  const parsed = parseAuthenticatedGame({ ...privateGame, privateExtra: 'discard' });
+  const parsed = parseAuthenticatedGame({
+    ...privateGame,
+    privateExtra: 'discard',
+    venue: {
+      ...privateGame.venue,
+      contactPhone: 'PRIVATE_PHONE',
+      contactWebsite: 'https://private.example',
+      bookingNote: 'PRIVATE_NOTE',
+    },
+  });
   assert.equal(parsed.status, 'draft'); assert.equal(parsed.visibility, 'unlisted');
   assert.equal('management' in parsed, false); assert.equal('privateExtra' in parsed, false);
+  assert.equal('contactPhone' in parsed.venue, false);
+  assert.equal('contactWebsite' in parsed.venue, false);
+  assert.equal('bookingNote' in parsed.venue, false);
   assert.throws(() => parseManagedGame(privateGame));
   for (const invalid of [{ ...privateGame, version: 0 }, { ...privateGame, venue: {} }, { ...privateGame, availablePlaces: -1 },
     { ...privateGame, settlement: { mode: 'external', purpose: 'trainer_fee', priceStatus: 'fixed', terms: '' } }]) {

@@ -13,6 +13,7 @@ import { GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
+import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
 import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
@@ -33,7 +34,15 @@ export type AuthSnapshot = {
   notice: 'unavailable' | 'signin' | 'storage' | 'network' | 'cancelled' | 'remote-unconfirmed' | null;
 };
 type Store = { getItem: (key: string) => Promise<string | null>; setItem: (key: string, value: string) => Promise<void> };
-export type AuthDependencies = { api: NativeApi; store: Store; random: () => string; challenge: (verifier: string) => Promise<string>; now?: () => number };
+export type AuthDependencies = {
+  api: NativeApi;
+  store: Store;
+  random: () => string;
+  challenge: (verifier: string) => Promise<string>;
+  now?: () => number;
+  /** Optional OS opener (e.g. Linking.openURL). Injected by auth-runtime; absent under node tests. */
+  openExternalUrl?: (url: string) => Promise<void>;
+};
 /** Sole owner of credentials, pending login and private caches. UI never receives bearer/refresh/verifier. */
 export class AuthCoordinator {
   private readonly deps: AuthDependencies;
@@ -60,6 +69,7 @@ export class AuthCoordinator {
   readonly trainer: TrainerProfileCoordinator;
   readonly gameContactPreference: GameContactPreferenceCoordinator;
   readonly gameCourtBooking: GameCourtBookingCoordinator;
+  readonly privateGameVenueContacts: PrivateGameVenueContactsCoordinator;
   readonly invitationAuthoring: InvitationAuthoringCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
@@ -202,6 +212,16 @@ export class AuthCoordinator {
         return deps.api.mutateGameCourtBooking(access, packet);
       }, authority),
     }, deps.random);
+    // Private game-detail venue contacts: existing GET /games/:id bearer only; never via gameDetail() shared parser.
+    // Surface/read permit rechecked after token await immediately before native-api.
+    // Opener is an injected AuthDependencies port (static Linking in auth-runtime) — no lazy RN require here.
+    this.privateGameVenueContacts = new PrivateGameVenueContactsCoordinator({
+      read: (gameId, venueId, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.privateGameVenueContacts(access, gameId, venueId);
+      }),
+      openUrl: deps.openExternalUrl,
+    });
     // avatar ↔ cover ↔ trainer busy fences are closed over `this` and resolve after fields exist.
     this.messages = new MessagesCoordinator({
       inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
@@ -374,6 +394,7 @@ export class AuthCoordinator {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
       this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
       this.gameContactPreference.setActor(actor); this.gameCourtBooking.setActor(actor);
+      this.privateGameVenueContacts.setActor(actor);
       this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
     }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
@@ -773,6 +794,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.trainer.forget();
     if (forgetCreation) this.gameContactPreference.forget();
     if (forgetCreation) this.gameCourtBooking.forget();
+    if (forgetCreation) this.privateGameVenueContacts.forget();
     if (forgetCreation) this.invitationAuthoring.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
