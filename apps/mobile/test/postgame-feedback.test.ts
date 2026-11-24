@@ -2463,7 +2463,7 @@ test('#522 APK42 layout-driven clarification reveal — section fence, delayed l
 
   // Delayed layout → scroll → complete; retired target ignores late layout.
   let completed: string | null = null;
-  let plan = planResultsSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
+  const plan = planResultsSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
   assert.equal(plan.kind, 'attempt');
   assert.deepEqual(planResultsRevealFromLayout({
     plan, layoutY: null, ...base,

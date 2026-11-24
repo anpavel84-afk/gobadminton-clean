@@ -479,7 +479,7 @@ test('#522 APK42 ClarificationSection layout reveal wiring — no measure loop; 
   assert.match(results, /ClarificationSection key=\{`\$\{actor\}:\$\{gameId\}:clarify`\}/);
   assert.match(results, /sectionRef=\{clarificationAnchor\}/);
   assert.match(results, /onSectionLayout=\{onClarificationLayout\}/);
-  assert.match(results, /showClarification=\!\!data\?\.attendance\?\.installed/);
+  assert.match(results, /showClarification=!!data\?\.attendance\?\.installed/);
   // Fresh results decide availability — route params never carry disputeId/contextId.
   assert.doesNotMatch(results, /params\.disputeId|params\.contextId/);
   assert.doesNotMatch(results, /section=clarification.*ACK|auto.*withdraw/i);
