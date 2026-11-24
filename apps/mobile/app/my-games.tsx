@@ -3,9 +3,12 @@ import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/auth.tsx';
 import { participationLabels } from '../src/participation.ts';
-import { hubRows, hubView, hubBucket, sortHubRows, pendingInviteCount } from '../src/my-games.ts';
+import {
+  hubRows, hubView, hubBucket, sortHubRows, pendingInviteCount,
+  ownAttendanceHistoryLine, ownAttendanceDisputeOpen, ownAttendanceResultsNavParams,
+  ownAttendancePendingNotice,
+} from '../src/my-games.ts';
 import type { HubRow } from '../src/my-games.ts';
-import { attendanceLabel, needsAttention } from '../src/postgame.ts';
 import { PublicApiError } from '../src/public-api.ts';
 import {
   bindPublicRoleFocusRef,
@@ -138,9 +141,21 @@ function OwnGame({ row, activeInvite, onActiveInvite }: {
     <View style={styles.card}>
       {row.managed && <><Label>{row.managed.management.role === 'owner' ? 'Создаю и управляю' : 'Управляю'}</Label><TextButton title="Управление игрой" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: row.gameId } })} /></>}
       {row.parts.map(part => <Label key={part.id}>{participationLabels[part.status]}</Label>)}
-      {row.own.map(r => <Label key={r.contextId}>{attendanceLabel(r.attendance.value)}{needsAttention(r) ? ' · Ждёт вашего ответа' : ''}</Label>)}
+      {row.own.map(r => <View key={r.contextId} style={{ gap: 4 }}>
+        <Label>{ownAttendanceHistoryLine(r)}</Label>
+        {ownAttendancePendingNotice(r) ? <Label>Ждёт вашего ответа</Label> : null}
+        <TextButton
+          title={ownAttendanceDisputeOpen(r) ? 'Уточнение открыто →' : 'Участники / Итоги →'}
+          onPress={() => router.push({
+            pathname: '/my-games/[gameId]/results',
+            params: ownAttendanceResultsNavParams(r),
+          })}
+        />
+      </View>)}
       {row.invites.length > 0 ? <MyGameInvitations invitations={row.invites} activeId={activeInvite} onActive={onActiveInvite} /> : null}
-      <TextButton title="Участники / Итоги" onPress={() => router.push({ pathname: '/my-games/[gameId]/results', params: { gameId: row.gameId } })} />
+      {row.own.length === 0
+        ? <TextButton title="Участники / Итоги" onPress={() => router.push({ pathname: '/my-games/[gameId]/results', params: { gameId: row.gameId } })} />
+        : null}
       {row.reminders.map(r => <ReminderActions key={r.id} item={r} />)}
     </View>
   </View>;

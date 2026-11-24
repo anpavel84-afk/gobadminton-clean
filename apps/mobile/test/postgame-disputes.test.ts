@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { URL as NodeURL } from 'node:url';
 import { createNativeApi } from '../src/native-api.ts';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import {
@@ -10,6 +12,8 @@ import {
 import type { AckReceipt, Attendance, AttendanceDispute, Intent, Packet, Receipt, Results, ResultsQuery } from '../src/postgame.ts';
 import type { Actor } from '../src/participation.ts';
 import { game as publicGame } from './fixtures.ts';
+
+const read = (path: string) => readFileSync(new NodeURL(path, import.meta.url), 'utf8');
 
 const game = { ...publicGame, version: 1 };
 const actor: Actor = { actorId: 'actor-a', sessionId: 'session-a', generation: 1 };
@@ -454,4 +458,29 @@ test('own attendance history lane stays reachable after closed dispute; core his
   assert.equal(history?.status, 'ready');
   assert.equal(history?.data?.items.length, 1);
   assert.equal(history?.data?.items[0]?.after.value, 'present');
+});
+
+test('#522 APK42 ClarificationSection layout reveal wiring — no measure loop; open/closed availability from fresh results', () => {
+  const ui = read('../src/components/postgame-disputes.tsx');
+  const results = read('../app/my-games/[gameId]/results.tsx');
+  assert.match(ui, /export function ClarificationSection/);
+  assert.match(ui, /sectionRef\?:/);
+  assert.match(ui, /onSectionLayout\?:/);
+  assert.match(ui, /collapsable=\{false\}/);
+  assert.match(ui, /onLayout=\{reportSectionLayout\}/);
+  assert.match(ui, /accessibilityRole="header"/);
+  assert.match(ui, /Нет открытого уточнения по вашей отметке/);
+  assert.doesNotMatch(ui, /measureLayout/);
+  assert.doesNotMatch(ui, /requestAnimationFrame/);
+  // Section never auto-writes disputes — only selectDispute for single open row.
+  assert.match(ui, /owner\.selectDispute/);
+  assert.doesNotMatch(ui, /owner\.review\(\{[\s\S]*kind: 'dispute'/);
+
+  assert.match(results, /ClarificationSection key=\{`\$\{actor\}:\$\{gameId\}:clarify`\}/);
+  assert.match(results, /sectionRef=\{clarificationAnchor\}/);
+  assert.match(results, /onSectionLayout=\{onClarificationLayout\}/);
+  assert.match(results, /showClarification=\!\!data\?\.attendance\?\.installed/);
+  // Fresh results decide availability — route params never carry disputeId/contextId.
+  assert.doesNotMatch(results, /params\.disputeId|params\.contextId/);
+  assert.doesNotMatch(results, /section=clarification.*ACK|auto.*withdraw/i);
 });

@@ -174,13 +174,13 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Field | Content |
 | --- | --- |
 | Authority | Accepted web `GameResultsComposition` clarification tab + existing attendance-dispute API; native `postgame` / `postgame-coordinator` / `postgame-disputes` on `/my-games/[gameId]/results` |
-| Entry | Authenticated results screen section «Уточнение» beside attendance; own «К уточнению» / roster «Открыть уточнение»; organizer multi-select by display name |
-| Trigger | Explicit create («Оспорить отметку» / «Попросить уточнение»), respond/correct, withdraw, help, resolving ACK, history; no silence/auto-help/auto-ACK |
-| Expected | Server `canDispute`/`canRespond`/`canWithdraw`/`canRequestHelp`/`canAcknowledgeCurrent` + writesEnabled only; missing-mark `challengedVersion` 0; correction keeps OPEN; withdraw ≠ agreement; help requested ≠ case linked; resolving ACK requires both dispute fields and matching `resolvedDispute` receipt; ordinary ACK unchanged; selection/draft fences; UNKNOWN exact-packet retry; bounded history limit, no cursor |
-| Accessibility | Named participant/action/result; keyboard-safe scroll; focus return to initiating control; busy/error/UNKNOWN announced |
-| Non-scope | Public comments/peer feedback/admin case resolution UI; PROD; APK30 binary/device claim |
-| Evidence | Mobile unit `postgame.test.ts` / `postgame-disputes.test.ts`; API `game-attendance-disputes.disposable` cookie + native bearer; source APK counter 30 |
-| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native PG-2 disputes source; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+| Entry | Authenticated results screen section «Уточнение» beside attendance; own «К уточнению» / roster «Открыть уточнение»; organizer multi-select by display name. MyGames own attendance row: value + late + human Russian source + version + pending notice; open dispute → «Уточнение открыто →» → `/my-games/[gameId]/results?section=clarification` (gameId+section only; no contextId/disputeId/text) |
+| Trigger | Explicit create («Оспорить отметку» / «Попросить уточнение»), respond/correct, withdraw, help, resolving ACK, history; no silence/auto-help/auto-ACK. Deep-link reveal is GET/selection only — never auto ACK/submit/dispute/reply/retry UNKNOWN |
+| Expected | Server `canDispute`/`canRespond`/`canWithdraw`/`canRequestHelp`/`canAcknowledgeCurrent` + writesEnabled only; missing-mark `challengedVersion` 0; correction keeps OPEN; withdraw ≠ agreement; help requested ≠ case linked; resolving ACK requires both dispute fields and matching `resolvedDispute` receipt; ordinary ACK unchanged; selection/draft fences; UNKNOWN exact-packet retry; bounded history limit, no cursor. Fresh results decide open clarification availability (stale closed dispute shows current no-open state). `section=clarification` deliberately reveals «Уточнение» via content-relative section onLayout after results layout settles (actor/session/game/section visit key; no late jump after route/target retire; feedback/clarification/normal flips preserve prior APK41 feedback reveal) |
+| Accessibility | Named participant/action/result; keyboard-safe scroll; focus return to initiating control; busy/error/UNKNOWN announced; screenreader heading focus on deep-link reveal; safe areas and Back preserved |
+| Non-scope | Public comments/peer feedback/admin case resolution UI; PROD; APK42 binary/device claim |
+| Evidence | Mobile unit `my-games.test.ts` / `postgame-feedback.test.ts` / `postgame-disputes.test.ts`; API `game-attendance-disputes.disposable` cookie + native bearer; source APK counter 42; layout-driven `section=clarification` reveal (onLayout, not ScrollView measureLayout) |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native PG-2 disputes + own-attendance clarification nav source; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
 ## R-05 · Postgame private personal notes (#522 PARTIAL)
 
