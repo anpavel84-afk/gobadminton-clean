@@ -10,12 +10,13 @@ import { FeedbackSection } from '../../../src/components/postgame-feedback.tsx';
 import { VenueExperienceEntry } from '../../../src/components/venue-experience-composer.tsx';
 import {
   feedbackRevealCachedLayoutRetained,
-  feedbackRevealTargetStillLive,
   nextFeedbackRevealCompletedKey,
-  parseResultsFeedbackSection,
-  planFeedbackRevealFromLayout,
-  planFeedbackSectionReveal,
+  parseResultsDeepLinkSection,
+  planResultsRevealFromLayout,
+  planResultsSectionReveal,
+  resultsRevealTargetStillLive,
   type FeedbackRevealLayoutScope,
+  type ResultsRevealSection,
 } from '../../../src/postgame-feedback.ts';
 import { feedbackSectionVisible, notesSectionVisible } from '../../../src/postgame.ts';
 import { BackLink, Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
@@ -24,47 +25,71 @@ export default function GameResults() {
   const s=useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot);
   const p=useSyncExternalStore(auth.participation.subscribe,auth.participation.getSnapshot,auth.participation.getSnapshot);
   const gameId=typeof params.gameId === 'string' && canonicalPostgamePath(`/my-games/${params.gameId}/results`) ? params.gameId : null;
-  const openFeedback=!!parseResultsFeedbackSection(params.section);
+  const deepLinkSection=parseResultsDeepLinkSection(params.section);
+  const openFeedback=deepLinkSection === 'feedback';
+  const openClarification=deepLinkSection === 'clarification';
   const actor=auth.me?.id,session=auth.me?.session.id;
   const current=auth.status === 'authenticated' && s.actor?.actorId === actor && s.actor?.sessionId === session;
   const scrollRef=useRef<ComponentRef<typeof ScrollView> | null>(null);
   const feedbackAnchor=useRef<ComponentRef<typeof View> | null>(null);
+  const clarificationAnchor=useRef<ComponentRef<typeof View> | null>(null);
   const focusedKey=useRef<string | null>(null);
   const feedbackLayoutY=useRef<number | null>(null);
-  const revealLive=useRef({openFeedback,showFeedback:false as boolean,gameId,actor,session});
+  const clarificationLayoutY=useRef<number | null>(null);
+  const revealLive=useRef({
+    deepLinkSection: deepLinkSection as ResultsRevealSection | null,
+    openFeedback,openClarification,showFeedback:false as boolean,showClarification:false as boolean,
+    gameId,actor,session,
+  });
   const layoutScope=useRef<FeedbackRevealLayoutScope>({gameId,actor,session,resultsStatus:undefined});
   useEffect(()=>{if(!current || !gameId) return; void owner.loadResults(gameId);void owner.loadReminders();void auth.participation.loadGame(gameId);},[current,gameId,owner,auth.participation,actor,session]);
   const state=current && gameId ? s.games[gameId] : undefined, data=state?.data, game=gameId ? p.games[gameId]?.game : undefined;
   const showNotes=!!gameId && notesSectionVisible(gameId, data, s.notes, s.knownNoteRefs);
   const showFeedback=!!gameId && (openFeedback || feedbackSectionVisible(gameId, data?.feedback, s.reviewHistory));
-  revealLive.current={openFeedback,showFeedback,gameId,actor,session};
-  // Drop prior content Y only when visit identity or results settlement changes — same-target section=feedback keeps geometry.
+  const showClarification=!!data?.attendance?.installed;
+  revealLive.current={deepLinkSection,openFeedback,openClarification,showFeedback,showClarification,gameId,actor,session};
+  // Drop prior content Y only when visit identity or results settlement changes — same-target section flips keep per-section geometry.
   useEffect(()=>{
     const next:FeedbackRevealLayoutScope={gameId,actor,session,resultsStatus:state?.status};
-    if(!feedbackRevealCachedLayoutRetained(layoutScope.current,next)) feedbackLayoutY.current=null;
+    if(!feedbackRevealCachedLayoutRetained(layoutScope.current,next)) {
+      feedbackLayoutY.current=null;
+      clarificationLayoutY.current=null;
+    }
     layoutScope.current=next;
   },[gameId,actor,session,state?.status]);
   const tryReveal=()=>{
     const live=revealLive.current;
-    const plan=planFeedbackSectionReveal({
-      openFeedback:live.openFeedback,showFeedback:live.showFeedback,gameId:live.gameId,
+    const section=live.deepLinkSection;
+    if(!section) return;
+    const openSection=section === 'feedback' ? live.openFeedback : live.openClarification;
+    const showSection=section === 'feedback' ? live.showFeedback : live.showClarification;
+    const layoutY=section === 'feedback' ? feedbackLayoutY.current : clarificationLayoutY.current;
+    const anchor=section === 'feedback' ? feedbackAnchor.current : clarificationAnchor.current;
+    const plan=planResultsSectionReveal({
+      openSection,showSection,section,gameId:live.gameId,
       resultsStatus:state?.status,completedKey:focusedKey.current,actor:live.actor,session:live.session,
     });
-    const decision=planFeedbackRevealFromLayout({
-      plan,layoutY:feedbackLayoutY.current,...live,
+    const decision=planResultsRevealFromLayout({
+      plan,layoutY,openSection,showSection,section,gameId:live.gameId,actor:live.actor,session:live.session,
     });
     if(decision.kind !== 'scroll') return;
     const scroll=scrollRef.current;
     if(!scroll) return;
-    if(!feedbackRevealTargetStillLive({expectedKey:decision.key,...revealLive.current})) return;
+    if(!resultsRevealTargetStillLive({
+      expectedKey:decision.key,openSection,showSection,section,gameId:live.gameId,actor:live.actor,session:live.session,
+    })) return;
     scroll.scrollTo({y:decision.y,animated:true});
     focusedKey.current=nextFeedbackRevealCompletedKey(focusedKey.current,decision.key,{ok:true});
-    const a11y=findNodeHandle(feedbackAnchor.current);
+    const a11y=findNodeHandle(anchor);
     if(a11y) AccessibilityInfo.setAccessibilityFocus(a11y);
   };
-  useEffect(()=>{tryReveal();},[openFeedback,showFeedback,gameId,actor,session,state?.status]);
+  useEffect(()=>{tryReveal();},[deepLinkSection,openFeedback,openClarification,showFeedback,showClarification,gameId,actor,session,state?.status]);
   const onFeedbackLayout=(layoutY:number)=>{
     feedbackLayoutY.current=layoutY;
+    tryReveal();
+  };
+  const onClarificationLayout=(layoutY:number)=>{
+    clarificationLayoutY.current=layoutY;
     tryReveal();
   };
   const back=()=>router.replace('/my-games');
@@ -81,7 +106,7 @@ export default function GameResults() {
         {data.attendance?.installed === false && <Label>Отметки посещения сейчас недоступны.</Label>}
         {data.attendance?.myAttendance && <AttendancePanel key={`${actor}:${gameId}:own`} row={data.attendance.myAttendance} gameId={gameId} own writes={data.attendance.writesEnabled} />}
         <Roster key={`${actor}:${gameId}:roster`} data={data} />
-        <ClarificationSection key={`${actor}:${gameId}:clarify`} data={data} />
+        <ClarificationSection key={`${actor}:${gameId}:clarify`} data={data} sectionRef={clarificationAnchor} onSectionLayout={onClarificationLayout} />
         {data.revisions && <View style={styles.card}><Label style={{fontWeight:'700'}}>История исхода</Label>{data.revisions.map(r=><View key={r.version}><Label>{r.after.value === 'held' ? 'Игра состоялась' : 'Игра не состоялась'} · {new Date(r.recordedAt).toLocaleString('ru')}</Label>{r.reason && <Label>{r.reason}</Label>}</View>)}
           {data.revisionsNextCursor && <TextButton title="Ещё изменения" onPress={()=>void owner.loadResults(gameId,{revisionsLimit:20,revisionsCursor:data.revisionsNextCursor ?? undefined},'revisions')} />}</View>}
       </>}

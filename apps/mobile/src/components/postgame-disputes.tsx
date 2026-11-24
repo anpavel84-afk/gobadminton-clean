@@ -1,5 +1,5 @@
-import { useEffect, useSyncExternalStore } from 'react';
-import { Platform, Switch, TextInput, View } from 'react-native';
+import { useEffect, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
+import { Platform, Switch, TextInput, View, type LayoutChangeEvent } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { attendanceHistoryLanes, attendanceLabel, mayAcknowledgeCurrent, normalizeFormReason } from '../postgame.ts';
 import type { AttendanceDispute, AttendanceValue, Results } from '../postgame.ts';
@@ -124,7 +124,14 @@ function DisputeDetailPanel({ detail, writes, displayName }: { detail: Attendanc
   </View>;
 }
 
-export function ClarificationSection({ data }: { data: Results }) {
+export function ClarificationSection({
+  data, sectionRef, onSectionLayout,
+}: {
+  data: Results;
+  /** Content-relative onLayout anchor for results section=clarification reveal. */
+  sectionRef?: RefObject<ComponentRef<typeof View> | null>;
+  onSectionLayout?: (layoutY: number) => void;
+}) {
   const { owner, s } = useOwner();
   const attendance = data.attendance;
   const installed = !!attendance?.installed;
@@ -145,6 +152,9 @@ export function ClarificationSection({ data }: { data: Results }) {
     && historyLanes.own?.contextId !== historyLanes.clarification.contextId
     ? historyLanes.clarification
     : null;
+  const reportSectionLayout = (event: LayoutChangeEvent) => {
+    onSectionLayout?.(event.nativeEvent.layout.y);
+  };
 
   // Hooks must run before any conditional return (installed gate).
   useEffect(() => {
@@ -156,7 +166,7 @@ export function ClarificationSection({ data }: { data: Results }) {
 
   if (!installed || !attendance) return null;
 
-  return <View style={{ gap: 12 }}>
+  return <View ref={sectionRef} collapsable={false} onLayout={reportSectionLayout} style={{ gap: 12 }} accessibilityLabel="Уточнение">
     <Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>Уточнение</Label>
     {opens.length > 1 ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }} accessibilityLabel="Открытые уточнения">
       {opens.map(row => {

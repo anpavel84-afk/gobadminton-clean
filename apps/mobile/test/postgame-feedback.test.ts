@@ -16,6 +16,7 @@ import {
 import {
   boundRoleDiscrepancyFieldError,
   FEEDBACK_REVEAL_SCROLL_INSET,
+  clarificationResultsNavParams,
   feedbackResultsNavParams,
   feedbackRevealCachedLayoutRetained,
   feedbackRevealFocusKey,
@@ -24,13 +25,18 @@ import {
   feedbackRevealTargetStillLive,
   formatPrivateReviewWhen,
   nextFeedbackRevealCompletedKey,
+  parseResultsDeepLinkSection,
   parseResultsFeedbackSection,
   peerReviewHistoryLabel,
   planFeedbackRevealFromLayout,
   planFeedbackSectionReveal,
+  planResultsRevealFromLayout,
+  planResultsSectionReveal,
   privateHubHistoryEmptyText,
   privateReviewHistoryDetail,
   privateReviewKindHistoryLabel,
+  resultsRevealFocusKey,
+  resultsRevealTargetStillLive,
   roleDiscrepancyActiveDecision,
   roleDiscrepancyContextFromResults,
   roleDiscrepancyDecisionFromError,
@@ -2186,9 +2192,9 @@ test('#522 hub private feedback history helpers + read-only loadReviews (no writ
 test('#522 APK41 layout-driven feedback reveal — wait results, onLayout offset, no late jump', () => {
   const resultsUi = readFileSync(new NodeURL('../app/my-games/[gameId]/results.tsx', import.meta.url), 'utf8');
   const panelUi = readFileSync(new NodeURL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
-  assert.match(resultsUi, /planFeedbackSectionReveal/);
-  assert.match(resultsUi, /planFeedbackRevealFromLayout/);
-  assert.match(resultsUi, /feedbackRevealTargetStillLive/);
+  assert.match(resultsUi, /planResultsSectionReveal/);
+  assert.match(resultsUi, /planResultsRevealFromLayout/);
+  assert.match(resultsUi, /resultsRevealTargetStillLive/);
   assert.match(resultsUi, /feedbackRevealCachedLayoutRetained/);
   assert.match(resultsUi, /nextFeedbackRevealCompletedKey/);
   assert.match(resultsUi, /onSectionLayout=\{onFeedbackLayout\}/);
@@ -2199,10 +2205,10 @@ test('#522 APK41 layout-driven feedback reveal — wait results, onLayout offset
   assert.doesNotMatch(resultsUi, /findNodeHandle\(scroll\)/);
   assert.doesNotMatch(resultsUi, /requestAnimationFrame/);
   assert.doesNotMatch(resultsUi, /feedbackRevealShouldRetryMeasurement/);
-  // Layout-cache effect deps are visit/settlement only — openFeedback flip must not clear cachedY.
+  // Layout-cache effect deps are visit/settlement only — section flip must not clear via open* alone.
   assert.match(
     resultsUi,
-    /feedbackRevealCachedLayoutRetained\(layoutScope\.current,next\)\) feedbackLayoutY\.current=null;[\s\S]*?\},\[gameId,actor,session,state\?\.status\]/,
+    /feedbackRevealCachedLayoutRetained\(layoutScope\.current,next\)[\s\S]*?feedbackLayoutY\.current=null;[\s\S]*?clarificationLayoutY\.current=null;[\s\S]*?\},\[gameId,actor,session,state\?\.status\]/,
   );
   assert.match(resultsUi, /type ComponentRef/);
   assert.match(panelUi, /collapsable=\{false\}/);
@@ -2371,5 +2377,142 @@ test('#522 APK41 layout-driven feedback reveal — wait results, onLayout offset
     planFeedbackRevealFromLayout({ plan: afterSettle, layoutY: cachedY, ...base }),
     { kind: 'wait_layout' },
   );
+});
+
+test('#522 APK42 layout-driven clarification reveal — section fence, delayed layout, feedback flip', () => {
+  const resultsUi = readFileSync(new NodeURL('../app/my-games/[gameId]/results.tsx', import.meta.url), 'utf8');
+  const disputesUi = readFileSync(new NodeURL('../src/components/postgame-disputes.tsx', import.meta.url), 'utf8');
+  assert.match(resultsUi, /parseResultsDeepLinkSection\(params\.section\)/);
+  assert.match(resultsUi, /openClarification/);
+  assert.match(resultsUi, /showClarification/);
+  assert.match(resultsUi, /clarificationAnchor/);
+  assert.match(resultsUi, /onSectionLayout=\{onClarificationLayout\}/);
+  assert.match(resultsUi, /clarificationLayoutY\.current/);
+  assert.match(resultsUi, /deepLinkSection === 'clarification'/);
+  assert.match(resultsUi, /section === 'feedback' \? live\.openFeedback : live\.openClarification/);
+  assert.doesNotMatch(resultsUi, /measureLayout/);
+  assert.doesNotMatch(resultsUi, /requestAnimationFrame/);
+  assert.match(disputesUi, /sectionRef/);
+  assert.match(disputesUi, /onSectionLayout/);
+  assert.match(disputesUi, /collapsable=\{false\}/);
+  assert.match(disputesUi, /onLayout=\{reportSectionLayout\}/);
+  assert.match(disputesUi, /accessibilityLabel="Уточнение"/);
+
+  assert.equal(parseResultsDeepLinkSection('clarification'), 'clarification');
+  assert.equal(parseResultsDeepLinkSection('feedback'), 'feedback');
+  assert.equal(parseResultsDeepLinkSection(undefined), null);
+  assert.deepEqual(clarificationResultsNavParams(game.id), { gameId: game.id, section: 'clarification' });
+
+  const clarifyKey = resultsRevealFocusKey(actor.actorId, actor.sessionId, game.id, 'clarification');
+  const feedbackKey = feedbackRevealFocusKey(actor.actorId, actor.sessionId, game.id);
+  assert.equal(clarifyKey, `${actor.actorId}:${actor.sessionId}:${game.id}:clarification`);
+  assert.notEqual(clarifyKey, feedbackKey);
+
+  const base = {
+    openSection: true,
+    showSection: true,
+    section: 'clarification' as const,
+    gameId: game.id,
+    completedKey: null as string | null,
+    actor: actor.actorId,
+    session: actor.sessionId,
+  };
+
+  assert.deepEqual(
+    planResultsSectionReveal({ ...base, resultsStatus: 'loading' }),
+    { kind: 'wait_layout' },
+  );
+  assert.deepEqual(
+    planResultsSectionReveal({ ...base, resultsStatus: 'ready' }),
+    { kind: 'attempt', key: clarifyKey },
+  );
+  assert.deepEqual(
+    planResultsSectionReveal({ ...base, openSection: false, resultsStatus: 'ready' }),
+    { kind: 'idle' },
+  );
+  assert.deepEqual(
+    planResultsSectionReveal({ ...base, showSection: false, resultsStatus: 'ready' }),
+    { kind: 'idle' },
+  );
+  assert.deepEqual(
+    planResultsSectionReveal({ ...base, resultsStatus: 'ready', completedKey: clarifyKey }),
+    { kind: 'already_complete' },
+  );
+  // Completed feedback visit must not block clarification on the same mount.
+  assert.deepEqual(
+    planResultsSectionReveal({ ...base, resultsStatus: 'ready', completedKey: feedbackKey }),
+    { kind: 'attempt', key: clarifyKey },
+  );
+
+  assert.equal(resultsRevealTargetStillLive({
+    expectedKey: clarifyKey, openSection: true, showSection: true, section: 'clarification',
+    gameId: game.id, actor: actor.actorId, session: actor.sessionId,
+  }), true);
+  assert.equal(resultsRevealTargetStillLive({
+    expectedKey: clarifyKey, openSection: true, showSection: true, section: 'feedback',
+    gameId: game.id, actor: actor.actorId, session: actor.sessionId,
+  }), false);
+  assert.equal(resultsRevealTargetStillLive({
+    expectedKey: clarifyKey, openSection: false, showSection: true, section: 'clarification',
+    gameId: game.id, actor: actor.actorId, session: actor.sessionId,
+  }), false);
+  assert.equal(resultsRevealTargetStillLive({
+    expectedKey: clarifyKey, openSection: true, showSection: true, section: 'clarification',
+    gameId: 'other-game', actor: actor.actorId, session: actor.sessionId,
+  }), false);
+
+  // Delayed layout → scroll → complete; retired target ignores late layout.
+  let completed: string | null = null;
+  const plan = planResultsSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
+  assert.equal(plan.kind, 'attempt');
+  assert.deepEqual(planResultsRevealFromLayout({
+    plan, layoutY: null, ...base,
+  }), { kind: 'wait_layout' });
+  const scroll = planResultsRevealFromLayout({ plan, layoutY: 360, ...base });
+  assert.deepEqual(scroll, {
+    kind: 'scroll', key: clarifyKey, y: 360 - FEEDBACK_REVEAL_SCROLL_INSET,
+  });
+  if (scroll.kind === 'scroll') {
+    completed = nextFeedbackRevealCompletedKey(completed, scroll.key, { ok: true });
+  }
+  assert.equal(completed, clarifyKey);
+  assert.deepEqual(planResultsRevealFromLayout({
+    plan: { kind: 'attempt', key: clarifyKey }, layoutY: 900, ...base, openSection: false,
+  }), { kind: 'ignore' });
+
+  // Same-mounted flip: feedback → clarification uses distinct keys and layout Y.
+  const feedbackBase = {
+    openFeedback: true, showFeedback: true, gameId: game.id,
+    completedKey: null as string | null, actor: actor.actorId, session: actor.sessionId,
+  };
+  const fbPlan = planFeedbackSectionReveal({ ...feedbackBase, resultsStatus: 'ready' });
+  assert.equal(fbPlan.kind, 'attempt');
+  if (fbPlan.kind === 'attempt') {
+    assert.equal(fbPlan.key, feedbackKey);
+  }
+  const clarifyAfterFeedback = planResultsSectionReveal({
+    ...base, resultsStatus: 'ready', completedKey: feedbackKey,
+  });
+  assert.deepEqual(clarifyAfterFeedback, { kind: 'attempt', key: clarifyKey });
+  assert.deepEqual(
+    planResultsRevealFromLayout({
+      plan: clarifyAfterFeedback, layoutY: 280, ...base,
+    }),
+    { kind: 'scroll', key: clarifyKey, y: 280 - FEEDBACK_REVEAL_SCROLL_INSET },
+  );
+
+  // Ordinary entry (no section) idles; feedback wrappers still work for APK41 path.
+  assert.equal(parseResultsDeepLinkSection(null), null);
+  assert.deepEqual(
+    planFeedbackSectionReveal({
+      openFeedback: false, showFeedback: true, gameId: game.id, resultsStatus: 'ready',
+      completedKey: null, actor: actor.actorId, session: actor.sessionId,
+    }),
+    { kind: 'idle' },
+  );
+  assert.equal(feedbackRevealTargetStillLive({
+    expectedKey: feedbackKey, openFeedback: true, showFeedback: true, gameId: game.id,
+    actor: actor.actorId, session: actor.sessionId,
+  }), true);
 });
 

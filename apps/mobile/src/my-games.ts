@@ -2,9 +2,53 @@ import type { Game, Participation } from '@gobadminton/contracts/game-types';
 import type { GameInvitation } from './messages.ts';
 import type { ManagedGame } from './participation.ts';
 import type { OwnResult, Reminder } from './postgame.ts';
-import { needsAttention } from './postgame.ts';
+import { attendanceLabel, needsAttention } from './postgame.ts';
 import type { Filter } from './postgame-coordinator.ts';
 export type HubRow = { gameId: string; managed?: ManagedGame; parts: Participation[]; own: OwnResult[]; reminders: Reminder[]; invites: GameInvitation[] };
+
+/** Human Russian source labels — web `attendanceSourceLabel` / native AttendancePanel parity. Never expose enums. */
+export function attendanceSourceLabel(
+  source: OwnResult['attendance']['assertion']['source'],
+): string {
+  if (source === 'self_attested') return 'Сами отметили';
+  if (source === 'manager_explicit') return 'Отметил организатор';
+  if (source === 'case_reviewer') return 'Решение по обращению';
+  return 'Источник неизвестен';
+}
+
+/** Compact own-history attendance line — web OwnResultsHistoryCard parity (value/late/source/version). */
+export function ownAttendanceHistoryLine(item: OwnResult): string {
+  const source = item.attendance.assertion.source
+    ? attendanceSourceLabel(item.attendance.assertion.source)
+    : null;
+  return `Ваша отметка: ${attendanceLabel(item.attendance.value)}`
+    + (item.attendance.late ? ' · опоздание' : '')
+    + (source ? ` · ${source}` : '')
+    + ` · v${item.attendance.version}`;
+}
+
+/** Open dispute on this own row only — fresh projection; closed/withdrawn/absent → false. */
+export function ownAttendanceDisputeOpen(item: OwnResult): boolean {
+  return item.attendance.dispute?.status === 'open';
+}
+
+/**
+ * Exact-game results params from an own attendance row.
+ * Open dispute → section=clarification; otherwise ordinary results. Never carries contextId/disputeId/text.
+ */
+export function ownAttendanceResultsNavParams(
+  item: OwnResult,
+): { gameId: string; section?: 'clarification' } {
+  if (ownAttendanceDisputeOpen(item)) {
+    return { gameId: item.gameId, section: 'clarification' };
+  }
+  return { gameId: item.gameId };
+}
+
+/** Pending notice pill — existing needsAttention semantics (unacked external current notice). */
+export function ownAttendancePendingNotice(item: OwnResult): boolean {
+  return needsAttention(item);
+}
 /** Preserve every independent relation/context while deduplicating the game surface by real gameId. */
 export function hubRows(managed: ManagedGame[], parts: Participation[], own: OwnResult[], reminders: Reminder[], invites: GameInvitation[] = []): HubRow[] {
   const map=new Map<string,HubRow>();

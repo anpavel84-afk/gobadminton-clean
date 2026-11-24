@@ -6,12 +6,18 @@ import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
 import { MessagesCoordinator } from '../src/messages-coordinator.ts';
 import type { GameInvitation } from '../src/messages.ts';
 import { MessagesError, parseInvitationPage } from '../src/messages.ts';
-import { hubRows, hubView, matchesFilter, pendingInviteCount, isPendingInvite, isInviteClockExpired, hubBucket } from '../src/my-games.ts';
+import {
+  hubRows, hubView, matchesFilter, pendingInviteCount, isPendingInvite, isInviteClockExpired, hubBucket,
+  attendanceSourceLabel, ownAttendanceHistoryLine, ownAttendanceDisputeOpen,
+  ownAttendanceResultsNavParams, ownAttendancePendingNotice,
+} from '../src/my-games.ts';
 import type { Actor } from '../src/participation.ts';
 import type { OwnResult, Reminder } from '../src/postgame.ts';
 import { PostgameError } from '../src/postgame.ts';
 import {
+  clarificationResultsNavParams,
   feedbackResultsNavParams,
+  parseResultsDeepLinkSection,
   parseResultsFeedbackSection,
   peerReviewHistoryLabel,
   privateHubHistoryEmptyText,
@@ -445,7 +451,7 @@ test('#522 MyGames private feedback history entry + exact section=feedback resul
   assert.doesNotMatch(panel, /params:\s*\{[^}]*recipientDisplay/);
 
   const results = read('../app/my-games/[gameId]/results.tsx');
-  assert.match(results, /parseResultsFeedbackSection\(params\.section\)/);
+  assert.match(results, /parseResultsDeepLinkSection\(params\.section\)/);
   assert.match(results, /openFeedback=\{openFeedback\}/);
   assert.match(results, /sectionRef=\{feedbackAnchor\}/);
   assert.match(results, /openFeedback \|\| feedbackSectionVisible/);
@@ -455,8 +461,12 @@ test('#522 MyGames private feedback history entry + exact section=feedback resul
   assert.equal(Object.keys(params).sort().join(','), 'gameId,section');
   assert.equal(parseResultsFeedbackSection('feedback'), 'feedback');
   assert.equal(parseResultsFeedbackSection('attendance'), null);
+  assert.equal(parseResultsFeedbackSection('clarification'), null);
   assert.equal(parseResultsFeedbackSection(['feedback', 'x']), 'feedback');
   assert.equal(parseResultsFeedbackSection(undefined), null);
+  assert.equal(parseResultsDeepLinkSection('feedback'), 'feedback');
+  assert.equal(parseResultsDeepLinkSection('clarification'), 'clarification');
+  assert.equal(parseResultsDeepLinkSection('attendance'), null);
   assert.equal(privateHubHistoryEmptyText('received'), 'Пока нет полученных отзывов');
   assert.equal(privateHubHistoryEmptyText('sent'), 'Пока нет отправленных отзывов');
   assert.equal(peerReviewHistoryLabel('play_again'), 'Сыграл бы снова');
@@ -469,4 +479,116 @@ test('#522 MyGames private feedback history entry + exact section=feedback resul
     createdAt: '2026-11-14T10:00:00Z', direction: 'sent', reply: null,
     allowedActions: { canEdit: false, canReply: false, canReport: false },
   }), 'Оценка 4 из 5');
+});
+
+test('#522 APK42 MyGames own attendance source/late/version + open clarification nav parity', () => {
+  const screen = read('../app/my-games.tsx');
+  assert.match(screen, /ownAttendanceHistoryLine\(r\)/);
+  assert.match(screen, /ownAttendancePendingNotice\(r\)/);
+  assert.match(screen, /ownAttendanceDisputeOpen\(r\)/);
+  assert.match(screen, /ownAttendanceResultsNavParams\(r\)/);
+  assert.match(screen, /Уточнение открыто →/);
+  assert.match(screen, /Участники \/ Итоги →/);
+  assert.match(screen, /row\.own\.length === 0/);
+  assert.doesNotMatch(screen, /params:\s*\{[^}]*contextId/);
+  assert.doesNotMatch(screen, /params:\s*\{[^}]*disputeId/);
+  assert.doesNotMatch(screen, /self_attested/);
+  assert.doesNotMatch(screen, /manager_explicit/);
+
+  assert.equal(attendanceSourceLabel('self_attested'), 'Сами отметили');
+  assert.equal(attendanceSourceLabel('manager_explicit'), 'Отметил организатор');
+  assert.equal(attendanceSourceLabel('case_reviewer'), 'Решение по обращению');
+  assert.equal(attendanceSourceLabel(null), 'Источник неизвестен');
+
+  const present: OwnResult = {
+    ...own,
+    attendance: {
+      ...own.attendance,
+      value: 'present', version: 2, late: true,
+      assertion: { actorDisplay: 'Я', source: 'self_attested', at: date },
+      dispute: null,
+    },
+    notice: null,
+  };
+  assert.equal(
+    ownAttendanceHistoryLine(present),
+    'Ваша отметка: Пришёл · опоздание · Сами отметили · v2',
+  );
+  assert.equal(ownAttendanceDisputeOpen(present), false);
+  assert.deepEqual(ownAttendanceResultsNavParams(present), { gameId: game.id });
+  assert.equal(ownAttendancePendingNotice(present), false);
+
+  const open: OwnResult = {
+    ...present,
+    attendance: {
+      ...present.attendance,
+      late: false,
+      assertion: { actorDisplay: 'Организатор', source: 'manager_explicit', at: date },
+      dispute: { id: 'dispute-a', status: 'open', challengedVersion: 2, version: 1 },
+    },
+  };
+  assert.equal(
+    ownAttendanceHistoryLine(open),
+    'Ваша отметка: Пришёл · Отметил организатор · v2',
+  );
+  assert.equal(ownAttendanceDisputeOpen(open), true);
+  assert.deepEqual(ownAttendanceResultsNavParams(open), { gameId: game.id, section: 'clarification' });
+  assert.equal(Object.keys(ownAttendanceResultsNavParams(open)).sort().join(','), 'gameId,section');
+
+  const closed: OwnResult = {
+    ...open,
+    attendance: {
+      ...open.attendance,
+      dispute: { id: 'dispute-a', status: 'withdrawn', challengedVersion: 2, version: 2 },
+    },
+  };
+  assert.equal(ownAttendanceDisputeOpen(closed), false);
+  assert.deepEqual(ownAttendanceResultsNavParams(closed), { gameId: game.id });
+
+  const absentDispute: OwnResult = {
+    ...present,
+    attendance: { ...present.attendance, dispute: null },
+  };
+  assert.equal(ownAttendanceDisputeOpen(absentDispute), false);
+
+  const pending: OwnResult = {
+    ...present,
+    attendance: {
+      ...present.attendance,
+      version: 3, late: false,
+      assertion: { actorDisplay: 'Организатор', source: 'manager_explicit', at: date },
+    },
+    notice: {
+      id: 'n1', attendanceVersion: 3, value: 'present', late: false,
+      source: 'manager_explicit', actorDisplay: 'Организатор', createdAt: date, acknowledgedAt: null,
+    },
+  };
+  assert.equal(ownAttendancePendingNotice(pending), true);
+  assert.match(ownAttendanceHistoryLine(pending), /Отметил организатор · v3/);
+
+  const personalOnly: OwnResult = {
+    ...own,
+    gameTitle: null,
+    attendance: {
+      ...own.attendance,
+      value: 'absent', version: 1, late: false,
+      assertion: { actorDisplay: null, source: 'case_reviewer', at: date },
+      dispute: { id: 'd-open', status: 'open', challengedVersion: 1, version: 1 },
+      // Personal projection still shows available attendance fields — never invents level/payment.
+      displayName: 'Я',
+    },
+  };
+  assert.equal(
+    ownAttendanceHistoryLine(personalOnly),
+    'Ваша отметка: Не пришёл · Решение по обращению · v1',
+  );
+  assert.deepEqual(ownAttendanceResultsNavParams(personalOnly), {
+    gameId: game.id, section: 'clarification',
+  });
+
+  const clarifyParams = clarificationResultsNavParams('game-abc_1');
+  assert.deepEqual(clarifyParams, { gameId: 'game-abc_1', section: 'clarification' });
+  assert.equal(Object.keys(clarifyParams).sort().join(','), 'gameId,section');
+  assert.equal(parseResultsDeepLinkSection(['clarification', 'x']), 'clarification');
+  assert.equal(parseResultsDeepLinkSection('unknown'), null);
 });

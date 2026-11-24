@@ -597,11 +597,24 @@ export function displayOnlyReview(row: PrivateReview): PrivateReview {
   };
 }
 
-/** Exact-game results source statuses used to gate feedback deep-link reveal. */
+/** Exact-game results source statuses used to gate feedback/clarification deep-link reveal. */
 export type FeedbackRevealResultsStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
 
-/** Content-relative inset above «Как вам встреча?» for deliberate deep-link scroll. */
+/** Admitted results deep-link sections that drive layout-gated reveal. */
+export type ResultsRevealSection = 'feedback' | 'clarification';
+
+/** Content-relative inset above the target section for deliberate deep-link scroll. */
 export const FEEDBACK_REVEAL_SCROLL_INSET = 16;
+
+/** Stable focus key for one actor/session/game/section deep-link visit. */
+export function resultsRevealFocusKey(
+  actor: string | null | undefined,
+  session: string | null | undefined,
+  gameId: string,
+  section: ResultsRevealSection,
+): string {
+  return `${actor ?? ''}:${session ?? ''}:${gameId}:${section}`;
+}
 
 /** Stable focus key for one actor/session/game feedback deep-link visit. */
 export function feedbackRevealFocusKey(
@@ -609,7 +622,7 @@ export function feedbackRevealFocusKey(
   session: string | null | undefined,
   gameId: string,
 ): string {
-  return `${actor ?? ''}:${session ?? ''}:${gameId}:feedback`;
+  return resultsRevealFocusKey(actor, session, gameId, 'feedback');
 }
 
 /**
@@ -651,6 +664,17 @@ export function feedbackRevealCachedLayoutRetained(
     && prior.resultsStatus === next.resultsStatus;
 }
 
+export type ResultsSectionRevealAttemptGate = {
+  openSection: boolean;
+  showSection: boolean;
+  section: ResultsRevealSection;
+  gameId: string | null;
+  resultsStatus: FeedbackRevealResultsStatus | undefined;
+  completedKey: string | null;
+  actor?: string | null;
+  session?: string | null;
+};
+
 export type FeedbackRevealAttemptGate = {
   openFeedback: boolean;
   showFeedback: boolean;
@@ -668,15 +692,33 @@ export type FeedbackRevealAttempt =
   | { kind: 'attempt'; key: string };
 
 /**
+ * Plan deep-link section reveal: wait for settled results layout; never consume the
+ * visit key before a successful layout-driven scroll (caller marks complete separately).
+ * Section is part of the visit key so feedback ↔ clarification flips do not stale-focus.
+ */
+export function planResultsSectionReveal(gate: ResultsSectionRevealAttemptGate): FeedbackRevealAttempt {
+  if (!gate.openSection || !gate.showSection || !gate.gameId) return { kind: 'idle' };
+  const key = resultsRevealFocusKey(gate.actor, gate.session, gate.gameId, gate.section);
+  if (gate.completedKey === key) return { kind: 'already_complete' };
+  if (!feedbackRevealResultsLayoutSettled(gate.resultsStatus)) return { kind: 'wait_layout' };
+  return { kind: 'attempt', key };
+}
+
+/**
  * Plan deep-link feedback reveal: wait for settled results layout; never consume the
  * visit key before a successful layout-driven scroll (caller marks complete separately).
  */
 export function planFeedbackSectionReveal(gate: FeedbackRevealAttemptGate): FeedbackRevealAttempt {
-  if (!gate.openFeedback || !gate.showFeedback || !gate.gameId) return { kind: 'idle' };
-  const key = feedbackRevealFocusKey(gate.actor, gate.session, gate.gameId);
-  if (gate.completedKey === key) return { kind: 'already_complete' };
-  if (!feedbackRevealResultsLayoutSettled(gate.resultsStatus)) return { kind: 'wait_layout' };
-  return { kind: 'attempt', key };
+  return planResultsSectionReveal({
+    openSection: gate.openFeedback,
+    showSection: gate.showFeedback,
+    section: 'feedback',
+    gameId: gate.gameId,
+    resultsStatus: gate.resultsStatus,
+    completedKey: gate.completedKey,
+    actor: gate.actor,
+    session: gate.session,
+  });
 }
 
 /**
@@ -701,11 +743,12 @@ export type FeedbackRevealLayoutDecision =
  * Layout-driven reveal decision: active attempt + live target + ready content offset.
  * Failed/missing layout leaves the visit open for a later onLayout (no RAF measure loop).
  */
-export function planFeedbackRevealFromLayout(args: {
+export function planResultsRevealFromLayout(args: {
   plan: FeedbackRevealAttempt;
   layoutY: number | null | undefined;
-  openFeedback: boolean;
-  showFeedback: boolean;
+  openSection: boolean;
+  showSection: boolean;
+  section: ResultsRevealSection;
   gameId: string | null;
   actor?: string | null;
   session?: string | null;
@@ -713,10 +756,11 @@ export function planFeedbackRevealFromLayout(args: {
 }): FeedbackRevealLayoutDecision {
   if (args.plan.kind === 'wait_layout') return { kind: 'wait_layout' };
   if (args.plan.kind !== 'attempt') return { kind: 'ignore' };
-  if (!feedbackRevealTargetStillLive({
+  if (!resultsRevealTargetStillLive({
     expectedKey: args.plan.key,
-    openFeedback: args.openFeedback,
-    showFeedback: args.showFeedback,
+    openSection: args.openSection,
+    showSection: args.showSection,
+    section: args.section,
     gameId: args.gameId,
     actor: args.actor,
     session: args.session,
@@ -727,6 +771,33 @@ export function planFeedbackRevealFromLayout(args: {
   const y = feedbackRevealScrollOffset(args.layoutY, args.inset);
   if (y == null) return { kind: 'wait_layout' };
   return { kind: 'scroll', key: args.plan.key, y };
+}
+
+/**
+ * Layout-driven reveal decision: active attempt + live target + ready content offset.
+ * Failed/missing layout leaves the visit open for a later onLayout (no RAF measure loop).
+ */
+export function planFeedbackRevealFromLayout(args: {
+  plan: FeedbackRevealAttempt;
+  layoutY: number | null | undefined;
+  openFeedback: boolean;
+  showFeedback: boolean;
+  gameId: string | null;
+  actor?: string | null;
+  session?: string | null;
+  inset?: number;
+}): FeedbackRevealLayoutDecision {
+  return planResultsRevealFromLayout({
+    plan: args.plan,
+    layoutY: args.layoutY,
+    openSection: args.openFeedback,
+    showSection: args.showFeedback,
+    section: 'feedback',
+    gameId: args.gameId,
+    actor: args.actor,
+    session: args.session,
+    inset: args.inset,
+  });
 }
 
 /**
@@ -742,6 +813,22 @@ export function nextFeedbackRevealCompletedKey(
 }
 
 /**
+ * Suppress late scroll/focus when the route or section target retired mid-layout.
+ */
+export function resultsRevealTargetStillLive(args: {
+  expectedKey: string;
+  openSection: boolean;
+  showSection: boolean;
+  section: ResultsRevealSection;
+  gameId: string | null;
+  actor?: string | null;
+  session?: string | null;
+}): boolean {
+  if (!args.openSection || !args.showSection || !args.gameId) return false;
+  return resultsRevealFocusKey(args.actor, args.session, args.gameId, args.section) === args.expectedKey;
+}
+
+/**
  * Suppress late scroll/focus when the route or feedback target retired mid-layout.
  */
 export function feedbackRevealTargetStillLive(args: {
@@ -752,8 +839,15 @@ export function feedbackRevealTargetStillLive(args: {
   actor?: string | null;
   session?: string | null;
 }): boolean {
-  if (!args.openFeedback || !args.showFeedback || !args.gameId) return false;
-  return feedbackRevealFocusKey(args.actor, args.session, args.gameId) === args.expectedKey;
+  return resultsRevealTargetStillLive({
+    expectedKey: args.expectedKey,
+    openSection: args.openFeedback,
+    showSection: args.showFeedback,
+    section: 'feedback',
+    gameId: args.gameId,
+    actor: args.actor,
+    session: args.session,
+  });
 }
 
 export type PeerSubjectOption = { contextId: string; displayName: string };
@@ -794,14 +888,24 @@ export function privateHubHistoryEmptyText(direction: 'received' | 'sent'): stri
 }
 
 /**
+ * Validated results deep-link section from My Games (feedback or clarification).
+ * Unknown/array noise falls back to null — never invents attendance/default section.
+ */
+export function parseResultsDeepLinkSection(
+  raw: string | string[] | null | undefined,
+): ResultsRevealSection | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === 'feedback' || value === 'clarification' ? value : null;
+}
+
+/**
  * Validated results deep-link section from My Games private history.
  * Only `feedback` is admitted — unknown/array noise falls back to null.
  */
 export function parseResultsFeedbackSection(
   raw: string | string[] | null | undefined,
 ): 'feedback' | null {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return value === 'feedback' ? 'feedback' : null;
+  return parseResultsDeepLinkSection(raw) === 'feedback' ? 'feedback' : null;
 }
 
 /**
@@ -810,6 +914,14 @@ export function parseResultsFeedbackSection(
  */
 export function feedbackResultsNavParams(gameId: string): { gameId: string; section: 'feedback' } {
   return { gameId: postgameId(gameId), section: 'feedback' };
+}
+
+/**
+ * Expo-router params for exact-game results with clarification section.
+ * Never carries contextId, disputeId, name, reason, or dispute text.
+ */
+export function clarificationResultsNavParams(gameId: string): { gameId: string; section: 'clarification' } {
+  return { gameId: postgameId(gameId), section: 'clarification' };
 }
 
 /** History-surface peer rating labels (web GameReviewsHistory parity; distinct from create titles). */
