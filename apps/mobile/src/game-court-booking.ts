@@ -345,7 +345,8 @@ export class GameCourtBookingCoordinator {
     const viewGen = focus.viewGen;
     const gameId = focus.gameId;
     const live = () => this.readLive(actor, readGen, viewGen);
-    this.show({ status: 'loading', notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
+    // load() returns early when command is present — UNKNOWN blocks this path; notices stay null.
+    this.show({ status: 'loading', notice: null });
     try {
       const eligible = await this.resolveEligible(focus, live);
       if (!live()) return;
@@ -364,9 +365,9 @@ export class GameCourtBookingCoordinator {
       const booking = parseGameCourtBooking(await this.port.read(gameId, live), gameId);
       if (!live()) return;
       if (!this.draftDirty) {
-        this.show({ booking, draft: booking.status, status: 'ready', notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
+        this.show({ booking, draft: booking.status, status: 'ready', notice: null });
       } else {
-        this.show({ booking, status: 'ready', notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
+        this.show({ booking, status: 'ready', notice: null });
       }
     } catch (error) {
       if (!live()) return;

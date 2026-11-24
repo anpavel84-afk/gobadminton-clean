@@ -15,7 +15,9 @@ const otherGame = '10000000-0000-4000-8000-000000000011';
 
 function booking(partial: Partial<GameCourtBooking> & { canUpdate?: boolean } = {}): GameCourtBooking {
   const canUpdate = partial.canUpdate ?? partial.allowedActions?.canUpdate ?? true;
-  const { canUpdate: _c, allowedActions: _a, ...rest } = partial;
+  const rest = { ...partial };
+  delete rest.canUpdate;
+  delete rest.allowedActions;
   return Object.freeze({
     gameId,
     status: 'unspecified' as const,
