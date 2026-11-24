@@ -810,7 +810,21 @@ test('#522 FIX3: CoverLockNoSendError on UNKNOWN retry preserves packet/key; unr
 });
 
 test('#522 APK52 omit photo keeps create→publish; no cover stage', async () => {
-  const s = setup();
+  let latest: Game = g;
+  const s = setup({
+    game: async () => latest,
+    send: async p => {
+      if (p.kind === 'create') {
+        latest = { ...g, status: 'draft', version: 7 };
+        return latest;
+      }
+      if (p.kind === 'publish') {
+        latest = { ...g, status: 'published', version: 8 };
+        return latest;
+      }
+      return { ...part, version: 4, status: p.kind === 'confirm' ? 'confirmed' : p.kind === 'reject' ? 'rejected' : 'removed' };
+    },
+  });
   await preview(s.owner);
   assert.equal(s.owner.hasCreationPhoto(), false);
   await s.owner.publishPreview();
@@ -825,20 +839,25 @@ test('#522 APK52 confirmed photo: exactly one create, one cover save, one publis
   let serial = 0;
   const draft = { ...g, version: 7 };
   const published = { ...g, status: 'published' as const, version: 9 };
+  let latest: Game = draft;
   const sent: ManagementPacket[] = [];
   const owner = new GameManagementCoordinator({
     profile: async () => profile,
     preferences: async () => preferences,
     trainer: async () => { throw new ParticipationError('business', 404); },
     venues: async () => ({ items: [venue], nextCursor: null }),
-    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
-    game: async () => draft,
+    managed: async () => ({ items: [{ ...latest, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => latest,
     participants: async () => ({ items: [], nextCursor: null }),
     send: async p => {
       sent.push(p);
-      if (p.kind === 'create') return draft;
+      if (p.kind === 'create') {
+        latest = draft;
+        return draft;
+      }
       if (p.kind === 'publish') {
         assert.equal(p.body.expectedVersion, 8);
+        latest = published;
         return published;
       }
       throw new Error('unexpected');
@@ -849,6 +868,7 @@ test('#522 APK52 confirmed photo: exactly one create, one cover save, one publis
       assert.equal(live(), true);
       assert.equal(gameId, draft.id);
       assert.equal(gameVersion, 7);
+      latest = { ...draft, version: 8 };
       return { version: 8 };
     },
   });

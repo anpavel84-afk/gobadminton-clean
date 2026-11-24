@@ -380,7 +380,8 @@ test('new root management owner shares secure actor fences, leaves Messages UNKN
   const resource={kind:'direct',id:'thread'} as const;
   s.auth.messages.focus(resource); await new Promise(resolve=>setImmediate(resolve)); s.auth.messages.draft(resource,'private'); await s.auth.messages.act(resource,'send');
   const message=s.auth.messages.getSnapshot().pending['direct:thread']?.packet; assert.ok(message);
-  await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@creator'}); owner.preview(); await owner.publishPreview();
+  await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@creator'}); owner.preview();
+  owner.bindCreationView(); await owner.publishPreview();
   const packet=owner.getSnapshot().command?.packet; assert.ok(packet); assert.equal(owner.getSnapshot().command?.status,'unknown');
   assert.equal(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
   const participationBefore = participation.getSnapshot();
@@ -417,7 +418,7 @@ test('involuntary auth loss preserves UNKNOWN create until authoritative same-ow
     return {ok:true};
   });
   await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@private-creator'});
-  owner.preview(); await owner.publishPreview();
+  owner.preview(); owner.bindCreationView(); await owner.publishPreview();
   const original = owner.getSnapshot().command!.packet;
   assert.equal(owner.getSnapshot().command?.status,'unknown');
   phase = 'lost'; await s.auth.refresh();
@@ -443,6 +444,8 @@ test('involuntary auth loss preserves UNKNOWN create until authoritative same-ow
   assert.equal(s.calls.filter(c => c.path.endsWith('/publish')).length,0);
   assert.equal(owner.getSnapshot().created?.status,'draft');
   // Explicit logout must also erase an active UNKNOWN, not merely its visible reference.
+  // Session rotate cleared the create-view lease; rebind before user create/publish intent.
+  owner.bindCreationView();
   phase = 'unknown'; await owner.publishDraft(fixture.id); assert.equal(owner.getSnapshot().command?.status,'unknown');
   await s.auth.logout(); assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().creationReference,null);
   assert.equal(owner.getSnapshot().actor,null); assert.equal(owner.getSnapshot().form.contact,'');
@@ -1923,6 +1926,7 @@ test('#522 APK52/FIX3: AuthCoordinator saveCreationCover openView+transport; cre
     const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
     const puts: string[] = [];
     let row = { version: 7, hasCover: false, cover: { uploadedUrl: null as string | null } };
+    let latest: typeof draft & { status: 'draft' | 'published' } = { ...draft };
     const createGate = deferred<typeof draft>();
     s.setHandler(async (path, init) => {
       if (path === '/me') return me;
@@ -1933,20 +1937,23 @@ test('#522 APK52/FIX3: AuthCoordinator saveCreationCover openView+transport; cre
         if ((init.method ?? 'GET') === 'PUT') {
           puts.push('PUT');
           row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+          latest = { ...latest, version: row.version };
           return row;
         }
         return row;
       }
       if (path.startsWith('/me/games')) {
-        return { items: [{ ...draft, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+        return { items: [{ ...latest, version: latest.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
       }
-      if (path === `/games/${gameId}`) return { ...draft, version: row.version, status: 'draft' };
+      if (path === `/games/${gameId}`) return { ...latest };
       if (path === '/games' && (init.method ?? 'GET') === 'POST') {
         if (retireView) return createGate.promise;
+        latest = { ...draft };
         return draft;
       }
       if (path === `/games/${gameId}/publish`) {
-        return { ...draft, status: 'published', version: row.version + 1 };
+        latest = { ...draft, status: 'published', version: row.version + 1 };
+        return latest;
       }
       if (path.includes('/participations')) return { items: [], nextCursor: null };
       return { ok: true };
