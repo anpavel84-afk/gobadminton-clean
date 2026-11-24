@@ -363,6 +363,12 @@ test('#522 APK45 source wiring: DM chooser, create opt-in, counter 45', () => {
   assert.match(messages, /Пригласить на игру/);
   assert.match(messages, /canInvite/);
   assert.match(messages, /nativeAuth\.invitationAuthoring\.close\(\)/);
+  // P2 QA: outside-chooser sending progress (UNKNOWN retry / tokenrefresh / POST) + focus via kept-mounted visible=
+  assert.match(messages, /inviteOutsideProgress/);
+  assert.match(messages, /inviteAuthoring\.checking \? 'Проверяем игру…'/);
+  assert.match(messages, /inviteAuthoring\.command\?\.status === 'sending' \? 'Отправляем…'/);
+  assert.match(messages, /direct && !safetyHeld \? <InvitationChooser/);
+  assert.doesNotMatch(messages, /direct && chooser && !safetyHeld/);
 
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /InvitationAuthoringCoordinator/);

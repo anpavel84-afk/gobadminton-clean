@@ -207,8 +207,15 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     nativeAuth.invitationAuthoring.getSnapshot,
     nativeAuth.invitationAuthoring.getSnapshot,
   );
+  // Outside closed chooser: UNKNOWN retry / tokenrefresh / POST must not hide behind a disabled trigger.
+  const inviteOutsideProgress = !chooser
+    ? inviteAuthoring.checking ? 'Проверяем игру…'
+      : inviteAuthoring.command?.status === 'sending' ? 'Отправляем…'
+        : null
+    : null;
   const notice = <>{state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}{pending?.state === 'unknown' && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource, state.viewGeneration, state.actor); }} />}
     {pending?.state === 'sending' && <Label accessibilityLiveRegion="polite">Отправляем…</Label>}
+    {inviteOutsideProgress && <Label accessibilityLiveRegion="polite">{inviteOutsideProgress}</Label>}
     {inviteAuthoring.command?.status === 'unknown' && !chooser && <Label accessibilityRole="alert">{inviteAuthoring.notice}</Label>}
     {inviteAuthoring.command?.status === 'unknown' && !chooser && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void nativeAuth.invitationAuthoring.retry(); }} />}</>;
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
@@ -258,7 +265,8 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
         <PrimaryButton title="Отправить" disabled={!!pending || !draft.trim()} onPress={() => { void owner.act(resource, 'send', undefined, state.viewGeneration, state.actor); }} /></>}
       {notice}<View style={{ flexDirection: 'row', flexWrap: 'wrap' }}><TextButton title="Обновить" onPress={() => { initialScroll.current = true; void owner.loadDetail(resource); }} /><TextButton title="Новые сообщения" onPress={() => { void owner.catchUp(resource); }} /></View>
     </View>
-    {direct && chooser && !safetyHeld ? <InvitationChooser
+    {/* Keep mounted while DM is invite-eligible so DiscoverySheet visible=false can restore inviteTrigger focus; lease still scoped to open(visible). */}
+    {direct && !safetyHeld ? <InvitationChooser
       conversationId={direct.id}
       peerId={direct.peer.publicPlayerId}
       visible={chooser}
