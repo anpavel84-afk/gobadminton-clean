@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef } from 'react';
-import { AccessibilityInfo, findNodeHandle, ScrollView, View } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, View, type ScrollView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../../src/auth.tsx';
 import { canonicalPostgamePath } from '../../../src/native-auth-protocol.ts';
@@ -20,7 +20,7 @@ export default function GameResults() {
   const actor=auth.me?.id,session=auth.me?.session.id;
   const current=auth.status === 'authenticated' && s.actor?.actorId === actor && s.actor?.sessionId === session;
   const scrollRef=useRef<ComponentRef<typeof ScrollView> | null>(null);
-  const feedbackAnchor=useRef<View | null>(null);
+  const feedbackAnchor=useRef<ComponentRef<typeof View> | null>(null);
   const focusedKey=useRef<string | null>(null);
   useEffect(()=>{if(!current || !gameId) return; void owner.loadResults(gameId);void owner.loadReminders();void auth.participation.loadGame(gameId);},[current,gameId,owner,auth.participation,actor,session]);
   const state=current && gameId ? s.games[gameId] : undefined, data=state?.data, game=gameId ? p.games[gameId]?.game : undefined;

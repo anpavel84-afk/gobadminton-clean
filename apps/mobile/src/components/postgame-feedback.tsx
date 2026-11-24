@@ -358,7 +358,7 @@ export function FeedbackSection({
   data?: Results;
   /** Deep-link from hub private history — prefer history lane without writing draft.mode. */
   openFeedback?: boolean;
-  sectionRef?: RefObject<View | null>;
+  sectionRef?: RefObject<ComponentRef<typeof View> | null>;
 }) {
   const { owner, s } = useOwner();
   const blocked = useBlocked();
