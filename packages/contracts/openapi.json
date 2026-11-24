@@ -4850,7 +4850,7 @@
             "NativeBearer": []
           }
         ],
-        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404. Outgoing GET game invitations and revoke remain cookie-only."
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404. Outgoing GET game invitations remain cookie-only; revoke has its own operation-local NativeBearer opt-in."
       }
     },
     "/me/invitations": {
@@ -4904,7 +4904,7 @@
             "NativeBearer": []
           }
         ],
-        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie session retained. Create uses operation-local NativeBearer via requirePrincipalMutation; organizer list GET and revoke remain cookie-only."
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. Cookie session retained. Create and revoke use operation-local NativeBearer via requirePrincipalMutation; organizer list GET remains cookie-only."
       }
     },
     "/invitations/{invitationId}": {
@@ -5160,10 +5160,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -5205,7 +5206,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404. Current GameManager authority, version and idempotency rules unchanged; organizer list GET remains cookie-only."
       }
     },
     "/games/{gameId}/chat": {

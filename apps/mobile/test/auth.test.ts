@@ -1956,3 +1956,127 @@ test('#522 APK45: deferred token fence — surface close before createInvitation
   assert.equal(owner.getSnapshot().command, undefined);
   assert.equal(owner.getSnapshot().checking, false);
 });
+
+test('#522 APK46: revoke deferred token fence — blur/focus/account → zero POST, no hidden lock; UNKNOWN exact retry retained', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const messages = s.auth.messages;
+  const invite = { kind: 'invitation' as const, id: 'invite-apk46' };
+  const invitation = {
+    id: 'invite-apk46', gameId: 'game-managed', status: 'pending', version: 4,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  const game = {
+    id: 'game-managed', version: 3, title: 'Evening', status: 'published', visibility: 'public',
+    organizer: { id: 'org', displayName: 'Host', publicContact: 'telegram:@h' },
+    venue: { id: 'v', name: 'Court', address: 'Addr', cityId: 'city', timezone: 'Europe/Moscow' },
+    startsAt: '2027-06-01T15:00:00.000Z', endsAt: '2027-06-01T17:00:00.000Z',
+    applicationDeadlineAt: '2027-05-31T15:00:00.000Z', timezone: 'Europe/Moscow',
+    capacity: 4, confirmedCount: 1, externalReservedCount: 0, availablePlaces: 3,
+    formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+    settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'Outside' },
+    activityKind: 'regular', trainingDescription: null, trainer: null,
+    management: { role: 'owner', createdByMe: true },
+  };
+  const counts = { pendingRequestCount: 0, pendingInvitationCount: 0, dmUnread: 0, gameChatUnread: 0 };
+  const expireAfterEligibility = () => {
+    const access = (s.auth as unknown as { access: { expiresAt: number } | null }).access;
+    if (access) access.expiresAt = 0;
+  };
+  const revokePosts: string[] = [];
+  let managedReads = 0;
+  let refreshResult: Promise<typeof credentials> | typeof credentials = credentials;
+
+  const install = () => {
+    s.setHandler(async path => {
+      if (path === '/me') return me;
+      if (path === '/me/social-profile') return { publicPlayerId: 'public-manager' };
+      if (path === '/invitations/invite-apk46') return invitation;
+      if (path.startsWith('/me/games')) {
+        managedReads++;
+        // After act() eligibility GET, expire access so mutation send awaits refresh.
+        if (managedReads >= 2) expireAfterEligibility();
+        return { items: [game], nextCursor: null };
+      }
+      if (path === '/auth/native/refresh') return refreshResult;
+      if (path === '/invitations/invite-apk46/revoke') {
+        revokePosts.push(path);
+        return new Response('{}', { status: 503 });
+      }
+      if (path === '/me/inbox/counts') return counts;
+      return { ok: true };
+    });
+  };
+
+  install();
+  messages.focus(invite);
+  await new Promise(r => setImmediate(r));
+  assert.equal(messages.getSnapshot().detail?.managerEligible, true);
+
+  // (1) Blur while mutation token refresh pending → zero POST, clear sending (not UNKNOWN).
+  const tokenGate = deferred<typeof credentials>();
+  refreshResult = tokenGate.promise;
+  const blurred = messages.act(invite, 'revoke');
+  await new Promise(r => setImmediate(r));
+  assert.equal(revokePosts.length, 0);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46']?.state, 'sending');
+  messages.setForeground(false);
+  tokenGate.resolve(credentials);
+  await blurred;
+  assert.equal(revokePosts.length, 0);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46'], undefined);
+  assert.equal(messages.getSnapshot().notice, null);
+
+  // (1b) ABA: background→foreground while token still pending must not revive the old initial revoke.
+  managedReads = 0;
+  await s.auth.refresh();
+  messages.setForeground(true);
+  messages.focus(invite);
+  await new Promise(r => setImmediate(r));
+  const abaGate = deferred<typeof credentials>();
+  refreshResult = abaGate.promise;
+  const aba = messages.act(invite, 'revoke');
+  await new Promise(r => setImmediate(r));
+  assert.equal(revokePosts.length, 0);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46']?.state, 'sending');
+  messages.setForeground(false);
+  messages.setForeground(true);
+  abaGate.resolve(credentials);
+  await aba;
+  assert.equal(revokePosts.length, 0);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46'], undefined);
+  assert.equal(messages.getSnapshot().notice, null);
+
+  // Seed UNKNOWN via real AuthCoordinator revoke POST (503 → network).
+  managedReads = 0;
+  refreshResult = credentials;
+  await s.auth.refresh();
+  messages.focus(invite);
+  await new Promise(r => setImmediate(r));
+  await messages.act(invite, 'revoke');
+  assert.equal(revokePosts.length, 1);
+  const unknownPacket = messages.getSnapshot().pending['invitation:invite-apk46']?.packet;
+  assert.ok(unknownPacket);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46']?.state, 'unknown');
+
+  // (2) Reconcile retry: focus leave during token wait → zero additional POST; exact UNKNOWN retained.
+  expireAfterEligibility();
+  const retryGate = deferred<typeof credentials>();
+  refreshResult = retryGate.promise;
+  const postsBeforeRetry = revokePosts.length;
+  const retrying = messages.retry(invite);
+  await new Promise(r => setImmediate(r));
+  messages.focus(null);
+  retryGate.resolve(credentials);
+  await retrying;
+  assert.equal(revokePosts.length, postsBeforeRetry);
+  assert.equal(messages.getSnapshot().pending['invitation:invite-apk46']?.state, 'unknown');
+  assert.strictEqual(messages.getSnapshot().pending['invitation:invite-apk46']?.packet, unknownPacket);
+
+  // (3) Account change clears ownership; never POSTs the old revoke packet.
+  await s.auth.logout();
+  assert.deepEqual(messages.getSnapshot().pending, {});
+  await messages.retry(invite);
+  assert.equal(revokePosts.length, postsBeforeRetry);
+});

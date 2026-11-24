@@ -222,10 +222,8 @@ run("native Messages · self-migrating isolated database", () => {
     }
     expect((await app.inject({url:listUrl,headers:{...bearer(player),cookie:player.cookie}})).statusCode).toBe(403);
     expect((await disabledApp.inject({url:listUrl,headers:bearer(player)})).statusCode).toBe(404);
-    // Create is NativeBearer-opted; closed neighbors stay cookie-only outgoing list + revoke.
-    for (const [method,closed] of [['POST',`/v1/invitations/${a.id}/revoke`],['GET',`/v1/games/${g1.id}/invitations`]] as const) {
-      expect([401,403]).toContain((await app.inject({method,url:closed,headers:bearer(player),payload:{}})).statusCode);
-    }
+    // Create + revoke are NativeBearer-opted; closed neighbor stays cookie-only organizer outgoing list.
+    expect([401,403]).toContain((await app.inject({method:'GET',url:`/v1/games/${g1.id}/invitations`,headers:bearer(player)})).statusCode);
     await app.get(SessionService).revokeSession(player.sessionId);
     expect((await app.inject({url:listUrl,headers:bearer(player)})).statusCode).toBe(401);
   });
@@ -379,7 +377,7 @@ run("native Messages · self-migrating isolated database", () => {
     expect((await app.inject({method:'POST',url:url+'/messages',headers:{cookie:owner.cookie,origin,'idempotency-key':randomUUID()},payload})).json().code).toBe('CSRF_REQUIRED');
     expect((await app.inject({method:'POST',url:url+'/messages',headers:{...browser(owner),origin:'https://evil.test'},payload})).json().code).toBe('ORIGIN_REJECTED');
     expect((await app.inject({method:'POST',url:url+'/messages',headers:browser(owner),payload})).statusCode).toBe(201);
-    for(const [method,closed] of [['POST',url+'/messages/'+randomUUID()+'/hide'],['POST',`/v1/me/inbox/items/dm/${dm.id}/read`],['GET','/v1/me/discovery-preference'],['GET',`/v1/games/${randomUUID()}/invitations`],['POST','/v1/invitations/'+randomUUID()+'/revoke']] as const) {
+    for(const [method,closed] of [['POST',url+'/messages/'+randomUUID()+'/hide'],['POST',`/v1/me/inbox/items/dm/${dm.id}/read`],['GET','/v1/me/discovery-preference'],['GET',`/v1/games/${randomUUID()}/invitations`]] as const) {
       expect([401,403]).toContain((await app.inject({method,url:closed,headers:bearer(player),payload:{}})).statusCode);
     }
     await app.get(SessionService).revokeSession(player.sessionId);
@@ -543,11 +541,49 @@ run("native Messages · self-migrating isolated database", () => {
     await pool.query("UPDATE games SET starts_at=now()-interval '1 minute', application_deadline_at=now()-interval '2 minutes' WHERE id=$1",[started.id]);
     const startedVer=(await app.inject({url:`/v1/games/${started.id}`,headers:bearer(owner)})).json().version;
     expect((await app.inject({method:'POST',url:`/v1/games/${started.id}/invitations`,headers:bearer(owner),payload:{inviteePublicPlayerId:p.publicPlayerId,expectedGameVersion:startedVer}})).statusCode).toBe(409);
-    for (const [method,closed] of [['GET',url],['POST',`/v1/invitations/${created.json().id}/revoke`]] as const) {
-      expect([401,403]).toContain((await app.inject({method,url:closed,headers:bearer(player),payload:{expectedVersion:1}})).statusCode);
-    }
+    // Organizer list GET remains cookie-only closed neighbor; revoke has its own NativeBearer case below.
+    expect([401,403]).toContain((await app.inject({method:'GET',url,headers:bearer(player)})).statusCode);
     await app.get(SessionService).revokeSession(owner.sessionId);
     expect((await app.inject({method:'POST',url,headers:bearer(owner),payload})).statusCode).toBe(401);
   });
-  // pinned suite size after #522 APK45 invitation-create NativeBearer admission: 11
+  it('POST /invitations/:invitationId/revoke NativeBearer: manager receipt, replay/rights/stale, cookie CSRF and closed organizer list', async () => {
+    await pool.query('DELETE FROM native_auth_budgets');
+    const owner=await actor(), player=await actor(), other=await actor();
+    await profile(owner); const p=await profile(player); const o=await profile(other);
+    const g=await game(owner);
+    const inv=await invite(owner,p.publicPlayerId,g);
+    const url=`/v1/invitations/${inv.id}/revoke`;
+    const payload={expectedVersion:inv.version};
+    expect((await app.inject({method:'POST',url,headers:{}})).statusCode).toBe(403);
+    for (const headers of [{authorization:'Basic invalid'},{authorization:'Bearer invalid'},{authorization:`Bearer ${'x'.repeat(43)}`},
+      {Authorization:[`Bearer ${owner.accessToken}`,`Bearer ${owner.accessToken}`]}]) {
+      expect((await app.inject({method:'POST',url,headers,payload})).statusCode).toBe(401);
+    }
+    expect((await app.inject({method:'POST',url,headers:{...bearer(owner),cookie:owner.cookie},payload})).statusCode).toBe(403);
+    expect((await disabledApp.inject({method:'POST',url,headers:bearer(owner),payload})).statusCode).toBe(404);
+    expect((await app.inject({method:'POST',url,headers:{cookie:owner.cookie,origin,'idempotency-key':randomUUID()},payload})).json().code).toBe('CSRF_REQUIRED');
+    expect((await app.inject({method:'POST',url,headers:{...browser(owner),origin:'https://evil.test'},payload})).json().code).toBe('ORIGIN_REJECTED');
+    const key=randomUUID();
+    const revoked=await app.inject({method:'POST',url,headers:bearer(owner,key),payload});
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json()).toMatchObject({id:inv.id,gameId:g.id,status:'revoked',version:inv.version+1});
+    expect((await app.inject({method:'POST',url,headers:bearer(owner,key),payload})).json()).toEqual(revoked.json());
+    expect((await app.inject({method:'POST',url,headers:bearer(owner,key),payload:{expectedVersion:inv.version+2}})).statusCode).toBe(409);
+    const again=await invite(owner,p.publicPlayerId,g);
+    expect((await app.inject({method:'POST',url:`/v1/invitations/${again.id}/revoke`,headers:bearer(player),payload:{expectedVersion:again.version}})).statusCode).toBe(404);
+    expect((await app.inject({method:'POST',url:`/v1/invitations/${again.id}/revoke`,headers:bearer(owner),payload:{expectedVersion:again.version+1}})).statusCode).toBe(409);
+    const staleOk=await app.inject({method:'POST',url:`/v1/invitations/${again.id}/revoke`,headers:bearer(owner),payload:{expectedVersion:again.version}});
+    expect(staleOk.statusCode).toBe(200);
+    expect(staleOk.json().status).toBe('revoked');
+    const rights=await invite(owner,o.publicPlayerId,g);
+    await pool.query("UPDATE game_managers SET status='revoked', revoked_at=now(), updated_at=now() WHERE game_id=$1 AND user_id=$2",[g.id,owner.id]);
+    expect([403,404]).toContain((await app.inject({method:'POST',url:`/v1/invitations/${rights.id}/revoke`,headers:bearer(owner),payload:{expectedVersion:rights.version}})).statusCode);
+    expect([401,403]).toContain((await app.inject({method:'GET',url:`/v1/games/${g.id}/invitations`,headers:bearer(player)})).statusCode);
+    const sessionOwner=await actor(); await profile(sessionOwner);
+    const g2=await game(sessionOwner);
+    const sessionInv=await invite(sessionOwner,p.publicPlayerId,g2);
+    await app.get(SessionService).revokeSession(sessionOwner.sessionId);
+    expect((await app.inject({method:'POST',url:`/v1/invitations/${sessionInv.id}/revoke`,headers:bearer(sessionOwner),payload:{expectedVersion:sessionInv.version}})).statusCode).toBe(401);
+  });
+  // pinned suite size after #522 APK46 invitation-revoke NativeBearer admission: 12
 });

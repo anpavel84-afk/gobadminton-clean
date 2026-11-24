@@ -204,6 +204,7 @@ test('Messages owner across MyGames/detail keeps same UNKNOWN key, no auto-write
     game: async () => { throw new Error('unexpected'); },
     members: async () => [],
     invitation: async () => base,
+    managed: async () => ({ items: [], nextCursor: null }),
     history: async () => ({ items: [], nextCursor: null }),
     send: async packet => {
       sent.push(packet);

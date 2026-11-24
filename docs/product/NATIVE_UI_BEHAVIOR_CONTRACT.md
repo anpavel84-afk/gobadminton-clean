@@ -160,14 +160,27 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 
 | Field | Content |
 | --- | --- |
-| Authority | Accepted web `DirectConversation` + `InvitationChooser` + `invitation-continuation` eligibility; existing native Messages DM + invitation detail; `POST /games/:gameId/invitations` requirePrincipalMutation + OpenAPI NativeBearer on create only (outgoing list GET + revoke remain cookie-only) |
+| Authority | Accepted web `DirectConversation` + `InvitationChooser` + `invitation-continuation` eligibility; existing native Messages DM + invitation detail; `POST /games/:gameId/invitations` requirePrincipalMutation + OpenAPI NativeBearer on create (outgoing list GET remains cookie-only; revoke opted in R-12) |
 | Entry | Authenticated accepted DM thread; explicit «Пригласить на игру» from current conversation header peer only |
 | Trigger | Manual chooser open; managed-games load/retry with cursor/dedup/fence; explicit send after fresh game GET; UNKNOWN exact-packet retry; cancel returns same DM/draft |
 | Expected | Russian web copy; eligibility at action time (published/future start/open deadline); no fake seat reservation; blocked/safety-held peer cannot open/send; actor/session/surface fences; stale 409 refreshes list without auto-resend; success opens existing invitation detail only while surface remains intended; clear on logout/account switch |
 | Accessibility | Sheet title/hint; busy/UNKNOWN announced; return-focus to invite control; large-text/safe-area retained |
-| Non-scope | New-contact/Discovery/manager outgoing-list/revoke/recommendations; preferredGameId create-resume; PROD; device/OTA/iOS completion |
+| Non-scope | New-contact/Discovery/manager outgoing-list/recommendations; preferredGameId create-resume; PROD; device/OTA/iOS completion |
 | Evidence | Mobile unit `invitation-authoring.test.ts` / `auth.test.ts`; API `native-messages.foundation` create NativeBearer case; source APK counter 45 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native DM invite create; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
+## R-12 · Native invitation detail manager revoke + Open game (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `InvitationDetail` manager revoke + Open game; current `GET /me/games` managed projection (never inviter/createdByMe); `POST /invitations/:id/revoke` requirePrincipalMutation + OpenAPI NativeBearer; organizer list GET remains cookie-only; service/idempotency/current-manager/version unchanged |
+| Entry | Authenticated Messages invitation detail (and shared `InvitationDecisionBody`) when viewer is not invitee |
+| Trigger | Detail load paginates managed games (fail-closed); explicit «Отозвать приглашение» only when `managerEligible`; UNKNOWN exact-packet manual retry; «Открыть игру» via native `/games/:id` for manager or accepted+participation recipient |
+| Expected | Role-appropriate pending copy («Ожидает ответа» manager / «Вас приглашают в игру» recipient); recipient accept/decline preserved; latest invitation version; actor/surface/session fences; rights loss clears revoke without POST; no auto after login/refresh/restart |
+| Accessibility | Existing Russian controls/tokens; busy/UNKNOWN announced; large-text/safe-area retained |
+| Non-scope | Organizer outgoing invitation list UI; new discovery/recommendation APIs; business-rule copies; PROD; device/OTA/iOS completion |
+| Evidence | Mobile unit `messages.test.ts` / `invitation-authoring` wiring; API `native-messages.foundation` revoke NativeBearer case; source APK counter 46 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native manager revoke + Open game; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 

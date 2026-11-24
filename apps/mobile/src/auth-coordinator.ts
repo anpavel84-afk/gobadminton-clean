@@ -182,10 +182,19 @@ export class AuthCoordinator {
       members: id => this.participationRead(access => deps.api.chatMembers(access,id)),
       invitation: id => this.participationRead(access => deps.api.invitation(access,id)),
       history: (r,before,after) => this.participationRead(access => deps.api.messageHistory(access,r,before,after)),
+      // Current managed-game projection for manager revoke eligibility — same /me/games port as chooser.
+      managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
       send: packet => {
+        // Capture dispatch attempt + view + foreground lifecycle before token await; revoke rechecks after refresh.
         const permit = this.messages.safetyPermit(packet);
+        const viewGeneration = this.messages.getSnapshot().viewGeneration;
+        const foregroundGeneration = this.messages.foregroundLifecycle();
         return this.participationRead(access => {
-          if (!this.messages.mayDispatchSafety(packet, permit)) throw new MessagesError('network');
+          if (packet.action === 'revoke') {
+            if (!this.messages.mayDispatchRevoke(packet, permit, viewGeneration, foregroundGeneration)) throw new MessagesError('stale');
+          } else if (!this.messages.mayDispatchSafety(packet, permit)) {
+            throw new MessagesError('network');
+          }
           return deps.api.messageMutation(access,packet.resource,packet.action,packet.body,packet.key);
         },packet.actor);
       },

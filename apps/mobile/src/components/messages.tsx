@@ -126,6 +126,8 @@ export function NativeMessagesInbox() {
 }
 const requestCopy = { pending: 'Запрос на общение', accepted: 'Переписка', declined: 'Запрос отклонён', expired: 'Срок запроса истёк', closed: 'Переписка закрыта' };
 export const invitationCopy = { pending: 'Вас приглашают в игру', accepted: 'Приглашение принято', declined: 'Приглашение отклонено', expired: 'Срок приглашения истёк', revoked: 'Приглашение отозвано', cancelled_by_game: 'Игра отменена' } as const;
+/** Manager pending strip — accepted-web role-neutral copy; not recipient «Вас приглашают». */
+const managerPendingCopy = 'Ожидает ответа';
 /** Ghost decline control — TextButton has no disabled; keep accepted textButton look with a11y. */
 function DeclineTextButton({ title, onPress, disabled = false }: { title: string; onPress: () => void; disabled?: boolean }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
@@ -133,13 +135,15 @@ function DeclineTextButton({ title, onPress, disabled = false }: { title: string
     <Label style={{ color: colors.ink, textAlign: 'center' }}>{title}</Label>
   </Pressable>;
 }
-/** Shared safe invitation terms + accept/decline; MyGames and Messages reuse one MessagesCoordinator owner. */
-export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, onDecline, onOpenGame, now = Date.now() }: {
+/** Shared safe invitation terms + accept/decline/revoke; MyGames and Messages reuse one MessagesCoordinator owner. */
+export function InvitationDecisionBody({ invitation, ownId, pending, managerEligible = false, onAccept, onDecline, onRevoke, onOpenGame, now = Date.now() }: {
   invitation: GameInvitation;
   ownId: string | null;
   pending: boolean;
+  managerEligible?: boolean;
   onAccept: () => void;
   onDecline: () => void;
+  onRevoke?: () => void;
   onOpenGame?: () => void;
   now?: number;
 }) {
@@ -147,9 +151,13 @@ export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, o
   const clockExpired = isInviteClockExpired(invitation, now);
   const noSeats = !!context && context.availablePlaces < 1;
   const showDecision = recipient && invitation.status === 'pending';
+  const showRevoke = !recipient && managerEligible && invitation.status === 'pending' && !!onRevoke;
   const acceptDisabled = !!pending || !context || noSeats || clockExpired;
   const declineDisabled = !!pending || clockExpired;
-  const statusLabel = clockExpired ? invitationCopy.expired : invitationCopy[invitation.status];
+  const revokeDisabled = !!pending || clockExpired;
+  const statusLabel = clockExpired ? invitationCopy.expired
+    : invitation.status === 'pending' && !recipient ? managerPendingCopy
+      : invitationCopy[invitation.status];
   const pressAccept = () => {
     if (pending || !context || noSeats || isInviteClockExpired(invitation, Date.now())) return;
     onAccept();
@@ -158,6 +166,10 @@ export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, o
     if (pending || isInviteClockExpired(invitation, Date.now())) return;
     onDecline();
   };
+  const pressRevoke = () => {
+    if (pending || !managerEligible || isInviteClockExpired(invitation, Date.now()) || !onRevoke) return;
+    onRevoke();
+  };
   return <View style={{ gap: 8 }}>
     <Label style={styles.subtitle}>{statusLabel}</Label>
     {context ? <><Label style={{ fontWeight: '700' }}>{context.title}</Label><Label>{new Date(context.startsAt).toLocaleString('ru', { timeZone: context.timezone })} · {context.timezone}</Label>
@@ -165,12 +177,13 @@ export function InvitationDecisionBody({ invitation, ownId, pending, onAccept, o
       {context.activityKind === 'trainer_led' && <Label>С тренером{context.trainerDisplayName ? ` · ${context.trainerDisplayName}` : ''}</Label>}
       {context.trainingDescription && <Label>{context.trainingDescription}</Label>}
       <Label>{context.settlementPurpose === 'no_trainer_fee' ? 'Без тренерского сбора' : context.priceStatus === 'fixed' ? `${context.priceMinor ? (BigInt(context.priceMinor) / 100n).toString() + '.' + (BigInt(context.priceMinor) % 100n).toString().padStart(2, '0') : ''} ${context.currency} / игрока за занятие` : 'Цена по договорённости'}</Label>
-      <Label>{context.settlementTerms}</Label><Label>Свободных мест: {context.availablePlaces}. Окончательное место проверяется при принятии.</Label></> : invitation.status === 'pending' && !clockExpired && <Label>Условия сейчас недоступны. Обновите приглашение.</Label>}
+      <Label>{context.settlementTerms}</Label><Label>Свободных мест: {context.availablePlaces}. Окончательное место проверяется при принятии.</Label></> : invitation.status === 'pending' && !clockExpired && recipient && <Label>Условия сейчас недоступны. Обновите приглашение.</Label>}
     {showDecision && !clockExpired && noSeats ? <Label>Свободных мест сейчас нет</Label> : null}
     {showDecision && !clockExpired ? <><PrimaryButton title="Принять приглашение" disabled={acceptDisabled} onPress={pressAccept} />
       <DeclineTextButton title="Отклонить" disabled={declineDisabled} onPress={pressDecline} /></> : null}
+    {showRevoke && !clockExpired ? <DeclineTextButton title="Отозвать приглашение" disabled={revokeDisabled} onPress={pressRevoke} /> : null}
     {showDecision && clockExpired ? <Label>Обновите приглашение, чтобы увидеть актуальный статус на сервере.</Label> : null}
-    {invitation.status === 'accepted' && invitation.participationId && onOpenGame ? <TextButton title="Открыть игру" onPress={onOpenGame} /> : null}
+    {onOpenGame ? <TextButton title="Открыть игру" onPress={onOpenGame} /> : null}
   </View>;
 }
 export function NativeMessageThread({ resource }: { resource: MessageResource }) {
@@ -224,9 +237,12 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     return <Page keyboard header={<MessageHeader name="Приглашение в игру" subtitle="Участие и условия игры" />}>
       <View style={styles.card}><InvitationDecisionBody
         invitation={invitation} ownId={detail.ownId} pending={!!pending}
+        managerEligible={detail.managerEligible}
         onAccept={() => { void owner.act(resource, 'accept'); }}
         onDecline={() => { if (!pending) void owner.act(resource, 'decline'); }}
-        onOpenGame={() => router.push(`/games/${invitation.gameId}` as '/games')}
+        onRevoke={() => { if (!pending) void owner.act(resource, 'revoke', undefined, state.viewGeneration, state.actor); }}
+        onOpenGame={(invitation.status === 'accepted' && invitation.participationId) || detail.managerEligible
+          ? () => router.push(`/games/${invitation.gameId}` as '/games') : undefined}
       /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
     </Page>;
   }

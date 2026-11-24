@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MessagesCoordinator } from '../src/messages-coordinator.ts';
 import type { MessagePacket, MessagesPort, MessagesClock } from '../src/messages-coordinator.ts';
-import { inboxDestination, mergeMessages, MessagesError, parseInbox, parseMessage, parseMessageMutation, parseOwnMessageIdentity, seq } from '../src/messages.ts';
+import { inboxDestination, mergeMessages, MessagesError, mutationPath, parseInbox, parseMessage, parseMessageMutation, parseOwnMessageIdentity, seq } from '../src/messages.ts';
 import type { Conversation, DirectMessage, InboxPage } from '../src/messages.ts';
 const actor = { actorId: 'internal-a', sessionId: 'session-a', generation: 1 };
 const resource = { kind: 'direct', id: 'thread-a' } as const;
@@ -16,6 +16,7 @@ function setup(overrides: Partial<MessagesPort> = {}, clock?: MessagesClock) {
   let serial=0; const sent: MessagePacket[]=[];
   const port: MessagesPort = { inbox: async () => page, counts: async () => counts, identity: async () => 'public-a', direct: async () => header,
     game: async () => { throw Error('unexpected'); }, members: async () => [], invitation: async () => { throw Error('unexpected'); },
+    managed: async () => ({ items: [], nextCursor: null }),
     history: async () => ({ items: [message('9007199254740993'),message('9007199254740994',true),message('9007199254740995')], nextCursor: '9007199254740993' }),
     send: async p => { sent.push(p); return {}; }, ...overrides };
   const owner = new MessagesCoordinator(port,() => 'random-'+(++serial),clock); owner.setActor(actor);
@@ -622,4 +623,240 @@ test('invitation decision body: zero seats disable accept, clock expiry honest, 
   };
   assert.equal(isInviteClockExpired(expired, Date.parse('2026-11-14T12:00:00Z')), true);
   assert.equal(isInviteClockExpired({ ...expired, expiresAt: null }, Date.parse('2026-11-14T12:00:00Z')), false);
+});
+
+test('#522 APK46 manager revoke: managed projection eligibility, selected revoke only, UNKNOWN exact retry', async () => {
+  const invite = { kind: 'invitation', id: 'invite-mgr' } as const;
+  const base = {
+    id: 'invite-mgr', gameId: 'game-managed', status: 'pending' as const, version: 4,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  let managedCalls = 0;
+  let includeManaged = true;
+  let pagePhase: 'first' | 'more' | 'done' = 'first';
+  const { owner, sent, port } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base }),
+    managed: async (cursor?: string) => {
+      managedCalls++;
+      if (!includeManaged) return { items: [{ id: 'other-game' }], nextCursor: null };
+      // Bounded pagination: first page misses, second page hits game-managed.
+      if (!cursor && pagePhase === 'first') { pagePhase = 'more'; return { items: [{ id: 'other-game' }], nextCursor: 'c1' }; }
+      pagePhase = 'done';
+      return { items: [{ id: 'game-managed' }], nextCursor: null };
+    },
+    send: async p => { sent.push(p); return { ...base, status: 'revoked', version: 5 }; },
+  });
+  owner.focus(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, true);
+  assert.ok(managedCalls >= 2);
+  // Recipient accept/decline path must stay closed for manager.
+  await owner.act(invite, 'accept'); assert.equal(sent.length, 0);
+  await owner.act(invite, 'decline'); assert.equal(sent.length, 0);
+  pagePhase = 'first';
+  await owner.act(invite, 'revoke');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.action, 'revoke');
+  assert.equal(sent[0]!.path, '/invitations/invite-mgr/revoke');
+  assert.deepEqual(sent[0]!.body, { expectedVersion: 4 });
+  assert.ok(Object.isFrozen(sent[0]!.body));
+  const header = owner.getSnapshot().detail?.header;
+  assert.equal(header && 'status' in header ? header.status : null, 'revoked');
+
+  // Rights loss fail-closed: no POST when managed projection no longer includes the game.
+  port.invitation = async () => ({ ...base, id: 'invite-mgr', version: 6 });
+  includeManaged = false;
+  await owner.loadDetail(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, false);
+  const before = sent.length;
+  await owner.act(invite, 'revoke');
+  assert.equal(sent.length, before);
+
+  // UNKNOWN exact packet retry — no auto after refresh; explicit retry only.
+  let fail = true;
+  const unknownSent: MessagePacket[] = [];
+  const unknown = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base, id: 'invite-u', version: 2 }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => { unknownSent.push(p); if (fail) throw new MessagesError('network'); return { ...base, id: 'invite-u', status: 'revoked', version: 3 }; },
+  });
+  const u = { kind: 'invitation' as const, id: 'invite-u' };
+  unknown.owner.focus(u); await tick();
+  await unknown.owner.act(u, 'revoke');
+  assert.equal(unknownSent.length, 1);
+  const packet = unknownSent[0]!;
+  assert.equal(unknown.owner.getSnapshot().pending['invitation:invite-u']?.state, 'unknown');
+  unknown.owner.setActor({ ...actor }); // same actor refresh must not auto-retry
+  await unknown.owner.act(u, 'revoke');
+  assert.equal(unknownSent.length, 1);
+  fail = false;
+  await unknown.owner.retry(u);
+  assert.strictEqual(unknownSent[1], packet);
+});
+
+test('#522 APK46 revoke-only path: reject unsupported direct revoke; blur after managed GET → zero dispatch', async () => {
+  assert.throws(() => mutationPath({ kind: 'direct', id: 'thread-a' }, 'revoke'), MessagesError);
+  assert.throws(() => mutationPath({ kind: 'game', id: 'game-a' }, 'revoke'), MessagesError);
+  assert.equal(mutationPath({ kind: 'invitation', id: 'inv-1' }, 'revoke'), '/invitations/inv-1/revoke');
+  // Old direct accept/send semantics stay intact.
+  assert.equal(mutationPath({ kind: 'direct', id: 'thread-a' }, 'accept'), '/conversations/thread-a/accept');
+  assert.equal(mutationPath({ kind: 'direct', id: 'thread-a' }, 'send'), '/conversations/thread-a/messages');
+
+  const invite = { kind: 'invitation', id: 'invite-blur' } as const;
+  const base = {
+    id: 'invite-blur', gameId: 'game-managed', status: 'pending' as const, version: 1,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  const actGate = deferred<{ items: { id: string }[]; nextCursor: null }>();
+  let managedPhase = 0;
+  const blurSent: MessagePacket[] = [];
+  const { owner } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base }),
+    managed: async () => {
+      managedPhase++;
+      // First call seeds focus detail; act() re-checks eligibility behind the gate.
+      if (managedPhase <= 1) return { items: [{ id: 'game-managed' }], nextCursor: null };
+      return actGate.promise;
+    },
+    send: async p => { blurSent.push(p); return { ...base, status: 'revoked', version: 2 }; },
+  });
+  owner.focus(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, true);
+  const work = owner.act(invite, 'revoke');
+  await tick();
+  owner.setForeground(false);
+  actGate.resolve({ items: [{ id: 'game-managed' }], nextCursor: null });
+  await work;
+  assert.equal(blurSent.length, 0);
+  assert.equal(owner.getSnapshot().pending['invitation:invite-blur'], undefined);
+  assert.equal(owner.getSnapshot().notice, null);
+});
+
+test('#522 APK46 revoke fence: captured foreground lifecycle invalidates after background→return; live boolean alone is not enough', () => {
+  const invite = { kind: 'invitation', id: 'invite-aba' } as const;
+  const { owner } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({
+      id: 'invite-aba', gameId: 'game-managed', status: 'pending', version: 1,
+      inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+      expiresAt: null, participationId: null, acceptanceContext: null,
+    }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+  });
+  owner.focus(invite);
+  const packet = Object.freeze({
+    actor: Object.freeze({ ...actor }), resource: Object.freeze({ ...invite }), action: 'revoke' as const,
+    method: 'POST' as const, path: '/invitations/invite-aba/revoke',
+    body: Object.freeze({ expectedVersion: 1 }), key: 'k-aba',
+  });
+  const view = owner.getSnapshot().viewGeneration;
+  const life = owner.foregroundLifecycle();
+  assert.equal(owner.mayDispatchRevoke(packet, 0, view, life), true);
+  owner.setForeground(false);
+  owner.setForeground(true);
+  assert.equal(owner.getSnapshot().viewGeneration, view);
+  assert.notEqual(owner.foregroundLifecycle(), life);
+  assert.equal(owner.mayDispatchRevoke(packet, 0, view, life), false);
+  assert.equal(owner.mayDispatchRevoke(packet, 0, view, owner.foregroundLifecycle()), true);
+});
+
+test('#522 APK46 revoke fence: proven-zero stale clears initial sending; UNKNOWN network retained; reconcile stale keeps packet', async () => {
+  const invite = { kind: 'invitation', id: 'invite-fence' } as const;
+  const base = {
+    id: 'invite-fence', gameId: 'game-managed', status: 'pending' as const, version: 2,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  let mode: 'stale' | 'network' | 'ok' = 'stale';
+  const sent: MessagePacket[] = [];
+  const { owner } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (mode === 'stale') throw new MessagesError('stale');
+      if (mode === 'network') throw new MessagesError('network');
+      return { ...base, status: 'revoked', version: 3 };
+    },
+  });
+  owner.focus(invite); await tick();
+  await owner.act(invite, 'revoke');
+  assert.equal(sent.length, 1);
+  assert.equal(owner.getSnapshot().pending['invitation:invite-fence'], undefined);
+  assert.equal(owner.getSnapshot().notice, null);
+
+  mode = 'network';
+  await owner.act(invite, 'revoke');
+  assert.equal(sent.length, 2);
+  const packet = sent[1]!;
+  assert.equal(owner.getSnapshot().pending['invitation:invite-fence']?.state, 'unknown');
+  assert.strictEqual(owner.getSnapshot().pending['invitation:invite-fence']?.packet, packet);
+
+  mode = 'stale';
+  await owner.retry(invite);
+  assert.equal(sent.length, 3);
+  assert.equal(owner.getSnapshot().pending['invitation:invite-fence']?.state, 'unknown');
+  assert.strictEqual(owner.getSnapshot().pending['invitation:invite-fence']?.packet, packet);
+
+  mode = 'ok';
+  await owner.retry(invite);
+  assert.equal(sent.length, 4);
+  assert.strictEqual(sent[3], packet);
+  assert.equal(owner.getSnapshot().pending['invitation:invite-fence'], undefined);
+});
+
+test('#522 APK46 revoke: stale rendered viewGeneration/actor → zero dispatch; current revoke preserved', async () => {
+  const invite = { kind: 'invitation', id: 'invite-stale-render' } as const;
+  const base = {
+    id: 'invite-stale-render', gameId: 'game-managed', status: 'pending' as const, version: 3,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  const sent: MessagePacket[] = [];
+  const { owner } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => { sent.push(p); return { ...base, status: 'revoked', version: base.version + 1 }; },
+  });
+  owner.focus(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, true);
+  const rendered = owner.getSnapshot();
+
+  // Same-invitation reopen bumps viewGeneration; stale handler must not dispatch under new intent.
+  owner.focus(null); owner.focus(invite); await tick();
+  assert.notEqual(owner.getSnapshot().viewGeneration, rendered.viewGeneration);
+  await owner.act(invite, 'revoke', undefined, rendered.viewGeneration, rendered.actor);
+  assert.equal(sent.length, 0);
+  // Recipient accept/decline stay closed for manager (other actions preserved).
+  await owner.act(invite, 'accept'); assert.equal(sent.length, 0);
+  await owner.act(invite, 'decline'); assert.equal(sent.length, 0);
+  // Current rendered revoke still works.
+  await owner.act(invite, 'revoke', undefined, owner.getSnapshot().viewGeneration, owner.getSnapshot().actor);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.action, 'revoke');
+
+  // Authorized-manager session switch: stale actor intent → zero dispatch.
+  const afterRevoke = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base, id: 'invite-stale-actor', version: 4 }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => { sent.push(p); return { ...base, id: 'invite-stale-actor', status: 'revoked', version: 5 }; },
+  });
+  const inviteB = { kind: 'invitation' as const, id: 'invite-stale-actor' };
+  afterRevoke.owner.focus(inviteB); await tick();
+  const renderedActor = afterRevoke.owner.getSnapshot();
+  afterRevoke.owner.setActor({ ...actor, sessionId: 'manager-session-b', generation: 2 });
+  afterRevoke.owner.focus(inviteB); await tick();
+  const before = sent.length;
+  await afterRevoke.owner.act(inviteB, 'revoke', undefined, renderedActor.viewGeneration, renderedActor.actor);
+  assert.equal(sent.length, before);
+  await afterRevoke.owner.act(inviteB, 'revoke', undefined, afterRevoke.owner.getSnapshot().viewGeneration, afterRevoke.owner.getSnapshot().actor);
+  assert.equal(sent.length, before + 1);
+  assert.equal(sent[before]!.action, 'revoke');
 });
