@@ -1776,3 +1776,64 @@ test('#522 QA2: cold expiry cleanup SecureStore write failure fail-closes hydrat
   assert.equal(auth.getSnapshot().status, 'unverifiable');
   assert.equal(auth.getSnapshot().notice, 'storage');
 });
+test('#522 APK44: game-contact preference AuthCoordinator fences, PATCH transport, creation prefill untouched', async t => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameContactPreference;
+  const calls: { path: string; method?: string; body?: unknown; key?: string }[] = [];
+  let preference = { version: 0, defaultPublicGameContact: null as string | null };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === '/me/game-preferences') {
+      calls.push({
+        path,
+        method: init.method,
+        body: init.body ? JSON.parse(String(init.body)) : undefined,
+        key: (init.headers as Record<string, string> | undefined)?.['Idempotency-Key'],
+      });
+      if ((init.method ?? 'GET') === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { expectedVersion: number; defaultPublicGameContact: string | null };
+        preference = { version: body.expectedVersion + 1, defaultPublicGameContact: body.defaultPublicGameContact };
+        return preference;
+      }
+      return preference;
+    }
+    if (path === '/me/social-profile') return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+    return { ok: true };
+  });
+  await owner.load();
+  assert.equal(calls.some(c => c.method === 'PATCH'), false);
+  owner.updateDraft('telegram:@auth');
+  await owner.save();
+  const save = calls.find(c => c.method === 'PATCH');
+  assert.ok(save);
+  assert.deepEqual(save!.body, { expectedVersion: 0, defaultPublicGameContact: 'telegram:@auth' });
+  assert.ok(save!.key && save!.key.length >= 16);
+  assert.equal(owner.getSnapshot().preference?.defaultPublicGameContact, 'telegram:@auth');
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.gameContactPreference, owner);
+  assert.equal(owner.getSnapshot().preference?.defaultPublicGameContact, 'telegram:@auth');
+
+  // Creation prefill uses ordinary GET; later preference save must not overwrite user-edited create form.
+  t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+  const management = s.auth.gameManagement;
+  await management.loadContext('city-1');
+  assert.equal(management.getSnapshot().form.contact, 'telegram:@auth');
+  management.update({ contact: '@user-edited' });
+  assert.equal(management.getSnapshot().form.contact, '@user-edited');
+  owner.updateDraft('telegram:@other');
+  await owner.save();
+  assert.equal(management.getSnapshot().form.contact, '@user-edited');
+  assert.equal(owner.getSnapshot().preference?.defaultPublicGameContact, 'telegram:@other');
+
+  const patchCount = calls.filter(c => c.method === 'PATCH').length;
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(owner.getSnapshot().preference, null);
+  owner.updateDraft('@guest');
+  await owner.save();
+  assert.equal(calls.filter(c => c.method === 'PATCH').length, patchCount);
+});

@@ -246,6 +246,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `role-reputation.test.ts`; source APK counter 43 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL game-detail read parity; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## P-07 · Own saved game-contact preference read/save/remove (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameContactPreference.tsx` + `GET/PATCH /v1/me/game-preferences`; native `game-contact-preference.ts` / profile card; PATCH NativeBearer via `requirePrincipalMutation` only |
+| Entry | Authenticated `/profile` — bounded «Контакт для игр» card alongside own profile / settings (not full Settings redesign) |
+| Trigger | Explicit load on idle; Save trimmed 1…320; separate Remove when saved contact present; no auto-write on mount/login/reload/back |
+| Expected | Server version CAS + Idempotency-Key; empty draft ≠ save(null); unchanged/empty disables Save; 409 → keep draft + explicit reread; UNKNOWN exact packet/key retry; actor/session fence late A→B; logout/forget clears; does not push over user-edited creation form (next ordinary create GET remains authoritative); existing games/directory unchanged |
+| Accessibility | Named field + Save/Remove; busy/UNKNOWN announced; existing profile-card tokens |
+| Non-scope | Full Settings parity; device/APK44 binary/iOS/OTA; OpenAPI rewrite; PROD; full #522 |
+| Evidence | Mobile unit `game-contact-preference.test.ts` + `auth.test.ts`; API `native-game-management.foundation` preference lifecycle; source APK counter 44 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native preference parity; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 
 | Field | Content |

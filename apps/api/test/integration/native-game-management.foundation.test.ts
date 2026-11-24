@@ -260,9 +260,42 @@ run("native game management · self-migrating isolated database", () => {
       }
     }
     expect((await app.inject({url:'/v1/me/discovery-preference',headers:bearer(owner)})).statusCode).toBe(401);
-    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner),payload:{expectedVersion:1,defaultPublicGameContact:null}})).statusCode).toBe(403);
+    // PATCH /me/game-preferences is native-opted via requirePrincipalMutation; closed cancel neighbor stays 403.
     expect((await app.inject({method:'POST',url:`/v1/games/${g.id}/cancel`,headers:bearer(owner),payload:{expectedVersion:g.version,reason:'Not admitted'}})).statusCode).toBe(403);
     await app.get(SessionService).revokeSession(owner.sessionId);
     for(const route of routes) expect((await app.inject({...route,headers:bearer(owner)})).statusCode).toBe(401);
+  });
+  it('native bearer game-preferences PATCH lifecycle: save/remove, CAS409, key replay/mismatch, cookie CSRF and revoked bearer', async () => {
+    const owner = await actor(), outsider = await actor();
+    const empty = await app.inject({url:'/v1/me/game-preferences',headers:bearer(owner)});
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json()).toEqual({version:0,defaultPublicGameContact:null});
+    const saveKey = randomUUID(), savePayload = {expectedVersion:0,defaultPublicGameContact:'telegram:@native_pref'};
+    const saved = await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner,saveKey),payload:savePayload});
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({version:1,defaultPublicGameContact:'telegram:@native_pref'});
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner,saveKey),payload:savePayload})).json()).toEqual(saved.json());
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner,saveKey),payload:{expectedVersion:0,defaultPublicGameContact:'telegram:@other'}})).statusCode).toBe(409);
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner),payload:{expectedVersion:0,defaultPublicGameContact:'telegram:@stale'}})).statusCode).toBe(409);
+    const cookieKey = randomUUID();
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:{origin,cookie:owner.cookie,'idempotency-key':cookieKey},payload:{expectedVersion:1,defaultPublicGameContact:null}})).json().code).toBe('CSRF_REQUIRED');
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:{...browser(owner),origin:'https://evil.test'},payload:{expectedVersion:1,defaultPublicGameContact:null}})).json().code).toBe('ORIGIN_REJECTED');
+    const cookieRemove = await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:browser(owner),payload:{expectedVersion:1,defaultPublicGameContact:'telegram:@cookie_path'}});
+    expect(cookieRemove.statusCode).toBe(200);
+    expect(cookieRemove.json()).toEqual({version:2,defaultPublicGameContact:'telegram:@cookie_path'});
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:{...bearer(owner),cookie:owner.cookie},payload:{expectedVersion:2,defaultPublicGameContact:null}})).statusCode).toBe(403);
+    for (const authorization of ['', 'Basic invalid', 'Bearer invalid', `Bearer ${'x'.repeat(43)}`]) {
+      expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:{authorization,'idempotency-key':randomUUID()},payload:{expectedVersion:2,defaultPublicGameContact:null}})).statusCode).toBe(401);
+    }
+    expect((await disabledApp.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner),payload:{expectedVersion:2,defaultPublicGameContact:null}})).statusCode).toBe(404);
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(outsider),payload:{expectedVersion:2,defaultPublicGameContact:null}})).statusCode).toBe(409);
+    const removeKey = randomUUID(), removePayload = {expectedVersion:2,defaultPublicGameContact:null};
+    const removed = await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner,removeKey),payload:removePayload});
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toEqual({version:3,defaultPublicGameContact:null});
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner,removeKey),payload:removePayload})).json()).toEqual(removed.json());
+    expect((await app.inject({url:'/v1/me/game-preferences',headers:bearer(owner)})).json()).toEqual(removed.json());
+    await app.get(SessionService).revokeSession(owner.sessionId);
+    expect((await app.inject({method:'PATCH',url:'/v1/me/game-preferences',headers:bearer(owner),payload:{expectedVersion:3,defaultPublicGameContact:'telegram:@revoked'}})).statusCode).toBe(401);
   });
 });

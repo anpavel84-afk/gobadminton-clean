@@ -11,6 +11,7 @@ import { ProfileAvatarCoordinator } from './profile-avatar.ts';
 import { ProfileCoverCoordinator } from './profile-cover.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
+import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
 import { PlayersCoordinator, PlayersError } from './players.ts';
@@ -55,6 +56,7 @@ export class AuthCoordinator {
   readonly avatar: ProfileAvatarCoordinator;
   readonly cover: ProfileCoverCoordinator;
   readonly trainer: TrainerProfileCoordinator;
+  readonly gameContactPreference: GameContactPreferenceCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
   readonly postgame: PostgameCoordinator;
@@ -162,6 +164,12 @@ export class AuthCoordinator {
       applySocial: fresh => { this.profile.rebaseFromAuthoritative(fresh); },
       invalidateGameTrainer: () => { void this.gameManagement.refreshOwnTrainerContext(); },
     });
+    // Own game-contact preference: GET already admitted; PATCH uses closed mutateGamePreferences port only.
+    // Never pushes into an in-flight creation form — next ordinary loadContext GET remains authoritative.
+    this.gameContactPreference = new GameContactPreferenceCoordinator({
+      read: () => this.participationRead(access => deps.api.gamePreferences(access)),
+      send: (packet, authority) => this.participationRead(access => deps.api.mutateGamePreferences(access, packet), authority),
+    }, deps.random);
     // avatar ↔ cover ↔ trainer busy fences are closed over `this` and resolve after fields exist.
     this.messages = new MessagesCoordinator({
       inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
@@ -312,7 +320,8 @@ export class AuthCoordinator {
     const actor = this.participation.getSnapshot().actor;
     if (this.snapshot.status !== 'hydrating') {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
-      this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor); this.contact.setActor(actor);
+      this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
+      this.gameContactPreference.setActor(actor); this.contact.setActor(actor);
     }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
@@ -709,6 +718,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.avatar.forget();
     if (forgetCreation) this.cover.forget();
     if (forgetCreation) this.trainer.forget();
+    if (forgetCreation) this.gameContactPreference.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
     if (forgetCreation) this.postgame.forget();
