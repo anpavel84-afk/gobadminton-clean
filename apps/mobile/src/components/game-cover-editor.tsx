@@ -28,6 +28,33 @@ function retirePickerSource(asset: PickedAvatarAsset | null | undefined) {
   releaseOwnedPickerAsset(createExpoAvatarRuntime(), asset);
 }
 
+/** Lifetime owner for retained picker cache — not React state (updaters may be discarded on unmount). */
+type OwnedPickerLease = { scope: string; asset: PickedAvatarAsset };
+
+function installOwnedPicker(
+  ref: { current: OwnedPickerLease | null },
+  scope: string,
+  asset: PickedAvatarAsset,
+) {
+  const prev = ref.current;
+  if (prev && (prev.scope !== scope || prev.asset.uri !== asset.uri)) {
+    ref.current = null;
+    retirePickerSource(prev.asset);
+  }
+  ref.current = { scope, asset };
+}
+
+function retireOwnedPicker(
+  ref: { current: OwnedPickerLease | null },
+  scope?: string,
+) {
+  const cur = ref.current;
+  if (!cur) return;
+  if (scope !== undefined && cur.scope !== scope) return;
+  ref.current = null;
+  retirePickerSource(cur.asset);
+}
+
 function bytesToDataUri(bytes: Uint8Array, mime: string): string {
   const chunk = 0x8000;
   let binary = '';
@@ -74,6 +101,8 @@ export function GameCoverEditor({
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const leaseRef = useRef<number | null>(null);
   const endPickerRef = useRef<(() => void) | null>(null);
+  /** Direct owned picker cache lease — cleanup must not depend on setDraft updaters. */
+  const ownedPickerRef = useRef<OwnedPickerLease | null>(null);
   const [draft, setDraft] = useState<DraftBundle>(() => emptyDraft(''));
   const [preparing, setPreparing] = useState(false);
   const [reconciling, setReconciling] = useState(false);
@@ -96,7 +125,7 @@ export function GameCoverEditor({
 
   // Synchronous draft binding — previous-game/account/view private image must not render or submit under a new permit.
   if (draft.scope !== draftScope) {
-    retirePickerSource(draft.asset);
+    retireOwnedPicker(ownedPickerRef, draft.scope);
     setDraft(emptyDraft(draftScope));
   }
   const preparingScoped = draft.scope === draftScope && preparing;
@@ -123,11 +152,8 @@ export function GameCoverEditor({
       owner.setForeground(next === 'active');
       // Ordinary background clears draft; expected picker handoff retains legitimate selection.
       if (next !== 'active' && !owner.expectingPickerHandoff()) {
-        setDraft(d => {
-          if (d.scope !== scopeForBg) return d;
-          retirePickerSource(d.asset);
-          return emptyDraft(scopeForBg);
-        });
+        retireOwnedPicker(ownedPickerRef, scopeForBg);
+        setDraft(d => (d.scope !== scopeForBg ? d : emptyDraft(scopeForBg)));
         setPreparing(false);
       }
     });
@@ -135,14 +161,13 @@ export function GameCoverEditor({
       sub.remove();
       // Expo route blur/unmount is real view retirement — always end picker + release lease.
       // Native picker Activity background does not navigate Expo routes (AppState + handoff handle that).
+      // Owned picker cache retired directly from ref — setDraft updaters are not guaranteed on unmount.
       endPickerRef.current?.();
       endPickerRef.current = null;
       release();
       leaseRef.current = null;
-      setDraft(d => {
-        retirePickerSource(d.asset);
-        return emptyDraft(d.scope);
-      });
+      retireOwnedPicker(ownedPickerRef);
+      setDraft(d => emptyDraft(d.scope));
       setPreparing(false);
       setReconciling(false);
       reconcileViewRef.current = null;
@@ -155,10 +180,8 @@ export function GameCoverEditor({
     if (!open) {
       endPickerRef.current?.();
       endPickerRef.current = null;
-      setDraft(d => {
-        retirePickerSource(d.asset);
-        return emptyDraft(draftScope);
-      });
+      retireOwnedPicker(ownedPickerRef);
+      setDraft(emptyDraft(draftScope));
       setReconciling(false);
       reconcileViewRef.current = null;
     }
@@ -245,11 +268,8 @@ export function GameCoverEditor({
     endPickerRef.current?.();
     endPickerRef.current = null;
     if (live) {
-      setDraft(d => {
-        if (d.scope !== draftScope) return d;
-        retirePickerSource(d.asset);
-        return emptyDraft(draftScope);
-      });
+      retireOwnedPicker(ownedPickerRef, draftScope);
+      setDraft(d => (d.scope !== draftScope ? d : emptyDraft(draftScope)));
     }
     onOpenChange(false);
   }
@@ -257,12 +277,9 @@ export function GameCoverEditor({
   function resetSelection() {
     if (saving) return;
     if (!permit || !owner.permitLive(permit)) return;
-    // Old reset must not clear a newer context's draft.
-    setDraft(d => {
-      if (d.scope !== draftScope) return d;
-      retirePickerSource(d.asset);
-      return emptyDraft(draftScope);
-    });
+    // Old reset must not clear a newer context's draft / owned picker.
+    retireOwnedPicker(ownedPickerRef, draftScope);
+    setDraft(d => (d.scope !== draftScope ? d : emptyDraft(draftScope)));
     setPreparing(false);
   }
 
@@ -336,19 +353,16 @@ export function GameCoverEditor({
                     end?.();
                     if (!accepted) return;
                     if (picked === 'cancelled') return;
-                    setDraft(d => {
-                      if (d.scope === scope && d.asset && d.asset.uri !== picked.uri) {
-                        retirePickerSource(d.asset);
-                      }
-                      return {
-                        scope,
-                        asset: picked,
-                        crop: { x: 0.5, y: 0.5 },
-                        previewUri: null,
-                        previewBytes: null,
-                        confirmed: false,
-                        prepareError: null,
-                      };
+                    // Sync owned-cache lease before display state — retirement must not live in setDraft.
+                    installOwnedPicker(ownedPickerRef, scope, picked);
+                    setDraft({
+                      scope,
+                      asset: picked,
+                      crop: { x: 0.5, y: 0.5 },
+                      previewUri: null,
+                      previewBytes: null,
+                      confirmed: false,
+                      prepareError: null,
                     });
                   }, failure => {
                     const accepted = owner.pickerHandoffLive(captured) || owner.permitLive(captured);
@@ -440,11 +454,8 @@ export function GameCoverEditor({
                       const snap = owner.getSnapshot();
                       // Close only on definite success + live original view — not on error/UNKNOWN notice.
                       if (gameCoverMutationSucceeded(snap)) {
-                        setDraft(d => {
-                          if (d.scope !== scope) return d;
-                          retirePickerSource(d.asset);
-                          return emptyDraft(scope);
-                        });
+                        retireOwnedPicker(ownedPickerRef, scope);
+                        setDraft(d => (d.scope !== scope ? d : emptyDraft(scope)));
                         onOpenChange(false);
                       }
                     });
@@ -457,11 +468,8 @@ export function GameCoverEditor({
                     void owner.remove(captured).then(() => {
                       if (!owner.permitLive(captured)) return;
                       if (gameCoverMutationSucceeded(owner.getSnapshot())) {
-                        setDraft(d => {
-                          if (d.scope !== scope) return d;
-                          retirePickerSource(d.asset);
-                          return emptyDraft(scope);
-                        });
+                        retireOwnedPicker(ownedPickerRef, scope);
+                        setDraft(d => (d.scope !== scope ? d : emptyDraft(scope)));
                         onOpenChange(false);
                       }
                     });
