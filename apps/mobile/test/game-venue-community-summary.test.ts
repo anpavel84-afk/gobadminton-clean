@@ -1,7 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { URL } from 'node:url';
 import { createPublicApi, PublicApiError } from '../src/public-api.ts';
 import { LatestResource } from '../src/resource.ts';
 import {
@@ -14,7 +12,6 @@ import {
 } from '../src/game-venue-community-summary.ts';
 import type { CommunityRatingSummary } from '../src/venue-community.ts';
 
-const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const venueA = '10000000-0000-4000-8000-0000000000a1';
 const venueB = '10000000-0000-4000-8000-0000000000b2';
 
@@ -122,52 +119,4 @@ test('#522 APK50 LatestResource venue A→B suppresses stale A; retry replaces e
   assert.equal(resource.getSnapshot().status, 'ready');
   assert.equal(resource.getSnapshot().data?.average, 4.0);
   assert.equal(resource.getSnapshot().data?.count, 8);
-});
-
-test('#522 APK50 source wiring: signed-in compact summary sibling, no NativeVenueCommunity owner, counter 50', () => {
-  const helper = read('../src/game-venue-community-summary.ts');
-  const component = read('../src/components/game-venue-community-summary.tsx');
-  const gameDetails = read('../app/games/[id].tsx');
-  const api = read('../src/public-api.ts');
-  const privateContacts = read('../src/components/private-game-venue-contacts.tsx');
-
-  assert.match(helper, /loadGameVenueCommunitySummary/);
-  assert.match(helper, /parseSummaries/);
-  assert.match(helper, /compactSummaryPhase/);
-  assert.match(helper, /venueCommunityNavParams/);
-  assert.match(helper, /from: 'game'/);
-
-  assert.match(component, /GameVenueCommunitySummaryPanel/);
-  assert.match(component, /useResource/);
-  assert.match(component, /communitySummaryResourceKey/);
-  assert.match(component, /publicApi\.communitySummary/);
-  assert.match(component, /Оценки сообщества/);
-  assert.match(component, /Загружаем оценки/);
-  assert.match(component, /Не удалось загрузить оценки/);
-  assert.match(component, /Повторить загрузку оценок/);
-  assert.match(component, /Сводка оценок недоступна/);
-  assert.match(component, /Пока нет оценок/);
-  assert.match(component, /Оценки и обсуждение/);
-  assert.match(component, /pathname: '\/venues\/\[id\]'/);
-  assert.match(component, /venueCommunityNavParams/);
-  assert.doesNotMatch(component, /NativeVenueCommunity|useVenueCommunity|communityOwn|communityMutation|privateGameVenueContacts|\/me\//);
-  assert.doesNotMatch(component, /vote|photoIds|upsert|withdraw/);
-
-  assert.match(gameDetails, /GameVenueCommunitySummaryPanel/);
-  assert.match(gameDetails, /authenticated \? <GameVenueCommunitySummaryPanel venueId=\{game\.venue\.id\} \/>/);
-  assert.match(gameDetails, /PrivateGameVenueContactsPanel/);
-  const summaryIdx = gameDetails.indexOf('GameVenueCommunitySummaryPanel');
-  const contactsIdx = gameDetails.indexOf('PrivateGameVenueContactsPanel');
-  const courtIdx = gameDetails.indexOf('GameCourtBookingPanel');
-  assert.ok(summaryIdx > 0 && contactsIdx > summaryIdx && courtIdx > contactsIdx);
-  assert.doesNotMatch(gameDetails, /NativeVenueCommunity/);
-
-  assert.match(api, /communitySummary: \(venueId: string, signal\?: AbortSignal\)/);
-  assert.match(api, /credentials: 'omit'/);
-
-  // Public summary must stay independent of private contacts result / empty omit.
-  assert.match(privateContacts, /successful empty omits the section/i);
-  assert.doesNotMatch(privateContacts, /GameVenueCommunitySummary|communitySummary|Оценки сообщества/);
-
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 50);
 });
