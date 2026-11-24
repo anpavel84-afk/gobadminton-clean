@@ -342,6 +342,19 @@ export class MessagesCoordinator {
   isPeerSafetyHeld = (peer: string) => this.safetyPeers.has(peer);
   safetyPermit = (packet: MessagePacket) => this.safetyAttempts.get(packet) ?? 0;
   mayDispatchSafety = (packet: MessagePacket, permit = this.safetyPermit(packet)) => permit === this.safetyPermit(packet) && !this.safetyHeld(packet.resource, packet.action);
+  /**
+   * Revoke-only final wire permit (post token await): same dispatch attempt + current
+   * actor/session + captured view + focused invitation route + foreground.
+   * Accept/send/read keep mayDispatchSafety only.
+   */
+  mayDispatchRevoke = (packet: MessagePacket, permit: number, viewGeneration: number) =>
+    packet.action === 'revoke'
+    && packet.resource.kind === 'invitation'
+    && this.mayDispatchSafety(packet, permit)
+    && sameActor(packet.actor, this.snapshot.actor)
+    && this.foreground
+    && this.focused === resourceKey(packet.resource)
+    && this.snapshot.viewGeneration === viewGeneration;
   private safetyHeld(resource: MessageResource, action: MessageAction) {
     return resource.kind === 'direct' && action !== 'read' && this.safetyPeers.has(this.directPeers.get(resource.id) ?? '');
   }
@@ -396,7 +409,9 @@ export class MessagesCoordinator {
       if (resource.kind !== 'invitation' || !('status' in h) || h.status !== 'pending' || h.inviteePublicPlayerId === detail.ownId || !detail.managerEligible) return;
       const revision = this.revision, request = this.detailRevision;
       const still = await this.resolveManagerEligible(detail.ownId ?? '', h, revision, request);
-      if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, this.snapshot.actor) || this.focused !== key || this.snapshot.pending[key]) return;
+      // Post-managed-GET selected-route fence: blur/focus/account cancel cleanly — not a rights-loss notice.
+      if (revision !== this.revision || expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, this.snapshot.actor)
+        || this.focused !== key || !this.foreground || this.snapshot.pending[key]) return;
       const current = this.snapshot.detail;
       if (!current || current.status !== 'ready' || current.header !== h) return;
       if (!still) {
@@ -420,7 +435,7 @@ export class MessagesCoordinator {
     ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
     this.show({ pending: { ...this.snapshot.pending, [key]: { packet, state: 'sending' } }, notice: null, countsLoading: false, loadingMore: false,
       detail: { ...live, loadingMore: false } });
-    await this.dispatch(packet);
+    await this.dispatch(packet, 'initial');
   };
   /** Current GameManager projection only — fail-closed on missing/error/exhausted pages without a match. */
   private async resolveManagerEligible(ownId: string, invitation: GameInvitation, revision: number, request: number, safety?: SafetyRead): Promise<boolean> {
@@ -458,9 +473,13 @@ export class MessagesCoordinator {
     const pending = this.snapshot.pending[resourceKey(resource)];
     if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor,this.snapshot.actor) || !pending || this.safetyHeld(resource, pending.packet.action) || pending.state !== 'unknown' || !this.foreground || !sameActor(pending.packet.actor,this.snapshot.actor)) return;
     this.show({ pending: { ...this.snapshot.pending, [resourceKey(resource)]: { ...pending, state: 'sending' } } });
-    await this.dispatch(pending.packet);
+    await this.dispatch(pending.packet, 'reconcile');
   };
-  private async dispatch(packet: MessagePacket) {
+  /**
+   * @param intent `initial` — proven zero-dispatch (token/blur/focus fence) clears sending, never UNKNOWN.
+   *   `reconcile` — keep exact UNKNOWN packet/key for explicit retry; never auto after reauth/refresh.
+   */
+  private async dispatch(packet: MessagePacket, intent: 'initial' | 'reconcile' = 'initial') {
     const revision = this.revision, key = resourceKey(packet.resource), permit = this.safetyPermit(packet) + 1;
     this.safetyAttempts.set(packet, permit);
     try {
@@ -482,6 +501,17 @@ export class MessagesCoordinator {
       if (packet.resource.kind === 'invitation' && (packet.action === 'accept' || packet.action === 'decline' || packet.action === 'revoke')) this.invitationSettled?.();
     } catch (error) {
       if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || !this.mayDispatchSafety(packet, permit) || this.failed(error)) return;
+      // Proven zero-dispatch for selected revoke — never invent UNKNOWN from a canceled wire.
+      if (error instanceof MessagesError && error.kind === 'stale' && packet.action === 'revoke') {
+        if (intent === 'initial') {
+          const pending = { ...this.snapshot.pending }; delete pending[key];
+          this.show({ pending, notice: null });
+        } else {
+          this.show({ pending: { ...this.snapshot.pending, [key]: { packet, state: 'unknown' } },
+            notice: 'Результат неизвестен. Проверьте тем же запросом.' });
+        }
+        return;
+      }
       if (error instanceof MessagesError && error.kind === 'business' && !['IDEMPOTENCY_KEY_REUSED','KEY_REUSED','CLIENT_MESSAGE_ID_REUSED','CLIENT_MESSAGE_ID_UNAVAILABLE'].includes(error.code)) {
         const pending = { ...this.snapshot.pending }; delete pending[key];
         this.show({ pending, notice: error.status === 429 ? 'Слишком часто. Черновик сохранён.' : 'Действие отклонено. Черновик сохранён; обновите условия.' });

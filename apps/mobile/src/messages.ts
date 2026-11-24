@@ -82,6 +82,8 @@ export function resourcePath(r: MessageResource): `/conversations/${string}` | `
 export type MessageAction = 'send' | 'read' | 'accept' | 'decline' | 'revoke';
 export type MessageBody = Readonly<{ kind: 'text'; text: string; clientMessageId: string }> | Readonly<{ throughSeq: string }> | Readonly<{ expectedVersion: number; expectedGameVersion?: number }>;
 export function mutationPath(r: MessageResource, action: MessageAction): string {
+  // Selected revoke is invitation-only — never invent direct/game revoke routes.
+  if (action === 'revoke' && r.kind !== 'invitation') invalid();
   if (r.kind === 'invitation' ? !['accept','decline','revoke'].includes(action) : r.kind === 'game' && ['accept','decline','revoke'].includes(action)) invalid();
   return `${resourcePath(r)}/${action === 'send' ? 'messages' : action}`;
 }
