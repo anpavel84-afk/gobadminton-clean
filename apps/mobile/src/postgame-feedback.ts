@@ -600,8 +600,8 @@ export function displayOnlyReview(row: PrivateReview): PrivateReview {
 /** Exact-game results source statuses used to gate feedback deep-link reveal. */
 export type FeedbackRevealResultsStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
 
-/** Finite measure attempts for one reveal visit (first try + retries). */
-export const FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS = 3;
+/** Content-relative inset above «Как вам встреча?» for deliberate deep-link scroll. */
+export const FEEDBACK_REVEAL_SCROLL_INSET = 16;
 
 /** Stable focus key for one actor/session/game feedback deep-link visit. */
 export function feedbackRevealFocusKey(
@@ -642,7 +642,7 @@ export type FeedbackRevealAttempt =
 
 /**
  * Plan deep-link feedback reveal: wait for settled results layout; never consume the
- * visit key before a successful measure/scroll (caller marks complete separately).
+ * visit key before a successful layout-driven scroll (caller marks complete separately).
  */
 export function planFeedbackSectionReveal(gate: FeedbackRevealAttemptGate): FeedbackRevealAttempt {
   if (!gate.openFeedback || !gate.showFeedback || !gate.gameId) return { kind: 'idle' };
@@ -653,19 +653,58 @@ export function planFeedbackSectionReveal(gate: FeedbackRevealAttemptGate): Feed
 }
 
 /**
- * attemptIndex is 0-based for the try that just failed / lacked nodes.
- * Allows a finite retry so a transient measure miss can recover.
+ * Convert a direct ScrollView-content child onLayout.y into scrollTo y.
+ * Rejects non-finite / negative layout (section not ready) — no speculative delays.
  */
-export function feedbackRevealShouldRetryMeasurement(
-  attemptIndex: number,
-  maxAttempts: number = FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS,
-): boolean {
-  return attemptIndex + 1 < maxAttempts && attemptIndex >= 0 && maxAttempts > 0;
+export function feedbackRevealScrollOffset(
+  layoutY: number,
+  inset: number = FEEDBACK_REVEAL_SCROLL_INSET,
+): number | null {
+  if (!Number.isFinite(layoutY) || layoutY < 0) return null;
+  if (!Number.isFinite(inset) || inset < 0) return null;
+  return Math.max(0, layoutY - inset);
+}
+
+export type FeedbackRevealLayoutDecision =
+  | { kind: 'scroll'; key: string; y: number }
+  | { kind: 'wait_layout' }
+  | { kind: 'ignore' };
+
+/**
+ * Layout-driven reveal decision: active attempt + live target + ready content offset.
+ * Failed/missing layout leaves the visit open for a later onLayout (no RAF measure loop).
+ */
+export function planFeedbackRevealFromLayout(args: {
+  plan: FeedbackRevealAttempt;
+  layoutY: number | null | undefined;
+  openFeedback: boolean;
+  showFeedback: boolean;
+  gameId: string | null;
+  actor?: string | null;
+  session?: string | null;
+  inset?: number;
+}): FeedbackRevealLayoutDecision {
+  if (args.plan.kind === 'wait_layout') return { kind: 'wait_layout' };
+  if (args.plan.kind !== 'attempt') return { kind: 'ignore' };
+  if (!feedbackRevealTargetStillLive({
+    expectedKey: args.plan.key,
+    openFeedback: args.openFeedback,
+    showFeedback: args.showFeedback,
+    gameId: args.gameId,
+    actor: args.actor,
+    session: args.session,
+  })) {
+    return { kind: 'ignore' };
+  }
+  if (args.layoutY == null) return { kind: 'wait_layout' };
+  const y = feedbackRevealScrollOffset(args.layoutY, args.inset);
+  if (y == null) return { kind: 'wait_layout' };
+  return { kind: 'scroll', key: args.plan.key, y };
 }
 
 /**
- * Mark the visit complete only after successful measurement/scroll.
- * Failed measurement leaves the prior completed key unchanged for retry.
+ * Mark the visit complete only after successful layout-driven scroll.
+ * Missing/invalid layout leaves the prior completed key unchanged for a later onLayout.
  */
 export function nextFeedbackRevealCompletedKey(
   completedKey: string | null,
@@ -676,7 +715,7 @@ export function nextFeedbackRevealCompletedKey(
 }
 
 /**
- * Suppress late scroll/focus when the route or feedback target retired mid-measure.
+ * Suppress late scroll/focus when the route or feedback target retired mid-layout.
  */
 export function feedbackRevealTargetStillLive(args: {
   expectedKey: string;

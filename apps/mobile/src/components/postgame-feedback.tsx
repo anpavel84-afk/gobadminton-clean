@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef, type RefObject } from 'react';
-import { Platform, Pressable, TextInput, View } from 'react-native';
+import { Platform, Pressable, TextInput, View, type LayoutChangeEvent } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import {
@@ -352,13 +352,15 @@ function PrivateHistoryRow({
  * History lane works when full results/roster denied; notes stay a separate section.
  */
 export function FeedbackSection({
-  gameId, data, openFeedback = false, sectionRef,
+  gameId, data, openFeedback = false, sectionRef, onSectionLayout,
 }: {
   gameId: string;
   data?: Results;
   /** Deep-link from hub private history — prefer history lane without writing draft.mode. */
   openFeedback?: boolean;
   sectionRef?: RefObject<ComponentRef<typeof View> | null>;
+  /** Content-relative onLayout.y for results deep-link reveal (direct Page ScrollView child). */
+  onSectionLayout?: (layoutY: number) => void;
 }) {
   const { owner, s } = useOwner();
   const blocked = useBlocked();
@@ -409,6 +411,9 @@ export function FeedbackSection({
   const sent = s.reviewHistory.sent;
   const visible = feedbackSectionVisible(gameId, feedback, { received, sent });
   const orgRecipient = caps?.organizationRecipientDisplay;
+  const reportSectionLayout = (event: LayoutChangeEvent) => {
+    onSectionLayout?.(event.nativeEvent.layout.y);
+  };
 
   useEffect(() => {
     void owner.loadReviews('received');
@@ -417,7 +422,7 @@ export function FeedbackSection({
 
   if (!visible || !installed) {
     if (feedback && feedback.installed === false) {
-      return <View style={styles.card}>
+      return <View ref={sectionRef} collapsable={false} onLayout={reportSectionLayout} style={styles.card}>
         <Label style={{ fontWeight: '700' }}>Как вам встреча?</Label>
         <Label>Раздел обратной связи ещё не установлен на этой среде.</Label>
       </View>;
@@ -486,7 +491,7 @@ export function FeedbackSection({
     });
   };
 
-  return <View ref={sectionRef} style={{ gap: 12 }} accessibilityLabel="Обратная связь">
+  return <View ref={sectionRef} collapsable={false} onLayout={reportSectionLayout} style={{ gap: 12 }} accessibilityLabel="Обратная связь">
     <Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>Как вам встреча?</Label>
     <Label>Без публичного рейтинга</Label>
     <Label>Отзыв приватный и отделён от посещения. Нет публичного рейтинга и смены навыка.</Label>
