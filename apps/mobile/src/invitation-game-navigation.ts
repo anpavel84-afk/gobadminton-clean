@@ -24,6 +24,11 @@ export type InvitationOpenLive = Readonly<{
   invitationId: string;
   gameId: string;
   actor: Actor | null;
+  /**
+   * When set (rendered press permit), must match the ready phase bind.
+   * Omit for current-focus visibility checks — controller uses focusedBind generation.
+   */
+  viewGeneration?: number;
 }>;
 
 /** Ready Open-game target only when this view's fresh matching read settled. */
@@ -58,6 +63,8 @@ export function invitationGamePath(gameId: string): `/games/${string}` {
 export class InvitationGameNavController {
   private phase: InvitationGameNavPhase = { status: 'idle' };
   private serial = 0;
+  /** Stable focus-session id; not bumped by load/foreground renewals. */
+  private focusedLeaseId: number | null = null;
   private foreground = true;
   private focusedBind: InvitationGameNavBind | null = null;
   private participation: ParticipationCoordinator | null = null;
@@ -75,19 +82,24 @@ export class InvitationGameNavController {
     ++this.serial;
   }
 
-  /** Focus lease for one invitation identity; cleanup retires the generation. */
+  /**
+   * Focus lease for one invitation identity. Cleanup retires by lease id —
+   * independent of viewGeneration bumps from background→foreground / renew.
+   */
   focus = (
     bind: { invitationId: string; gameId: string; actor: Actor },
     participation: ParticipationCoordinator,
   ) => {
     this.participation = participation;
-    const viewGeneration = ++this.serial;
+    const leaseId = ++this.serial;
+    const viewGeneration = leaseId;
     const full: InvitationGameNavBind = Object.freeze({
       invitationId: bind.invitationId,
       gameId: bind.gameId,
       actor: Object.freeze({ ...bind.actor }),
       viewGeneration,
     });
+    this.focusedLeaseId = leaseId;
     this.focusedBind = full;
     if (this.foreground) this.startLoad(full);
     else {
@@ -95,7 +107,8 @@ export class InvitationGameNavController {
       this.emit();
     }
     return () => {
-      if (this.focusedBind?.viewGeneration === viewGeneration) {
+      if (this.focusedLeaseId === leaseId) {
+        this.focusedLeaseId = null;
         this.focusedBind = null;
         this.invalidateInFlight();
         this.phase = { status: 'idle' };
@@ -113,7 +126,7 @@ export class InvitationGameNavController {
       this.emit();
       return;
     }
-    if (this.focusedBind && this.participation) {
+    if (this.focusedBind && this.participation && this.focusedLeaseId != null) {
       const base = this.focusedBind;
       const viewGeneration = ++this.serial;
       const full: InvitationGameNavBind = Object.freeze({
@@ -127,13 +140,32 @@ export class InvitationGameNavController {
     }
   };
 
+  /**
+   * Same-focus manual renew: fresh game read without requiring invitation version change.
+   * No-op when lease retired, background, or participation actor no longer matches bind.
+   */
+  renewFocusedRead = () => {
+    if (!this.foreground || !this.focusedBind || !this.participation || this.focusedLeaseId == null) return;
+    const base = this.focusedBind;
+    if (!sameActor(this.participation.getSnapshot().actor, base.actor)) return;
+    const viewGeneration = ++this.serial;
+    const full: InvitationGameNavBind = Object.freeze({
+      invitationId: base.invitationId,
+      gameId: base.gameId,
+      actor: base.actor,
+      viewGeneration,
+    });
+    this.focusedBind = full;
+    this.startLoad(full);
+  };
+
   openGameId = (live: InvitationOpenLive): string | null => {
     if (!this.foreground || !this.focusedBind) return null;
     return invitationOpenGameTarget(this.phase, {
       invitationId: live.invitationId,
       gameId: live.gameId,
       actor: live.actor,
-      viewGeneration: this.focusedBind.viewGeneration,
+      viewGeneration: live.viewGeneration ?? this.focusedBind.viewGeneration,
     });
   };
 
@@ -152,6 +184,7 @@ export class InvitationGameNavController {
       const still = () =>
         this.foreground
         && !!this.focusedBind
+        && this.focusedLeaseId != null
         && this.focusedBind.viewGeneration === bind.viewGeneration
         && this.focusedBind.invitationId === bind.invitationId
         && this.focusedBind.gameId === bind.gameId

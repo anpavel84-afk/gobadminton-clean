@@ -62,7 +62,7 @@ function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
     const release = owner.leaseFocus({ kind: 'invitation', id: invitationId });
     return () => { release(); };
   }, [owner, invitationId, auth.status]));
-  const { onOpenGame } = useInvitationOpenGame({
+  const { onOpenGame, renewGameRead } = useInvitationOpenGame({
     invitationId,
     gameId: invitation?.gameId ?? listInvite.gameId,
     invitationVersion: invitation?.version ?? listInvite.version,
@@ -70,13 +70,14 @@ function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
   });
   // Open game only after invitation header is ready — hook may run earlier but target stays null until focus+read.
   const openGame = invitation ? onOpenGame : undefined;
+  const refreshInvitation = () => { void owner.loadDetail(resource).then(() => renewGameRead()); };
   return <View style={{ gap: 8 }}>
     {state.notice ? <Label accessibilityRole="alert">{state.notice}</Label> : null}
     {pending?.state === 'unknown' ? <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource, state.viewGeneration, state.actor); }} /> : null}
     {pending?.state === 'sending' ? <Label accessibilityLiveRegion="polite">Отправляем…</Label> : null}
     {!detail || detail.status === 'loading' ? <Label>Загружаем условия приглашения…</Label> : null}
     {detail?.status === 'error' ? <><Label>{detail.error ?? 'Приглашение недоступно.'}</Label>
-      <TextButton title="Обновить приглашение" onPress={() => { void owner.loadDetail(resource); }} /></> : null}
+      <TextButton title="Обновить приглашение" onPress={refreshInvitation} /></> : null}
     {invitation ? <InvitationDecisionBody
       invitation={invitation}
       ownId={detail?.ownId ?? null}
@@ -86,7 +87,7 @@ function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
       onOpenGame={openGame}
     /> : listInvite.status === 'pending' && detail?.status === 'ready' ? <Label>Условия сейчас недоступны. Обновите приглашение.</Label> : null}
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      <TextButton title="Обновить приглашение" onPress={() => { void owner.loadDetail(resource); }} />
+      <TextButton title="Обновить приглашение" onPress={refreshInvitation} />
       {!pending ? <TextButton title="Скрыть решение" onPress={onClose} /> : null}
     </View>
   </View>;

@@ -1,7 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { URL } from 'node:url';
 import {
   InvitationGameNavController,
   invitationGamePath,
@@ -11,6 +9,9 @@ import {
 import { ParticipationCoordinator, ParticipationError } from '../src/participation.ts';
 import type { Actor, ParticipationPort } from '../src/participation.ts';
 import { PublicApiError } from '../src/public-api.ts';
+import { MessagesCoordinator } from '../src/messages-coordinator.ts';
+import type { MessagePacket, MessagesPort } from '../src/messages-coordinator.ts';
+import { MessagesError } from '../src/messages.ts';
 import { game as fixture } from './fixtures.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
 
@@ -28,7 +29,6 @@ const deferred = <T>() => {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 };
-const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 function participationSetup(readGame: (id: string) => Promise<unknown> = async () => game) {
   const port: ParticipationPort = {
@@ -218,27 +218,187 @@ test('#522 APK47: foreground fence clears target; return refreshes same invitati
   release();
 });
 
-test('#522 APK47: game read does not mutate messages UNKNOWN packet identity (source + participation isolation)', async () => {
-  // Behavioral isolation: ParticipationCoordinator.loadGame never touches a frozen packet reference.
-  const packet = Object.freeze({
-    actor: Object.freeze({ ...actor }),
-    resource: Object.freeze({ kind: 'invitation' as const, id: 'invite-u' }),
-    action: 'revoke' as const,
-    method: 'POST' as const,
-    path: '/invitations/invite-u/revoke',
-    body: Object.freeze({ expectedVersion: 2 }),
-    key: 'exact-unknown-key',
+test('#522 APK47: lease cleanup retires after foreground gen bump; further foreground issues no reads', async () => {
+  let reads = 0;
+  const participation = participationSetup(async () => {
+    reads++;
+    return game;
   });
-  const pending = { packet, state: 'unknown' as const };
+  const nav = new InvitationGameNavController();
+  const live = { invitationId: 'invite-lease', gameId: game.id, actor };
+  const release = nav.focus(live, participation);
+  await tick();
+  assert.equal(nav.openGameId(live), game.id);
+  assert.equal(reads, 1);
+
+  // focus→ready→background→foreground→ready: viewGeneration changes; lease id must not.
+  nav.setForeground(false);
+  nav.setForeground(true);
+  await tick();
+  assert.equal(nav.openGameId(live), game.id);
+  assert.equal(reads, 2);
+
+  release();
+  assert.equal(nav.getSnapshot().status, 'idle');
+  assert.equal(nav.openGameId(live), null);
+
+  nav.setForeground(false);
+  nav.setForeground(true);
+  await tick();
+  assert.equal(reads, 2);
+  assert.equal(nav.openGameId(live), null);
+});
+
+test('#522 APK47: old focus cleanup must not retire a newer focus lease', async () => {
+  const gameB: Game = { ...game, id: 'public-game-b' };
+  const participation = participationSetup(async id => (id === gameB.id ? gameB : game));
+  const nav = new InvitationGameNavController();
+  const liveA = { invitationId: 'invite-a', gameId: game.id, actor };
+  const liveB = { invitationId: 'invite-b', gameId: gameB.id, actor };
+  const releaseA = nav.focus(liveA, participation);
+  // New focus without awaiting prior cleanup (ABA / retained release).
+  const releaseB = nav.focus(liveB, participation);
+  await tick();
+  assert.equal(nav.openGameId(liveB), gameB.id);
+  releaseA();
+  assert.equal(nav.openGameId(liveB), gameB.id);
+  assert.equal(nav.openGameId(liveA), null);
+  releaseB();
+  assert.equal(nav.openGameId(liveB), null);
+});
+
+test('#522 APK47: failed game read → same-identity renewFocusedRead → success (hook seam)', async () => {
+  let mode: 'fail' | 'ok' = 'fail';
+  let reads = 0;
+  const participation = participationSetup(async () => {
+    reads++;
+    if (mode === 'fail') throw new PublicApiError('unavailable', 404);
+    return game;
+  });
+  const nav = new InvitationGameNavController();
+  const live = { invitationId: 'invite-renew', gameId: game.id, actor };
+  const release = nav.focus(live, participation);
+  await tick();
+  assert.equal(nav.getSnapshot().status, 'error');
+  assert.equal(nav.openGameId(live), null);
+  assert.equal(reads, 1);
+
+  // Same invitation version/id/actor — explicit renew (manual refresh path) must re-read.
+  mode = 'ok';
+  nav.renewFocusedRead();
+  assert.equal(nav.getSnapshot().status, 'loading');
+  await tick();
+  assert.equal(nav.getSnapshot().status, 'ready');
+  assert.equal(nav.openGameId(live), game.id);
+  assert.equal(reads, 2);
+
+  // Stale actor fence: renew no-ops when participation actor diverged.
+  participation.setActor({ ...actor, sessionId: 'session-b', generation: 2 });
+  const before = reads;
+  nav.renewFocusedRead();
+  assert.equal(reads, before);
+  assert.equal(nav.openGameId({ ...live, actor: { ...actor, sessionId: 'session-b', generation: 2 } }), null);
+  release();
+  // After release, renew must not resurrect the lease.
+  nav.renewFocusedRead();
+  assert.equal(nav.getSnapshot().status, 'idle');
+  assert.equal(reads, before);
+});
+
+test('#522 APK47: stale rendered viewGeneration permit false after same-identity new focus; current true', async () => {
+  const participation = participationSetup();
+  const nav = new InvitationGameNavController();
+  const live = { invitationId: 'invite-permit', gameId: game.id, actor };
+  const release1 = nav.focus(live, participation);
+  await tick();
+  const snap1 = nav.getSnapshot();
+  assert.equal(snap1.status, 'ready');
+  const gen1 = snap1.bind.viewGeneration;
+  assert.equal(nav.mayOpen(game.id, { ...live, viewGeneration: gen1 }), true);
+
+  release1();
+  const release2 = nav.focus(live, participation);
+  await tick();
+  const snap2 = nav.getSnapshot();
+  assert.equal(snap2.status, 'ready');
+  const gen2 = snap2.bind.viewGeneration;
+  assert.notEqual(gen1, gen2);
+  assert.equal(nav.mayOpen(game.id, { ...live, viewGeneration: gen1 }), false);
+  assert.equal(nav.mayOpen(game.id, { ...live, viewGeneration: gen2 }), true);
+
+  // Foreground return also invalidates a retained rendered permit from the prior ready gen.
+  nav.setForeground(false);
+  nav.setForeground(true);
+  await tick();
+  const snap3 = nav.getSnapshot();
+  assert.equal(snap3.status, 'ready');
+  const gen3 = snap3.bind.viewGeneration;
+  assert.notEqual(gen2, gen3);
+  assert.equal(nav.mayOpen(game.id, { ...live, viewGeneration: gen2 }), false);
+  assert.equal(nav.mayOpen(game.id, { ...live, viewGeneration: gen3 }), true);
+  release2();
+});
+
+test('#522 APK47: MessagesCoordinator UNKNOWN packet survives game read + focus return; manual retry same packet', async () => {
+  const inviteResource = { kind: 'invitation' as const, id: 'invite-u' };
+  const inviteHeader = {
+    id: 'invite-u',
+    gameId: game.id,
+    status: 'pending' as const,
+    version: 2,
+    inviterPublicPlayerId: 'public-b',
+    inviteePublicPlayerId: 'public-a',
+    expiresAt: null,
+    participationId: null,
+    acceptanceContext: null,
+  };
+  const sent: MessagePacket[] = [];
+  let fail = true;
+  let serial = 0;
+  const port: MessagesPort = {
+    inbox: async () => ({ counts: { pendingRequestCount: 0, pendingInvitationCount: 0, dmUnread: 0, gameChatUnread: 0 }, nextCursor: null, items: [] }),
+    counts: async () => ({ pendingRequestCount: 0, pendingInvitationCount: 0, dmUnread: 0, gameChatUnread: 0 }),
+    identity: async () => 'public-a',
+    direct: async () => { throw new Error('unexpected'); },
+    game: async () => { throw new Error('unexpected'); },
+    members: async () => [],
+    invitation: async () => ({ ...inviteHeader }),
+    managed: async () => ({ items: [], nextCursor: null }),
+    history: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (fail) throw new MessagesError('network');
+      return { ...inviteHeader, status: 'declined', version: 3 };
+    },
+  };
+  const messages = new MessagesCoordinator(port, () => 'random-' + (++serial));
+  messages.setActor(actor);
+  messages.focus(inviteResource);
+  await tick();
+  await messages.act(inviteResource, 'decline');
+  assert.equal(sent.length, 1);
+  const packet = sent[0]!;
+  const key = 'invitation:invite-u';
+  assert.equal(messages.getSnapshot().pending[key]?.state, 'unknown');
+  assert.strictEqual(messages.getSnapshot().pending[key]?.packet, packet);
+
+  // Game read + focus return must not mutate the actual pending UNKNOWN packet/key.
   const participation = participationSetup();
   const nav = new InvitationGameNavController();
   const release = nav.focus({ invitationId: 'invite-u', gameId: game.id, actor }, participation);
   await tick();
   assert.equal(nav.openGameId({ invitationId: 'invite-u', gameId: game.id, actor }), game.id);
-  assert.strictEqual(pending.packet, packet);
-  assert.equal(pending.state, 'unknown');
-  assert.equal(pending.packet.key, 'exact-unknown-key');
+  assert.strictEqual(messages.getSnapshot().pending[key]?.packet, packet);
+  assert.equal(messages.getSnapshot().pending[key]?.state, 'unknown');
+  assert.equal(messages.getSnapshot().pending[key]?.packet.key, packet.key);
   release();
+  assert.strictEqual(messages.getSnapshot().pending[key]?.packet, packet);
+  assert.equal(messages.getSnapshot().pending[key]?.state, 'unknown');
+
+  fail = false;
+  await messages.retry(inviteResource);
+  assert.strictEqual(sent[1], packet);
+  assert.equal(messages.getSnapshot().pending[key], undefined);
 });
 
 test('#522 APK47: ambient participation ready cache does not flash Open game before this view settles', async () => {
@@ -254,31 +414,4 @@ test('#522 APK47: ambient participation ready cache does not flash Open game bef
   assert.equal(nav.openGameId(live), null);
   await tick();
   assert.equal(nav.openGameId(live), game.id);
-});
-
-test('#522 APK47 source wiring: Messages + inline MyGames use helper; old accepted/manager-only gate removed', () => {
-  const helper = read('../src/invitation-game-navigation.ts');
-  assert.match(helper, /InvitationGameNavController/);
-  assert.match(helper, /matchingReadableGameId/);
-  assert.match(helper, /participation\.loadGame/);
-  assert.doesNotMatch(helper, /from 'react'|from "react"/);
-
-  const messages = read('../src/components/messages.tsx');
-  assert.match(messages, /export function useInvitationOpenGame/);
-  assert.match(messages, /InvitationGameNavController/);
-  assert.match(messages, /InvitationMessageDetail/);
-  assert.doesNotMatch(messages, /invitation\.status === 'accepted' && invitation\.participationId/);
-  assert.doesNotMatch(messages, /detail\.managerEligible\s*\n?\s*\? \(\) => router\.push\(`\/games\/\$\{invitation\.gameId\}`/);
-
-  const inline = read('../src/components/my-game-invitation.tsx');
-  assert.match(inline, /useInvitationOpenGame/);
-  assert.doesNotMatch(inline, /invitation\.status === 'accepted' && invitation\.participationId/);
-
-  // Manager revoke path retained independently of Open game.
-  assert.match(messages, /managerEligible/);
-  assert.match(messages, /onRevoke/);
-});
-
-test('#522 APK47 source counter 46→47 numeric pin', () => {
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 47);
 });

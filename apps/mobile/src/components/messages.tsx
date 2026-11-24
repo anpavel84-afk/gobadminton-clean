@@ -29,15 +29,16 @@ export function useInvitationOpenGame(args: {
   gameId: string;
   invitationVersion: number;
   actor: Actor | null;
-}): { onOpenGame: (() => void) | undefined } {
+}): { onOpenGame: (() => void) | undefined; renewGameRead: () => void } {
   const auth = useAuth();
   const router = useRouter();
   const controller = useRef(new InvitationGameNavController()).current;
-  useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const phase = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const participation = auth.participation;
   const actorId = args.actor?.actorId;
   const sessionId = args.actor?.sessionId;
   const generation = args.actor?.generation;
+  const renewGameRead = useCallback(() => { controller.renewFocusedRead(); }, [controller]);
 
   useFocusEffect(useCallback(() => {
     if (!args.actor || auth.status !== 'authenticated') return;
@@ -72,16 +73,20 @@ export function useInvitationOpenGame(args: {
     actor: args.actor,
   };
   const target = controller.openGameId(live);
-  if (!target) return { onOpenGame: undefined };
+  if (!target || phase.status !== 'ready') return { onOpenGame: undefined, renewGameRead };
+  // Press permit binds the generation that rendered this callback — not a later focus/foreground gen.
+  const renderedViewGeneration = phase.bind.viewGeneration;
   const renderedActor = args.actor;
   const renderedInvitationId = args.invitationId;
   const renderedGameId = args.gameId;
   return {
+    renewGameRead,
     onOpenGame: () => {
       if (!controller.mayOpen(target, {
         invitationId: renderedInvitationId,
         gameId: renderedGameId,
         actor: renderedActor,
+        viewGeneration: renderedViewGeneration,
       })) return;
       router.push(invitationGamePath(target) as '/games');
     },
@@ -273,7 +278,7 @@ function InvitationMessageDetail({
   notice: ReactNode;
 }) {
   const { owner, state } = useMessages();
-  const { onOpenGame } = useInvitationOpenGame({
+  const { onOpenGame, renewGameRead } = useInvitationOpenGame({
     invitationId: invitation.id,
     gameId: invitation.gameId,
     invitationVersion: invitation.version,
@@ -287,7 +292,7 @@ function InvitationMessageDetail({
       onDecline={() => { if (!pending) void owner.act(resource, 'decline'); }}
       onRevoke={() => { if (!pending) void owner.act(resource, 'revoke', undefined, state.viewGeneration, state.actor); }}
       onOpenGame={onOpenGame}
-    /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
+    /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource).then(() => renewGameRead()); }} />
   </Page>;
 }
 export function NativeMessageThread({ resource }: { resource: MessageResource }) {
