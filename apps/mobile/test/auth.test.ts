@@ -1837,3 +1837,122 @@ test('#522 APK44: game-contact preference AuthCoordinator fences, PATCH transpor
   await owner.save();
   assert.equal(calls.filter(c => c.method === 'PATCH').length, patchCount);
 });
+test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.invitationAuthoring;
+  const calls: { path: string; method?: string; body?: unknown; key?: string }[] = [];
+  const startsAt = '2027-06-01T15:00:00.000Z';
+  const game = {
+    id: 'game-open', version: 3, title: 'Evening', status: 'published', visibility: 'public',
+    organizer: { id: 'org', displayName: 'Host', publicContact: 'telegram:@h' },
+    venue: { id: 'v', name: 'Court', address: 'Addr', cityId: 'city', timezone: 'Europe/Moscow' },
+    startsAt, endsAt: '2027-06-01T17:00:00.000Z', applicationDeadlineAt: '2027-05-31T15:00:00.000Z',
+    timezone: 'Europe/Moscow', capacity: 4, confirmedCount: 1, externalReservedCount: 0, availablePlaces: 3,
+    formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+    settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'Outside' },
+    activityKind: 'regular', trainingDescription: null, trainer: null,
+    management: { role: 'owner', createdByMe: true },
+  };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path.startsWith('/me/games')) {
+      calls.push({ path, method: init.method ?? 'GET' });
+      return { items: [game], nextCursor: null };
+    }
+    if (path === '/games/game-open') {
+      calls.push({ path, method: init.method ?? 'GET' });
+      return game;
+    }
+    if (path === '/games/game-open/invitations') {
+      calls.push({
+        path,
+        method: init.method,
+        body: init.body ? JSON.parse(String(init.body)) : undefined,
+        key: (init.headers as Record<string, string> | undefined)?.['Idempotency-Key'],
+      });
+      return {
+        id: 'inv-created', gameId: 'game-open', status: 'pending', version: 1,
+        inviterPublicPlayerId: 'public-a', inviteePublicPlayerId: 'peer-1',
+        expiresAt: null, decidedAt: null, participationId: null, createdAt: '2026-11-24T10:00:00.000Z',
+      };
+    }
+    return { ok: true };
+  });
+  assert.equal(calls.some(c => c.path.includes('/invitations')), false);
+  owner.open('dm-1', 'peer-1');
+  await owner.load();
+  assert.equal(owner.getSnapshot().games[0]?.id, 'game-open');
+  assert.equal(calls.some(c => c.method === 'POST'), false);
+  await owner.invite('game-open');
+  const create = calls.find(c => c.method === 'POST' && c.path === '/games/game-open/invitations');
+  assert.ok(create);
+  assert.deepEqual(create!.body, { inviteePublicPlayerId: 'peer-1', expectedGameVersion: 3 });
+  assert.ok(create!.key && create!.key.length >= 16);
+  assert.equal(owner.getSnapshot().receipt?.id, 'inv-created');
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.invitationAuthoring, owner);
+
+  const postCount = calls.filter(c => c.method === 'POST').length;
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(owner.getSnapshot().receipt, null);
+  owner.open('dm-1', 'peer-1');
+  await owner.invite('game-open');
+  assert.equal(calls.filter(c => c.method === 'POST').length, postCount);
+});
+
+test('#522 APK45: deferred token fence — surface close before createInvitation yields zero POSTs', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.invitationAuthoring;
+  const posts: string[] = [];
+  const startsAt = '2027-06-01T15:00:00.000Z';
+  const game = {
+    id: 'game-open', version: 3, title: 'Evening', status: 'published', visibility: 'public',
+    organizer: { id: 'org', displayName: 'Host', publicContact: 'telegram:@h' },
+    venue: { id: 'v', name: 'Court', address: 'Addr', cityId: 'city', timezone: 'Europe/Moscow' },
+    startsAt, endsAt: '2027-06-01T17:00:00.000Z', applicationDeadlineAt: '2027-05-31T15:00:00.000Z',
+    timezone: 'Europe/Moscow', capacity: 4, confirmedCount: 1, externalReservedCount: 0, availablePlaces: 3,
+    formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+    settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'Outside' },
+    activityKind: 'regular', trainingDescription: null, trainer: null,
+    management: { role: 'owner', createdByMe: true },
+  };
+  const tokenGate = deferred<typeof credentials>();
+  s.setHandler(async path => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return tokenGate.promise;
+    if (path.startsWith('/me/games')) return { items: [game], nextCursor: null };
+    if (path === '/games/game-open') {
+      // Expire after fresh GET acquired its token so create awaits refresh, then rechecks permit.
+      const access = (s.auth as unknown as { access: { expiresAt: number } | null }).access;
+      if (access) access.expiresAt = 0;
+      return game;
+    }
+    if (path === '/games/game-open/invitations') {
+      posts.push(path);
+      return {
+        id: 'inv-late', gameId: 'game-open', status: 'pending', version: 1,
+        inviterPublicPlayerId: 'public-a', inviteePublicPlayerId: 'peer-1',
+        expiresAt: null, decidedAt: null, participationId: null, createdAt: '2026-11-24T10:00:00.000Z',
+      };
+    }
+    return { ok: true };
+  });
+  owner.open('dm-1', 'peer-1');
+  await owner.load();
+  const invite = owner.invite('game-open');
+  await new Promise(r => setImmediate(r));
+  assert.equal(posts.length, 0);
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+  owner.close();
+  tokenGate.resolve(credentials);
+  await invite;
+  assert.equal(posts.length, 0);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(owner.getSnapshot().checking, false);
+});

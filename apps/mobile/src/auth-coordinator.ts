@@ -12,6 +12,7 @@ import { ProfileCoverCoordinator } from './profile-cover.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
+import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
 import { PlayersCoordinator, PlayersError } from './players.ts';
@@ -57,6 +58,7 @@ export class AuthCoordinator {
   readonly cover: ProfileCoverCoordinator;
   readonly trainer: TrainerProfileCoordinator;
   readonly gameContactPreference: GameContactPreferenceCoordinator;
+  readonly invitationAuthoring: InvitationAuthoringCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
   readonly postgame: PostgameCoordinator;
@@ -188,6 +190,17 @@ export class AuthCoordinator {
         },packet.actor);
       },
     },deps.random);
+    // DM peer invitation create: managed list + fresh game GET + POST create; Messages safety fence for held peers.
+    // Final actor/session + surface/peer/safety permit runs after token await, immediately before createInvitation.
+    this.invitationAuthoring = new InvitationAuthoringCoordinator({
+      managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
+      game: id => this.participationRead(access => deps.api.gameDetail(access, id)),
+      send: (packet, authority, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.createInvitation(access, packet);
+      }, authority),
+      isPeerHeld: peerId => this.messages.isPeerSafetyHeld(peerId),
+    }, deps.random, this.now);
     this.safety = new SafetyCoordinator({
       send: (packet, authority) => this.participationRead(access => deps.api.safetyMutation(access, packet), authority),
       verified: (peer, blocked, context) => {
@@ -321,7 +334,7 @@ export class AuthCoordinator {
     if (this.snapshot.status !== 'hydrating') {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
       this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
-      this.gameContactPreference.setActor(actor); this.contact.setActor(actor);
+      this.gameContactPreference.setActor(actor); this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
     }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
@@ -719,6 +732,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.cover.forget();
     if (forgetCreation) this.trainer.forget();
     if (forgetCreation) this.gameContactPreference.forget();
+    if (forgetCreation) this.invitationAuthoring.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
     if (forgetCreation) this.postgame.forget();

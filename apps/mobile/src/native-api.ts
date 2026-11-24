@@ -41,6 +41,7 @@ import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
 import { gameContactPreferenceWire } from './game-contact-preference.ts';
+import { invitationCreateWire, type InvitationCreatePacket } from './invitation-authoring.ts';
 import type { GameContactPacket } from './game-contact-preference.ts';
 import {
   parseTrainerProfile, trainerDeactivateWire, trainerUpsertWire,
@@ -671,6 +672,16 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     chatMembers: async (access: string, id: string) => parseMembers(await privateMessage(`/games/${messageId(id)}/chat/members`, access)),
     invitation: async (access: string, id: string) => parseInvitation(await privateMessage(resourcePath({ kind: 'invitation', id }), access)),
     myInvitations: async (access: string, cursor?: string) => parseInvitationPage(await privateMessage(`/me/invitations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, access)),
+    /** Closed POST create invitation — NativeBearer opt-in via requirePrincipalMutation; cookie Origin/CSRF preserved. */
+    createInvitation: async (access: string, packet: InvitationCreatePacket) =>
+      parseInvitation(await request(
+        `/games/${encodeURIComponent(packet.gameId)}/invitations`,
+        'POST',
+        invitationCreateWire(packet.body),
+        access,
+        packet.key,
+        true,
+      )),
     messageHistory: async (access: string, r: MessageResource, before?: string, after?: string) => {
       if (r.kind === 'invitation') throw new MessagesError('invalid');
       return parseMessagePage(await privateMessage(`${resourcePath(r)}/messages?limit=50${before ? `&beforeSeq=${encodeURIComponent(before)}` : ''}${after ? `&afterSeq=${encodeURIComponent(after)}` : ''}`, access), parseMessage);

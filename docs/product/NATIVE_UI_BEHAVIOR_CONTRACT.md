@@ -156,6 +156,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `visibility.test.ts` / own-profile·profile·contact·looking; API `native-players.foundation` bearer visibility case; source APK counter 29 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 catalog visibility native parity source; not VERIFIED_SOURCE / not device PASS |
 
+## R-11 · Native DM peer game invitation chooser + explicit create (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `DirectConversation` + `InvitationChooser` + `invitation-continuation` eligibility; existing native Messages DM + invitation detail; `POST /games/:gameId/invitations` requirePrincipalMutation + OpenAPI NativeBearer on create only (outgoing list GET + revoke remain cookie-only) |
+| Entry | Authenticated accepted DM thread; explicit «Пригласить на игру» from current conversation header peer only |
+| Trigger | Manual chooser open; managed-games load/retry with cursor/dedup/fence; explicit send after fresh game GET; UNKNOWN exact-packet retry; cancel returns same DM/draft |
+| Expected | Russian web copy; eligibility at action time (published/future start/open deadline); no fake seat reservation; blocked/safety-held peer cannot open/send; actor/session/surface fences; stale 409 refreshes list without auto-resend; success opens existing invitation detail only while surface remains intended; clear on logout/account switch |
+| Accessibility | Sheet title/hint; busy/UNKNOWN announced; return-focus to invite control; large-text/safe-area retained |
+| Non-scope | New-contact/Discovery/manager outgoing-list/revoke/recommendations; preferredGameId create-resume; PROD; device/OTA/iOS completion |
+| Evidence | Mobile unit `invitation-authoring.test.ts` / `auth.test.ts`; API `native-messages.foundation` create NativeBearer case; source APK counter 45 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native DM invite create; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |
