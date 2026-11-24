@@ -809,3 +809,54 @@ test('#522 APK46 revoke fence: proven-zero stale clears initial sending; UNKNOWN
   assert.strictEqual(sent[3], packet);
   assert.equal(owner.getSnapshot().pending['invitation:invite-fence'], undefined);
 });
+
+test('#522 APK46 revoke: stale rendered viewGeneration/actor → zero dispatch; current revoke preserved', async () => {
+  const invite = { kind: 'invitation', id: 'invite-stale-render' } as const;
+  const base = {
+    id: 'invite-stale-render', gameId: 'game-managed', status: 'pending' as const, version: 3,
+    inviterPublicPlayerId: 'public-b', inviteePublicPlayerId: 'public-peer',
+    expiresAt: null, participationId: null, acceptanceContext: null,
+  };
+  const sent: MessagePacket[] = [];
+  const { owner } = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => { sent.push(p); return { ...base, status: 'revoked', version: base.version + 1 }; },
+  });
+  owner.focus(invite); await tick();
+  assert.equal(owner.getSnapshot().detail?.managerEligible, true);
+  const rendered = owner.getSnapshot();
+
+  // Same-invitation reopen bumps viewGeneration; stale handler must not dispatch under new intent.
+  owner.focus(null); owner.focus(invite); await tick();
+  assert.notEqual(owner.getSnapshot().viewGeneration, rendered.viewGeneration);
+  await owner.act(invite, 'revoke', undefined, rendered.viewGeneration, rendered.actor);
+  assert.equal(sent.length, 0);
+  // Recipient accept/decline stay closed for manager (other actions preserved).
+  await owner.act(invite, 'accept'); assert.equal(sent.length, 0);
+  await owner.act(invite, 'decline'); assert.equal(sent.length, 0);
+  // Current rendered revoke still works.
+  await owner.act(invite, 'revoke', undefined, owner.getSnapshot().viewGeneration, owner.getSnapshot().actor);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.action, 'revoke');
+
+  // Authorized-manager session switch: stale actor intent → zero dispatch.
+  const afterRevoke = setup({
+    identity: async () => 'public-manager',
+    invitation: async () => ({ ...base, id: 'invite-stale-actor', version: 4 }),
+    managed: async () => ({ items: [{ id: 'game-managed' }], nextCursor: null }),
+    send: async p => { sent.push(p); return { ...base, id: 'invite-stale-actor', status: 'revoked', version: 5 }; },
+  });
+  const inviteB = { kind: 'invitation' as const, id: 'invite-stale-actor' };
+  afterRevoke.owner.focus(inviteB); await tick();
+  const renderedActor = afterRevoke.owner.getSnapshot();
+  afterRevoke.owner.setActor({ ...actor, sessionId: 'manager-session-b', generation: 2 });
+  afterRevoke.owner.focus(inviteB); await tick();
+  const before = sent.length;
+  await afterRevoke.owner.act(inviteB, 'revoke', undefined, renderedActor.viewGeneration, renderedActor.actor);
+  assert.equal(sent.length, before);
+  await afterRevoke.owner.act(inviteB, 'revoke', undefined, afterRevoke.owner.getSnapshot().viewGeneration, afterRevoke.owner.getSnapshot().actor);
+  assert.equal(sent.length, before + 1);
+  assert.equal(sent[before]!.action, 'revoke');
+});

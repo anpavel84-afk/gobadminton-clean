@@ -240,7 +240,7 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
         managerEligible={detail.managerEligible}
         onAccept={() => { void owner.act(resource, 'accept'); }}
         onDecline={() => { if (!pending) void owner.act(resource, 'decline'); }}
-        onRevoke={() => { if (!pending) void owner.act(resource, 'revoke'); }}
+        onRevoke={() => { if (!pending) void owner.act(resource, 'revoke', undefined, state.viewGeneration, state.actor); }}
         onOpenGame={(invitation.status === 'accepted' && invitation.participationId) || detail.managerEligible
           ? () => router.push(`/games/${invitation.gameId}` as '/games') : undefined}
       /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
