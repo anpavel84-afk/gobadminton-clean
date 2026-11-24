@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ComponentRef, RefObject } from 'react';
-import { Pressable, View } from 'react-native';
+import { View, type Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { nativeAuth } from '../auth-runtime.ts';
 import {
@@ -113,7 +113,7 @@ export function InvitationChooser({
       onPress={() => {
         if (!canClose) return;
         onClose();
-        router.push('/games/create' as '/games/create');
+        router.push('/games/create' as const);
       }}
     />
     {state.notice ? <Label accessibilityRole="alert">{state.notice}</Label> : null}
