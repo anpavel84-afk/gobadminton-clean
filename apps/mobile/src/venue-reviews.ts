@@ -21,6 +21,192 @@ export type VenueReviewsSummary = {
   canWriteHint: boolean;
 };
 
+/** Venue card preview page size — matches accepted web `VenueReviewsPanel`. */
+export const PUBLIC_VENUE_REVIEWS_PREVIEW_LIMIT = 5;
+/** Independent full-list page size — matches accepted web `VenueReviewsDialog`. */
+export const PUBLIC_VENUE_REVIEWS_GALLERY_LIMIT = 20;
+
+/** CTA «Все отзывы · N» only when published total exceeds the preview rows. */
+export function shouldOpenPublicVenueReviewsGallery(
+  publishedCount: number,
+  previewItemsLength: number,
+): boolean {
+  return Number.isInteger(publishedCount)
+    && publishedCount >= 0
+    && publishedCount > previewItemsLength;
+}
+
+/** Append next page by reviewHandle — duplicate identities never reappear. */
+export function appendPublicVenueReviewItems(
+  previous: readonly PublicVenueReviewItem[],
+  next: readonly PublicVenueReviewItem[],
+): PublicVenueReviewItem[] {
+  const seen = new Set(previous.map(item => item.reviewHandle));
+  const merged = previous.slice();
+  for (const item of next) {
+    if (seen.has(item.reviewHandle)) continue;
+    seen.add(item.reviewHandle);
+    merged.push(item);
+  }
+  return merged;
+}
+
+export type PublicVenueReviewsTransport = {
+  experienceReviews: (
+    venueId: string,
+    cursor: string | undefined,
+    limit: number,
+    signal?: AbortSignal,
+  ) => Promise<VenueReviewsSummary>;
+};
+
+export type PublicVenueReviewsGallerySnapshot = {
+  venueId: string | null;
+  open: boolean;
+  phase: 'idle' | 'loading' | 'ready' | 'error';
+  items: PublicVenueReviewItem[];
+  nextCursor: string | null;
+  loadingMore: boolean;
+  moreError: boolean;
+};
+
+function emptyPublicVenueReviewsGallery(): PublicVenueReviewsGallerySnapshot {
+  return {
+    venueId: null,
+    open: false,
+    phase: 'idle',
+    items: [],
+    nextCursor: null,
+    loadingMore: false,
+    moreError: false,
+  };
+}
+
+/**
+ * Production public gallery owner — independent first page (limit 20), exact nextCursor,
+ * reviewHandle dedupe, double-tap/cursor busy fence, late close/venue-change retirement,
+ * more-error retry without dropping rows/cursor. Credential-omit transport only.
+ */
+export class PublicVenueReviewsGallery {
+  private state: PublicVenueReviewsGallerySnapshot = emptyPublicVenueReviewsGallery();
+  private listeners = new Set<() => void>();
+  private epoch = 0;
+  /** Non-null while a GET for that token is outstanding (`''` = first page). */
+  private inflight: string | null = null;
+  /** Cursors that already produced a successful page — blocks blind same-cursor repeat. */
+  private consumed = new Set<string>();
+  private readonly ports: PublicVenueReviewsTransport;
+
+  constructor(ports: PublicVenueReviewsTransport) {
+    this.ports = ports;
+  }
+
+  getSnapshot = (): PublicVenueReviewsGallerySnapshot => this.state;
+
+  subscribe = (fn: () => void): (() => void) => {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  };
+
+  private emit(): void {
+    for (const fn of this.listeners) fn();
+  }
+
+  private show(patch: Partial<PublicVenueReviewsGallerySnapshot>): void {
+    this.state = { ...this.state, ...patch };
+    this.emit();
+  }
+
+  /** Open (or reopen) independent gallery for venue — first GET limit=20, no cursor. */
+  open(venueId: string): void {
+    const request = ++this.epoch;
+    this.inflight = '';
+    this.consumed.clear();
+    this.state = {
+      venueId,
+      open: true,
+      phase: 'loading',
+      items: [],
+      nextCursor: null,
+      loadingMore: false,
+      moreError: false,
+    };
+    this.emit();
+    void this.ports.experienceReviews(
+      venueId,
+      undefined,
+      PUBLIC_VENUE_REVIEWS_GALLERY_LIMIT,
+    ).then(page => {
+      if (request !== this.epoch || !this.state.open || this.state.venueId !== venueId) return;
+      if (this.inflight !== '') return;
+      this.inflight = null;
+      this.show({
+        phase: 'ready',
+        items: appendPublicVenueReviewItems([], page.items),
+        nextCursor: page.nextCursor,
+        loadingMore: false,
+        moreError: false,
+      });
+    }, () => {
+      if (request !== this.epoch || !this.state.open || this.state.venueId !== venueId) return;
+      if (this.inflight !== '') return;
+      this.inflight = null;
+      this.show({ phase: 'error', loadingMore: false, moreError: false });
+    });
+  }
+
+  /** Close + bump epoch so late GETs cannot append after dismiss/venue change. */
+  close(): void {
+    this.epoch += 1;
+    this.inflight = null;
+    this.consumed.clear();
+    this.state = emptyPublicVenueReviewsGallery();
+    this.emit();
+  }
+
+  /**
+   * «Ещё» / more-error retry — exact server nextCursor, busy + consumed-cursor fence,
+   * preserves prior rows on failure for the same GET retry.
+   */
+  loadMore(): void {
+    if (!this.state.open || this.inflight !== null || this.state.loadingMore) return;
+    const venueId = this.state.venueId;
+    const cursor = this.state.nextCursor;
+    if (!venueId || !cursor || this.consumed.has(cursor)) return;
+    const request = this.epoch;
+    this.inflight = cursor;
+    this.show({ loadingMore: true, moreError: false, phase: 'ready' });
+    void this.ports.experienceReviews(
+      venueId,
+      cursor,
+      PUBLIC_VENUE_REVIEWS_GALLERY_LIMIT,
+    ).then(page => {
+      if (request !== this.epoch || !this.state.open || this.state.venueId !== venueId) return;
+      if (this.inflight !== cursor) return;
+      this.inflight = null;
+      this.consumed.add(cursor);
+      this.show({
+        items: appendPublicVenueReviewItems(this.state.items, page.items),
+        nextCursor: page.nextCursor,
+        loadingMore: false,
+        moreError: false,
+      });
+    }, () => {
+      if (request !== this.epoch || !this.state.open || this.state.venueId !== venueId) return;
+      if (this.inflight !== cursor) return;
+      this.inflight = null;
+      this.show({ loadingMore: false, moreError: true });
+    });
+  }
+
+  /** First-page error retry — same independent open GET. */
+  retryFirst(): void {
+    if (!this.state.open || !this.state.venueId || this.state.items.length > 0) return;
+    if (this.inflight !== null) return;
+    this.open(this.state.venueId);
+  }
+}
+
 export type OwnVenueEligibilityBasis = {
   gameId: string;
   gameTitle: string | null;
