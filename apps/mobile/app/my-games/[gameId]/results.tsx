@@ -8,7 +8,13 @@ import { ClarificationSection } from '../../../src/components/postgame-disputes.
 import { NotesSection } from '../../../src/components/postgame-notes.tsx';
 import { FeedbackSection } from '../../../src/components/postgame-feedback.tsx';
 import { VenueExperienceEntry } from '../../../src/components/venue-experience-composer.tsx';
-import { parseResultsFeedbackSection } from '../../../src/postgame-feedback.ts';
+import {
+  feedbackRevealTargetStillLive,
+  nextFeedbackRevealCompletedKey,
+  parseResultsFeedbackSection,
+  planFeedbackSectionReveal,
+  feedbackRevealShouldRetryMeasurement,
+} from '../../../src/postgame-feedback.ts';
 import { feedbackSectionVisible, notesSectionVisible } from '../../../src/postgame.ts';
 import { BackLink, Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
 export default function GameResults() {
@@ -22,32 +28,65 @@ export default function GameResults() {
   const scrollRef=useRef<ComponentRef<typeof ScrollView> | null>(null);
   const feedbackAnchor=useRef<ComponentRef<typeof View> | null>(null);
   const focusedKey=useRef<string | null>(null);
+  const revealLive=useRef({openFeedback,showFeedback:false as boolean,gameId,actor,session});
   useEffect(()=>{if(!current || !gameId) return; void owner.loadResults(gameId);void owner.loadReminders();void auth.participation.loadGame(gameId);},[current,gameId,owner,auth.participation,actor,session]);
   const state=current && gameId ? s.games[gameId] : undefined, data=state?.data, game=gameId ? p.games[gameId]?.game : undefined;
   const showNotes=!!gameId && notesSectionVisible(gameId, data, s.notes, s.knownNoteRefs);
   const showFeedback=!!gameId && (openFeedback || feedbackSectionVisible(gameId, data?.feedback, s.reviewHistory));
+  revealLive.current={openFeedback,showFeedback,gameId,actor,session};
   useEffect(()=>{
-    if(!openFeedback || !showFeedback || !gameId) return;
-    const key=`${actor}:${session}:${gameId}:feedback`;
-    if(focusedKey.current === key) return;
-    const frame=requestAnimationFrame(()=>{
+    const plan=planFeedbackSectionReveal({
+      openFeedback,showFeedback,gameId,resultsStatus:state?.status,completedKey:focusedKey.current,actor,session,
+    });
+    if(plan.kind !== 'attempt') return;
+    const key=plan.key;
+    let cancelled=false;
+    let attemptIndex=0;
+    let frame=0;
+    const run=()=>{
+      if(cancelled) return;
+      const live=revealLive.current;
+      if(!feedbackRevealTargetStillLive({expectedKey:key,...live})) return;
       const node=feedbackAnchor.current;
       const scroll=scrollRef.current;
-      if(!node || !scroll) return;
-      focusedKey.current=key;
-      const scrollNode=findNodeHandle(scroll);
-      if(scrollNode) {
-        node.measureLayout(
-          scrollNode,
-          (_x, y) => { scroll.scrollTo({ y: Math.max(0, y - 16), animated: true }); },
-          () => {},
-        );
+      if(!node || !scroll){
+        if(feedbackRevealShouldRetryMeasurement(attemptIndex)){
+          attemptIndex+=1;
+          frame=requestAnimationFrame(run);
+        }
+        return;
       }
-      const a11y=findNodeHandle(node);
-      if(a11y) AccessibilityInfo.setAccessibilityFocus(a11y);
-    });
-    return ()=>cancelAnimationFrame(frame);
-  },[openFeedback,showFeedback,gameId,actor,session]);
+      const scrollNode=findNodeHandle(scroll);
+      if(!scrollNode){
+        if(feedbackRevealShouldRetryMeasurement(attemptIndex)){
+          attemptIndex+=1;
+          frame=requestAnimationFrame(run);
+        }
+        return;
+      }
+      node.measureLayout(
+        scrollNode,
+        (_x,y)=>{
+          if(cancelled) return;
+          if(!feedbackRevealTargetStillLive({expectedKey:key,...revealLive.current})) return;
+          scroll.scrollTo({y:Math.max(0,y-16),animated:true});
+          focusedKey.current=nextFeedbackRevealCompletedKey(focusedKey.current,key,{ok:true});
+          const a11y=findNodeHandle(node);
+          if(a11y) AccessibilityInfo.setAccessibilityFocus(a11y);
+        },
+        ()=>{
+          if(cancelled) return;
+          focusedKey.current=nextFeedbackRevealCompletedKey(focusedKey.current,key,{ok:false});
+          if(feedbackRevealShouldRetryMeasurement(attemptIndex)){
+            attemptIndex+=1;
+            frame=requestAnimationFrame(run);
+          }
+        },
+      );
+    };
+    frame=requestAnimationFrame(run);
+    return ()=>{cancelled=true;cancelAnimationFrame(frame);};
+  },[openFeedback,showFeedback,gameId,actor,session,state?.status]);
   const back=()=>router.replace('/my-games');
   return <PostgameSurface><Page keyboard header={<Header />} scrollRef={scrollRef}><BackLink title="← К моим играм" onPress={back} /><Label accessibilityRole="header" style={styles.title}>Участники / Итоги</Label>
     {!gameId ? <Label>Игра недоступна.</Label> : auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <>

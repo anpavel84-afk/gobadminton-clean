@@ -597,6 +597,99 @@ export function displayOnlyReview(row: PrivateReview): PrivateReview {
   };
 }
 
+/** Exact-game results source statuses used to gate feedback deep-link reveal. */
+export type FeedbackRevealResultsStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable';
+
+/** Finite measure attempts for one reveal visit (first try + retries). */
+export const FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS = 3;
+
+/** Stable focus key for one actor/session/game feedback deep-link visit. */
+export function feedbackRevealFocusKey(
+  actor: string | null | undefined,
+  session: string | null | undefined,
+  gameId: string,
+): string {
+  return `${actor ?? ''}:${session ?? ''}:${gameId}:feedback`;
+}
+
+/**
+ * Results content above feedback can still grow while idle/loading.
+ * Ready/error/unavailable means the initial destination layout has settled.
+ */
+export function feedbackRevealResultsLayoutSettled(
+  resultsStatus: FeedbackRevealResultsStatus | undefined,
+): boolean {
+  return resultsStatus === 'ready'
+    || resultsStatus === 'error'
+    || resultsStatus === 'unavailable';
+}
+
+export type FeedbackRevealAttemptGate = {
+  openFeedback: boolean;
+  showFeedback: boolean;
+  gameId: string | null;
+  resultsStatus: FeedbackRevealResultsStatus | undefined;
+  completedKey: string | null;
+  actor?: string | null;
+  session?: string | null;
+};
+
+export type FeedbackRevealAttempt =
+  | { kind: 'idle' }
+  | { kind: 'wait_layout' }
+  | { kind: 'already_complete' }
+  | { kind: 'attempt'; key: string };
+
+/**
+ * Plan deep-link feedback reveal: wait for settled results layout; never consume the
+ * visit key before a successful measure/scroll (caller marks complete separately).
+ */
+export function planFeedbackSectionReveal(gate: FeedbackRevealAttemptGate): FeedbackRevealAttempt {
+  if (!gate.openFeedback || !gate.showFeedback || !gate.gameId) return { kind: 'idle' };
+  const key = feedbackRevealFocusKey(gate.actor, gate.session, gate.gameId);
+  if (gate.completedKey === key) return { kind: 'already_complete' };
+  if (!feedbackRevealResultsLayoutSettled(gate.resultsStatus)) return { kind: 'wait_layout' };
+  return { kind: 'attempt', key };
+}
+
+/**
+ * attemptIndex is 0-based for the try that just failed / lacked nodes.
+ * Allows a finite retry so a transient measure miss can recover.
+ */
+export function feedbackRevealShouldRetryMeasurement(
+  attemptIndex: number,
+  maxAttempts: number = FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS,
+): boolean {
+  return attemptIndex + 1 < maxAttempts && attemptIndex >= 0 && maxAttempts > 0;
+}
+
+/**
+ * Mark the visit complete only after successful measurement/scroll.
+ * Failed measurement leaves the prior completed key unchanged for retry.
+ */
+export function nextFeedbackRevealCompletedKey(
+  completedKey: string | null,
+  attemptKey: string,
+  outcome: { ok: true } | { ok: false },
+): string | null {
+  return outcome.ok ? attemptKey : completedKey;
+}
+
+/**
+ * Suppress late scroll/focus when the route or feedback target retired mid-measure.
+ */
+export function feedbackRevealTargetStillLive(args: {
+  expectedKey: string;
+  openFeedback: boolean;
+  showFeedback: boolean;
+  gameId: string | null;
+  actor?: string | null;
+  session?: string | null;
+}): boolean {
+  if (!args.openFeedback || !args.showFeedback || !args.gameId) return false;
+  return feedbackRevealFocusKey(args.actor, args.session, args.gameId) === args.expectedKey;
+}
+
 export type PeerSubjectOption = { contextId: string; displayName: string };
 
 /**
