@@ -182,6 +182,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `messages.test.ts` / `invitation-authoring` wiring; API `native-messages.foundation` revoke NativeBearer case; source APK counter 46 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native manager revoke + Open game; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-13 · Native invitation Open game via readable matching game (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `InvitationDetail` lines 28/57: `getGame` then «Открыть игру» whenever game is readable, independent of invitation status / manager; native `ParticipationCoordinator` public game read + authenticated fallback only on real public 404 |
+| Entry | Authenticated Messages invitation detail and inline MyGames invitation panel (`InvitationDecisionBody`) |
+| Trigger | Focus/foreground/version-fenced fresh `loadGame(invitation.gameId)`; explicit «Открыть игру» only when matching game id settled ready; navigation return re-reads; press bound to rendered actor/view |
+| Expected | Pending recipient and terminal statuses can open when game readable; loading/error hide only the link; accept/decline/revoke and `managerEligible` unchanged; no rights expansion from manager/acceptanceContext/gameId alone; A→B→A / blur / session fences; UNKNOWN exact packet retained; Games `[id]` loading/errors/Back unchanged |
+| Accessibility | Existing Russian «Открыть игру» TextButton / tokens; large-text/safe-area retained |
+| Non-scope | Backend/contracts/deps; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Mobile unit `invitation-game-navigation.test.ts` + Messages/MyGames wiring; source APK counter 47 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native Open game readable-game parity; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |
