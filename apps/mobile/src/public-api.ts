@@ -119,7 +119,8 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
     }
   }
   return {
-    communitySummary: (venueId: string) => get(`/venue-community-summaries?venueIds=${communityId(venueId)}`),
+    communitySummary: (venueId: string, signal?: AbortSignal) =>
+      get(`/venue-community-summaries?venueIds=${communityId(venueId)}`, signal),
     communityComments: (query: CommunityQuery) => get(commentsPath(query)).catch(error => {
       if (error instanceof PublicApiError && error.kind === 'unavailable') throw new CommunityError('private', error.status);
       throw error;
