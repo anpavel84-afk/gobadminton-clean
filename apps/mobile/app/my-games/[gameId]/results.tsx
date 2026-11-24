@@ -9,11 +9,13 @@ import { NotesSection } from '../../../src/components/postgame-notes.tsx';
 import { FeedbackSection } from '../../../src/components/postgame-feedback.tsx';
 import { VenueExperienceEntry } from '../../../src/components/venue-experience-composer.tsx';
 import {
+  feedbackRevealCachedLayoutRetained,
   feedbackRevealTargetStillLive,
   nextFeedbackRevealCompletedKey,
   parseResultsFeedbackSection,
+  planFeedbackRevealFromLayout,
   planFeedbackSectionReveal,
-  feedbackRevealShouldRetryMeasurement,
+  type FeedbackRevealLayoutScope,
 } from '../../../src/postgame-feedback.ts';
 import { feedbackSectionVisible, notesSectionVisible } from '../../../src/postgame.ts';
 import { BackLink, Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
@@ -28,65 +30,43 @@ export default function GameResults() {
   const scrollRef=useRef<ComponentRef<typeof ScrollView> | null>(null);
   const feedbackAnchor=useRef<ComponentRef<typeof View> | null>(null);
   const focusedKey=useRef<string | null>(null);
+  const feedbackLayoutY=useRef<number | null>(null);
   const revealLive=useRef({openFeedback,showFeedback:false as boolean,gameId,actor,session});
+  const layoutScope=useRef<FeedbackRevealLayoutScope>({gameId,actor,session,resultsStatus:undefined});
   useEffect(()=>{if(!current || !gameId) return; void owner.loadResults(gameId);void owner.loadReminders();void auth.participation.loadGame(gameId);},[current,gameId,owner,auth.participation,actor,session]);
   const state=current && gameId ? s.games[gameId] : undefined, data=state?.data, game=gameId ? p.games[gameId]?.game : undefined;
   const showNotes=!!gameId && notesSectionVisible(gameId, data, s.notes, s.knownNoteRefs);
   const showFeedback=!!gameId && (openFeedback || feedbackSectionVisible(gameId, data?.feedback, s.reviewHistory));
   revealLive.current={openFeedback,showFeedback,gameId,actor,session};
+  // Drop prior content Y only when visit identity or results settlement changes — same-target section=feedback keeps geometry.
   useEffect(()=>{
+    const next:FeedbackRevealLayoutScope={gameId,actor,session,resultsStatus:state?.status};
+    if(!feedbackRevealCachedLayoutRetained(layoutScope.current,next)) feedbackLayoutY.current=null;
+    layoutScope.current=next;
+  },[gameId,actor,session,state?.status]);
+  const tryReveal=()=>{
+    const live=revealLive.current;
     const plan=planFeedbackSectionReveal({
-      openFeedback,showFeedback,gameId,resultsStatus:state?.status,completedKey:focusedKey.current,actor,session,
+      openFeedback:live.openFeedback,showFeedback:live.showFeedback,gameId:live.gameId,
+      resultsStatus:state?.status,completedKey:focusedKey.current,actor:live.actor,session:live.session,
     });
-    if(plan.kind !== 'attempt') return;
-    const key=plan.key;
-    let cancelled=false;
-    let attemptIndex=0;
-    let frame=0;
-    const run=()=>{
-      if(cancelled) return;
-      const live=revealLive.current;
-      if(!feedbackRevealTargetStillLive({expectedKey:key,...live})) return;
-      const node=feedbackAnchor.current;
-      const scroll=scrollRef.current;
-      if(!node || !scroll){
-        if(feedbackRevealShouldRetryMeasurement(attemptIndex)){
-          attemptIndex+=1;
-          frame=requestAnimationFrame(run);
-        }
-        return;
-      }
-      const scrollNode=findNodeHandle(scroll);
-      if(!scrollNode){
-        if(feedbackRevealShouldRetryMeasurement(attemptIndex)){
-          attemptIndex+=1;
-          frame=requestAnimationFrame(run);
-        }
-        return;
-      }
-      node.measureLayout(
-        scrollNode,
-        (_x,y)=>{
-          if(cancelled) return;
-          if(!feedbackRevealTargetStillLive({expectedKey:key,...revealLive.current})) return;
-          scroll.scrollTo({y:Math.max(0,y-16),animated:true});
-          focusedKey.current=nextFeedbackRevealCompletedKey(focusedKey.current,key,{ok:true});
-          const a11y=findNodeHandle(node);
-          if(a11y) AccessibilityInfo.setAccessibilityFocus(a11y);
-        },
-        ()=>{
-          if(cancelled) return;
-          focusedKey.current=nextFeedbackRevealCompletedKey(focusedKey.current,key,{ok:false});
-          if(feedbackRevealShouldRetryMeasurement(attemptIndex)){
-            attemptIndex+=1;
-            frame=requestAnimationFrame(run);
-          }
-        },
-      );
-    };
-    frame=requestAnimationFrame(run);
-    return ()=>{cancelled=true;cancelAnimationFrame(frame);};
-  },[openFeedback,showFeedback,gameId,actor,session,state?.status]);
+    const decision=planFeedbackRevealFromLayout({
+      plan,layoutY:feedbackLayoutY.current,...live,
+    });
+    if(decision.kind !== 'scroll') return;
+    const scroll=scrollRef.current;
+    if(!scroll) return;
+    if(!feedbackRevealTargetStillLive({expectedKey:decision.key,...revealLive.current})) return;
+    scroll.scrollTo({y:decision.y,animated:true});
+    focusedKey.current=nextFeedbackRevealCompletedKey(focusedKey.current,decision.key,{ok:true});
+    const a11y=findNodeHandle(feedbackAnchor.current);
+    if(a11y) AccessibilityInfo.setAccessibilityFocus(a11y);
+  };
+  useEffect(()=>{tryReveal();},[openFeedback,showFeedback,gameId,actor,session,state?.status]);
+  const onFeedbackLayout=(layoutY:number)=>{
+    feedbackLayoutY.current=layoutY;
+    tryReveal();
+  };
   const back=()=>router.replace('/my-games');
   return <PostgameSurface><Page keyboard header={<Header />} scrollRef={scrollRef}><BackLink title="← К моим играм" onPress={back} /><Label accessibilityRole="header" style={styles.title}>Участники / Итоги</Label>
     {!gameId ? <Label>Игра недоступна.</Label> : auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <>
@@ -106,7 +86,7 @@ export default function GameResults() {
           {data.revisionsNextCursor && <TextButton title="Ещё изменения" onPress={()=>void owner.loadResults(gameId,{revisionsLimit:20,revisionsCursor:data.revisionsNextCursor ?? undefined},'revisions')} />}</View>}
       </>}
       {/* Peer feedback + own history: available when results denied but /me/reviews permits. */}
-      {showFeedback ? <FeedbackSection key={`${actor}:${gameId}:feedback`} gameId={gameId} data={data} openFeedback={openFeedback} sectionRef={feedbackAnchor} /> : null}
+      {showFeedback ? <FeedbackSection key={`${actor}:${gameId}:feedback`} gameId={gameId} data={data} openFeedback={openFeedback} sectionRef={feedbackAnchor} onSectionLayout={onFeedbackLayout} /> : null}
       {/* Exact-game venue experience — may_submit only; no broad venue CTA/picker. */}
       <VenueExperienceEntry key={`${actor}:${gameId}:venue-experience`} gameId={gameId} />
       {/* Own-note lane outside data&& when results denied but typed GET proves ownership. */}

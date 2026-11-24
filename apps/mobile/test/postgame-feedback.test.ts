@@ -15,16 +15,18 @@ import {
 } from '../src/postgame.ts';
 import {
   boundRoleDiscrepancyFieldError,
-  FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS,
+  FEEDBACK_REVEAL_SCROLL_INSET,
   feedbackResultsNavParams,
+  feedbackRevealCachedLayoutRetained,
   feedbackRevealFocusKey,
   feedbackRevealResultsLayoutSettled,
-  feedbackRevealShouldRetryMeasurement,
+  feedbackRevealScrollOffset,
   feedbackRevealTargetStillLive,
   formatPrivateReviewWhen,
   nextFeedbackRevealCompletedKey,
   parseResultsFeedbackSection,
   peerReviewHistoryLabel,
+  planFeedbackRevealFromLayout,
   planFeedbackSectionReveal,
   privateHubHistoryEmptyText,
   privateReviewHistoryDetail,
@@ -2181,17 +2183,31 @@ test('#522 hub private feedback history helpers + read-only loadReviews (no writ
   assert.equal(writes, 0);
 });
 
-test('#522 QA1 delayed results feedback reveal lifecycle — wait layout, retry measure, no late jump', () => {
+test('#522 APK41 layout-driven feedback reveal — wait results, onLayout offset, no late jump', () => {
   const resultsUi = readFileSync(new NodeURL('../app/my-games/[gameId]/results.tsx', import.meta.url), 'utf8');
+  const panelUi = readFileSync(new NodeURL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
   assert.match(resultsUi, /planFeedbackSectionReveal/);
+  assert.match(resultsUi, /planFeedbackRevealFromLayout/);
   assert.match(resultsUi, /feedbackRevealTargetStillLive/);
+  assert.match(resultsUi, /feedbackRevealCachedLayoutRetained/);
   assert.match(resultsUi, /nextFeedbackRevealCompletedKey/);
-  assert.match(resultsUi, /feedbackRevealShouldRetryMeasurement/);
-  assert.match(resultsUi, /resultsStatus:\s*state\?\.status/);
-  assert.match(resultsUi, /nextFeedbackRevealCompletedKey\(focusedKey\.current,key,\{ok:true\}\)/);
-  assert.match(resultsUi, /nextFeedbackRevealCompletedKey\(focusedKey\.current,key,\{ok:false\}\)/);
+  assert.match(resultsUi, /onSectionLayout=\{onFeedbackLayout\}/);
+  assert.match(resultsUi, /feedbackLayoutY\.current/);
+  assert.match(resultsUi, /nextFeedbackRevealCompletedKey\(focusedKey\.current,decision\.key,\{ok:true\}\)/);
   assert.doesNotMatch(resultsUi, /focusedKey\.current\s*=\s*key\s*;/);
+  assert.doesNotMatch(resultsUi, /measureLayout/);
+  assert.doesNotMatch(resultsUi, /findNodeHandle\(scroll\)/);
+  assert.doesNotMatch(resultsUi, /requestAnimationFrame/);
+  assert.doesNotMatch(resultsUi, /feedbackRevealShouldRetryMeasurement/);
+  // Layout-cache effect deps are visit/settlement only — openFeedback flip must not clear cachedY.
+  assert.match(
+    resultsUi,
+    /feedbackRevealCachedLayoutRetained\(layoutScope\.current,next\)\) feedbackLayoutY\.current=null;[\s\S]*?\},\[gameId,actor,session,state\?\.status\]/,
+  );
   assert.match(resultsUi, /type ComponentRef/);
+  assert.match(panelUi, /collapsable=\{false\}/);
+  assert.match(panelUi, /onSectionLayout/);
+  assert.match(panelUi, /onLayout=\{reportSectionLayout\}/);
 
   const key = feedbackRevealFocusKey(actor.actorId, actor.sessionId, game.id);
   assert.equal(key, `${actor.actorId}:${actor.sessionId}:${game.id}:feedback`);
@@ -2241,17 +2257,16 @@ test('#522 QA1 delayed results feedback reveal lifecycle — wait layout, retry 
     { kind: 'idle' },
   );
 
-  // Failed measurement does not consume the key — later retry can still complete.
+  // Content-relative onLayout.y → scrollTo; invalid layout leaves visit open.
+  assert.equal(feedbackRevealScrollOffset(240), 240 - FEEDBACK_REVEAL_SCROLL_INSET);
+  assert.equal(feedbackRevealScrollOffset(8), 0);
+  assert.equal(feedbackRevealScrollOffset(Number.NaN), null);
+  assert.equal(feedbackRevealScrollOffset(-1), null);
   assert.equal(nextFeedbackRevealCompletedKey(null, key, { ok: false }), null);
   assert.equal(nextFeedbackRevealCompletedKey(null, key, { ok: true }), key);
   assert.equal(nextFeedbackRevealCompletedKey('other', key, { ok: false }), 'other');
 
-  assert.equal(feedbackRevealShouldRetryMeasurement(0), true);
-  assert.equal(feedbackRevealShouldRetryMeasurement(FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS - 2), true);
-  assert.equal(feedbackRevealShouldRetryMeasurement(FEEDBACK_REVEAL_MAX_MEASURE_ATTEMPTS - 1), false);
-  assert.equal(feedbackRevealShouldRetryMeasurement(-1), false);
-
-  // Retired route / target must not apply a late scroll after async measure.
+  // Retired route / target must not apply a late scroll after async layout.
   assert.equal(feedbackRevealTargetStillLive({
     expectedKey: key, openFeedback: true, showFeedback: true, gameId: game.id,
     actor: actor.actorId, session: actor.sessionId,
@@ -2269,22 +2284,92 @@ test('#522 QA1 delayed results feedback reveal lifecycle — wait layout, retry 
     actor: actor.actorId, session: actor.sessionId,
   }), false);
 
-  // Simulated delayed-results visit: wait → attempt → fail leaves key open → success completes.
+  // Simulated delayed-results visit: wait → attempt without y → wait → layout scroll → complete.
   let completed: string | null = null;
   assert.equal(planFeedbackSectionReveal({
     ...base, resultsStatus: 'loading', completedKey: completed,
   }).kind, 'wait_layout');
   let plan = planFeedbackSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
   assert.equal(plan.kind, 'attempt');
+  assert.deepEqual(planFeedbackRevealFromLayout({
+    plan, layoutY: null, ...base,
+  }), { kind: 'wait_layout' });
+  assert.deepEqual(planFeedbackRevealFromLayout({
+    plan, layoutY: Number.NaN, ...base,
+  }), { kind: 'wait_layout' });
+  const scroll = planFeedbackRevealFromLayout({
+    plan, layoutY: 520, ...base,
+  });
+  assert.deepEqual(scroll, { kind: 'scroll', key, y: 520 - FEEDBACK_REVEAL_SCROLL_INSET });
   completed = nextFeedbackRevealCompletedKey(completed, key, { ok: false });
   assert.equal(completed, null);
-  assert.equal(feedbackRevealShouldRetryMeasurement(0), true);
   plan = planFeedbackSectionReveal({ ...base, resultsStatus: 'ready', completedKey: completed });
   assert.equal(plan.kind, 'attempt');
-  completed = nextFeedbackRevealCompletedKey(completed, key, { ok: true });
+  const applied = planFeedbackRevealFromLayout({ plan, layoutY: 520, ...base });
+  assert.equal(applied.kind, 'scroll');
+  if (applied.kind === 'scroll') {
+    completed = nextFeedbackRevealCompletedKey(completed, applied.key, { ok: true });
+  }
   assert.equal(completed, key);
   assert.equal(planFeedbackSectionReveal({
     ...base, resultsStatus: 'ready', completedKey: completed,
   }).kind, 'already_complete');
+  assert.deepEqual(planFeedbackRevealFromLayout({
+    plan: { kind: 'already_complete' }, layoutY: 900, ...base,
+  }), { kind: 'ignore' });
+  assert.deepEqual(planFeedbackRevealFromLayout({
+    plan: { kind: 'attempt', key }, layoutY: 520, ...base, openFeedback: false,
+  }), { kind: 'ignore' });
+
+  // Settled same-target ordinary entry → section=feedback without a new onLayout.
+  const settledScope = {
+    gameId: game.id,
+    actor: actor.actorId,
+    session: actor.sessionId,
+    resultsStatus: 'ready' as const,
+  };
+  assert.equal(feedbackRevealCachedLayoutRetained(settledScope, settledScope), true);
+  let cachedY: number | null = 480; // prior received-lane onLayout while openFeedback was false
+  assert.equal(
+    feedbackRevealCachedLayoutRetained(settledScope, settledScope),
+    true,
+    'openFeedback flip is outside layout scope — keep cached Y',
+  );
+  const sameTargetPlan = planFeedbackSectionReveal({
+    ...base, openFeedback: true, resultsStatus: 'ready', completedKey: null,
+  });
+  assert.equal(sameTargetPlan.kind, 'attempt');
+  assert.deepEqual(
+    planFeedbackRevealFromLayout({ plan: sameTargetPlan, layoutY: cachedY, ...base }),
+    { kind: 'scroll', key, y: 480 - FEEDBACK_REVEAL_SCROLL_INSET },
+  );
+
+  // Identity / settlement retirement still drops cache (fresh onLayout required).
+  assert.equal(feedbackRevealCachedLayoutRetained(settledScope, {
+    ...settledScope, gameId: 'other-game',
+  }), false);
+  assert.equal(feedbackRevealCachedLayoutRetained(settledScope, {
+    ...settledScope, actor: 'other-actor',
+  }), false);
+  assert.equal(feedbackRevealCachedLayoutRetained(settledScope, {
+    ...settledScope, session: 'other-session',
+  }), false);
+  assert.equal(feedbackRevealCachedLayoutRetained(settledScope, {
+    ...settledScope, resultsStatus: 'loading',
+  }), false);
+  if (!feedbackRevealCachedLayoutRetained(settledScope, {
+    ...settledScope, resultsStatus: 'loading',
+  })) {
+    cachedY = null;
+  }
+  assert.equal(cachedY, null);
+  // Initial slow layout after settlement change: null Y waits; no premature scroll.
+  const afterSettle = planFeedbackSectionReveal({
+    ...base, resultsStatus: 'ready', completedKey: null,
+  });
+  assert.deepEqual(
+    planFeedbackRevealFromLayout({ plan: afterSettle, layoutY: cachedY, ...base }),
+    { kind: 'wait_layout' },
+  );
 });
 

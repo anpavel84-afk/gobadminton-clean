@@ -747,5 +747,5 @@ test('#522 native role-history source wiring, composition slot, APK26 counter', 
   assert.match(nav, /flexBasis: 'auto'/);
   assert.match(nav, /accessibilityLabel=\{a11yLabel\}/);
   assert.doesNotMatch(nav, /numberOfLines|ellipsizeMode|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 40);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 41);
 });
