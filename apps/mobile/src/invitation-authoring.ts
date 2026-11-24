@@ -126,7 +126,15 @@ export type InvitationAuthoringSnapshot = {
 export type InvitationAuthoringPort = {
   managed: (cursor?: string) => Promise<{ items: ManagedGame[]; nextCursor: string | null }>;
   game: (id: string) => Promise<Game>;
-  send: (packet: InvitationCreatePacket, authority: Actor) => Promise<GameInvitation>;
+  /**
+   * Transport create. `permit` is rechecked after token/refresh await, immediately
+   * before the wire call — initial send also requires a live matching surface.
+   */
+  send: (
+    packet: InvitationCreatePacket,
+    authority: Actor,
+    permit: () => boolean,
+  ) => Promise<GameInvitation>;
   /** Live safety fence from MessagesCoordinator — blocked peers cannot open/send. */
   isPeerHeld: (peerId: string) => boolean;
 };
@@ -221,14 +229,16 @@ export class InvitationAuthoringCoordinator {
 
   /**
    * Bind chooser to the authoritative DM peer/header. Safety-held peers refuse.
-   * Does not clear UNKNOWN — exact retry remains until logout or successful settle.
+   * Returns a release that closes only this surfaceGen (older cleanup cannot
+   * tear down a newer peer/surface). Does not clear UNKNOWN — exact retry remains.
    */
-  open = (conversationId: string, peerId: string) => {
+  open = (conversationId: string, peerId: string): (() => void) => {
+    const noop = () => {};
     const actor = this.state.actor;
-    if (!actor || !conversationId || !peerId) return;
+    if (!actor || !conversationId || !peerId) return noop;
     if (this.port.isPeerHeld(peerId)) {
       this.show({ notice: 'Приглашение сейчас недоступно для этого собеседника.' });
-      return;
+      return noop;
     }
     const surfaceGen = ++this.surfaceSerial;
     const surface: InvitationSurface = Object.freeze({ conversationId, peerId, surfaceGen });
@@ -242,6 +252,16 @@ export class InvitationAuthoringCoordinator {
       notice: this.state.command?.status === 'unknown' ? unknownNotice : null,
       now: this.clock(),
     });
+    return () => this.releaseSurface(surfaceGen);
+  };
+
+  /**
+   * Close only the named surface generation. Safe for blur/unmount/rebind cleanup
+   * after a newer open has already replaced the lease.
+   */
+  releaseSurface = (surfaceGen: number) => {
+    if (!this.state.surface || this.state.surface.surfaceGen !== surfaceGen) return;
+    this.close();
   };
 
   /** Cancel chooser UI — returns to DM; keeps UNKNOWN packet and never auto-sends. */
@@ -329,6 +349,12 @@ export class InvitationAuthoringCoordinator {
         this.show({ checking: false, notice: 'Приглашение сейчас недоступно для этого собеседника.' });
         return;
       }
+      // Fail closed: authoritative GET must name the selected game — never invite another id.
+      if (fresh.id !== gameId) {
+        this.show({ checking: false, notice: 'Игра сейчас недоступна. Обновите список.' });
+        await this.load(false, { preserveNotice: true });
+        return;
+      }
       const block = invitationEligibilityBlockReason(fresh, this.clock());
       if (block) {
         this.show({ checking: false, notice: invitationEligibilityNotice(block) });
@@ -338,7 +364,7 @@ export class InvitationAuthoringCoordinator {
       const packet: InvitationCreatePacket = Object.freeze({
         actor: Object.freeze({ ...actor }),
         key: this.random(),
-        gameId: fresh.id,
+        gameId,
         peerId: surface.peerId,
         conversationId: surface.conversationId,
         surfaceGen,
@@ -348,7 +374,7 @@ export class InvitationAuthoringCoordinator {
         }),
       });
       this.show({ checking: false });
-      await this.dispatch(packet, actor);
+      await this.dispatch(packet, actor, 'initial');
     } catch (error) {
       if (!this.current(actor) || serial !== this.serial) return;
       if (!this.state.surface || this.state.surface.surfaceGen !== surfaceGen) return;
@@ -371,7 +397,7 @@ export class InvitationAuthoringCoordinator {
       this.show({ notice: 'Приглашение сейчас недоступно для этого собеседника.' });
       return;
     }
-    await this.dispatch(command.packet, actor);
+    await this.dispatch(command.packet, actor, 'reconcile');
   };
 
   /** Open detail only when the live surface still matches the receipt destination. */
@@ -384,24 +410,42 @@ export class InvitationAuthoringCoordinator {
     return receipt;
   };
 
-  private async dispatch(packet: InvitationCreatePacket, authority: Actor) {
+  private surfaceAliveFor(packet: InvitationCreatePacket): boolean {
+    const surface = this.state.surface;
+    return !!surface
+      && surface.surfaceGen === packet.surfaceGen
+      && surface.conversationId === packet.conversationId
+      && surface.peerId === packet.peerId;
+  }
+
+  /**
+   * @param intent `initial` requires live surface/peer/safety at the post-token fence;
+   *   `reconcile` keeps exact UNKNOWN authority (surface may be closed) and never auto-sends.
+   */
+  private async dispatch(
+    packet: InvitationCreatePacket,
+    authority: Actor,
+    intent: 'initial' | 'reconcile',
+  ) {
     this.serial++;
     this.show({ command: { packet, status: 'sending' }, notice: null, receipt: null });
     const valid = () =>
       this.current(authority)
       && this.state.command?.packet === packet
       && this.state.command.status === 'sending';
+    const permit = () => {
+      if (!valid()) return false;
+      if (this.port.isPeerHeld(packet.peerId)) return false;
+      if (intent === 'initial') return this.surfaceAliveFor(packet);
+      return true;
+    };
     try {
-      const ack = parseInvitation(await this.port.send(packet, authority));
+      const ack = parseInvitation(await this.port.send(packet, authority, permit));
       if (!valid()) return;
       if (ack.gameId !== packet.gameId) throw new ParticipationError('invalid');
       if (ack.inviteePublicPlayerId !== packet.peerId) throw new ParticipationError('invalid');
       if (ack.status !== 'pending') throw new ParticipationError('invalid');
-      const surfaceAlive =
-        this.state.surface
-        && this.state.surface.surfaceGen === packet.surfaceGen
-        && this.state.surface.conversationId === packet.conversationId
-        && this.state.surface.peerId === packet.peerId;
+      const surfaceAlive = this.surfaceAliveFor(packet);
       this.show({
         command: undefined,
         receipt: surfaceAlive ? ack : null,
@@ -410,6 +454,21 @@ export class InvitationAuthoringCoordinator {
       });
     } catch (error) {
       if (!valid()) return;
+      // Proven zero-dispatch (token fence / surface end): clear sending, never UNKNOWN.
+      if (error instanceof ParticipationError && error.kind === 'stale' && intent === 'initial') {
+        this.show({ command: undefined, notice: null });
+        return;
+      }
+      // Reconcile cancelled by safety/actor before wire — keep exact UNKNOWN for deliberate retry.
+      if (error instanceof ParticipationError && error.kind === 'stale' && intent === 'reconcile') {
+        this.show({
+          command: { packet, status: 'unknown' },
+          notice: this.port.isPeerHeld(packet.peerId)
+            ? 'Приглашение сейчас недоступно для этого собеседника.'
+            : unknownNotice,
+        });
+        return;
+      }
       if (
         error instanceof ParticipationError
         && error.kind === 'business'

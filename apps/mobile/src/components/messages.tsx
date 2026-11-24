@@ -190,7 +190,15 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     if (auth.status !== 'authenticated') return;
     initialScroll.current = true; nearBottom.current = false; visibleIds.current = [];
     const release = owner.leaseFocus(resourceRef.current);
-    return () => { nearBottom.current = false; visibleIds.current = []; release(); setChooser(false); };
+    return () => {
+      nearBottom.current = false;
+      visibleIds.current = [];
+      release();
+      // setChooser alone does not run chooser cleanup when this screen unmounts with
+      // chooser still true — InvitationChooser lease release + explicit close fence the surface.
+      setChooser(false);
+      nativeAuth.invitationAuthoring.close();
+    };
   }, [owner, key, auth.status]));
   const h = detail?.header, direct = h && 'requestState' in h ? h : null, chat = h && 'lifecycleState' in h ? h : null, invitation = h && 'status' in h ? h : null;
   const title = direct?.peer.displayName ?? (chat ? 'Чат игры' : 'Приглашение в игру');

@@ -61,11 +61,18 @@ function inviteReceipt(gameId: string, invitee = peer): GameInvitation {
 function setup(overrides: {
   managed?: (cursor?: string) => Promise<{ items: ManagedGame[]; nextCursor: string | null }>;
   game?: (id: string) => Promise<Game>;
-  send?: (packet: InvitationCreatePacket, authority: Actor) => Promise<GameInvitation>;
+  send?: (
+    packet: InvitationCreatePacket,
+    authority: Actor,
+    permit: () => boolean,
+  ) => Promise<GameInvitation>;
+  /** When set, send awaits this before evaluating permit (token/refresh seam). */
+  beforePermit?: () => Promise<void>;
   held?: Set<string>;
   clock?: { now: number };
 } = {}) {
   const sent: InvitationCreatePacket[] = [];
+  const permits: boolean[] = [];
   let keys = 0;
   const held = overrides.held ?? new Set<string>();
   const clock = overrides.clock ?? { now: Date.parse('2026-11-24T10:00:00.000Z') };
@@ -77,15 +84,19 @@ function setup(overrides: {
       const row = games.find(g => g.id === id) ?? managed({ id });
       return row;
     },
-    send: async (packet, authority) => {
+    send: async (packet, authority, permit) => {
+      if (overrides.beforePermit) await overrides.beforePermit();
+      const allowed = permit();
+      permits.push(allowed);
+      if (!allowed) throw new ParticipationError('stale');
       sent.push(packet);
-      if (overrides.send) return overrides.send(packet, authority);
+      if (overrides.send) return overrides.send(packet, authority, permit);
       return inviteReceipt(packet.gameId, packet.peerId);
     },
     isPeerHeld: id => held.has(id),
   }, () => `invite-key-${++keys}xxxxxxxx`, () => clock.now);
   owner.setActor(actor);
-  return { owner, sent, held, clock, get keyCount() { return keys; } };
+  return { owner, sent, permits, held, clock, get keyCount() { return keys; } };
 }
 
 test('eligibility helpers mirror accepted-web publish/start/deadline gates', () => {
@@ -168,6 +179,111 @@ test('interrupted GET/refresh and late receipt after surface close are ignored',
   assert.equal(s.owner.getSnapshot().checking, false);
 });
 
+test('#522 lease release cancels pending fresh GET; older release cannot close newer surface; zero sends', async () => {
+  const gate = deferred<Game>();
+  const s = setup({
+    game: async id => gate.promise.then(() => managed({ id, version: 9 })),
+  });
+  const releaseA = s.owner.open(conversationId, peer);
+  await s.owner.load();
+  const invite = s.owner.invite('game-open');
+  assert.equal(s.owner.getSnapshot().checking, true);
+  // Actual exposed lifecycle seam (chooser unmount / blur release), not close() alone.
+  releaseA();
+  assert.equal(s.owner.getSnapshot().surface, null);
+  gate.resolve(managed({ id: 'game-open', version: 9 }));
+  await invite;
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.owner.getSnapshot().checking, false);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+
+  const releaseOld = s.owner.open(conversationId, peer);
+  const genOld = s.owner.getSnapshot().surface!.surfaceGen;
+  const releaseNew = s.owner.open('dm-2', 'peer-public-2');
+  const genNew = s.owner.getSnapshot().surface!.surfaceGen;
+  assert.notEqual(genOld, genNew);
+  releaseOld();
+  assert.equal(s.owner.getSnapshot().surface?.surfaceGen, genNew);
+  assert.equal(s.owner.getSnapshot().surface?.peerId, 'peer-public-2');
+  releaseNew();
+  assert.equal(s.owner.getSnapshot().surface, null);
+  assert.equal(s.sent.length, 0);
+});
+
+test('#522 fresh GET identity mismatch fails closed before mutation; zero sends', async () => {
+  const s = setup({
+    game: async () => managed({ id: 'game-other', version: 3 }),
+  });
+  s.owner.open(conversationId, peer);
+  await s.owner.load();
+  await s.owner.invite('game-open');
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().checking, false);
+  assert.match(s.owner.getSnapshot().notice ?? '', /недоступна/);
+});
+
+test('#522 post-token permit: surface end / peer hold cancel initial send; UNKNOWN exact retry retained', async () => {
+  const tokenGate = deferred<void>();
+  const s = setup({ beforePermit: () => tokenGate.promise });
+  s.owner.open(conversationId, peer);
+  await s.owner.load();
+  const invite = s.owner.invite('game-open');
+  await new Promise(r => setImmediate(r));
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.owner.getSnapshot().command?.status, 'sending');
+  s.owner.close();
+  tokenGate.resolve();
+  await invite;
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.permits.includes(false), true);
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  assert.equal(s.owner.getSnapshot().checking, false);
+
+  // Peer hold after token await on a fresh initial send — zero wire, no stranded sending.
+  const holdGate = deferred<void>();
+  const held = setup({ beforePermit: () => holdGate.promise, held: new Set<string>() });
+  held.owner.open(conversationId, peer);
+  await held.owner.load();
+  const heldInvite = held.owner.invite('game-open');
+  await new Promise(r => setImmediate(r));
+  held.held.add(peer);
+  holdGate.resolve();
+  await heldInvite;
+  assert.equal(held.sent.length, 0);
+  assert.equal(held.owner.getSnapshot().command, undefined);
+
+  // Explicit UNKNOWN: surface may close; deliberate retry keeps exact packet after token seam.
+  let phase: 'network' | 'ok' = 'network';
+  const retryGate = deferred<void>();
+  let gateOpen = false;
+  const u = setup({
+    beforePermit: async () => { if (gateOpen) await retryGate.promise; },
+    send: async (packet) => {
+      if (phase === 'network') throw new ParticipationError('network');
+      return inviteReceipt(packet.gameId, packet.peerId);
+    },
+  });
+  u.owner.open(conversationId, peer);
+  await u.owner.load();
+  await u.owner.invite('game-open');
+  assert.equal(u.owner.getSnapshot().command?.status, 'unknown');
+  const key = u.owner.getSnapshot().command!.packet.key;
+  const body = u.owner.getSnapshot().command!.packet.body;
+  u.owner.close();
+  assert.equal(u.owner.getSnapshot().surface, null);
+  assert.equal(u.owner.getSnapshot().command?.status, 'unknown');
+  phase = 'ok';
+  gateOpen = true;
+  const retry = u.owner.retry();
+  await new Promise(r => setImmediate(r));
+  retryGate.resolve();
+  await retry;
+  assert.equal(u.sent.length, 2);
+  assert.equal(u.sent[1]!.key, key);
+  assert.deepEqual(u.sent[1]!.body, body);
+});
+
 test('UNKNOWN exact retry same packet; terminal denial clears command; stale 409 refreshes without auto-resend', async () => {
   let phase: 'network' | 'stale' | 'ok' = 'network';
   const s = setup({
@@ -228,6 +344,9 @@ test('#522 APK45 source wiring: DM chooser, create opt-in, counter 45', () => {
   assert.match(authoring, /InvitationAuthoringCoordinator/);
   assert.match(authoring, /isGameOpenForInvitation/);
   assert.match(authoring, /invitationCreateWire/);
+  assert.match(authoring, /releaseSurface/);
+  assert.match(authoring, /fresh\.id !== gameId/);
+  assert.match(authoring, /permit:\s*\(\)\s*=>\s*boolean/);
 
   const chooser = read('../src/components/invitation-chooser.tsx');
   assert.match(chooser, /Пригласить на игру/);
@@ -236,17 +355,21 @@ test('#522 APK45 source wiring: DM chooser, create opt-in, counter 45', () => {
   assert.match(chooser, /Нет предстоящих игр, открытых для приглашений/);
   assert.match(chooser, /nativeAuth\.invitationAuthoring/);
   assert.match(chooser, /\+ Создать новую игру/);
+  assert.match(chooser, /const release = owner\.open\(/);
+  assert.match(chooser, /return \(\) => \{\s*opened\.current = false;\s*release\(\);\s*\};/);
 
   const messages = read('../src/components/messages.tsx');
   assert.match(messages, /InvitationChooser/);
   assert.match(messages, /Пригласить на игру/);
   assert.match(messages, /canInvite/);
+  assert.match(messages, /nativeAuth\.invitationAuthoring\.close\(\)/);
 
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /InvitationAuthoringCoordinator/);
   assert.match(auth, /this\.invitationAuthoring\.setActor/);
   assert.match(auth, /this\.invitationAuthoring\.forget/);
   assert.match(auth, /createInvitation/);
+  assert.match(auth, /if \(!permit\(\)\) throw new ParticipationError\('stale'\);\s*return deps\.api\.createInvitation/);
 
   const api = read('../src/native-api.ts');
   assert.match(api, /createInvitation/);

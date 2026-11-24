@@ -191,10 +191,14 @@ export class AuthCoordinator {
       },
     },deps.random);
     // DM peer invitation create: managed list + fresh game GET + POST create; Messages safety fence for held peers.
+    // Final actor/session + surface/peer/safety permit runs after token await, immediately before createInvitation.
     this.invitationAuthoring = new InvitationAuthoringCoordinator({
       managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
       game: id => this.participationRead(access => deps.api.gameDetail(access, id)),
-      send: (packet, authority) => this.participationRead(access => deps.api.createInvitation(access, packet), authority),
+      send: (packet, authority, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.createInvitation(access, packet);
+      }, authority),
       isPeerHeld: peerId => this.messages.isPeerSafetyHeld(peerId),
     }, deps.random, this.now);
     this.safety = new SafetyCoordinator({

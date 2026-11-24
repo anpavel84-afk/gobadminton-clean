@@ -34,15 +34,17 @@ export function InvitationChooser({
 
   useEffect(() => {
     if (!visible) {
-      if (opened.current) {
-        opened.current = false;
-        owner.close();
-      }
+      opened.current = false;
       return;
     }
     opened.current = true;
-    owner.open(conversationId, peerId);
+    // Scoped lease: blur/unmount/peer-rebind release closes only this surfaceGen.
+    const release = owner.open(conversationId, peerId);
     void owner.load();
+    return () => {
+      opened.current = false;
+      release();
+    };
   }, [visible, conversationId, peerId, owner]);
 
   useEffect(() => {
