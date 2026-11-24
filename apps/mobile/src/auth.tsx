@@ -11,9 +11,10 @@ import type { PublicRoleLocalGoal } from './native-auth-protocol.ts';
 import type { MessagesCoordinator } from './messages-coordinator.ts';
 import type { PlayersCoordinator } from './players.ts';
 import type { ParticipationCoordinator } from './participation.ts';
+import type { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
 import type { AuthSnapshot } from './auth-coordinator.ts';
 
-type AuthContext = AuthSnapshot & { postgame: typeof nativeAuth.postgame; safety: typeof nativeAuth.safety; contact: typeof nativeAuth.contact; profile: typeof nativeAuth.profile; avatar: typeof nativeAuth.avatar; cover: typeof nativeAuth.cover; gameManagement: typeof nativeAuth.gameManagement; players: PlayersCoordinator; messages: MessagesCoordinator; participation: ParticipationCoordinator; signIn: (returnPath?: string | null, goal?: PublicRoleLocalGoal | null) => Promise<void>; signInUnavailable: string | null;
+type AuthContext = AuthSnapshot & { postgame: typeof nativeAuth.postgame; safety: typeof nativeAuth.safety; contact: typeof nativeAuth.contact; profile: typeof nativeAuth.profile; avatar: typeof nativeAuth.avatar; cover: typeof nativeAuth.cover; gameManagement: typeof nativeAuth.gameManagement; players: PlayersCoordinator; messages: MessagesCoordinator; participation: ParticipationCoordinator; privateGameVenueContacts: PrivateGameVenueContactsCoordinator; signIn: (returnPath?: string | null, goal?: PublicRoleLocalGoal | null) => Promise<void>; signInUnavailable: string | null;
   claimPublicRoleGoal: () => Promise<PublicRoleLocalGoal | null>;
   logout: () => Promise<void>; cancel: () => Promise<void>; validate: () => Promise<void>;
   loadSessions: () => Promise<void>; revokeSession: (id: string | null) => Promise<void> };
@@ -63,7 +64,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       } catch { await nativeAuth.cancelLogin(start.generation); }
     } finally { browserBusy.current = false; }
   }
-  return <Context.Provider value={{ ...snapshot, postgame: nativeAuth.postgame, safety: nativeAuth.safety, contact: nativeAuth.contact, profile: nativeAuth.profile, avatar: nativeAuth.avatar, cover: nativeAuth.cover, gameManagement: nativeAuth.gameManagement, players: nativeAuth.players, messages: nativeAuth.messages, participation: nativeAuth.participation, signIn, claimPublicRoleGoal: nativeAuth.claimPublicRoleGoal, signInUnavailable: iosSignInUnavailable, logout: () => nativeAuth.logout(), cancel: () => nativeAuth.cancelLogin(),
+  return <Context.Provider value={{ ...snapshot, postgame: nativeAuth.postgame, safety: nativeAuth.safety, contact: nativeAuth.contact, profile: nativeAuth.profile, avatar: nativeAuth.avatar, cover: nativeAuth.cover, gameManagement: nativeAuth.gameManagement, players: nativeAuth.players, messages: nativeAuth.messages, participation: nativeAuth.participation, privateGameVenueContacts: nativeAuth.privateGameVenueContacts, signIn, claimPublicRoleGoal: nativeAuth.claimPublicRoleGoal, signInUnavailable: iosSignInUnavailable, logout: () => nativeAuth.logout(), cancel: () => nativeAuth.cancelLogin(),
     validate: nativeAuth.validate, loadSessions: nativeAuth.loadSessions, revokeSession: nativeAuth.revokeSession }}>{children}</Context.Provider>;
 }
 export function useAuth() {

@@ -148,6 +148,112 @@ run("bounded native participation principal opt-in", () => {
     expect((await app.inject({ url, headers: bearer(player) })).statusCode).toBe(404);
     expect((await app.inject({ url, headers: bearer(owner) })).statusCode).toBe(200);
   });
+  it("bearer private venue contacts: owner/manager/confirmed see fields; guest/outsider/pending/withdrawn omit; revoke clears; lists exclude", async () => {
+    const owner = await actor(), manager = await actor(), player = await actor(), outsider = await actor();
+    const g = await game(owner, 4);
+    const detail = (await app.inject({ url: `/v1/games/${g.id}`, headers: bearer(owner) })).json() as {
+      id: string;
+      venue: {
+        id: string;
+        contactPhone?: string | null;
+        contactWebsite?: string | null;
+        bookingNote?: string | null;
+      };
+    };
+    const venueId = detail.venue.id as string;
+    const contacts = {
+      contactPhone: "+7 (999) 123-45-67",
+      contactWebsite: "https://example.org/booking",
+      bookingNote: "Инструкция бронирования",
+    };
+    await pool.query(
+      "UPDATE venues SET contact_phone=$2, contact_website=$3, booking_note=$4, contact_updated_at=now() WHERE id=$1",
+      [venueId, contacts.contactPhone, contacts.contactWebsite, contacts.bookingNote],
+    );
+    const absent = (value: unknown) => {
+      const walk = (node: unknown): void => {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) { for (const child of node) walk(child); return; }
+        for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+          expect(["contactPhone", "contactWebsite", "bookingNote"]).not.toContain(key);
+          walk(child);
+        }
+      };
+      walk(value);
+    };
+    const expectContacts = async (headers?: Record<string, string>) => {
+      const row = (await app.inject({ url: `/v1/games/${g.id}`, headers })).json().venue;
+      expect(row).toMatchObject(contacts);
+    };
+    const expectOmitted = async (headers?: Record<string, string>) => {
+      const row = (await app.inject({ url: `/v1/games/${g.id}`, headers })).json().venue;
+      expect(row).not.toHaveProperty("contactPhone");
+      expect(row).not.toHaveProperty("contactWebsite");
+      expect(row).not.toHaveProperty("bookingNote");
+    };
+
+    await expectContacts(bearer(owner));
+    const cookieOwner = (await app.inject({ url: `/v1/games/${g.id}`, headers: { cookie: owner.cookie } })).json().venue;
+    expect(cookieOwner).toMatchObject(contacts);
+
+    await pool.query("INSERT INTO game_managers(game_id,user_id,role,status) VALUES($1,$2,'manager','active')", [g.id, manager.id]);
+    await expectContacts(bearer(manager));
+
+    const requested = await app.inject({
+      method: "POST", url: `/v1/games/${g.id}/participations`, headers: bearer(player),
+      payload: { expectedGameVersion: g.version },
+    });
+    expect(requested.statusCode).toBe(201);
+    await expectOmitted(bearer(player));
+    const confirmed = await app.inject({
+      method: "POST", url: `/v1/participations/${requested.json().id}/confirm`, headers: browser(owner),
+      payload: { expectedVersion: requested.json().version },
+    });
+    expect(confirmed.statusCode).toBe(200);
+    await expectContacts(bearer(player));
+
+    await expectOmitted();
+    await expectOmitted(bearer(outsider));
+    const pendingActor = await actor();
+    const pending = await app.inject({
+      method: "POST", url: `/v1/games/${g.id}/participations`, headers: bearer(pendingActor),
+      payload: { expectedGameVersion: (await app.inject({ url: `/v1/games/${g.id}` })).json().version },
+    });
+    expect(pending.statusCode).toBe(201);
+    await expectOmitted(bearer(pendingActor));
+
+    const withdrawn = await app.inject({
+      method: "POST", url: `/v1/participations/${confirmed.json().id}/withdraw`, headers: bearer(player),
+      payload: { expectedVersion: confirmed.json().version },
+    });
+    expect(withdrawn.statusCode).toBe(200);
+    await expectOmitted(bearer(player));
+
+    await pool.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1 AND user_id=$2", [g.id, manager.id]);
+    await expectOmitted(bearer(manager));
+    // Creator/manager revocation is not a universal deny when confirmed participation remains.
+    await pool.query("INSERT INTO participations(game_id,user_id,status) VALUES($1,$2,'confirmed')", [g.id, manager.id]);
+    await expectContacts(bearer(manager));
+
+    for (const url of [
+      `/v1/games?venueId=${venueId}`,
+      `/v1/games?cityId=${MOSCOW_CITY_ID}&temporalScope=upcoming`,
+      `/v1/games/map?cityId=${MOSCOW_CITY_ID}&temporalScope=upcoming`,
+      `/v1/venues?cityId=${MOSCOW_CITY_ID}`,
+      `/v1/venues/${venueId}`,
+    ]) {
+      const r = await app.inject({ url, headers: { cookie: owner.cookie } });
+      expect(r.statusCode).toBe(200);
+      absent(r.json());
+    }
+    const managed = await app.inject({ url: "/v1/me/games", headers: bearer(owner) });
+    expect(managed.statusCode).toBe(200);
+    absent(managed.json());
+    // Cookie vs bearer projection comparison on the same authorized actor.
+    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { cookie: owner.cookie } })).json().venue)
+      .toMatchObject((await app.inject({ url: `/v1/games/${g.id}`, headers: bearer(owner) })).json().venue);
+  });
+
   it("preserves browser CSRF/Origin and rejects invalid/mixed/revoked/disabled native authority without public credential fallback", async () => {
     const owner = await actor(), player = await actor(), g = await game(owner);
     const url = `/v1/games/${g.id}/participations`, payload = { expectedGameVersion: g.version };

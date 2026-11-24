@@ -42,6 +42,7 @@ import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-m
 import type { ManagementPacket } from './game-management.ts';
 import { gameContactPreferenceWire } from './game-contact-preference.ts';
 import { courtBookingWire, parseGameCourtBooking, type CourtBookingPacket } from './game-court-booking.ts';
+import { parsePrivateGameVenueContacts } from './private-game-venue-contacts.ts';
 import { invitationCreateWire, type InvitationCreatePacket } from './invitation-authoring.ts';
 import type { GameContactPacket } from './game-contact-preference.ts';
 import {
@@ -707,6 +708,16 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     players: async (access: string, filters: PlayerFilters, cursor?: string) => parsePlayerPage(await request(`/players?${playerQuery(filters, cursor)}`, 'GET', undefined, access, undefined, false, true)),
     player: async (access: string, id: string) => parsePlayer(await request(`/players/${encodeURIComponent(id)}`, 'GET', undefined, access, undefined, false, true)),
     gameDetail: async (access: string, gameId: string) => parseAuthenticatedGame(await request(`/games/${encodeURIComponent(gameId)}`, 'GET', undefined, access, undefined, true)),
+    /**
+     * Closed GET existing /games/:id for private venue contacts only — same bearer helper as gameDetail,
+     * but returns the isolated private projection parser (never the stripped shared Game DTO).
+     */
+    privateGameVenueContacts: async (access: string, gameId: string, venueId: string) =>
+      parsePrivateGameVenueContacts(
+        await request(`/games/${encodeURIComponent(gameId)}`, 'GET', undefined, access, undefined, true),
+        gameId,
+        venueId,
+      ),
     ownParticipations: async (access: string, cursor?: string) => parseCursorPage(await request(`/me/participations?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseParticipation),
     managedGames: async (access: string, cursor?: string) => parseCursorPage(await request(`/me/games?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseManagedGame),
     requestParticipation: async (access: string, gameId: string, body: Readonly<{ expectedGameVersion: number }>, key: string) =>

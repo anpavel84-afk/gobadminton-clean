@@ -1954,6 +1954,106 @@ test('#522 APK48: delayed token actor/view permit yields zero PUT', async () => 
   assert.equal(puts.length, 0);
   assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
+
+test('#522 APK49: private venue contacts AuthCoordinator fences, separate GET, logout clear', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.privateGameVenueContacts;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const venueId = '20000000-0000-4000-8000-000000000020';
+  const calls: { path: string; method?: string; auth?: string; credentials?: RequestCredentials }[] = [];
+  const detail = {
+    id: gameId, version: 1, title: 'Fixture', status: 'published', visibility: 'public',
+    organizer: { id: me.id, displayName: 'Host', publicContact: 'tg' },
+    venue: {
+      id: venueId, name: 'Hall', address: 'Addr', cityId: 'c', timezone: 'Europe/Moscow',
+      contactPhone: '+7 (999) 123-45-67', contactWebsite: 'https://example.org/booking', bookingNote: 'Note',
+    },
+    startsAt: '2026-12-01T10:00:00.000Z', endsAt: '2026-12-01T12:00:00.000Z',
+    applicationDeadlineAt: '2026-11-30T10:00:00.000Z', timezone: 'Europe/Moscow',
+    capacity: 4, confirmedCount: 1, externalReservedCount: 0, availablePlaces: 3,
+    formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+    settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'x' },
+    activityKind: 'regular', trainingDescription: null, trainer: null,
+  };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}`) {
+      const headers = (init.headers ?? {}) as Record<string, string>;
+      calls.push({
+        path,
+        method: init.method ?? 'GET',
+        auth: headers.Authorization,
+        credentials: init.credentials,
+      });
+      return detail;
+    }
+    return { ok: true };
+  });
+  owner.focus(gameId, venueId);
+  await owner.load();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.path, `/games/${gameId}`);
+  assert.equal(calls[0]!.auth, `Bearer ${credentials.accessToken}`);
+  assert.equal(calls[0]!.credentials, 'omit');
+  assert.equal(owner.getSnapshot().projection?.phone?.url, 'tel:+79991234567');
+  assert.equal(owner.getSnapshot().projection?.bookingNote, 'Note');
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.privateGameVenueContacts, owner);
+  assert.equal(owner.getSnapshot().projection?.phone?.url, 'tel:+79991234567');
+
+  const getCount = calls.length;
+  const permit = owner.renderedPermit(owner.getSnapshot().projection!.phone!);
+  assert.ok(permit);
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().projection, null);
+  assert.equal(await owner.open(permit!), 'blocked');
+  assert.equal(calls.length, getCount);
+});
+
+test('#522 APK49: delayed token surface permit yields zero private contacts GET', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.privateGameVenueContacts;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const venueId = '20000000-0000-4000-8000-000000000020';
+  const gets: string[] = [];
+  const refreshGate = deferred<unknown>();
+  s.setHandler(async (path) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshGate.promise;
+    if (path === `/games/${gameId}`) {
+      gets.push(path);
+      return {
+        id: gameId, version: 1, title: 'Fixture', status: 'published', visibility: 'public',
+        organizer: { id: me.id, displayName: 'Host', publicContact: 'tg' },
+        venue: { id: venueId, name: 'Hall', address: 'Addr', cityId: 'c', timezone: 'Europe/Moscow' },
+        startsAt: '2026-12-01T10:00:00.000Z', endsAt: '2026-12-01T12:00:00.000Z',
+        applicationDeadlineAt: '2026-11-30T10:00:00.000Z', timezone: 'Europe/Moscow',
+        capacity: 4, confirmedCount: 0, externalReservedCount: 0, availablePlaces: 4,
+        formatKey: 'doubles', levelRule: { scaleId: 'ntrp', scaleVersion: 1, allowedLevelIds: ['3.0'] },
+        settlement: { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: 'x' },
+        activityKind: 'regular', trainingDescription: null, trainer: null,
+      };
+    }
+    return { ok: true };
+  });
+  // Force token rotation path so permit rechecks after await.
+  const refreshWork = s.auth.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.focus(gameId, venueId);
+  const loadWork = owner.load();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.setForeground(false);
+  refreshGate.resolve(credentials);
+  await Promise.all([loadWork, refreshWork]);
+  assert.equal(gets.length, 0);
+  assert.equal(owner.getSnapshot().projection, null);
+});
+
 test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();
