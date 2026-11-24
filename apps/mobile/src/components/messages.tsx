@@ -1,22 +1,92 @@
 import { NativeSafety } from './safety.tsx';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { ComponentRef, PropsWithChildren } from 'react';
+import type { ComponentRef, PropsWithChildren, ReactNode } from 'react';
 import { AppState, FlatList, Image, Platform, Pressable, RefreshControl, TextInput, View } from 'react-native';
 import type { FlatListProps } from 'react-native';
 import { useFocusEffect, usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { nativeAuth } from '../auth-runtime.ts';
+import {
+  InvitationGameNavController,
+  invitationGamePath,
+} from '../invitation-game-navigation.ts';
 import type { MessagesCoordinator } from '../messages-coordinator.ts';
 import { resourceKey } from '../messages-coordinator.ts';
 import { inboxDestination } from '../messages.ts';
 import type { DirectMessage, GameInvitation, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
 import { isInviteClockExpired } from '../my-games.ts';
 import { playerMediaUrl } from '../media.ts';
+import type { Actor } from '../participation.ts';
 import { formatLabel, levelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
 import { InvitationChooser } from './invitation-chooser.tsx';
 import { DiscoveryChip, DiscoverySheet, Header, Label, Page, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
+
+/** Messages + inline MyGames: focus/foreground-fenced Open game; hide while loading/error. */
+export function useInvitationOpenGame(args: {
+  invitationId: string;
+  gameId: string;
+  invitationVersion: number;
+  actor: Actor | null;
+}): { onOpenGame: (() => void) | undefined } {
+  const auth = useAuth();
+  const router = useRouter();
+  const controller = useRef(new InvitationGameNavController()).current;
+  useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const participation = auth.participation;
+  const actorId = args.actor?.actorId;
+  const sessionId = args.actor?.sessionId;
+  const generation = args.actor?.generation;
+
+  useFocusEffect(useCallback(() => {
+    if (!args.actor || auth.status !== 'authenticated') return;
+    return controller.focus(
+      { invitationId: args.invitationId, gameId: args.gameId, actor: args.actor },
+      participation,
+    );
+  }, [
+    controller,
+    participation,
+    args.invitationId,
+    args.gameId,
+    args.invitationVersion,
+    actorId,
+    sessionId,
+    generation,
+    args.actor,
+    auth.status,
+  ]));
+
+  useEffect(() => {
+    controller.setForeground(AppState.currentState === 'active');
+    const sub = AppState.addEventListener('change', state => {
+      controller.setForeground(state === 'active');
+    });
+    return () => { sub.remove(); };
+  }, [controller]);
+
+  const live = {
+    invitationId: args.invitationId,
+    gameId: args.gameId,
+    actor: args.actor,
+  };
+  const target = controller.openGameId(live);
+  if (!target) return { onOpenGame: undefined };
+  const renderedActor = args.actor;
+  const renderedInvitationId = args.invitationId;
+  const renderedGameId = args.gameId;
+  return {
+    onOpenGame: () => {
+      if (!controller.mayOpen(target, {
+        invitationId: renderedInvitationId,
+        gameId: renderedGameId,
+        actor: renderedActor,
+      })) return;
+      router.push(invitationGamePath(target) as '/games');
+    },
+  };
+}
 
 /** Web-parity inbox date: day + short month in ru-RU (#604). */
 export function formatInboxActivityDate(iso: string): string {
@@ -186,8 +256,42 @@ export function InvitationDecisionBody({ invitation, ownId, pending, managerElig
     {onOpenGame ? <TextButton title="Открыть игру" onPress={onOpenGame} /> : null}
   </View>;
 }
+/** Invitation detail with APK47 Open-game fence; decisions stay usable while game read loads/fails. */
+function InvitationMessageDetail({
+  resource,
+  invitation,
+  ownId,
+  managerEligible,
+  pending,
+  notice,
+}: {
+  resource: MessageResource;
+  invitation: GameInvitation;
+  ownId: string | null;
+  managerEligible: boolean;
+  pending: boolean;
+  notice: ReactNode;
+}) {
+  const { owner, state } = useMessages();
+  const { onOpenGame } = useInvitationOpenGame({
+    invitationId: invitation.id,
+    gameId: invitation.gameId,
+    invitationVersion: invitation.version,
+    actor: state.actor,
+  });
+  return <Page keyboard header={<MessageHeader name="Приглашение в игру" subtitle="Участие и условия игры" />}>
+    <View style={styles.card}><InvitationDecisionBody
+      invitation={invitation} ownId={ownId} pending={pending}
+      managerEligible={managerEligible}
+      onAccept={() => { void owner.act(resource, 'accept'); }}
+      onDecline={() => { if (!pending) void owner.act(resource, 'decline'); }}
+      onRevoke={() => { if (!pending) void owner.act(resource, 'revoke', undefined, state.viewGeneration, state.actor); }}
+      onOpenGame={onOpenGame}
+    /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
+  </Page>;
+}
 export function NativeMessageThread({ resource }: { resource: MessageResource }) {
-  const { owner, state } = useMessages(), auth = useAuth(), router = useRouter(), key = resourceKey(resource);
+  const { owner, state } = useMessages(), auth = useAuth(), key = resourceKey(resource);
   const resourceRef = useRef(resource); resourceRef.current = resource;
   const detail = state.detail && resourceKey(state.detail.resource) === key ? state.detail : null;
   const pending = state.pending[key], draft = state.drafts[key] ?? '';
@@ -234,17 +338,14 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
   if (!detail || detail.status !== 'ready' || !h) return <Page header={<MessageHeader name={title} />}><Label>{detail?.status === 'error' ? detail.error : 'Загружаем…'}</Label><TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />{notice}</Page>;
   if (invitation) {
-    return <Page keyboard header={<MessageHeader name="Приглашение в игру" subtitle="Участие и условия игры" />}>
-      <View style={styles.card}><InvitationDecisionBody
-        invitation={invitation} ownId={detail.ownId} pending={!!pending}
-        managerEligible={detail.managerEligible}
-        onAccept={() => { void owner.act(resource, 'accept'); }}
-        onDecline={() => { if (!pending) void owner.act(resource, 'decline'); }}
-        onRevoke={() => { if (!pending) void owner.act(resource, 'revoke', undefined, state.viewGeneration, state.actor); }}
-        onOpenGame={(invitation.status === 'accepted' && invitation.participationId) || detail.managerEligible
-          ? () => router.push(`/games/${invitation.gameId}` as '/games') : undefined}
-      /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
-    </Page>;
+    return <InvitationMessageDetail
+      resource={resource}
+      invitation={invitation}
+      ownId={detail.ownId}
+      managerEligible={detail.managerEligible}
+      pending={!!pending}
+      notice={notice}
+    />;
   }
   const safetyHeld = !!direct && owner.isPeerSafetyHeld(direct.peer.publicPlayerId);
   const canSend = direct ? direct.requestState === 'accepted' && !safetyHeld : chat?.lifecycleState === 'active';

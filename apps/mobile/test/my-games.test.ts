@@ -593,3 +593,11 @@ test('#522 APK42 MyGames own attendance source/late/version + open clarification
   assert.equal(parseResultsDeepLinkSection(['clarification', 'x']), 'clarification');
   assert.equal(parseResultsDeepLinkSection('unknown'), null);
 });
+
+test('#522 APK47 inline MyGames wiring: same Open-game helper; accepted-participation gate removed', () => {
+  const card = read('../src/components/my-game-invitation.tsx');
+  assert.match(card, /useInvitationOpenGame/);
+  assert.match(card, /onOpenGame=\{openGame\}/);
+  assert.doesNotMatch(card, /status === 'accepted' && invitation\.participationId/);
+  assert.match(card, /leaseFocus/);
+});

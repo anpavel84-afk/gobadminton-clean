@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { resourceKey } from '../messages-coordinator.ts';
 import type { GameInvitation, MessageResource } from '../messages.ts';
-import { invitationCopy, InvitationDecisionBody } from './messages.tsx';
+import { invitationCopy, InvitationDecisionBody, useInvitationOpenGame } from './messages.tsx';
 import { isInviteClockExpired, isPendingInvite } from '../my-games.ts';
 import { Label, PrimaryButton, TextButton, styles } from './ui.tsx';
 
@@ -49,7 +49,7 @@ export function MyGameInvitations({
 function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
   invitationId: string; listInvite: GameInvitation; onClose: () => void;
 }) {
-  const auth = useAuth(), owner = auth.messages, router = useRouter();
+  const auth = useAuth(), owner = auth.messages;
   const resource: MessageResource = { kind: 'invitation', id: invitationId };
   const key = resourceKey(resource);
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
@@ -62,6 +62,14 @@ function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
     const release = owner.leaseFocus({ kind: 'invitation', id: invitationId });
     return () => { release(); };
   }, [owner, invitationId, auth.status]));
+  const { onOpenGame } = useInvitationOpenGame({
+    invitationId,
+    gameId: invitation?.gameId ?? listInvite.gameId,
+    invitationVersion: invitation?.version ?? listInvite.version,
+    actor: state.actor,
+  });
+  // Open game only after invitation header is ready — hook may run earlier but target stays null until focus+read.
+  const openGame = invitation ? onOpenGame : undefined;
   return <View style={{ gap: 8 }}>
     {state.notice ? <Label accessibilityRole="alert">{state.notice}</Label> : null}
     {pending?.state === 'unknown' ? <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource, state.viewGeneration, state.actor); }} /> : null}
@@ -75,8 +83,7 @@ function InlineInvitationPanel({ invitationId, listInvite, onClose }: {
       pending={!!pending}
       onAccept={() => { void owner.act(resource, 'accept', undefined, state.viewGeneration, state.actor); }}
       onDecline={() => { if (!pending) void owner.act(resource, 'decline', undefined, state.viewGeneration, state.actor); }}
-      onOpenGame={invitation.status === 'accepted' && invitation.participationId
-        ? () => router.push(`/games/${invitation.gameId}` as '/games') : undefined}
+      onOpenGame={openGame}
     /> : listInvite.status === 'pending' && detail?.status === 'ready' ? <Label>Условия сейчас недоступны. Обновите приглашение.</Label> : null}
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       <TextButton title="Обновить приглашение" onPress={() => { void owner.loadDetail(resource); }} />

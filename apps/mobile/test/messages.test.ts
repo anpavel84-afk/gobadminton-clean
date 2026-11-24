@@ -860,3 +860,16 @@ test('#522 APK46 revoke: stale rendered viewGeneration/actor → zero dispatch; 
   assert.equal(sent.length, before + 1);
   assert.equal(sent[before]!.action, 'revoke');
 });
+
+test('#522 APK47 Messages wiring: Open game via invitation-game-navigation; revoke gate unchanged', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { URL } = await import('node:url');
+  const body = readFileSync(new URL('../src/components/messages.tsx', import.meta.url), 'utf8');
+  assert.match(body, /useInvitationOpenGame/);
+  assert.match(body, /InvitationMessageDetail/);
+  assert.match(body, /onOpenGame=\{onOpenGame\}/);
+  assert.doesNotMatch(body, /status === 'accepted' && invitation\.participationId/);
+  // Manager revoke eligibility remains independent of Open game readability.
+  assert.match(body, /managerEligible=\{managerEligible\}/);
+  assert.match(body, /onRevoke=\{/);
+});
