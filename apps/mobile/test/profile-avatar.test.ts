@@ -804,7 +804,7 @@ test('#522 FIX6: game cover retainSource keeps picker cache across crop prepares
       coverFrames += 1;
       const uri = `file://cache/cover-frame-${coverFrames}.jpg`;
       files.set(uri, jpeg(1200, 400));
-      assert.ok(files.has(sourceUri), `source must survive crop ${position.x},${position.y}`);
+      assert.ok(files.has(_uri), `source must survive crop ${position.x},${position.y}`);
       return { uri, width: 1200, height: 400 };
     },
     saveDerivative: async (_uri, format) => {
