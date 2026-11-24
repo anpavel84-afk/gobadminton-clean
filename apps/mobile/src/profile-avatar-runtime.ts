@@ -29,6 +29,8 @@ export const COVER_WIDTH = 1200;
 export const COVER_HEIGHT = 400;
 /** Server cover upload ceiling; native derivative stays at or below this. */
 export const COVER_DERIVATIVE_MAX_BYTES = 5 * 1024 * 1024;
+/** Accepted-web game-photo derivative cap — do not inherit profile 5 MiB budget. */
+export const GAME_COVER_DERIVATIVE_MAX_BYTES = 512 * 1024;
 
 /** Largest 3:1 rectangle positioned by x,y ∈ [0,1] (0.5 = centre). Pure crop math. */
 export function coverCrop(width: number, height: number, x: number, y: number): {
@@ -46,14 +48,18 @@ export function coverCrop(width: number, height: number, x: number, y: number): 
   };
 }
 
-export function assertCoverDerivativeReady(bytes: Uint8Array, mime: string): AvatarDerivative {
+export function assertCoverDerivativeReady(
+  bytes: Uint8Array,
+  mime: string,
+  maxBytes: number = COVER_DERIVATIVE_MAX_BYTES,
+): AvatarDerivative {
   const meta = inspectAvatarSource(bytes, mime);
   if (meta.width !== COVER_WIDTH || meta.height !== COVER_HEIGHT || meta.orientation !== 1) {
     throw new AvatarSourceError('Не удалось подготовить фрагмент обложки 1200×400. Выберите другое фото.');
   }
   if (meta.hasAlpha) throw new AvatarSourceError(AVATAR_TRANSPARENCY_USER, 'WHITE_FLATTEN_UNPROVEN');
   const stripped = stripAvatarMetadata(bytes, meta.mime);
-  if (stripped.byteLength > COVER_DERIVATIVE_MAX_BYTES) {
+  if (stripped.byteLength > maxBytes) {
     throw new AvatarSourceError(AVATAR_DERIVATIVE_OVERSIZE, 'DERIVATIVE_OVERSIZE');
   }
   const verified = inspectAvatarSource(stripped, meta.mime);
@@ -216,14 +222,16 @@ export function avatarDownsampleCrop(
 }
 
 /**
- * Cover derivative: same source gates as avatar, 3:1 crop at (x,y), output exactly 1200×400 ≤ 5 MiB.
+ * Cover derivative: same source gates as avatar, 3:1 crop at (x,y), output exactly 1200×400 ≤ maxBytes.
  */
 export async function prepareOwnCoverDerivative(
   deps: AvatarRuntimeDeps,
   asset: PickedAvatarAsset,
   position: { x: number; y: number },
   retired: () => boolean,
+  options?: { maxBytes?: number },
 ): Promise<AvatarDerivative> {
+  const maxBytes = options?.maxBytes ?? COVER_DERIVATIVE_MAX_BYTES;
   const tracked: string[] = [];
   let localRetired = false;
   const effectivelyRetired = () => retired() || localRetired;
@@ -271,7 +279,7 @@ export async function prepareOwnCoverDerivative(
             out = await readBoundedAvatarBytes(
               deps.openReadOnly,
               saved.uri,
-              COVER_DERIVATIVE_MAX_BYTES,
+              maxBytes,
               AVATAR_DERIVATIVE_OVERSIZE,
             );
           } catch (error) {
@@ -279,7 +287,7 @@ export async function prepareOwnCoverDerivative(
             throw error;
           }
           try {
-            return assertCoverDerivativeReady(out, `image/${format}`);
+            return assertCoverDerivativeReady(out, `image/${format}`, maxBytes);
           } catch (error) {
             if (error instanceof AvatarSourceError && error.code === 'DERIVATIVE_OVERSIZE') continue;
             if (error instanceof AvatarSourceError && error.message.includes('уменьшить')) continue;
@@ -307,6 +315,18 @@ export async function prepareOwnCoverDerivative(
   } finally {
     await cleanup();
   }
+}
+
+/** Managed game photo: same crop/cleanup primitives, exact 512 KiB upload budget. */
+export async function prepareGameCoverDerivative(
+  deps: AvatarRuntimeDeps,
+  asset: PickedAvatarAsset,
+  position: { x: number; y: number },
+  retired: () => boolean,
+): Promise<AvatarDerivative> {
+  return prepareOwnCoverDerivative(deps, asset, position, retired, {
+    maxBytes: GAME_COVER_DERIVATIVE_MAX_BYTES,
+  });
 }
 
 /**

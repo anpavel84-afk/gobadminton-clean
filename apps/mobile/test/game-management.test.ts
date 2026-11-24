@@ -638,3 +638,16 @@ test('late failed selection cannot replace later edits, newer valid selection or
     assert.strictEqual(s.owner.getSnapshot(),current); assert.equal(s.sent.length,0);
   }
 });
+
+test('#522 APK51 managed summary mounts game photo editor for draft/published only', () => {
+  const ui = readFileSync(new URL('../src/components/game-management.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /GameCoverEditor/);
+  assert.match(ui, /photoEditable/);
+  assert.match(ui, /blocksManagedWrites/);
+  assert.match(ui, /draft.*published|published.*draft/);
+  assert.doesNotMatch(ui, /prepareOwnCoverDerivative/);
+  const domain = readFileSync(new URL('../src/game-cover.ts', import.meta.url), 'utf8');
+  assert.match(domain, /hasCover/);
+  assert.match(domain, /blocksManagedWrites/);
+  assert.match(domain, /gameCoverMediaPath/);
+});

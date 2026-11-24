@@ -10,22 +10,24 @@ export class GameCoverController {
   constructor(private readonly auth:ConsumerAuthService,private readonly covers:GameCoverService,private readonly idempotency:IdempotencyService){}
   @Get("games/:gameId/cover")
   @Header("Cache-Control","no-store")
-  async get(@Req() r:FastifyRequest,@Param("gameId") id:string){return this.covers.get(id,await this.auth.requireSession(r));}
+  async get(@Req() r:FastifyRequest,@Param("gameId") id:string){return this.covers.get(id,await this.auth.requirePrincipal(r));}
   @Put("games/:gameId/cover")
   @Header("Cache-Control","no-store")
   async put(@Req() r:FastifyRequest,@Param("gameId") id:string){
-    return this.covers.mutate(await this.auth.requireCookieMutation(r),this.idempotency.requireKey(r.headers["idempotency-key"]),id,r.headers["x-game-version"],{body:r.body,mime:r.headers["content-type"]??""});
+    return this.covers.mutate(await this.auth.requirePrincipalMutation(r),this.idempotency.requireKey(r.headers["idempotency-key"]),id,r.headers["x-game-version"],{body:r.body,mime:r.headers["content-type"]??""});
   }
   @Delete("games/:gameId/cover")
   @Header("Cache-Control","no-store")
   async remove(@Req() r:FastifyRequest,@Param("gameId") id:string){
-    return this.covers.mutate(await this.auth.requireCookieMutation(r),this.idempotency.requireKey(r.headers["idempotency-key"]),id,coverDeleteVersion(r.body,r.headers["x-game-version"]));
+    return this.covers.mutate(await this.auth.requirePrincipalMutation(r),this.idempotency.requireKey(r.headers["idempotency-key"]),id,coverDeleteVersion(r.body,r.headers["x-game-version"]));
   }
   @Get("media/game-covers/:key")
   async read(@Req() r:FastifyRequest,@Param("key") key:string,@Res() reply:FastifyReply){
-    reply.header("Cache-Control","no-store").header("Vary","Cookie, Accept").header("X-Content-Type-Options","nosniff").header("Content-Security-Policy","default-src 'none'; sandbox");
-    // optionalSession + game access/approval checks before any derive.
-    const original = await this.covers.read(key,(await this.auth.optionalSession(r))?.userId??null);
+    reply.header("Cache-Control","no-store").header("Vary","Authorization, Cookie, Accept").header("X-Content-Type-Options","nosniff").header("Content-Security-Policy","default-src 'none'; sandbox");
+    // Bearer opt-in like /media/covers: invalid explicit bearer is 401, never guest fallback.
+    const actor = r.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(r) : await this.auth.optionalSession(r);
+    const original = await this.covers.read(key,actor?.userId??null);
     const response = await resolveMediaImageResponse(original, r.headers.accept, deriveCoverWebp);
     return reply.type(response.contentType).send(response.body);
   }

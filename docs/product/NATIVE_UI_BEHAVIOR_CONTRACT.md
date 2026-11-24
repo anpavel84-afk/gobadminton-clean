@@ -234,6 +234,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `game-venue-community-summary.test.ts`; source APK counter 50 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL compact public venue summary; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED / Device/OTA/iOS PARTIAL |
 
+## R-17 · Native managed game photo editor (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameCoverEditor` / `GamePhotoSelection` / OwnedGameSummary; GET/PUT/DELETE `/games/:gameId/cover` requirePrincipal / requirePrincipalMutation + OpenAPI NativeBearer; private `GET /media/game-covers/:key` bearer-aware; hasCover own-slot semantics; 512 KiB game derivative; CAS/idempotency/moderation/CURRENT replay receipt |
+| Entry | Authenticated managed summary `/games/manage/[id]` for draft or published current manager |
+| Trigger | Explicit open editor; select/crop/confirm preview then save; remove when hasCover; uncertain → «Обновить данные» before new write; receipt refreshes managed detail version; no auto-publish |
+| Expected | Manager-only access; venue fallback URL does not enable remove; unresolved cover blocks publish/roster writes for that game; bearer headers only on exact game-covers path (never venue/foreign); late actor/game change ignores retired work; cookie Origin/CSRF preserved |
+| Accessibility | Russian copy from web; DiscoverySheet + PrimaryButton/TextButton tokens; busy/uncertain announced |
+| Non-scope | Create-game photo authoring; new media backend/deps/migrations/permissions; device/OTA/iOS completion; PROD; Mode B READY/binding claim; APK50 both-ABI publication gate |
+| Evidence | Mobile unit `game-cover.test.ts` + `auth.test.ts`; API `cover-contract` bearer unit + `native-game-management.foundation` cover case; source APK counter 51 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL managed game photo; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED / Device/OTA/iOS PARTIAL |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

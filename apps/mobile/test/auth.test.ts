@@ -1907,6 +1907,81 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
   assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
 });
 
+test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, no auto-publish', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameCover;
+  const gameId = '10000000-0000-4000-8000-000000000051';
+  const hex = 'cd'.repeat(32);
+  const gameUrl = `/v1/media/game-covers/${hex}.png`;
+  const calls: { path: string; method?: string; key?: string; version?: string; contentType?: string }[] = [];
+  let row = { version: 3, hasCover: false, cover: { uploadedUrl: null as string | null } };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}/cover`) {
+      const headers = init.headers as Record<string, string> | undefined;
+      calls.push({
+        path,
+        method: init.method,
+        key: headers?.['Idempotency-Key'],
+        version: headers?.['X-Game-Version'],
+        contentType: headers?.['Content-Type'],
+      });
+      if ((init.method ?? 'GET') === 'PUT') {
+        row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+        return row;
+      }
+      if (init.method === 'DELETE') {
+        row = { version: row.version + 1, hasCover: false, cover: { uploadedUrl: null } };
+        return row;
+      }
+      return row;
+    }
+    if (path.startsWith('/me/games')) {
+      return { items: [{ id: gameId, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) {
+      return { ...fixture, id: gameId, version: row.version, status: 'draft' };
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  await owner.load(gameId);
+  assert.equal(calls.some(c => c.method === 'PUT' || c.method === 'DELETE'), false);
+  assert.equal(owner.getSnapshot().access?.hasCover, false);
+  await owner.change(async () => Object.freeze({
+    mime: 'image/jpeg' as const,
+    bytes: new Uint8Array([255, 216, 255, 217]),
+  }));
+  const put = calls.find(c => c.method === 'PUT');
+  assert.ok(put);
+  assert.equal(put!.version, '3');
+  assert.equal(put!.contentType, 'image/jpeg');
+  assert.ok(put!.key && put!.key.length >= 16);
+  assert.equal(owner.getSnapshot().access?.hasCover, true);
+  assert.equal(owner.getSnapshot().access?.version, 4);
+  await owner.remove();
+  const del = calls.find(c => c.method === 'DELETE');
+  assert.ok(del);
+  assert.equal(del!.contentType, 'application/json');
+  assert.equal(owner.getSnapshot().access?.hasCover, false);
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.gameCover, owner);
+
+  const mutCount = calls.filter(c => c.method === 'PUT' || c.method === 'DELETE').length;
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(owner.getSnapshot().access, null);
+  await owner.change(async () => Object.freeze({
+    mime: 'image/jpeg' as const,
+    bytes: new Uint8Array([255, 216, 255, 217]),
+  }));
+  assert.equal(calls.filter(c => c.method === 'PUT' || c.method === 'DELETE').length, mutCount);
+});
+
 test('#522 APK48: delayed token actor/view permit yields zero PUT', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

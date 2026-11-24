@@ -13,6 +13,7 @@ import { GameManagementCoordinator } from './game-management.ts';
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
+import { GameCoverCoordinator } from './game-cover.ts';
 import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
 import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
@@ -69,6 +70,7 @@ export class AuthCoordinator {
   readonly trainer: TrainerProfileCoordinator;
   readonly gameContactPreference: GameContactPreferenceCoordinator;
   readonly gameCourtBooking: GameCourtBookingCoordinator;
+  readonly gameCover: GameCoverCoordinator;
   readonly privateGameVenueContacts: PrivateGameVenueContactsCoordinator;
   readonly invitationAuthoring: InvitationAuthoringCoordinator;
   readonly contact: ContactCoordinator;
@@ -295,6 +297,14 @@ export class AuthCoordinator {
         return result;
       },
     },deps.random,this.now);
+    // Managed game photo: GET/PUT/DELETE principal opt-in; hasCover gates remove; receipt refreshes managed detail version.
+    this.gameCover = new GameCoverCoordinator({
+      read: (gameId, authority) => this.participationRead(access => deps.api.gameCover(access, gameId), authority),
+      mutate: (packet, authority) => this.participationRead(access => deps.api.mutateGameCover(access, packet), authority),
+    }, deps.random, {
+      onReceipt: (gameId) => { void this.gameManagement.loadDetail(gameId); },
+      accessToken: () => this.access?.token ?? null,
+    });
     this.participation = new ParticipationCoordinator({
       own: cursor => this.participationRead(access => deps.api.ownParticipations(access, cursor)),
       managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
@@ -394,6 +404,7 @@ export class AuthCoordinator {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
       this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
       this.gameContactPreference.setActor(actor); this.gameCourtBooking.setActor(actor);
+      this.gameCover.setActor(actor);
       this.privateGameVenueContacts.setActor(actor);
       this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
     }
@@ -794,6 +805,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.trainer.forget();
     if (forgetCreation) this.gameContactPreference.forget();
     if (forgetCreation) this.gameCourtBooking.forget();
+    if (forgetCreation) this.gameCover.forget();
     if (forgetCreation) this.privateGameVenueContacts.forget();
     if (forgetCreation) this.invitationAuthoring.forget();
     if (forgetCreation) this.contact.forget();

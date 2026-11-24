@@ -87,18 +87,23 @@ describe("cover DELETE runtime",()=>{
 
 import { GameCoverController } from "../../src/games/game-cover.controller";
 describe("Issue47 cover wire contract",()=>{
-  it("provides independent game and venue edit targets",()=>{
+  it("provides independent game and venue edit targets with native bearer parity",()=>{
     const route=contract.paths["/games/{gameId}/cover"];
-    for(const method of ["put","delete"]){
-      expect(route[method].security).toEqual([{cookieSession:[]}]);
-      for(const name of ["X-Game-Version","X-CSRF-Token","Idempotency-Key"])
-        expect(route[method].parameters).toContainEqual(expect.objectContaining({name,required:true}));
+    const avatarSecurity=contract.paths["/me/cover"].put.security;
+    for(const method of ["get","put","delete"] as const){
+      expect(route[method].security).toEqual(avatarSecurity);
+    }
+    for(const method of ["put","delete"] as const){
+      expect(route[method].parameters).toContainEqual(expect.objectContaining({name:"X-Game-Version",required:true}));
+      expect(route[method].parameters).toContainEqual(expect.objectContaining({name:"X-CSRF-Token",required:false}));
+      expect(route[method].parameters).toContainEqual(expect.objectContaining({name:"Idempotency-Key",required:true}));
       expect(route[method].responses["200"].content["application/json"].schema.$ref).toBe("#/components/schemas/GameCoverReceipt");
     }
     expect(Object.keys(route.put.requestBody.content).sort()).toEqual(["image/jpeg","image/png","image/webp"]);
     expect(contract.components.schemas.Game.properties.cover.$ref).toBe("#/components/schemas/GameCover");
     expect(contract.components.schemas.GameMapPreview.properties.cover.$ref).toBe("#/components/schemas/GameCover");
     expect(contract.paths["/media/game-covers/{key}"].get.responses["404"]).toBeDefined();
+    expect(contract.paths["/media/game-covers/{key}"].get.security).toEqual(avatarSecurity);
   });
   it("requires an exact integer CAS command agreeing with the header",()=>{
     expect(coverDeleteVersion({expectedVersion:1},"1")).toBe("1");
@@ -107,9 +112,42 @@ describe("Issue47 cover wire contract",()=>{
   });
   it("validates DELETE before media processing",async()=>{
     const actor={userId:"synthetic",sessionId:"synthetic"},mutate=vi.fn().mockResolvedValue({version:5,hasCover:false,cover:{uploadedUrl:null}});
-    const controller=new GameCoverController({requireCookieMutation:vi.fn().mockResolvedValue(actor)} as never,{mutate} as never,{requireKey:()=>"key"} as never);
+    const controller=new GameCoverController({requirePrincipalMutation:vi.fn().mockResolvedValue(actor)} as never,{mutate} as never,{requireKey:()=>"key"} as never);
     const request=(body:unknown)=>({body,headers:{"x-game-version":"4","idempotency-key":"key"}} as never);
     await expect(controller.remove(request(undefined),"game")).rejects.toThrow();expect(mutate).not.toHaveBeenCalled();
     await controller.remove(request({expectedVersion:4}),"game");expect(mutate).toHaveBeenCalledWith(actor,"key","game","4");
+  });
+  it("bearer path calls requirePrincipal / requirePrincipalMutation; media Vary includes Authorization",async()=>{
+    const actor={userId:"synthetic",sessionId:"s"};
+    const requirePrincipal=vi.fn().mockResolvedValue(actor);
+    const requirePrincipalMutation=vi.fn().mockResolvedValue(actor);
+    const optionalSession=vi.fn().mockResolvedValue(null);
+    const covers={
+      get:vi.fn().mockResolvedValue({version:1,hasCover:false,cover:{uploadedUrl:null}}),
+      mutate:vi.fn().mockResolvedValue({version:2,hasCover:true,cover:{uploadedUrl:"/v1/media/game-covers/"+"a".repeat(64)+".png"}}),
+      read:vi.fn().mockRejectedValue(new Error("stop-after-auth")),
+    };
+    const controller=new GameCoverController({requirePrincipal,requirePrincipalMutation,optionalSession} as never,covers as never,{requireKey:()=>"key"} as never);
+    await controller.get({headers:{authorization:"Bearer t"}} as never,"game");
+    expect(requirePrincipal).toHaveBeenCalled();
+    await controller.put({body:Buffer.from([1]),headers:{authorization:"Bearer t","x-game-version":"1","idempotency-key":"key","content-type":"image/png"}} as never,"game");
+    expect(requirePrincipalMutation).toHaveBeenCalled();
+    await controller.remove({body:{expectedVersion:1},headers:{authorization:"Bearer t","x-game-version":"1","idempotency-key":"key"}} as never,"game");
+    expect(requirePrincipalMutation).toHaveBeenCalledTimes(2);
+    const replyHeaders: Record<string,string>={};
+    const reply={
+      header(k:string,v:string){replyHeaders[k.toLowerCase()]=v;return reply;},
+      type(){return reply;},
+      send(body:unknown){return body;},
+    };
+    requirePrincipal.mockClear();optionalSession.mockClear();
+    await expect(controller.read({headers:{}} as never,"a".repeat(64)+".png",reply as never)).rejects.toThrow("stop-after-auth");
+    expect(optionalSession).toHaveBeenCalled();
+    expect(requirePrincipal).not.toHaveBeenCalled();
+    expect(replyHeaders.vary).toBe("Authorization, Cookie, Accept");
+    optionalSession.mockClear();requirePrincipal.mockClear();
+    await expect(controller.read({headers:{authorization:"Bearer t"}} as never,"a".repeat(64)+".png",reply as never)).rejects.toThrow("stop-after-auth");
+    expect(requirePrincipal).toHaveBeenCalled();
+    expect(optionalSession).not.toHaveBeenCalled();
   });
 });

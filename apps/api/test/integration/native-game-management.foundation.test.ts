@@ -1,7 +1,7 @@
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildTestCoreModule } from "./test-core.module";
 import { loadEnv } from "../../src/config/env";
@@ -17,9 +17,11 @@ import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 
 import { NATIVE_BINDING_COOKIE } from "../../src/auth/constants";
 import { Pool } from "pg";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
+import { registerAvatarHttp } from "../../src/profiles/avatar-http";
 import { SafetyModule } from "../../src/safety/safety.module";
 import { TrainersModule } from "../../src/trainers/trainers.module";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
@@ -29,13 +31,16 @@ const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 run("native game management · self-migrating isolated database", () => {
   let app: NestFastifyApplication, disabledApp: NestFastifyApplication;
   let pool: Pool, admin: Pool, databaseName: string;
+  let png: Buffer;
   const origin = "https://localhost:3001", clientId = "native.management.fixture", redirectUri = "https://app.example.test/auth/callback";
+  const media = path.resolve(__dirname, "../../../../.qa-runtime/native-game-management-foundation-media");
   const env = loadEnv({ NODE_ENV: "test", APP_ENV: "local", DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:15432/postgres",
     PUBLIC_API_ORIGIN: "https://localhost:3000", PUBLIC_WEB_ORIGIN: origin, ALLOWED_WEB_ORIGINS: origin,
     COOKIE_SECURE: "true", VK_CLIENT_ID: "vk-fixture", VK_CLIENT_SECRET: "vk-fixture-secret", VK_REDIRECT_URI: "https://localhost:3000/v1/auth/vk/callback",
     AUTH_PEPPER: "native-game-management-dedicated-synthetic-pepper-32chars", NATIVE_AUTH_ENABLED: "1",
     SOCIAL_DIRECTORY_ENABLED: "1",
     CONTENT_MODERATION_PROVIDER: "fake", CONTENT_MODERATION_FINGERPRINT_SECRET: "native-game-management-dedicated-synthetic-fingerprint-only",
+    AVATAR_MEDIA_ROOT: media,
     NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{ clientId, redirectUris: [redirectUri] }]) });
   const fake: AuthProviderAdapter = { key: "vk", configured: true,
     async startAuthorization(input) { return { authorizationUrl: `https://provider.test/authorize?state=${input.state}` }; },
@@ -47,6 +52,7 @@ run("native game management · self-migrating isolated database", () => {
       OrganizersModule, VenuesModule, TrainersModule, GamesModule, ParticipationsModule, ProfilesModule, SafetyModule,
       ] }).overrideProvider(AUTH_PROVIDER_OVERRIDES).useValue([fake]).compile();
     const instance = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter({ logger: false }));
+    registerAvatarHttp(instance.getHttpAdapter().getInstance());
     await instance.register(cookie); instance.setGlobalPrefix("v1"); instance.useGlobalFilters(new ProblemExceptionFilter());
     await instance.init(); await instance.getHttpAdapter().getInstance().ready(); return instance;
   }
@@ -68,6 +74,8 @@ run("native game management · self-migrating isolated database", () => {
       }
       expect((await client.query("SELECT to_regclass('native_refresh_tokens')::text AS name")).rows[0].name).toBe("native_refresh_tokens");
     } finally { client.release(); }
+    await mkdir(media, { recursive: true });
+    png = await sharp(randomBytes(600 * 400 * 3), { raw: { width: 600, height: 400, channels: 3 } }).png().toBuffer();
     app = await build(true); disabledApp = await build(false);
   },120_000);
   afterAll(async () => {
@@ -333,6 +341,90 @@ run("native game management · self-migrating isolated database", () => {
     await app.get(SessionService).revokeSession(owner.sessionId);
     expect((await app.inject({ url, headers: bearer(owner) })).statusCode).toBe(401);
     expect((await app.inject({ method: 'PUT', url, headers: bearer(owner), payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(401);
+  });
+  it('native bearer game-cover GET/PUT/DELETE: manager rights, private media, replay/CAS, cookie CSRF, bearer boundaries', async () => {
+    await pool.query('DELETE FROM native_auth_budgets');
+    const owner = await actor(), player = await actor(), outsider = await actor();
+    const made = await creation(owner); expect(made.result.statusCode).toBe(201);
+    const draft = made.result.json() as { id: string; version: number; status: string };
+    const coverUrl = `/v1/games/${draft.id}/cover`;
+    const coverGet = await app.inject({ url: coverUrl, headers: bearer(owner) });
+    expect(coverGet.statusCode).toBe(200);
+    expect(coverGet.json()).toMatchObject({ version: draft.version, hasCover: false });
+    expect((await app.inject({ url: coverUrl, headers: { cookie: owner.cookie } })).json()).toEqual(coverGet.json());
+    expect((await app.inject({ url: coverUrl, headers: bearer(outsider) })).statusCode).toBe(404);
+    expect((await app.inject({ url: coverUrl, headers: bearer(player) })).statusCode).toBe(404);
+    const putKey = randomUUID();
+    const putHeaders = { ...bearer(owner, putKey), 'x-game-version': String(draft.version), 'content-type': 'image/png' };
+    const saved = await app.inject({ method: 'PUT', url: coverUrl, headers: putHeaders, payload: png });
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.json()).toMatchObject({ hasCover: true, version: draft.version + 1 });
+    const ownUrl = saved.json().cover.uploadedUrl as string;
+    expect(ownUrl).toMatch(/^\/v1\/media\/game-covers\/[a-f0-9]{64}\.png$/);
+    expect((await app.inject({ method: 'PUT', url: coverUrl, headers: putHeaders, payload: png })).json()).toEqual(saved.json());
+    expect((await app.inject({ method: 'PUT', url: coverUrl, headers: { ...bearer(owner), 'x-game-version': String(draft.version), 'content-type': 'image/png' }, payload: png })).statusCode).toBe(409);
+    // Draft private media: bearer manager 200; anonymous 404; Vary includes Authorization.
+    const mediaBearer = await app.inject({ url: ownUrl, headers: { authorization: `Bearer ${owner.accessToken}` } });
+    expect(mediaBearer.statusCode, mediaBearer.body).toBe(200);
+    expect(mediaBearer.headers.vary).toBe('Authorization, Cookie, Accept');
+    expect((await app.inject({ url: ownUrl })).statusCode).toBe(404);
+    expect((await app.inject({ url: ownUrl, headers: bearer(outsider) })).statusCode).toBe(404);
+    const cookieKey = randomUUID();
+    expect((await app.inject({
+      method: 'PUT', url: coverUrl,
+      headers: { origin, cookie: owner.cookie, 'idempotency-key': cookieKey, 'x-game-version': String(saved.json().version), 'content-type': 'image/png' },
+      payload: png,
+    })).json().code).toBe('CSRF_REQUIRED');
+    expect((await app.inject({
+      method: 'PUT', url: coverUrl,
+      headers: { ...browser(owner), origin: 'https://evil.test', 'x-game-version': String(saved.json().version), 'content-type': 'image/png' },
+      payload: png,
+    })).json().code).toBe('ORIGIN_REJECTED');
+    expect((await app.inject({
+      method: 'PUT', url: coverUrl,
+      headers: { ...bearer(owner), cookie: owner.cookie, 'x-game-version': String(saved.json().version), 'content-type': 'image/png' },
+      payload: png,
+    })).statusCode).toBe(403);
+    for (const authorization of ['', 'Basic invalid', 'Bearer invalid', `Bearer ${'x'.repeat(43)}`]) {
+      expect((await app.inject({ url: coverUrl, headers: { authorization } })).statusCode).toBe(401);
+      expect((await app.inject({
+        method: 'PUT', url: coverUrl,
+        headers: { authorization, 'idempotency-key': randomUUID(), 'x-game-version': String(saved.json().version), 'content-type': 'image/png' },
+        payload: png,
+      })).statusCode).toBe(401);
+    }
+    expect((await disabledApp.inject({ url: coverUrl, headers: bearer(owner) })).statusCode).toBe(404);
+    const delKey = randomUUID(), delVersion = saved.json().version as number;
+    const removed = await app.inject({
+      method: 'DELETE', url: coverUrl,
+      headers: {
+        authorization: `Bearer ${owner.accessToken}`,
+        'idempotency-key': delKey,
+        'x-game-version': String(delVersion),
+        'content-type': 'application/json',
+      },
+      payload: { expectedVersion: delVersion },
+    });
+    expect(removed.statusCode, removed.body).toBe(200);
+    expect(removed.json()).toMatchObject({ hasCover: false });
+    expect((await app.inject({
+      method: 'DELETE', url: coverUrl,
+      headers: {
+        authorization: `Bearer ${owner.accessToken}`,
+        'idempotency-key': delKey,
+        'x-game-version': String(delVersion),
+        'content-type': 'application/json',
+      },
+      payload: { expectedVersion: delVersion },
+    })).json()).toEqual(removed.json());
+    await pool.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1 AND user_id=$2", [draft.id, owner.id]);
+    expect((await app.inject({
+      method: 'PUT', url: coverUrl,
+      headers: { ...bearer(owner, putKey), 'x-game-version': String(draft.version), 'content-type': 'image/png' },
+      payload: png,
+    })).statusCode).toBe(403);
+    await app.get(SessionService).revokeSession(owner.sessionId);
+    expect((await app.inject({ url: coverUrl, headers: bearer(owner) })).statusCode).toBe(401);
   });
   it('native bearer game-preferences PATCH lifecycle: save/remove, CAS409, key replay/mismatch, cookie CSRF and revoked bearer', async () => {
     const owner = await actor(), outsider = await actor();

@@ -1,10 +1,13 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
-import { Platform, View, TextInput } from 'react-native';
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
+import { Platform, Pressable, View, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { Game } from '@gobadminton/contracts/game-types';
 import { useAuth } from '../auth.tsx';
+import { nativeAuth } from '../auth-runtime.ts';
+import { GAME_COVER_EDITOR_COPY } from '../game-cover.ts';
 import { formatLabel, levelLabel, gameTime, deadline, settlementLabel } from '../presentation.ts';
 import { participationLabels } from '../participation.ts';
+import { GameCoverEditor } from './game-cover-editor.tsx';
 import { GameCourtBookingPanel } from './game-court-booking.tsx';
 import { BackLink, Label, Page, Header, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 import { colors, typography } from '../theme.ts';
@@ -33,11 +36,17 @@ export function ManagementCommand() {
 export function GameManagement({ id }: { id: string }) {
   const auth = useAuth(), owner = auth.gameManagement, router = useRouter();
   const state = useSyncExternalStore(owner.subscribe,owner.getSnapshot,owner.getSnapshot), d = state.details[id];
+  const coverOwner = nativeAuth.gameCover;
+  const coverState = useSyncExternalStore(coverOwner.subscribe, coverOwner.getSnapshot, coverOwner.getSnapshot);
   const [reason,setReason] = useState('');
-  useEffect(() => { setReason(''); if (auth.status === 'authenticated') void owner.loadDetail(id); }, [owner,id,auth.status,state.actor?.actorId,state.actor?.sessionId,state.actor?.generation]);
+  const [coverOpen, setCoverOpen] = useState(false);
+  const coverFocusRef = useRef<ComponentRef<typeof Pressable> | null>(null);
+  useEffect(() => { setReason(''); setCoverOpen(false); if (auth.status === 'authenticated') void owner.loadDetail(id); }, [owner,id,auth.status,state.actor?.actorId,state.actor?.sessionId,state.actor?.generation]);
   const current = auth.status === 'authenticated' && state.actor?.actorId === auth.me?.id;
-  const locked = ['sending','unknown'].includes(state.command?.status ?? '');
+  const coverLocked = coverOwner.blocksManagedWrites(id) || (coverState.gameId === id && coverState.status === 'unknown');
+  const locked = ['sending','unknown'].includes(state.command?.status ?? '') || coverLocked;
   const mutable = d?.status === 'ready' && d.roster === 'ready' && d.game?.status === 'published' && Date.parse(d.game.startsAt) > Date.now() && !locked;
+  const photoEditable = d?.status === 'ready' && !!d.game && (d.game.status === 'draft' || d.game.status === 'published');
   return <Page keyboard header={<Header />}><BackLink title="← Мои игры" onPress={() => router.replace('/my-games')} /><Label style={styles.title}>Управление игрой</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <><Label>Сводка доступна создателю или менеджеру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn(`/games/manage/${id}`)} /></>
       : !d || d.status === 'loading' ? <Loading title="Загружаем сводку…" />
@@ -46,6 +55,26 @@ export function GameManagement({ id }: { id: string }) {
         <ManagedTerms game={d.game} />
         <Label>{({ draft: 'Черновик', published: 'Опубликовано', cancelled: 'Игра отменена', completed: 'Завершена' })[d.game.status]}</Label>
         <Label>{d.management?.role === 'owner' ? 'Создаю и управляю' : 'Управляю'}</Label>
+        {photoEditable ? <>
+          <Pressable
+            ref={coverFocusRef}
+            accessibilityRole="button"
+            accessibilityLabel={GAME_COVER_EDITOR_COPY.open}
+            disabled={coverLocked && !coverOpen}
+            onPress={() => { if (!coverLocked) setCoverOpen(true); }}
+            style={({ pressed }) => [
+              styles.textButton,
+              {
+                borderWidth: 1,
+                borderColor: colors.lineDark,
+                backgroundColor: pressed ? colors.paper : colors.card,
+                opacity: coverLocked && !coverOpen ? 0.5 : 1,
+              },
+            ]}>
+            <Label style={{ color: colors.ink, textAlign: 'center', fontWeight: '600' }}>{GAME_COVER_EDITOR_COPY.open}</Label>
+          </Pressable>
+          <GameCoverEditor gameId={id} open={coverOpen} onOpenChange={setCoverOpen} returnFocusRef={coverFocusRef} />
+        </> : null}
         <GameCourtBookingPanel gameId={id} proof="managed" />
         <ManagementCommand />
         {d.game.status === 'draft' && <PrimaryButton title="Опубликовать черновик" disabled={locked} onPress={() => void owner.publishDraft(id)} />}
