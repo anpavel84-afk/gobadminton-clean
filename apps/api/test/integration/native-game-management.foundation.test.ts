@@ -305,13 +305,17 @@ run("native game management · self-migrating isolated database", () => {
     expect(cookiePut.statusCode).toBe(200);
     expect(cookiePut.json()).toMatchObject({ status: 'organizer_confirmed', version: 2 });
     expect((await app.inject({ method: 'PUT', url, headers: { ...bearer(owner), cookie: owner.cookie }, payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(403);
-    // Invalid explicit bearer + valid cookie must not fall back to cookie principal (GET and PUT).
-    expect((await app.inject({ url, headers: { authorization: 'Bearer invalid', cookie: owner.cookie } })).statusCode).toBe(401);
-    expect((await app.inject({
+    // Explicit Authorization + valid cookie: CREDENTIALS_CONFLICT before bearer shape (no cookie fallback).
+    const mixedGet = await app.inject({ url, headers: { authorization: 'Bearer invalid', cookie: owner.cookie } });
+    expect(mixedGet.statusCode).toBe(403);
+    expect(mixedGet.json().code).toBe('CREDENTIALS_CONFLICT');
+    const mixedPut = await app.inject({
       method: 'PUT', url,
       headers: { authorization: 'Bearer invalid', cookie: owner.cookie, 'idempotency-key': randomUUID() },
       payload: { expectedVersion: 2, status: 'not_arranged' },
-    })).statusCode).toBe(401);
+    });
+    expect(mixedPut.statusCode).toBe(403);
+    expect(mixedPut.json().code).toBe('CREDENTIALS_CONFLICT');
     for (const authorization of ['', 'Basic invalid', 'Bearer invalid', `Bearer ${'x'.repeat(43)}`]) {
       expect((await app.inject({ url, headers: { authorization } })).statusCode).toBe(401);
       expect((await app.inject({ method: 'PUT', url, headers: { authorization, 'idempotency-key': randomUUID() }, payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(401);

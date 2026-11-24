@@ -211,6 +211,8 @@ test('delayed responses after game/actor/focus/foreground changes do not repaint
   const work = late.owner.save();
   const packet = late.sent[0]!;
   late.owner.focus(otherGame, 'managed');
+  // New view retires sending immediately — old await must not leave indefinite sending.
+  assert.equal(late.owner.getSnapshot().command?.status, 'unknown');
   gate.resolve(booking({ gameId, status: 'arranging', version: 1, canUpdate: true }));
   await work;
   assert.equal(late.owner.getSnapshot().command?.status, 'unknown');
@@ -387,7 +389,7 @@ test('focus/foreground ABA: covered lease, captured callbacks, loading recovery,
 });
 
 test('pagination cursor bound, denied refresh clears private, exact UNKNOWN survives return', async () => {
-  // Cyclic empty cursor pages stay bounded; error is not false-proof of absence.
+  // Cyclic empty cursor pages stay bounded; invalid-read → error (not denied/absence).
   const cyclic = setup({
     parts: [],
     managedPages: [
@@ -398,7 +400,7 @@ test('pagination cursor bound, denied refresh clears private, exact UNKNOWN surv
   cyclic.owner.focus(gameId, 'detail');
   await cyclic.owner.load();
   assert.equal(cyclic.reads.length, 0);
-  assert.equal(cyclic.owner.getSnapshot().status, 'denied');
+  assert.equal(cyclic.owner.getSnapshot().status, 'error');
   assert.ok(cyclic.managedCalls.length <= 3);
 
   // Denied refreshAuthoritative clears private booking/editing (no stale retain).
@@ -458,6 +460,40 @@ test('pagination cursor bound, denied refresh clears private, exact UNKNOWN surv
   fail = false;
   await unk.owner.reconcile();
   assert.strictEqual(unk.sent[1], exact);
+
+  // Distinct dispatch attempts: old deferred settle cannot freeze/retire a manual same-packet retry.
+  const gate1 = deferred<GameCourtBooking>();
+  const gate2 = deferred<GameCourtBooking>();
+  let sendN = 0;
+  const retryFence = setup({
+    managed: [{ id: gameId } as ManagedGame],
+    send: () => (++sendN === 1 ? gate1.promise : gate2.promise),
+  });
+  retryFence.owner.focus(gameId, 'managed');
+  await retryFence.owner.load();
+  retryFence.owner.updateDraft('arranging');
+  const firstWork = retryFence.owner.save();
+  const frozen = retryFence.sent[0]!;
+  assert.equal(retryFence.owner.getSnapshot().command?.status, 'sending');
+  retryFence.owner.setForeground(false);
+  assert.equal(retryFence.owner.getSnapshot().command?.status, 'unknown');
+  retryFence.owner.setForeground(true);
+  assert.strictEqual(retryFence.owner.getSnapshot().command?.packet, frozen);
+  const secondWork = retryFence.owner.reconcile();
+  assert.equal(retryFence.sent.length, 2);
+  assert.strictEqual(retryFence.sent[1], frozen);
+  assert.equal(retryFence.owner.getSnapshot().command?.status, 'sending');
+  gate1.resolve(booking({ status: 'arranging', version: 1 }));
+  await firstWork;
+  // First settle while second pending must leave second SENDING (same key/body/object).
+  assert.equal(retryFence.owner.getSnapshot().command?.status, 'sending');
+  assert.strictEqual(retryFence.owner.getSnapshot().command?.packet, frozen);
+  gate2.resolve(booking({ status: 'arranging', version: 1 }));
+  await secondWork;
+  assert.equal(retryFence.owner.getSnapshot().command, undefined);
+  assert.equal(retryFence.owner.getSnapshot().status, 'ready');
+  assert.equal(retryFence.owner.getSnapshot().booking?.status, 'arranging');
+  assert.equal(retryFence.sent.length, 2);
 });
 
 test('managed membership pending/false; stale 409 refresh rechecks eligibility before reuse', async () => {

@@ -152,6 +152,8 @@ export class GameCourtBookingCoordinator {
   } | null = null;
   private port: CourtBookingPort;
   private random: () => string;
+  /** Distinct generation per mutation dispatch — old ack/catch cannot settle or freeze a newer attempt. */
+  private attemptSerial = 0;
 
   constructor(port: CourtBookingPort, random: () => string) {
     this.port = port;
@@ -289,6 +291,10 @@ export class GameCourtBookingCoordinator {
     if (!this.state.actor || !gameId) return noop;
     const viewGen = ++this.viewSerial;
     this.readSerial++;
+    // New view retires in-flight sending immediately — old await must not leave indefinite sending.
+    if (this.state.command?.status === 'sending') {
+      this.freezeUnknown(this.state.command.packet);
+    }
     const focus: CourtBookingFocus = Object.freeze({ gameId, viewGen, proof });
     const sameGameUnknown = this.state.command?.status === 'unknown'
       && this.state.command.packet.gameId === gameId;
@@ -496,14 +502,15 @@ export class GameCourtBookingCoordinator {
       const seenCursors = new Set<string>();
       for (;;) {
         const cursorKey = cursor ?? '';
-        if (seenCursors.has(cursorKey)) return false;
+        // Cyclic/corrupt pagination is an invalid read, not proof of absence.
+        if (seenCursors.has(cursorKey)) return 'failed';
         seenCursors.add(cursorKey);
         if (!permit()) throw new ParticipationError('stale');
         const page = await this.port.managed(cursor, permit);
         if (!permit()) throw new ParticipationError('stale');
         if (page.items.some(g => g.id === focus.gameId)) return true;
         for (const item of page.items) {
-          if (seenIds.has(item.id)) return false;
+          if (seenIds.has(item.id)) return 'failed';
           seenIds.add(item.id);
         }
         if (!page.nextCursor) return false;
@@ -521,6 +528,7 @@ export class GameCourtBookingCoordinator {
     viewGen: number,
     foregroundGen: number,
   ) {
+    const attempt = ++this.attemptSerial;
     this.show({ command: { packet, status: 'sending' }, notice: null });
     const valid = () =>
       this.current(authority)
@@ -529,18 +537,20 @@ export class GameCourtBookingCoordinator {
       && this.state.foreground
       && this.state.focus?.viewGen === viewGen
       && this.state.focus.gameId === packet.gameId
-      && this.state.foregroundGen === foregroundGen;
+      && this.state.foregroundGen === foregroundGen
+      && attempt === this.attemptSerial;
     const permit = () =>
       this.current(authority)
       && this.state.foreground
       && this.state.focus?.viewGen === viewGen
       && this.state.focus.gameId === packet.gameId
       && this.state.command?.packet === packet
-      && this.state.foregroundGen === foregroundGen;
+      && this.state.foregroundGen === foregroundGen
+      && attempt === this.attemptSerial;
     try {
       const ack = parseGameCourtBooking(await this.port.send(packet, authority, permit), packet.gameId);
       if (!valid()) {
-        this.freezeUnknown(packet);
+        this.freezeUnknown(packet, attempt);
         return;
       }
       if (ack.status !== packet.body.status) throw new ParticipationError('invalid');
@@ -555,7 +565,7 @@ export class GameCourtBookingCoordinator {
       });
     } catch (error) {
       if (!valid()) {
-        this.freezeUnknown(packet);
+        this.freezeUnknown(packet, attempt);
         return;
       }
       if (error instanceof ParticipationError
@@ -588,9 +598,14 @@ export class GameCourtBookingCoordinator {
     }
   }
 
-  /** Retire in-flight ownership to UNKNOWN when actor/view/focus/foreground fences fail after await. */
-  private freezeUnknown(packet: CourtBookingPacket) {
+  /**
+   * Retire in-flight ownership to UNKNOWN when actor/view/focus/foreground fences fail.
+   * Lifecycle callers omit attempt (current active sending). Dispatch callbacks pass their
+   * attempt so an old ack/catch cannot freeze a newer manual same-packet retry.
+   */
+  private freezeUnknown(packet: CourtBookingPacket, attempt?: number) {
     if (this.state.command?.packet !== packet || this.state.command.status !== 'sending') return;
+    if (attempt !== undefined && attempt !== this.attemptSerial) return;
     this.show({ command: { packet, status: 'unknown' }, notice: unknownNotice });
   }
 }
