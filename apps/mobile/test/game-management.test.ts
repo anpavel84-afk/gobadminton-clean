@@ -668,8 +668,10 @@ test('#522 APK51 management dispatch gate blocks publish while cover unresolved 
   coverBlocked = false;
   await owner.publishDraft('game-cover-lock');
   assert.equal(sent.length, 1);
-  assert.equal(sent[0]!.kind, 'publish');
-  assert.equal(sent[0]!.kind === 'publish' ? sent[0].gameId : '', 'game-cover-lock');
+  const packet = sent[0];
+  assert.ok(packet);
+  assert.equal(packet.kind, 'publish');
+  assert.equal(packet.kind === 'publish' ? packet.gameId : '', 'game-cover-lock');
 });
 
 test('#522 FIX3: CoverLockNoSendError on UNKNOWN retry preserves packet/key; unrelated stale → UNKNOWN', async () => {
