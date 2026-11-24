@@ -3,6 +3,9 @@ import { AppState, Image, Pressable, View } from 'react-native';
 import {
   GAME_COVER_EDITOR_COPY,
   GAME_PHOTO_SELECTION_COPY,
+  gamePhotoSelectionLive,
+  type GamePhotoSelectionFence,
+  type GamePhotoSelectionLiveState,
 } from '../game-cover.ts';
 import {
   createExpoAvatarRuntime,
@@ -114,20 +117,25 @@ export function GamePhotoSelection({
   const scopeEpoch = useRef(0);
   const liveScopeRef = useRef(scopeKey);
   const committedScopeRef = useRef<string | null>(null);
+  const liveIdentityRef = useRef({
+    generation: 0,
+    scope: scopeKey,
+    assetUri: null as string | null,
+    cropX: 0.5,
+    cropY: 0.5,
+    previewBytes: null as DraftBundle['previewBytes'],
+  });
 
-  // Bump generation synchronously on actor/session/view scope change so this render's
-  // callbacks capture the new identity. Passive effect must not invalidate a fresh render.
-  if (committedScopeRef.current !== scopeKey) {
+  // Advance generation once on actor/session/view scope change so this render's
+  // callbacks capture the new identity. No file cleanup here (render side-effect).
+  // liveScopeRef gates repeated bumps until passive effect commits.
+  if (liveScopeRef.current !== scopeKey) {
     if (committedScopeRef.current !== null) {
       scopeEpoch.current += 1;
-      retireOwnedPicker(ownedPickerRef);
     }
     liveScopeRef.current = scopeKey;
   }
 
-  // Original render generation / draft identity — OUTSIDE handlers (not re-read at press).
-  const genAtRender = scopeEpoch.current;
-  const scopeAtRender = scopeKey;
   const scopedAsset = draft.scope === scopeKey ? draft.asset : null;
   const scopedPreviewUri = draft.scope === scopeKey ? draft.previewUri : null;
   const scopedPreviewBytes = draft.scope === scopeKey ? draft.previewBytes : null;
@@ -137,42 +145,74 @@ export function GamePhotoSelection({
   const scopedStatus = draft.scope === scopeKey ? draft.statusMessage : '';
   const preparingScoped = draft.scope === scopeKey && preparing;
   const assetUri = scopedAsset?.uri ?? null;
-  const assetAtRender = scopedAsset;
-  const previewBytesAtRender = scopedPreviewBytes;
-  const cropXAtRender = scopedCrop.x;
-  const cropYAtRender = scopedCrop.y;
 
-  const selectionLive = useCallback((gen: number, scope: string) => (
-    mountedRef.current
-    && foregroundRef.current
-    && !disabledRef.current
-    && scopeEpoch.current === gen
-    && liveScopeRef.current === scope
-  ), []);
+  // Original render fence — OUTSIDE handlers (not re-read at press).
+  const fenceAtRender: GamePhotoSelectionFence = {
+    generation: scopeEpoch.current,
+    scope: scopeKey,
+    assetUri,
+    cropX: scopedCrop.x,
+    cropY: scopedCrop.y,
+    previewBytes: scopedPreviewBytes,
+  };
+  liveIdentityRef.current = {
+    generation: scopeEpoch.current,
+    scope: liveScopeRef.current,
+    assetUri,
+    cropX: scopedCrop.x,
+    cropY: scopedCrop.y,
+    previewBytes: scopedPreviewBytes,
+  };
+
+  const liveSnapshot = useCallback((): GamePhotoSelectionLiveState => ({
+    mounted: mountedRef.current,
+    foreground: foregroundRef.current,
+    disabled: disabledRef.current,
+    generation: liveIdentityRef.current.generation,
+    scope: liveIdentityRef.current.scope,
+    assetUri: liveIdentityRef.current.assetUri,
+    cropX: liveIdentityRef.current.cropX,
+    cropY: liveIdentityRef.current.cropY,
+    previewBytes: liveIdentityRef.current.previewBytes,
+  }), []);
+
+  const admit = useCallback(
+    (fence: GamePhotoSelectionFence) => gamePhotoSelectionLive(fence, liveSnapshot()),
+    [liveSnapshot],
+  );
+
+  /** Retire prior selection callbacks by generation before parent/draft mutation. */
+  const retireSelectionGeneration = useCallback(() => {
+    scopeEpoch.current += 1;
+    liveIdentityRef.current = {
+      ...liveIdentityRef.current,
+      generation: scopeEpoch.current,
+    };
+  }, []);
 
   const retireGeneration = useCallback((clearParent: boolean) => {
-    scopeEpoch.current += 1;
+    retireSelectionGeneration();
     retireOwnedPicker(ownedPickerRef);
     setPreparing(false);
     if (clearParent) {
       onChangeRef.current(null);
       onReadyRef.current(true);
     }
-  }, []);
+  }, [retireSelectionGeneration]);
 
   useEffect(() => {
     const prev = committedScopeRef.current;
     const changed = prev !== null && prev !== scopeKey;
     committedScopeRef.current = scopeKey;
     // Generation already advanced during render when scope changed — do not bump again.
-    setDraft(emptyDraft(scopeKey));
-    setPreparing(false);
-    // Actor/session/view scope change clears local + parent selection.
-    // Ordinary preview↔edit remount must not wipe parent-confirmed bytes (CreateGame keeps mount).
+    // File cleanup belongs here (not render): release owned asset for the prior scope.
     if (changed) {
+      retireOwnedPicker(ownedPickerRef);
       onChangeRef.current(null);
       onReadyRef.current(true);
     }
+    setDraft(emptyDraft(scopeKey));
+    setPreparing(false);
   }, [scopeKey]);
 
   useEffect(() => {
@@ -184,6 +224,10 @@ export function GamePhotoSelection({
       mountedRef.current = false;
       pickerArmedRef.current = false;
       scopeEpoch.current += 1;
+      liveIdentityRef.current = {
+        ...liveIdentityRef.current,
+        generation: scopeEpoch.current,
+      };
       retireOwnedPicker(ownedPickerRef);
     };
   }, []);
@@ -260,14 +304,23 @@ export function GamePhotoSelection({
   }, []);
 
   function resetSelection() {
-    if (!selectionLive(genAtRender, scopeAtRender)) return;
-    retireOwnedPicker(ownedPickerRef, scopeAtRender);
+    if (!admit(fenceAtRender)) return;
+    // Retire old confirm/pick/crop before parent clear.
+    retireSelectionGeneration();
+    liveIdentityRef.current = {
+      generation: scopeEpoch.current,
+      scope: fenceAtRender.scope,
+      assetUri: null,
+      cropX: 0.5,
+      cropY: 0.5,
+      previewBytes: null,
+    };
+    retireOwnedPicker(ownedPickerRef, fenceAtRender.scope);
     setDraft({
-      ...emptyDraft(scopeAtRender),
+      ...emptyDraft(fenceAtRender.scope),
       statusMessage: GAME_PHOTO_SELECTION_COPY.omitStatus,
     });
     setPreparing(false);
-    if (!selectionLive(genAtRender, scopeAtRender)) return;
     onChangeRef.current(null);
     onReadyRef.current(true);
   }
@@ -277,20 +330,36 @@ export function GamePhotoSelection({
       <Label style={{ textAlign: 'left' }}>{GAME_PHOTO_SELECTION_COPY.explanation}</Label>
       <Label style={{ textAlign: 'left' }}>{GAME_COVER_EDITOR_COPY.formats}</Label>
       <TextButton title={GAME_COVER_EDITOR_COPY.pick} onPress={() => {
-        if (!selectionLive(genAtRender, scopeAtRender)) return;
-        const gen = genAtRender;
-        const scope = scopeAtRender;
+        if (!admit(fenceAtRender)) return;
+        const scope = fenceAtRender.scope;
+        // New pick retires prior same-scope confirm/crop/late-pick before parent mutation.
+        retireSelectionGeneration();
+        const gen = scopeEpoch.current;
         pickerArmedRef.current = true;
         const runtime = createExpoAvatarRuntime();
         void pickOwnAvatarAsset(runtime, () => scopeEpoch.current !== gen || !mountedRef.current).then(picked => {
-          const armed = pickerArmedRef.current && selectionLive(gen, scope);
-          pickerArmedRef.current = false;
+          // Gen/scope/lifecycle only — do not clear pickerArmed when a fresher pick owns it.
+          const armed = pickerArmedRef.current
+            && mountedRef.current
+            && foregroundRef.current
+            && !disabledRef.current
+            && scopeEpoch.current === gen
+            && liveScopeRef.current === scope;
           if (!armed) {
             if (picked !== 'cancelled' && picked) retirePickerSource(picked);
             return;
           }
+          pickerArmedRef.current = false;
           if (picked === 'cancelled') return;
           installOwnedPicker(ownedPickerRef, scope, picked);
+          liveIdentityRef.current = {
+            generation: gen,
+            scope,
+            assetUri: picked.uri,
+            cropX: 0.5,
+            cropY: 0.5,
+            previewBytes: null,
+          };
           invalidateConfirmed();
           setDraft({
             scope,
@@ -303,8 +372,14 @@ export function GamePhotoSelection({
             statusMessage: '',
           });
         }, failure => {
+          const armed = pickerArmedRef.current
+            && mountedRef.current
+            && foregroundRef.current
+            && !disabledRef.current
+            && scopeEpoch.current === gen
+            && liveScopeRef.current === scope;
+          if (!armed) return;
           pickerArmedRef.current = false;
-          if (!selectionLive(gen, scope)) return;
           setDraft(d => d.scope === scope ? {
             ...d,
             prepareError: failure instanceof Error
@@ -319,20 +394,46 @@ export function GamePhotoSelection({
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Pressable accessibilityRole="button" accessibilityLabel="По горизонтали меньше"
               disabled={disabled} onPress={() => {
-                if (!selectionLive(genAtRender, scopeAtRender) || !assetAtRender) return;
+                if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
+                const nextX = step(fenceAtRender.cropX, -0.1);
+                retireSelectionGeneration();
+                liveIdentityRef.current = {
+                  ...liveIdentityRef.current,
+                  cropX: nextX,
+                  previewBytes: null,
+                };
                 invalidateConfirmed();
-                setDraft(d => d.scope === scopeAtRender
-                  ? { ...d, crop: { ...d.crop, x: step(cropXAtRender, -0.1) }, confirmed: false }
+                setDraft(d => d.scope === fenceAtRender.scope
+                  ? {
+                    ...d,
+                    crop: { ...d.crop, x: nextX },
+                    previewUri: null,
+                    previewBytes: null,
+                    confirmed: false,
+                  }
                   : d);
               }}
               style={styles.textButton}><Label>−</Label></Pressable>
             <Label accessibilityLabel={`По горизонтали ${scopedCrop.x.toFixed(1)}`}>{scopedCrop.x.toFixed(1)}</Label>
             <Pressable accessibilityRole="button" accessibilityLabel="По горизонтали больше"
               disabled={disabled} onPress={() => {
-                if (!selectionLive(genAtRender, scopeAtRender) || !assetAtRender) return;
+                if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
+                const nextX = step(fenceAtRender.cropX, 0.1);
+                retireSelectionGeneration();
+                liveIdentityRef.current = {
+                  ...liveIdentityRef.current,
+                  cropX: nextX,
+                  previewBytes: null,
+                };
                 invalidateConfirmed();
-                setDraft(d => d.scope === scopeAtRender
-                  ? { ...d, crop: { ...d.crop, x: step(cropXAtRender, 0.1) }, confirmed: false }
+                setDraft(d => d.scope === fenceAtRender.scope
+                  ? {
+                    ...d,
+                    crop: { ...d.crop, x: nextX },
+                    previewUri: null,
+                    previewBytes: null,
+                    confirmed: false,
+                  }
                   : d);
               }}
               style={styles.textButton}><Label>+</Label></Pressable>
@@ -341,20 +442,46 @@ export function GamePhotoSelection({
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Pressable accessibilityRole="button" accessibilityLabel="По вертикали меньше"
               disabled={disabled} onPress={() => {
-                if (!selectionLive(genAtRender, scopeAtRender) || !assetAtRender) return;
+                if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
+                const nextY = step(fenceAtRender.cropY, -0.1);
+                retireSelectionGeneration();
+                liveIdentityRef.current = {
+                  ...liveIdentityRef.current,
+                  cropY: nextY,
+                  previewBytes: null,
+                };
                 invalidateConfirmed();
-                setDraft(d => d.scope === scopeAtRender
-                  ? { ...d, crop: { ...d.crop, y: step(cropYAtRender, -0.1) }, confirmed: false }
+                setDraft(d => d.scope === fenceAtRender.scope
+                  ? {
+                    ...d,
+                    crop: { ...d.crop, y: nextY },
+                    previewUri: null,
+                    previewBytes: null,
+                    confirmed: false,
+                  }
                   : d);
               }}
               style={styles.textButton}><Label>−</Label></Pressable>
             <Label accessibilityLabel={`По вертикали ${scopedCrop.y.toFixed(1)}`}>{scopedCrop.y.toFixed(1)}</Label>
             <Pressable accessibilityRole="button" accessibilityLabel="По вертикали больше"
               disabled={disabled} onPress={() => {
-                if (!selectionLive(genAtRender, scopeAtRender) || !assetAtRender) return;
+                if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
+                const nextY = step(fenceAtRender.cropY, 0.1);
+                retireSelectionGeneration();
+                liveIdentityRef.current = {
+                  ...liveIdentityRef.current,
+                  cropY: nextY,
+                  previewBytes: null,
+                };
                 invalidateConfirmed();
-                setDraft(d => d.scope === scopeAtRender
-                  ? { ...d, crop: { ...d.crop, y: step(cropYAtRender, 0.1) }, confirmed: false }
+                setDraft(d => d.scope === fenceAtRender.scope
+                  ? {
+                    ...d,
+                    crop: { ...d.crop, y: nextY },
+                    previewUri: null,
+                    previewBytes: null,
+                    confirmed: false,
+                  }
                   : d);
               }}
               style={styles.textButton}><Label>+</Label></Pressable>
@@ -371,15 +498,15 @@ export function GamePhotoSelection({
           {!scopedConfirmed && scopedPreviewBytes && !preparingScoped ? (
             <PrimaryButton title={GAME_COVER_EDITOR_COPY.confirmPick} disabled={disabled}
               onPress={() => {
-                if (!selectionLive(genAtRender, scopeAtRender) || !previewBytesAtRender) return;
+                if (!admit(fenceAtRender) || !fenceAtRender.previewBytes) return;
                 const derivative = Object.freeze({
-                  mime: previewBytesAtRender.mime,
-                  bytes: previewBytesAtRender.bytes,
+                  mime: fenceAtRender.previewBytes.mime as AvatarDerivative['mime'],
+                  bytes: fenceAtRender.previewBytes.bytes,
                 });
-                setDraft(d => d.scope === scopeAtRender
+                setDraft(d => d.scope === fenceAtRender.scope
                   ? { ...d, confirmed: true, statusMessage: GAME_PHOTO_SELECTION_COPY.confirmStatus }
                   : d);
-                if (!selectionLive(genAtRender, scopeAtRender)) return;
+                if (!admit(fenceAtRender)) return;
                 onChangeRef.current(derivative);
                 onReadyRef.current(true);
               }} />
