@@ -175,6 +175,7 @@ export class AuthCoordinator {
       send: (packet, authority) => this.participationRead(access => deps.api.mutateGamePreferences(access, packet), authority),
     }, deps.random);
     // Organizer-declared court arrangement: GET/PUT principal opt-in; eligibility before private GET.
+    // Permit rechecked after token await on managed pages, private GET, and PUT — not PUT-only.
     this.gameCourtBooking = new GameCourtBookingCoordinator({
       detailParts: gameId => {
         const detail = this.participation.getSnapshot().details[gameId];
@@ -183,8 +184,19 @@ export class AuthCoordinator {
         if (detail.status === 'error') return [];
         return detail.parts;
       },
-      managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
-      read: gameId => this.participationRead(access => deps.api.gameCourtBooking(access, gameId)),
+      managedMembership: gameId => {
+        const detail = this.gameManagement.getSnapshot().details[gameId];
+        if (!detail || detail.status === 'loading') return null;
+        return detail.status === 'ready' && !!detail.management;
+      },
+      managed: (cursor, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.managedGames(access, cursor);
+      }),
+      read: (gameId, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.gameCourtBooking(access, gameId);
+      }),
       send: (packet, authority, permit) => this.participationRead(access => {
         if (!permit()) throw new ParticipationError('stale');
         return deps.api.mutateGameCourtBooking(access, packet);

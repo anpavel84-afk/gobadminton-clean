@@ -1872,6 +1872,14 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
     if (path.startsWith('/me/games')) return { items: [{ id: gameId, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
     return { ok: true };
   });
+  // Managed proof needs parent membership ready (GameManagement detail).
+  s.auth.gameManagement.getSnapshot().details[gameId] = {
+    status: 'ready',
+    management: { role: 'owner', createdByMe: true },
+    participants: [],
+    cursor: null,
+    roster: 'ready',
+  };
   owner.focus(gameId, 'managed');
   await owner.load();
   assert.equal(calls.some(c => c.method === 'PUT'), false);
@@ -1896,6 +1904,55 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
   owner.updateDraft('not_arranged');
   await owner.save();
   assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
+});
+
+test('#522 APK48: delayed token actor/view permit yields zero PUT', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameCourtBooking;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const puts: unknown[] = [];
+  const refreshGate = deferred<unknown>();
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshGate.promise;
+    if (path === `/games/${gameId}/court-booking`) {
+      if ((init.method ?? 'GET') === 'PUT') {
+        puts.push(init.body ? JSON.parse(String(init.body)) : null);
+        return {
+          gameId, status: 'arranging', version: 1, updatedAt: '2026-11-24T12:00:00.000Z',
+          declarationSource: 'organizer_declared', allowedActions: { canUpdate: true },
+        };
+      }
+      return {
+        gameId, status: 'unspecified', version: 0, updatedAt: null,
+        declarationSource: 'organizer_declared', allowedActions: { canUpdate: true },
+      };
+    }
+    if (path.startsWith('/me/games')) return { items: [{ id: gameId, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    return { ok: true };
+  });
+  s.auth.gameManagement.getSnapshot().details[gameId] = {
+    status: 'ready',
+    management: { role: 'owner', createdByMe: true },
+    participants: [],
+    cursor: null,
+    roster: 'ready',
+  };
+  owner.focus(gameId, 'managed');
+  await owner.load();
+  owner.updateDraft('arranging');
+  // Hold rotation so PUT permit rechecks after token await; invalidate view/foreground while waiting.
+  const refreshWork = s.auth.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  const saveWork = owner.save();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+  owner.setForeground(false);
+  refreshGate.resolve(credentials);
+  await Promise.all([saveWork, refreshWork]);
+  assert.equal(puts.length, 0);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
 });
 test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
   const s = setup(sessionEnvelope());

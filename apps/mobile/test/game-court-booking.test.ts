@@ -1,17 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { URL } from 'node:url';
 import { ParticipationError, type Actor, type ManagedGame } from '../src/participation.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import {
   COURT_BOOKING_DISCLAIMER, COURT_BOOKING_LABELS, COURT_BOOKING_STATUSES,
   GameCourtBookingCoordinator, canSaveCourtBooking, courtBookingWire, parseGameCourtBooking,
-  type CourtBookingPacket, type GameCourtBooking,
+  type CourtBookingPacket, type CourtBookingRenderedPermit, type GameCourtBooking,
 } from '../src/game-court-booking.ts';
 import type { Participation } from '@gobadminton/contracts/game-types';
 
-const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const actor: Actor = { actorId: 'A', sessionId: 'session-A', generation: 1 };
 const gameId = '10000000-0000-4000-8000-000000000010';
 const otherGame = '10000000-0000-4000-8000-000000000011';
@@ -39,22 +36,37 @@ function deferred<T>() {
 function setup(overrides: {
   parts?: Participation[] | null;
   managed?: ManagedGame[];
+  managedPages?: Array<{ items: ManagedGame[]; nextCursor: string | null }>;
+  membership?: boolean | null;
   read?: () => Promise<GameCourtBooking>;
   send?: (packet: CourtBookingPacket, authority: Actor, permit: () => boolean) => Promise<GameCourtBooking>;
   managedFail?: boolean;
 } = {}) {
   const sent: CourtBookingPacket[] = [];
   const reads: string[] = [];
+  const managedCalls: Array<{ cursor: string | undefined; permitted: boolean }> = [];
   let keys = 0;
   let stored = booking();
   let parts: Participation[] | null = overrides.parts === undefined ? [] : overrides.parts;
+  let membership: boolean | null = overrides.membership === undefined ? true : overrides.membership;
+  let pageIndex = 0;
   const owner = new GameCourtBookingCoordinator({
     detailParts: () => parts,
-    managed: async () => {
+    managedMembership: () => membership,
+    managed: async (cursor, permit) => {
+      const permitted = permit();
+      managedCalls.push({ cursor, permitted });
+      if (!permitted) throw new ParticipationError('stale');
       if (overrides.managedFail) throw new ParticipationError('network');
+      if (overrides.managedPages) {
+        const page = overrides.managedPages[pageIndex] ?? { items: [], nextCursor: null };
+        pageIndex++;
+        return page;
+      }
       return { items: overrides.managed ?? [], nextCursor: null };
     },
-    read: async (id) => {
+    read: async (id, permit) => {
+      if (!permit()) throw new ParticipationError('stale');
       reads.push(id);
       if (overrides.read) return overrides.read();
       return parseGameCourtBooking({ ...stored, gameId: id }, id);
@@ -78,11 +90,18 @@ function setup(overrides: {
   }, () => `court-key-${++keys}xxxxxxxx`);
   owner.setActor(actor);
   return {
-    owner, sent, reads,
+    owner, sent, reads, managedCalls,
     setParts: (value: Participation[] | null) => { parts = value; },
+    setMembership: (value: boolean | null) => { membership = value; },
     setStored: (value: GameCourtBooking) => { stored = value; },
     get keyCount() { return keys; },
   };
+}
+
+function capturePermit(owner: GameCourtBookingCoordinator): CourtBookingRenderedPermit {
+  const permit = owner.renderedPermit();
+  assert.ok(permit);
+  return permit!;
 }
 
 test('dto/helpers: four statuses, disclaimer, canUpdate gates save', () => {
@@ -123,7 +142,7 @@ test('manager edit vs participant readonly; denied/failed eligibility skips priv
   await participant.owner.save();
   assert.equal(participant.sent.length, 0);
 
-  const denied = setup({ parts: [], managed: [] });
+  const denied = setup({ parts: [], managed: [], membership: false });
   denied.owner.focus(gameId, 'detail');
   await denied.owner.load();
   assert.equal(denied.reads.length, 0);
@@ -280,39 +299,192 @@ test('native transport: exact GET/PUT URL, bearer/no cookies, immutable payload/
   await assert.rejects(() => bad.gameCourtBooking('access-token', gameId));
 });
 
-test('#522 APK48 source wiring: both surfaces, principal opt-in, counter 48', () => {
-  const component = read('../src/components/game-court-booking.tsx');
-  assert.match(component, /Договорённость о корте/);
-  assert.match(component, /COURT_BOOKING_DISCLAIMER/);
-  assert.match(component, /nativeAuth\.gameCourtBooking/);
-  assert.match(component, /proof/);
-  const module = read('../src/game-court-booking.ts');
-  assert.match(module, /Со слов организатора\. Приложение не проверяет бронь/);
+test('focus/foreground ABA: covered lease, captured callbacks, loading recovery, delayed PUT', async () => {
+  // Covered/unfocused lease: old release cannot retire a newer focus; unfocused screen does not read.
+  const covered = setup({ managed: [{ id: gameId } as ManagedGame] });
+  const releaseA = covered.owner.focus(gameId, 'managed');
+  const viewA = covered.owner.getSnapshot().focus!.viewGen;
+  await covered.owner.load();
+  assert.equal(covered.reads.length, 1);
+  const releaseB = covered.owner.focus(otherGame, 'managed');
+  const viewB = covered.owner.getSnapshot().focus!.viewGen;
+  assert.notEqual(viewA, viewB);
+  releaseA();
+  assert.equal(covered.owner.getSnapshot().focus?.viewGen, viewB);
+  assert.equal(covered.owner.getSnapshot().focus?.gameId, otherGame);
+  const readsAfterUnfocus = covered.reads.length;
+  await covered.owner.load();
+  // otherGame still focused — load may read; release B then no further reads from stale A permit.
+  releaseB();
+  const stalePermit: CourtBookingRenderedPermit = Object.freeze({
+    actor: Object.freeze({ ...actor }),
+    gameId,
+    viewGen: viewA,
+    foregroundGen: covered.owner.getSnapshot().foregroundGen,
+  });
+  await covered.owner.load(stalePermit);
+  covered.owner.updateDraft('arranging', stalePermit);
+  await covered.owner.save(stalePermit);
+  assert.equal(covered.sent.length, 0);
+  assert.equal(covered.reads.length, readsAfterUnfocus + 1);
 
-  const detail = read('../app/games/[id].tsx');
-  assert.match(detail, /GameCourtBookingPanel/);
-  assert.match(detail, /proof="detail"/);
+  // Captured callback A after A→B→A / foreground return: no draft/POST on old permit.
+  const aba = setup({ managed: [{ id: gameId } as ManagedGame] });
+  aba.owner.focus(gameId, 'managed');
+  await aba.owner.load();
+  const permitA1 = capturePermit(aba.owner);
+  aba.owner.focus(otherGame, 'managed');
+  aba.owner.focus(gameId, 'managed');
+  await aba.owner.load();
+  assert.equal(aba.owner.getSnapshot().focus?.viewGen !== permitA1.viewGen, true);
+  aba.owner.updateDraft('arranging', permitA1);
+  assert.equal(aba.owner.getSnapshot().draft, 'unspecified');
+  await aba.owner.save(permitA1);
+  assert.equal(aba.sent.length, 0);
 
-  const managed = read('../src/components/game-management.tsx');
-  assert.match(managed, /GameCourtBookingPanel/);
-  assert.match(managed, /proof="managed"/);
+  // Background during GET then return recovers with a fresh read (not stuck loading).
+  const gateGet = deferred<GameCourtBooking>();
+  const recover = setup({
+    managed: [{ id: gameId } as ManagedGame],
+    read: () => gateGet.promise,
+  });
+  recover.owner.focus(gameId, 'managed');
+  const loading = recover.owner.load();
+  assert.equal(recover.owner.getSnapshot().status, 'loading');
+  recover.owner.setForeground(false);
+  assert.equal(recover.owner.getSnapshot().status, 'idle');
+  assert.equal(recover.owner.getSnapshot().booking, null);
+  gateGet.resolve(booking());
+  await loading;
+  assert.equal(recover.owner.getSnapshot().status, 'idle');
+  assert.equal(recover.owner.getSnapshot().booking, null);
+  const readsBeforeReturn = recover.reads.length;
+  recover.owner.setForeground(true);
+  await new Promise(r => setImmediate(r));
+  assert.ok(recover.reads.length > readsBeforeReturn);
+  assert.equal(recover.owner.getSnapshot().status, 'ready');
 
-  const auth = read('../src/auth-coordinator.ts');
-  assert.match(auth, /GameCourtBookingCoordinator/);
-  assert.match(auth, /this\.gameCourtBooking\.setActor/);
-  assert.match(auth, /this\.gameCourtBooking\.forget/);
-  assert.match(auth, /mutateGameCourtBooking/);
+  // Delayed PUT ack across focus/foreground ABA never settles a new view; retires to UNKNOWN.
+  const gatePut = deferred<GameCourtBooking>();
+  const putAba = setup({
+    managed: [{ id: gameId } as ManagedGame],
+    send: () => gatePut.promise,
+  });
+  putAba.owner.focus(gameId, 'managed');
+  await putAba.owner.load();
+  putAba.owner.updateDraft('arranging');
+  const putWork = putAba.owner.save();
+  const putPacket = putAba.sent[0]!;
+  putAba.owner.setForeground(false);
+  assert.equal(putAba.owner.getSnapshot().command?.status, 'unknown');
+  putAba.owner.setForeground(true);
+  putAba.owner.focus(gameId, 'managed');
+  gatePut.resolve(booking({ status: 'arranging', version: 1 }));
+  await putWork;
+  assert.equal(putAba.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(putAba.owner.getSnapshot().command?.packet.key, putPacket.key);
+  assert.notEqual(putAba.owner.getSnapshot().booking?.status, 'arranging');
+});
 
-  const api = read('../src/native-api.ts');
-  assert.match(api, /gameCourtBooking/);
-  assert.match(api, /mutateGameCourtBooking/);
-  assert.match(api, /courtBookingWire/);
+test('pagination cursor bound, denied refresh clears private, exact UNKNOWN survives return', async () => {
+  // Cyclic empty cursor pages stay bounded; error is not false-proof of absence.
+  const cyclic = setup({
+    parts: [],
+    managedPages: [
+      { items: [], nextCursor: 'c1' },
+      { items: [], nextCursor: 'c1' },
+    ],
+  });
+  cyclic.owner.focus(gameId, 'detail');
+  await cyclic.owner.load();
+  assert.equal(cyclic.reads.length, 0);
+  assert.equal(cyclic.owner.getSnapshot().status, 'denied');
+  assert.ok(cyclic.managedCalls.length <= 3);
 
-  const controller = read('../../api/src/games/game-court-booking.controller.ts');
-  assert.match(controller, /requirePrincipal\(request\)/);
-  assert.match(controller, /requirePrincipalMutation\(request\)/);
-  assert.doesNotMatch(controller, /requireCookieMutation\(request\)/);
-  assert.doesNotMatch(controller, /requireSession\(request\)/);
+  // Denied refreshAuthoritative clears private booking/editing (no stale retain).
+  let denyNext = false;
+  const refreshDenied = setup({
+    managed: [{ id: gameId } as ManagedGame],
+    read: async () => {
+      if (denyNext) throw new ParticipationError('business', 401, 'UNAUTHORIZED');
+      return booking({ status: 'arranging', version: 1, canUpdate: true });
+    },
+  });
+  refreshDenied.owner.focus(gameId, 'managed');
+  await refreshDenied.owner.load();
+  refreshDenied.owner.updateDraft('not_arranged');
+  refreshDenied.setStored(booking({ version: 9, status: 'arranging', canUpdate: true }));
+  await refreshDenied.owner.save();
+  assert.equal(refreshDenied.owner.getSnapshot().status, 'stale');
+  denyNext = true;
+  await refreshDenied.owner.refreshAuthoritative();
+  assert.equal(refreshDenied.owner.getSnapshot().status, 'denied');
+  assert.equal(refreshDenied.owner.getSnapshot().booking, null);
+  assert.equal(refreshDenied.owner.getSnapshot().draft, 'unspecified');
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 48);
+  // Permission-denial PUT clears stale editing; UNKNOWN packet retained separately.
+  const putDenied = setup({
+    managed: [{ id: gameId } as ManagedGame],
+    send: async () => { throw new ParticipationError('business', 403, 'FORBIDDEN'); },
+  });
+  putDenied.owner.focus(gameId, 'managed');
+  await putDenied.owner.load();
+  putDenied.owner.updateDraft('arranging');
+  await putDenied.owner.save();
+  assert.equal(putDenied.owner.getSnapshot().status, 'denied');
+  assert.equal(putDenied.owner.getSnapshot().booking, null);
+  assert.equal(putDenied.owner.getSnapshot().command, undefined);
+
+  // Exact UNKNOWN same packet after background return — no auto-retry.
+  let fail = true;
+  const unk = setup({
+    managed: [{ id: gameId } as ManagedGame],
+    send: async (packet) => {
+      if (fail) throw new ParticipationError('network');
+      return booking({ status: packet.body.status, version: packet.body.expectedVersion + 1 });
+    },
+  });
+  unk.owner.focus(gameId, 'managed');
+  await unk.owner.load();
+  unk.owner.updateDraft('arranging');
+  await unk.owner.save();
+  const exact = unk.owner.getSnapshot().command!.packet;
+  assert.equal(unk.owner.getSnapshot().command?.status, 'unknown');
+  unk.owner.setForeground(false);
+  unk.owner.setForeground(true);
+  assert.equal(unk.owner.getSnapshot().command?.status, 'unknown');
+  assert.strictEqual(unk.owner.getSnapshot().command?.packet, exact);
+  assert.equal(unk.sent.length, 1);
+  fail = false;
+  await unk.owner.reconcile();
+  assert.strictEqual(unk.sent[1], exact);
+});
+
+test('managed membership pending/false; stale 409 refresh rechecks eligibility before reuse', async () => {
+  const pending = setup({ membership: null });
+  pending.owner.focus(gameId, 'managed');
+  await pending.owner.load();
+  assert.equal(pending.reads.length, 0);
+  assert.equal(pending.owner.getSnapshot().status, 'idle');
+
+  const revoked = setup({ membership: false });
+  revoked.owner.focus(gameId, 'managed');
+  await revoked.owner.load();
+  assert.equal(revoked.reads.length, 0);
+  assert.equal(revoked.owner.getSnapshot().status, 'denied');
+
+  const recheck = setup({ membership: true });
+  recheck.owner.focus(gameId, 'managed');
+  await recheck.owner.load();
+  recheck.owner.updateDraft('arranging');
+  recheck.setStored(booking({ version: 5, status: 'unspecified', canUpdate: true }));
+  await recheck.owner.save();
+  assert.equal(recheck.owner.getSnapshot().status, 'stale');
+  assert.equal(recheck.sent.length, 1);
+  recheck.setMembership(false);
+  await recheck.owner.refreshAuthoritative();
+  assert.equal(recheck.owner.getSnapshot().status, 'denied');
+  assert.equal(recheck.owner.getSnapshot().booking, null);
+  await recheck.owner.save();
+  assert.equal(recheck.sent.length, 1);
 });

@@ -266,6 +266,8 @@ run("native game management · self-migrating isolated database", () => {
     for(const route of routes) expect((await app.inject({...route,headers:bearer(owner)})).statusCode).toBe(401);
   });
   it('native bearer court-booking GET/PUT: manager+participant read, write/replay/CAS, revocation, cookie CSRF, bearer boundaries; closed cancel neighbor', async () => {
+    // Prior suite cases mint many native transaction actors against the shared fixture IP budget.
+    await pool.query('DELETE FROM native_auth_budgets');
     const owner = await actor(), player = await actor(), outsider = await actor();
     const made = await creation(owner); expect(made.result.statusCode).toBe(201);
     const g = await publish(owner, made.result.json());
@@ -303,6 +305,13 @@ run("native game management · self-migrating isolated database", () => {
     expect(cookiePut.statusCode).toBe(200);
     expect(cookiePut.json()).toMatchObject({ status: 'organizer_confirmed', version: 2 });
     expect((await app.inject({ method: 'PUT', url, headers: { ...bearer(owner), cookie: owner.cookie }, payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(403);
+    // Invalid explicit bearer + valid cookie must not fall back to cookie principal (GET and PUT).
+    expect((await app.inject({ url, headers: { authorization: 'Bearer invalid', cookie: owner.cookie } })).statusCode).toBe(401);
+    expect((await app.inject({
+      method: 'PUT', url,
+      headers: { authorization: 'Bearer invalid', cookie: owner.cookie, 'idempotency-key': randomUUID() },
+      payload: { expectedVersion: 2, status: 'not_arranged' },
+    })).statusCode).toBe(401);
     for (const authorization of ['', 'Basic invalid', 'Bearer invalid', `Bearer ${'x'.repeat(43)}`]) {
       expect((await app.inject({ url, headers: { authorization } })).statusCode).toBe(401);
       expect((await app.inject({ method: 'PUT', url, headers: { authorization, 'idempotency-key': randomUUID() }, payload: { expectedVersion: 2, status: 'not_arranged' } })).statusCode).toBe(401);

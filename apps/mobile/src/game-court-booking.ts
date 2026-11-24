@@ -46,11 +46,21 @@ export type CourtBookingFocus = Readonly<{
   proof: 'managed' | 'detail';
 }>;
 
+/** Immutable actor/game/view/foreground fence captured at render for edit/save/retry/refresh. */
+export type CourtBookingRenderedPermit = Readonly<{
+  actor: Readonly<Actor>;
+  gameId: string;
+  viewGen: number;
+  foregroundGen: number;
+}>;
+
 export type CourtBookingPort = {
   /** Confirmed participation rows for the focused game when already loaded; null = not ready. */
   detailParts: (gameId: string) => Participation[] | null;
-  managed: (cursor?: string) => Promise<CursorPage<ManagedGame>>;
-  read: (gameId: string) => Promise<GameCourtBooking>;
+  /** Parent managed-summary membership; null = parent not ready. */
+  managedMembership: (gameId: string) => boolean | null;
+  managed: (cursor: string | undefined, permit: () => boolean) => Promise<CursorPage<ManagedGame>>;
+  read: (gameId: string, permit: () => boolean) => Promise<GameCourtBooking>;
   send: (packet: CourtBookingPacket, authority: Actor, permit: () => boolean) => Promise<GameCourtBooking>;
 };
 
@@ -58,6 +68,8 @@ export type CourtBookingSnapshot = {
   actor: Actor | null;
   focus: CourtBookingFocus | null;
   foreground: boolean;
+  /** Bumps on every app foreground transition — invalidates rendered permits. */
+  foregroundGen: number;
   status: 'idle' | 'loading' | 'ready' | 'error' | 'denied' | 'stale';
   booking: GameCourtBooking | null;
   draft: CourtBookingStatus;
@@ -69,6 +81,7 @@ const initial = (actor: Actor | null = null): CourtBookingSnapshot => ({
   actor,
   focus: null,
   foreground: true,
+  foregroundGen: 0,
   status: 'idle',
   booking: null,
   draft: 'unspecified',
@@ -125,7 +138,9 @@ export function canSaveCourtBooking(draft: CourtBookingStatus, booking: GameCour
 export class GameCourtBookingCoordinator {
   private state = initial();
   private listeners = new Set<() => void>();
-  private serial = 0;
+  /** In-flight private read / eligibility generation. */
+  private readSerial = 0;
+  /** Focus lease generation — release retires only its own viewGen. */
   private viewSerial = 0;
   private draftDirty = false;
   private quarantine: {
@@ -155,6 +170,26 @@ export class GameCourtBookingCoordinator {
   }
   blocksMutations = () => !!this.state.command || this.state.status === 'stale';
 
+  /** Capture rendered actor/game/view/foreground fence for panel callbacks. */
+  renderedPermit = (): CourtBookingRenderedPermit | null => {
+    const { actor, focus, foreground, foregroundGen } = this.state;
+    if (!actor || !focus || !foreground) return null;
+    return Object.freeze({
+      actor: Object.freeze({ ...actor }),
+      gameId: focus.gameId,
+      viewGen: focus.viewGen,
+      foregroundGen,
+    });
+  };
+
+  private permitLive(permit: CourtBookingRenderedPermit) {
+    return this.current(permit.actor)
+      && this.state.foreground
+      && this.state.focus?.gameId === permit.gameId
+      && this.state.focus?.viewGen === permit.viewGen
+      && this.state.foregroundGen === permit.foregroundGen;
+  }
+
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || !actor && !this.state.actor) return;
     if (this.state.actor) {
@@ -169,11 +204,12 @@ export class GameCourtBookingCoordinator {
     if (actor && this.quarantine?.actorId !== actor.actorId) this.quarantine = null;
     const saved = actor ? this.quarantine : null;
     if (actor) this.quarantine = null;
-    this.serial++;
+    this.readSerial++;
     this.viewSerial++;
     this.draftDirty = false;
     const foreground = this.state.foreground;
-    this.state = { ...initial(actor ? Object.freeze({ ...actor }) : null), foreground };
+    const foregroundGen = this.state.foregroundGen + 1;
+    this.state = { ...initial(actor ? Object.freeze({ ...actor }) : null), foreground, foregroundGen };
     if (saved) {
       const restoredPacket = saved.packet
         ? Object.freeze({ ...saved.packet, actor: Object.freeze({ ...actor }) }) as CourtBookingPacket
@@ -192,17 +228,56 @@ export class GameCourtBookingCoordinator {
 
   forget = () => {
     this.quarantine = null;
-    this.serial++;
+    this.readSerial++;
     this.viewSerial++;
     this.draftDirty = false;
     this.state = initial();
     this.show({});
   };
 
+  /**
+   * App foreground fence. Background retires in-flight sending → UNKNOWN, hides private
+   * booking, and clears stuck loading. Safe return triggers a fresh read when focused;
+   * never drops UNKNOWN or auto-retries mutations.
+   */
   setForeground = (active: boolean) => {
     if (active === this.state.foreground) return;
-    this.serial++;
-    this.show({ foreground: active });
+    this.readSerial++;
+    const foregroundGen = this.state.foregroundGen + 1;
+    const focus = this.state.focus;
+
+    if (!active) {
+      if (this.state.command?.status === 'sending') {
+        this.freezeUnknown(this.state.command.packet);
+      }
+      const unknown = this.state.command?.status === 'unknown' ? this.state.command : undefined;
+      const sameGameUnknown = !!unknown && !!focus && unknown.packet.gameId === focus.gameId;
+      this.draftDirty = sameGameUnknown ? this.draftDirty : false;
+      this.show({
+        foreground: false,
+        foregroundGen,
+        status: 'idle',
+        booking: sameGameUnknown ? this.state.booking : null,
+        draft: sameGameUnknown && this.state.booking ? this.state.draft : 'unspecified',
+        notice: unknown ? unknownNotice : null,
+      });
+      return;
+    }
+
+    const unknown = this.state.command?.status === 'unknown' ? this.state.command : undefined;
+    const sameGameUnknown = !!unknown && !!focus && unknown.packet.gameId === focus.gameId;
+    this.draftDirty = sameGameUnknown ? this.draftDirty : false;
+    this.show({
+      foreground: true,
+      foregroundGen,
+      status: sameGameUnknown && this.state.booking ? 'ready' : 'idle',
+      booking: sameGameUnknown ? this.state.booking : null,
+      draft: sameGameUnknown && this.state.booking ? this.state.draft : 'unspecified',
+      notice: sameGameUnknown ? unknownNotice : null,
+    });
+    if (this.state.focus && !this.state.command) {
+      void this.load();
+    }
   };
 
   /**
@@ -213,50 +288,61 @@ export class GameCourtBookingCoordinator {
     const noop = () => {};
     if (!this.state.actor || !gameId) return noop;
     const viewGen = ++this.viewSerial;
+    this.readSerial++;
     const focus: CourtBookingFocus = Object.freeze({ gameId, viewGen, proof });
-    const sameGameUnknown = this.state.command?.packet.gameId === gameId;
+    const sameGameUnknown = this.state.command?.status === 'unknown'
+      && this.state.command.packet.gameId === gameId;
     this.draftDirty = false;
     this.show({
       focus,
       status: 'idle',
       booking: sameGameUnknown ? this.state.booking : null,
       draft: sameGameUnknown && this.state.booking ? this.state.draft : 'unspecified',
-      notice: sameGameUnknown && this.state.command?.status === 'unknown' ? unknownNotice : null,
+      notice: sameGameUnknown ? unknownNotice : null,
     });
     return () => this.releaseFocus(viewGen);
   };
 
   releaseFocus = (viewGen: number) => {
     if (!this.state.focus || this.state.focus.viewGen !== viewGen) return;
-    this.viewSerial++;
+    this.readSerial++;
+    if (this.state.command?.status === 'sending') {
+      this.freezeUnknown(this.state.command.packet);
+    }
+    const focusedGame = this.state.focus.gameId;
     this.show({
       focus: null,
       status: 'idle',
-      booking: this.state.command?.packet.gameId === this.state.focus.gameId ? this.state.booking : null,
+      booking: this.state.command?.packet.gameId === focusedGame ? this.state.booking : null,
       notice: this.state.command?.status === 'unknown' ? unknownNotice : null,
     });
   };
 
-  updateDraft = (status: CourtBookingStatus) => {
+  updateDraft = (status: CourtBookingStatus, permit?: CourtBookingRenderedPermit) => {
+    if (permit && !this.permitLive(permit)) return;
     if (!this.state.actor || !this.state.focus || this.locked()) return;
+    if (permit && (permit.gameId !== this.state.focus.gameId || permit.viewGen !== this.state.focus.viewGen)) return;
     if (!this.state.booking?.allowedActions.canUpdate) return;
     this.draftDirty = true;
     this.show({ draft: status, notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
   };
 
   /** Eligibility then private GET. Failed/unknown eligibility never triggers speculative GET. */
-  load = async () => {
+  load = async (permit?: CourtBookingRenderedPermit) => {
     const actor = this.state.actor;
     const focus = this.state.focus;
     if (!actor || !focus || this.state.command || this.state.status === 'loading') return;
     if (!this.state.foreground) return;
-    const serial = ++this.serial;
+    if (permit && !this.permitLive(permit)) return;
+    if (permit && (permit.gameId !== focus.gameId || permit.viewGen !== focus.viewGen)) return;
+    const readGen = ++this.readSerial;
     const viewGen = focus.viewGen;
     const gameId = focus.gameId;
+    const live = () => this.readLive(actor, readGen, viewGen);
     this.show({ status: 'loading', notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
     try {
-      const eligible = await this.resolveEligible(focus);
-      if (!this.live(actor, serial, viewGen)) return;
+      const eligible = await this.resolveEligible(focus, live);
+      if (!live()) return;
       if (eligible === 'pending') {
         this.show({ status: 'idle', booking: null, draft: 'unspecified', notice: null });
         return;
@@ -266,20 +352,20 @@ export class GameCourtBookingCoordinator {
         return;
       }
       if (!eligible) {
-        this.clearPrivate(actor, serial, viewGen, 'denied');
+        this.clearPrivate(actor, readGen, viewGen, 'denied');
         return;
       }
-      const booking = parseGameCourtBooking(await this.port.read(gameId), gameId);
-      if (!this.live(actor, serial, viewGen)) return;
+      const booking = parseGameCourtBooking(await this.port.read(gameId, live), gameId);
+      if (!live()) return;
       if (!this.draftDirty) {
         this.show({ booking, draft: booking.status, status: 'ready', notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
       } else {
         this.show({ booking, status: 'ready', notice: this.state.command?.status === 'unknown' ? unknownNotice : null });
       }
     } catch (error) {
-      if (!this.live(actor, serial, viewGen)) return;
+      if (!live()) return;
       if (error instanceof ParticipationError && error.kind === 'business' && (error.status === 404 || error.status === 401)) {
-        this.clearPrivate(actor, serial, viewGen, 'denied');
+        this.clearPrivate(actor, readGen, viewGen, 'denied');
         return;
       }
       this.show({
@@ -291,65 +377,96 @@ export class GameCourtBookingCoordinator {
     }
   };
 
-  /** After 409: authoritative GET; keep draft; require fresh version before new save. */
-  refreshAuthoritative = async () => {
+  /**
+   * After 409: recheck eligibility then authoritative GET; keep draft; require fresh version
+   * before new save. Denied private clears booking/editing.
+   */
+  refreshAuthoritative = async (permit?: CourtBookingRenderedPermit) => {
     const actor = this.state.actor;
     const focus = this.state.focus;
     if (!actor || !focus || this.state.command) return;
     if (this.state.status !== 'stale' && this.state.status !== 'ready' && this.state.status !== 'error') return;
     if (!this.state.foreground) return;
-    const serial = ++this.serial;
+    if (permit && !this.permitLive(permit)) return;
+    if (permit && (permit.gameId !== focus.gameId || permit.viewGen !== focus.viewGen)) return;
+    const readGen = ++this.readSerial;
     const viewGen = focus.viewGen;
     const priorDraft = this.state.draft;
+    const live = () => this.readLive(actor, readGen, viewGen);
     this.show({ status: 'loading', notice: null });
     try {
-      const booking = parseGameCourtBooking(await this.port.read(focus.gameId), focus.gameId);
-      if (!this.live(actor, serial, viewGen)) return;
+      const eligible = await this.resolveEligible(focus, live);
+      if (!live()) return;
+      if (eligible === 'pending') {
+        this.show({ status: 'idle', booking: null, draft: priorDraft, notice: null });
+        return;
+      }
+      if (eligible === 'failed') {
+        this.show({
+          status: 'stale',
+          draft: priorDraft,
+          notice: 'Не удалось обновить данные. Выбранный статус сохранён — повторите обновление.',
+        });
+        return;
+      }
+      if (!eligible) {
+        this.clearPrivate(actor, readGen, viewGen, 'denied');
+        return;
+      }
+      const booking = parseGameCourtBooking(await this.port.read(focus.gameId, live), focus.gameId);
+      if (!live()) return;
       this.show({
         booking,
         draft: priorDraft,
         status: 'ready',
         notice: 'Статус изменился. Проверьте значение перед новым сохранением.',
       });
-    } catch {
-      if (this.live(actor, serial, viewGen)) {
-        this.show({
-          status: 'stale',
-          draft: priorDraft,
-          notice: 'Не удалось обновить данные. Выбранный статус сохранён — повторите обновление.',
-        });
+    } catch (error) {
+      if (!live()) return;
+      if (error instanceof ParticipationError && error.kind === 'business' && (error.status === 404 || error.status === 401)) {
+        this.clearPrivate(actor, readGen, viewGen, 'denied');
+        return;
       }
+      this.show({
+        status: 'stale',
+        draft: priorDraft,
+        notice: 'Не удалось обновить данные. Выбранный статус сохранён — повторите обновление.',
+      });
     }
   };
 
-  save = async () => {
-    const { actor, focus, booking, draft, status, command, foreground } = this.state;
+  save = async (permit?: CourtBookingRenderedPermit) => {
+    const { actor, focus, booking, draft, status, command, foreground, foregroundGen } = this.state;
     if (!actor || !focus || !booking || command || status !== 'ready' || !foreground) return;
+    if (permit && !this.permitLive(permit)) return;
     if (!booking.allowedActions.canUpdate || draft === booking.status) return;
     if (booking.gameId !== focus.gameId) return;
+    if (permit && (permit.gameId !== focus.gameId || permit.viewGen !== focus.viewGen)) return;
     const packet: CourtBookingPacket = Object.freeze({
       actor: Object.freeze({ ...actor }),
       key: this.random(),
       gameId: focus.gameId,
       body: Object.freeze({ expectedVersion: booking.version, status: draft }),
     });
-    await this.dispatch(packet, actor, focus.viewGen);
+    await this.dispatch(packet, actor, focus.viewGen, foregroundGen);
   };
 
-  reconcile = async () => {
-    const { actor, command, focus, foreground } = this.state;
+  reconcile = async (permit?: CourtBookingRenderedPermit) => {
+    const { actor, command, focus, foreground, foregroundGen } = this.state;
     if (!actor || !command || command.status !== 'unknown' || !foreground) return;
+    if (permit && !this.permitLive(permit)) return;
     if (command.packet.actor.actorId !== actor.actorId) return;
     if (!focus || focus.gameId !== command.packet.gameId) return;
-    await this.dispatch(command.packet, actor, focus.viewGen);
+    if (permit && (permit.gameId !== focus.gameId || permit.viewGen !== focus.viewGen)) return;
+    await this.dispatch(command.packet, actor, focus.viewGen, foregroundGen);
   };
 
-  private live(actor: Actor, serial: number, viewGen: number) {
-    return this.current(actor) && serial === this.serial && this.state.focus?.viewGen === viewGen && this.state.foreground;
+  private readLive(actor: Actor, readGen: number, viewGen: number) {
+    return this.current(actor) && readGen === this.readSerial && this.state.focus?.viewGen === viewGen && this.state.foreground;
   }
 
-  private clearPrivate(actor: Actor, serial: number, viewGen: number, status: 'denied') {
-    if (!this.live(actor, serial, viewGen)) return;
+  private clearPrivate(actor: Actor, readGen: number, viewGen: number, status: 'denied') {
+    if (!this.readLive(actor, readGen, viewGen)) return;
     this.draftDirty = false;
     this.show({
       status,
@@ -359,8 +476,15 @@ export class GameCourtBookingCoordinator {
     });
   }
 
-  private async resolveEligible(focus: CourtBookingFocus): Promise<boolean | 'failed' | 'pending'> {
-    if (focus.proof === 'managed') return true;
+  private async resolveEligible(
+    focus: CourtBookingFocus,
+    permit: () => boolean,
+  ): Promise<boolean | 'failed' | 'pending'> {
+    if (focus.proof === 'managed') {
+      const membership = this.port.managedMembership(focus.gameId);
+      if (membership === null) return 'pending';
+      return membership;
+    }
     const parts = this.port.detailParts(focus.gameId);
     // Detail still loading — do not speculate private GET or managed walk.
     if (parts === null) return 'pending';
@@ -368,24 +492,35 @@ export class GameCourtBookingCoordinator {
     if (own?.status === 'confirmed') return true;
     try {
       let cursor: string | undefined;
-      const seen = new Set<string>();
-      do {
-        const page = await this.port.managed(cursor);
+      const seenIds = new Set<string>();
+      const seenCursors = new Set<string>();
+      for (;;) {
+        const cursorKey = cursor ?? '';
+        if (seenCursors.has(cursorKey)) return false;
+        seenCursors.add(cursorKey);
+        if (!permit()) throw new ParticipationError('stale');
+        const page = await this.port.managed(cursor, permit);
+        if (!permit()) throw new ParticipationError('stale');
         if (page.items.some(g => g.id === focus.gameId)) return true;
         for (const item of page.items) {
-          if (seen.has(item.id)) return false;
-          seen.add(item.id);
+          if (seenIds.has(item.id)) return false;
+          seenIds.add(item.id);
         }
-        cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-      return false;
-    } catch {
+        if (!page.nextCursor) return false;
+        cursor = page.nextCursor;
+      }
+    } catch (error) {
+      if (error instanceof ParticipationError && error.kind === 'stale') throw error;
       return 'failed';
     }
   }
 
-  private async dispatch(packet: CourtBookingPacket, authority: Actor, viewGen: number) {
-    this.serial++;
+  private async dispatch(
+    packet: CourtBookingPacket,
+    authority: Actor,
+    viewGen: number,
+    foregroundGen: number,
+  ) {
     this.show({ command: { packet, status: 'sending' }, notice: null });
     const valid = () =>
       this.current(authority)
@@ -393,13 +528,15 @@ export class GameCourtBookingCoordinator {
       && this.state.command.status === 'sending'
       && this.state.foreground
       && this.state.focus?.viewGen === viewGen
-      && this.state.focus.gameId === packet.gameId;
+      && this.state.focus.gameId === packet.gameId
+      && this.state.foregroundGen === foregroundGen;
     const permit = () =>
       this.current(authority)
       && this.state.foreground
       && this.state.focus?.viewGen === viewGen
       && this.state.focus.gameId === packet.gameId
-      && this.state.command?.packet === packet;
+      && this.state.command?.packet === packet
+      && this.state.foregroundGen === foregroundGen;
     try {
       const ack = parseGameCourtBooking(await this.port.send(packet, authority, permit), packet.gameId);
       if (!valid()) {
@@ -425,6 +562,18 @@ export class GameCourtBookingCoordinator {
         && error.kind === 'business'
         && error.status < 500
         && error.code !== 'COMMAND_IN_PROGRESS') {
+        const denied = error.status === 401 || error.status === 403 || error.status === 404;
+        if (denied) {
+          this.draftDirty = false;
+          this.show({
+            command: undefined,
+            status: 'denied',
+            booking: null,
+            draft: 'unspecified',
+            notice: null,
+          });
+          return;
+        }
         const stale = error.status === 409;
         this.show({
           command: undefined,
