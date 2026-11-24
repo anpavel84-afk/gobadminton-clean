@@ -264,6 +264,10 @@ export class GameManagementCoordinator {
       this.show({ notice: 'Сначала завершите или проверьте сохранение фото этой игры.' });
       return false;
     }
+    // Preserve prior UNKNOWN identity across a prevented no-send retry (cover-lock stale after token).
+    const priorUnknown = this.state.command?.status === 'unknown' && this.state.command.packet === packet
+      ? this.state.command.packet
+      : null;
     this.show({ command: { packet, status: 'sending' }, notice: undefined });
     try {
       const result = await this.port.send(packet); if (!this.current(packet.actor)) return false;
@@ -281,11 +285,20 @@ export class GameManagementCoordinator {
       return true;
     } catch (e) {
       if (!this.current(packet.actor)) return false;
-      // Cover/port stale fence after delayed token — not an UNKNOWN write; restore prior idle command slot.
+      // Distinguish cover-lock preflight stale (no network send) from unrelated stale.
       if (e instanceof ParticipationError && e.kind === 'stale') {
+        const coverLock = packet.kind !== 'create' && this.coverBlocked(packet.gameId);
+        if (coverLock && priorUnknown) {
+          // Prevented delayed retry must NOT erase prior UNKNOWN packet/key.
+          this.show({
+            command: { packet: priorUnknown, status: 'unknown' },
+            notice: 'Сначала завершите или проверьте сохранение фото этой игры.',
+          });
+          return false;
+        }
         this.show({
           command: undefined,
-          notice: packet.kind !== 'create' && this.coverBlocked(packet.gameId)
+          notice: coverLock
             ? 'Сначала завершите или проверьте сохранение фото этой игры.'
             : 'Действие устарело. Обновите данные перед новой попыткой.',
         });

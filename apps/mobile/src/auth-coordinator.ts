@@ -311,14 +311,22 @@ export class AuthCoordinator {
     // Managed game photo: GET/PUT/DELETE principal opt-in; hasCover gates remove; receipt refreshes managed detail version.
     this.gameCover = new GameCoverCoordinator({
       read: (gameId, authority) => this.participationRead(access => deps.api.gameCover(access, gameId), authority),
-      mutate: (packet, authority) => this.participationRead(access => {
-        const command = this.gameManagement.getSnapshot().command;
-        if (command && ['sending','unknown'].includes(command.status)
-          && command.packet.kind !== 'create' && command.packet.gameId === packet.gameId) {
-          throw new ParticipationError('stale');
-        }
-        return deps.api.mutateGameCover(access, packet);
-      }, authority),
+      mutate: (packet, authority) => {
+        // Capture original photo-command admission BEFORE token await — no minting a new permit later.
+        const admission = this.gameCover.captureDispatchAdmission(packet);
+        return this.participationRead(access => {
+          // Recheck actor/session/game/view/foreground generation + packet identity after token, before API.
+          if (!this.gameCover.dispatchAdmissionLive(admission, packet)) {
+            throw new ParticipationError('stale');
+          }
+          const command = this.gameManagement.getSnapshot().command;
+          if (command && ['sending','unknown'].includes(command.status)
+            && command.packet.kind !== 'create' && command.packet.gameId === packet.gameId) {
+            throw new ParticipationError('stale');
+          }
+          return deps.api.mutateGameCover(access, packet);
+        }, authority);
+      },
     }, deps.random, {
       onReceipt: (gameId) => { void this.gameManagement.loadDetail(gameId); },
       accessToken: () => this.access?.token ?? null,

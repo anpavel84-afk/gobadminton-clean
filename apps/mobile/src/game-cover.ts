@@ -43,6 +43,27 @@ export type GameCoverRenderedPermit = Readonly<{
   foregroundGen: number;
 }>;
 
+/**
+ * Admission frozen at mutate port entry (before token await) — rechecked after refresh,
+ * immediately before native-api dispatch. Packet identity is referential.
+ */
+export type GameCoverDispatchAdmission = Readonly<{
+  actor: Readonly<Actor>;
+  gameId: string;
+  key: string;
+  viewGen: number | null;
+  foregroundGen: number;
+  packet: GameCoverPacket;
+}>;
+
+/** Narrow expected system-picker handoff — survives Android library backgrounding only. */
+export type GameCoverPickerHandoff = Readonly<{
+  actor: Readonly<Actor>;
+  gameId: string;
+  viewGen: number;
+  serial: number;
+}>;
+
 export type GameCoverSnapshot = {
   actor: Actor | null;
   gameId: string | null;
@@ -141,10 +162,20 @@ const COPY = {
   errorOther: 'Сохранение не подтверждено. Обновите данные перед повторной попыткой; игра не публикуется автоматически.',
   saved: 'Фото игры проверено и сохранено.',
   removed: 'Своё фото удалено. Используется текущая обложка площадки или стандартная.',
+  /** CURRENT replay / authoritative state without own photo — never claim a successful save. */
+  currentNoOwn: 'Сейчас своё фото не установлено. Можно выбрать изображение снова.',
   refreshed: 'Данные обновлены. Можно повторить сохранение.',
   denied: 'Редактирование фото недоступно. Обновите страницу и проверьте вход.',
   held: 'Есть неподтверждённое сохранение фото другой игры. Вернитесь к ней, чтобы проверить результат.',
 } as const;
+
+/** True only for definite successful replace/remove notices — not UNKNOWN/error/CURRENT-empty. */
+export function gameCoverMutationSucceeded(snap: Pick<GameCoverSnapshot, 'status' | 'uncertain' | 'command' | 'notice'>): boolean {
+  return snap.status === 'ready'
+    && !snap.uncertain
+    && !snap.command
+    && (snap.notice === COPY.saved || snap.notice === COPY.removed);
+}
 
 const coverError = (status: number) =>
   status === 429 ? COPY.error429 : status === 422 ? COPY.error422 : COPY.errorOther;
@@ -173,9 +204,11 @@ export class GameCoverCoordinator {
   private listeners = new Set<() => void>();
   private serial = 0;
   private viewSerial = 0;
+  private pickerSerial = 0;
   private uncertain = false;
   private quarantined: GameCoverPacket | null = null;
   private holds = new Map<string, HeldCover>();
+  private pickerHandoff: GameCoverPickerHandoff | null = null;
   private readonly port: GameCoverPort;
   private readonly random: () => string;
   private readonly gate: GameCoverGate;
@@ -241,6 +274,89 @@ export class GameCoverCoordinator {
     && this.state.focus?.viewGen === permit.viewGen
     && this.state.foregroundGen === permit.foregroundGen;
 
+  /**
+   * Begin expected OS photo-picker handoff bound to original actor/session/game/view.
+   * Ordinary AppState background during the picker does not clear this; mutations still
+   * require permitLive (foregroundGen fence). Returns end() for cancel/complete.
+   */
+  beginExpectedPickerHandoff = (permit: GameCoverRenderedPermit): (() => void) => {
+    if (!this.permitLive(permit)) return () => {};
+    const serial = ++this.pickerSerial;
+    this.pickerHandoff = Object.freeze({
+      actor: Object.freeze({ ...permit.actor }),
+      gameId: permit.gameId,
+      viewGen: permit.viewGen,
+      serial,
+    });
+    return () => {
+      if (this.pickerHandoff?.serial === serial) this.pickerHandoff = null;
+    };
+  };
+
+  /** True while an expected picker handoff is armed for the focused view (may be backgrounded). */
+  expectingPickerHandoff = () => {
+    const h = this.pickerHandoff;
+    return !!h
+      && this.current(h.actor)
+      && this.state.focus?.gameId === h.gameId
+      && this.state.focus?.viewGen === h.viewGen;
+  };
+
+  /**
+   * In-flight picker identity — stays true while backgrounded so the OS library call is not
+   * retired by AppState. Close/account/game ABA still clears the handoff.
+   */
+  pickerHandoffPending = (permit: GameCoverRenderedPermit) => {
+    const h = this.pickerHandoff;
+    if (!h) return false;
+    return this.current(h.actor)
+      && sameActor(h.actor, permit.actor)
+      && this.state.focus?.gameId === h.gameId
+      && this.state.focus?.viewGen === h.viewGen
+      && permit.gameId === h.gameId
+      && permit.viewGen === h.viewGen;
+  };
+
+  /**
+   * Accept picker result after expected library backgrounding: same actor/session/game/view,
+   * app active again. Never revives stale mutation permits (foregroundGen still required there).
+   */
+  pickerHandoffLive = (permit: GameCoverRenderedPermit) => {
+    if (!this.pickerHandoff) return this.permitLive(permit);
+    return this.state.foreground && this.pickerHandoffPending(permit);
+  };
+
+  /**
+   * Freeze mutate admission at port entry (before token await). AuthCoordinator rechecks
+   * after token, immediately before API — no minting a new permit.
+   */
+  captureDispatchAdmission = (packet: GameCoverPacket): GameCoverDispatchAdmission =>
+    Object.freeze({
+      actor: Object.freeze({ ...packet.actor }),
+      gameId: packet.gameId,
+      key: packet.key,
+      viewGen: this.state.focus?.viewGen ?? null,
+      foregroundGen: this.state.foregroundGen,
+      packet,
+    });
+
+  /** Original actor/session/game/view/foreground generation + packet identity still live. */
+  dispatchAdmissionLive = (admission: GameCoverDispatchAdmission, packet: GameCoverPacket) =>
+    admission.packet === packet
+    && admission.key === packet.key
+    && this.current(admission.actor)
+    && sameActor(admission.actor, packet.actor)
+    && this.state.gameId === admission.gameId
+    && this.state.command?.packet === packet
+    && this.state.command.status === 'sending'
+    && this.state.foreground
+    && this.state.foregroundGen === admission.foregroundGen
+    && (admission.viewGen === null || this.state.focus?.viewGen === admission.viewGen);
+
+  private clearPickerHandoff() {
+    this.pickerHandoff = null;
+  }
+
   private managementBlocked(gameId: string) {
     return !!this.gate.managementBlocksWrites?.(gameId);
   }
@@ -281,6 +397,7 @@ export class GameCoverCoordinator {
       if (!this.quarantined && held.packet) this.quarantined = held.packet;
     }
     this.holds.clear();
+    this.clearPickerHandoff();
     if (actor && this.quarantined?.actor.actorId !== actor.actorId) this.quarantined = null;
     // Preserve original packet/key/version/bytes; do not rebind actor. Retry requires sameActor.
     const packet = actor ? this.quarantined : null;
@@ -307,6 +424,7 @@ export class GameCoverCoordinator {
   forget = () => {
     this.quarantined = null;
     this.holds.clear();
+    this.clearPickerHandoff();
     this.uncertain = false;
     this.serial++;
     this.viewSerial++;
@@ -333,12 +451,14 @@ export class GameCoverCoordinator {
   /**
    * App foreground fence. Background retires private view/previews and in-flight sending → UNKNOWN;
    * returning refreshes rights when focused without auto-mutation.
+   * Expected picker handoff keeps actor/game/view binding; foregroundGen still invalidates mutations.
    */
   setForeground = (active: boolean) => {
     if (active === this.state.foreground) return;
     this.serial++;
     const foregroundGen = this.state.foregroundGen + 1;
     const focus = this.state.focus;
+    const picker = this.expectingPickerHandoff();
     if (!active) {
       if (this.state.command?.status === 'sending') {
         this.uncertain = true;
@@ -354,13 +474,14 @@ export class GameCoverCoordinator {
         return;
       }
       const unknown = this.state.command?.status === 'unknown' ? this.state.command : undefined;
+      // During expected picker, keep access so UI can restore without wiping rights; draft clear is UI-side.
       this.show({
         foreground: false,
         foregroundGen,
-        status: unknown ? 'unknown' : 'idle',
-        access: unknown ? this.state.access : null,
-        notice: unknown ? COPY.errorOther : null,
-        error: unknown ? coverError(0) : null,
+        status: unknown ? 'unknown' : (picker ? (this.state.access ? 'ready' : 'idle') : 'idle'),
+        access: unknown || picker ? this.state.access : null,
+        notice: unknown ? COPY.errorOther : (picker ? this.state.notice : null),
+        error: unknown ? coverError(0) : (picker ? this.state.error : null),
       });
       return;
     }
@@ -368,10 +489,10 @@ export class GameCoverCoordinator {
     this.show({
       foreground: true,
       foregroundGen,
-      status: unknown ? 'unknown' : (focus ? 'idle' : this.state.status),
+      status: unknown ? 'unknown' : (focus ? (this.state.access ? 'ready' : 'idle') : this.state.status),
       notice: unknown ? COPY.errorOther : this.state.notice,
     });
-    if (focus && !this.state.command && !this.uncertain) {
+    if (focus && !this.state.command && !this.uncertain && !picker) {
       void this.load(focus.gameId);
     }
   };
@@ -379,11 +500,14 @@ export class GameCoverCoordinator {
   /**
    * Bind editor view lease to a managed game. Release retires only this viewGen.
    * Parks unresolved work for another game; restores journaled hold on return.
+   * Release converts in-flight sending → UNKNOWN; loading/preparation → reloadable idle/ready
+   * so reopen does not stay busy forever after late results are ignored.
    */
   openView = (gameId: string): (() => void) => {
     const actor = this.state.actor;
     if (!actor || !gameId) return () => {};
     const viewGen = ++this.viewSerial;
+    this.clearPickerHandoff();
     this.parkActiveIfNeeded(gameId);
     if (this.restoreHold(gameId)) {
       this.show({ focus: Object.freeze({ gameId, viewGen }) });
@@ -396,7 +520,29 @@ export class GameCoverCoordinator {
     return () => {
       if (this.state.focus?.viewGen !== viewGen) return;
       this.serial++;
-      this.show({ focus: null });
+      this.clearPickerHandoff();
+      if (this.state.command?.status === 'sending') {
+        this.uncertain = true;
+        this.show({
+          focus: null,
+          command: { packet: this.state.command.packet, status: 'unknown' },
+          status: 'unknown',
+          notice: COPY.errorOther,
+          error: coverError(0),
+          uncertain: true,
+        });
+        return;
+      }
+      const unknown = this.state.command?.status === 'unknown' ? this.state.command : undefined;
+      const stuckRead = this.state.status === 'loading'
+        || this.state.status === 'picking'
+        || this.state.status === 'processing';
+      this.show({
+        focus: null,
+        status: unknown ? 'unknown' : (stuckRead ? (this.state.access ? 'ready' : 'idle') : this.state.status),
+        notice: unknown ? COPY.errorOther : this.state.notice,
+        error: unknown ? coverError(0) : this.state.error,
+      });
     };
   };
 
@@ -576,11 +722,17 @@ export class GameCoverCoordinator {
       if (receipt.version < packet.gameVersion) throw new ProfileError('invalid');
       this.uncertain = false;
       this.gate.onReceipt?.(packet.gameId, receipt);
+      // CURRENT replay with hasCover=false must not claim "photo saved".
+      const notice = packet.action === 'remove'
+        ? COPY.removed
+        : receipt.hasCover
+          ? COPY.saved
+          : COPY.currentNoOwn;
       this.show({
         command: undefined,
         status: 'ready',
         access: receipt,
-        notice: packet.action === 'replace' ? COPY.saved : COPY.removed,
+        notice,
         error: null,
         uncertain: false,
       });

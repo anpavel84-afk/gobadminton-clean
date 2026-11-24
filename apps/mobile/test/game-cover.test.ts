@@ -10,6 +10,7 @@ import {
   admitGameCoverUpload,
   freezeGameCoverPacket,
   gameCoverMediaPath,
+  gameCoverMutationSucceeded,
   parseGameCoverReceipt,
   type GameCoverPacket,
   type GameCoverPort,
@@ -294,4 +295,155 @@ test('#522 APK51 managed game photo budget pin (no source-regex mirror)', () => 
   assert.equal(GAME_COVER_UPLOAD_MAX_BYTES, GAME_COVER_DERIVATIVE_MAX_BYTES);
   assert.ok(COVER_DERIVATIVE_MAX_BYTES > GAME_COVER_DERIVATIVE_MAX_BYTES);
   assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 51);
+});
+
+test('#522 FIX2: openView release retires load/prep; sending→UNKNOWN; reopen not stuck busy', async () => {
+  let resolveRead!: (v: { version: number; hasCover: boolean; cover: { uploadedUrl: string | null } }) => void;
+  let resolveMutate!: (v: { version: number; hasCover: boolean; cover: { uploadedUrl: string | null } }) => void;
+  let reads = 0;
+  const port: GameCoverPort = {
+    read: () => {
+      reads += 1;
+      return new Promise(r => { resolveRead = r; });
+    },
+    mutate: () => new Promise(r => { resolveMutate = r; }),
+  };
+  const owner = new GameCoverCoordinator(port, () => 'fix2-key', { accessToken: () => 'tok' });
+  owner.setActor(actor);
+
+  // Close during load → reloadable; late read ignored; reopen loads again.
+  const releaseLoad = owner.openView('game-load');
+  assert.equal(owner.getSnapshot().status, 'loading');
+  const readsAtClose = reads;
+  releaseLoad();
+  assert.equal(owner.getSnapshot().focus, null);
+  assert.ok(['idle', 'ready'].includes(owner.getSnapshot().status));
+  resolveRead!({ version: 1, hasCover: false, cover: { uploadedUrl: null } });
+  await Promise.resolve();
+  assert.notEqual(owner.getSnapshot().status, 'loading');
+  const releaseReload = owner.openView('game-load');
+  assert.equal(owner.getSnapshot().status, 'loading');
+  assert.ok(reads > readsAtClose);
+  resolveRead!({ version: 2, hasCover: false, cover: { uploadedUrl: null } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().status, 'ready');
+  releaseReload();
+
+  // Close during already-started send → UNKNOWN retained; reopen stays reconcilable not spinning.
+  const readyPort: GameCoverPort = {
+    read: async () => ({ version: 5, hasCover: false, cover: { uploadedUrl: null } }),
+    mutate: () => new Promise(r => { resolveMutate = r; }),
+  };
+  const sending = new GameCoverCoordinator(readyPort, () => 'send-key', { accessToken: () => 'tok' });
+  sending.setActor(actor);
+  const releaseSend = sending.openView('game-send');
+  await new Promise(r => setImmediate(r));
+  assert.equal(sending.getSnapshot().status, 'ready');
+  const sendWork = sending.change(async () => jpegDerivative());
+  await new Promise(r => setImmediate(r));
+  assert.equal(sending.getSnapshot().status, 'sending');
+  const packetKey = sending.getSnapshot().command!.packet.key;
+  releaseSend();
+  assert.equal(sending.getSnapshot().status, 'unknown');
+  assert.equal(sending.getSnapshot().command?.packet.key, packetKey);
+  assert.equal(sending.getSnapshot().uncertain, true);
+  resolveMutate!({ version: 99, hasCover: true, cover: { uploadedUrl: gameUrl } });
+  await sendWork;
+  assert.notEqual(sending.getSnapshot().access?.version, 99);
+  assert.equal(sending.getSnapshot().command?.packet.key, packetKey);
+
+  const releaseReopen = sending.openView('game-send');
+  assert.equal(sending.getSnapshot().status, 'unknown');
+  assert.equal(sending.busy(), false);
+  assert.equal(sending.getSnapshot().command?.packet.key, packetKey);
+  releaseReopen();
+});
+
+test('#522 FIX2: expected picker handoff survives AppState; close/account/game ABA discard', () => {
+  const owner = new GameCoverCoordinator({
+    read: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
+    mutate: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
+  }, () => 'k', { accessToken: () => 'tok' });
+  owner.setActor(actor);
+  const release = owner.openView('game-pick');
+  const permit = owner.renderedPermit();
+  assert.ok(permit);
+  assert.equal(owner.permitLive(permit!), true);
+
+  const end = owner.beginExpectedPickerHandoff(permit!);
+  assert.equal(owner.expectingPickerHandoff(), true);
+  owner.setForeground(false);
+  assert.equal(owner.permitLive(permit!), false);
+  assert.equal(owner.pickerHandoffPending(permit!), true);
+  assert.equal(owner.pickerHandoffLive(permit!), false);
+  owner.setForeground(true);
+  assert.equal(owner.pickerHandoffLive(permit!), true);
+  // Mutation fence still requires original foregroundGen — handoff must not revive it.
+  assert.equal(owner.permitLive(permit!), false);
+  end();
+  assert.equal(owner.expectingPickerHandoff(), false);
+
+  // Fresh permit after return: normal roundtrip end.
+  const permit2 = owner.renderedPermit();
+  assert.ok(permit2);
+  const end2 = owner.beginExpectedPickerHandoff(permit2!);
+  owner.setForeground(false);
+  owner.setForeground(true);
+  assert.equal(owner.pickerHandoffLive(permit2!), true);
+  end2();
+
+  // Account change discards handoff.
+  const permit3 = owner.renderedPermit();
+  assert.ok(permit3);
+  owner.beginExpectedPickerHandoff(permit3!);
+  owner.setActor({ actorId: 'B', sessionId: 'session-B', generation: 1 });
+  assert.equal(owner.expectingPickerHandoff(), false);
+
+  owner.setActor(actor);
+  const releaseB = owner.openView('game-B');
+  const permitB = owner.renderedPermit();
+  assert.ok(permitB);
+  owner.beginExpectedPickerHandoff(permitB!);
+  releaseB();
+  assert.equal(owner.expectingPickerHandoff(), false);
+  release();
+});
+
+test('#522 FIX2: CURRENT replay hasCover=false is honest; success helper excludes UNKNOWN notice', async () => {
+  const port: GameCoverPort = {
+    read: async () => ({ version: 3, hasCover: false, cover: { uploadedUrl: venueUrl } }),
+    mutate: async () => ({ version: 4, hasCover: false, cover: { uploadedUrl: venueUrl } }),
+  };
+  const owner = new GameCoverCoordinator(port, () => 'current-key', { accessToken: () => 'tok' });
+  owner.setActor(actor);
+  await owner.load('game-current');
+  await owner.change(async () => jpegDerivative());
+  const snap = owner.getSnapshot();
+  assert.equal(snap.access?.hasCover, false);
+  assert.match(snap.notice ?? '', /не установлено|обновлены|Данные/i);
+  assert.equal(snap.notice, 'Сейчас своё фото не установлено. Можно выбрать изображение снова.');
+  assert.equal(gameCoverMutationSucceeded(snap), false);
+
+  // Definite save still closes-worthy.
+  const ok: GameCoverPort = {
+    read: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
+    mutate: async () => ({ version: 2, hasCover: true, cover: { uploadedUrl: gameUrl } }),
+  };
+  const saved = new GameCoverCoordinator(ok, () => 'ok-key', { accessToken: () => 'tok' });
+  saved.setActor(actor);
+  await saved.load('game-ok');
+  await saved.change(async () => jpegDerivative());
+  assert.equal(gameCoverMutationSucceeded(saved.getSnapshot()), true);
+
+  // UNKNOWN notice must not count as success.
+  const flaky: GameCoverPort = {
+    read: async () => ({ version: 1, hasCover: false, cover: { uploadedUrl: null } }),
+    mutate: async () => { throw new ProfileError('network', 503); },
+  };
+  const unknown = new GameCoverCoordinator(flaky, () => 'u', { accessToken: () => 'tok' });
+  unknown.setActor(actor);
+  await unknown.load('game-u');
+  await unknown.change(async () => jpegDerivative());
+  assert.equal(gameCoverMutationSucceeded(unknown.getSnapshot()), false);
+  assert.ok(unknown.getSnapshot().notice);
 });

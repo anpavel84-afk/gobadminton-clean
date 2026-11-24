@@ -671,3 +671,69 @@ test('#522 APK51 management dispatch gate blocks publish while cover unresolved 
   assert.equal(sent[0]!.kind, 'publish');
   assert.equal(sent[0]!.kind === 'publish' ? sent[0].gameId : '', 'game-cover-lock');
 });
+
+test('#522 FIX2: cover-lock stale on UNKNOWN retry preserves packet/key; unrelated stale clears', async () => {
+  let coverBlocked = false;
+  let portStale: 'cover' | 'other' | null = null;
+  const sent: ManagementPacket[] = [];
+  let serial = 0;
+  let rejectSend!: (e: unknown) => void;
+  let pendingSend: Promise<Game> | null = null;
+  const draft = { ...g, id: 'game-cover-unknown', status: 'draft' as const, version: 2 };
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      if (pendingSend) {
+        await pendingSend;
+      }
+      if (portStale === 'cover') {
+        // Simulate AuthCoordinator cover gate after delayed token — arm lock then stale.
+        coverBlocked = true;
+        throw new ParticipationError('stale');
+      }
+      if (portStale === 'other') throw new ParticipationError('stale');
+      sent.push(p);
+      return { ...draft, status: 'published', version: draft.version + 1 };
+    },
+  }, () => `key-${++serial}`, () => now, {
+    coverBlocksWrites: gameId => coverBlocked && gameId === 'game-cover-unknown',
+  });
+  owner.setActor(actor);
+  await owner.loadDetail('game-cover-unknown');
+
+  // Force UNKNOWN publish via delayed network loss.
+  pendingSend = new Promise<Game>((_, reject) => { rejectSend = reject; });
+  const publishWork = owner.publishDraft('game-cover-unknown');
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().command?.status, 'sending');
+  const original = owner.getSnapshot().command!.packet;
+  rejectSend(new ParticipationError('network'));
+  await publishWork;
+  pendingSend = null;
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, original.key);
+
+  // Delayed cover-lock stale on retry: early gate off, port arms lock + throws → keep UNKNOWN.
+  portStale = 'cover';
+  coverBlocked = false;
+  const before = sent.length;
+  await owner.reconcile();
+  assert.equal(sent.length, before);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.getSnapshot().command?.packet.key, original.key);
+  assert.strictEqual(owner.getSnapshot().command?.packet, original);
+  assert.match(owner.getSnapshot().notice ?? '', /фото/);
+
+  // Unrelated stale (not cover-lock) clears the command slot.
+  portStale = 'other';
+  coverBlocked = false;
+  await owner.reconcile();
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.match(owner.getSnapshot().notice ?? '', /устарело/);
+});

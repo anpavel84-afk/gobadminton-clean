@@ -1982,6 +1982,72 @@ test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, n
   assert.equal(calls.filter(c => c.method === 'PUT' || c.method === 'DELETE').length, mutCount);
 });
 
+test('#522 FIX2: game-cover deferred-token admission — close/background/ABA/account → zero mutate', async () => {
+  const gameId = '10000000-0000-4000-8000-000000000052';
+  async function run(interrupt: 'background' | 'close-view' | 'game-ABA' | 'account') {
+    const s = setup(sessionEnvelope());
+    await s.auth.hydrate();
+    const owner = s.auth.gameCover;
+    const mutates: string[] = [];
+    const refreshGate = deferred<unknown>();
+    let row = { version: 2, hasCover: false, cover: { uploadedUrl: null as string | null } };
+    s.setHandler(async (path, init) => {
+      if (path === '/me') return me;
+      if (path === '/auth/native/refresh') return refreshGate.promise;
+      if (path === `/games/${gameId}/cover`) {
+        if ((init.method ?? 'GET') === 'PUT' || init.method === 'DELETE') {
+          mutates.push(String(init.method));
+          row = { version: row.version + 1, hasCover: init.method === 'PUT', cover: { uploadedUrl: null } };
+          return row;
+        }
+        return row;
+      }
+      if (path.startsWith('/games/other-game/cover')) {
+        return { version: 1, hasCover: false, cover: { uploadedUrl: null } };
+      }
+      if (path.startsWith('/me/games')) {
+        return { items: [{ id: gameId, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+      }
+      if (path === `/games/${gameId}`) {
+        return { ...fixture, id: gameId, version: row.version, status: 'draft' };
+      }
+      if (path.includes('/participations')) return { items: [], nextCursor: null };
+      return { ok: true };
+    });
+
+    const release = owner.openView(gameId);
+    await new Promise(r => setImmediate(r));
+    assert.equal(owner.getSnapshot().status, 'ready', interrupt);
+
+    const refreshWork = s.auth.refresh();
+    await new Promise(r => setImmediate(r));
+    const changeWork = owner.change(async () => Object.freeze({
+      mime: 'image/jpeg' as const,
+      bytes: new Uint8Array([255, 216, 255, 217]),
+    }));
+    await new Promise(r => setImmediate(r));
+    assert.equal(owner.getSnapshot().command?.status, 'sending', interrupt);
+
+    if (interrupt === 'background') owner.setForeground(false);
+    else if (interrupt === 'close-view') release();
+    else if (interrupt === 'game-ABA') owner.openView('other-game');
+    else owner.setActor({ actorId: 'other', sessionId: 's2', generation: 99 });
+
+    refreshGate.resolve(credentials);
+    await Promise.all([changeWork, refreshWork.catch(() => {})]);
+    assert.equal(mutates.length, 0, interrupt);
+    if (interrupt === 'background' || interrupt === 'close-view') {
+      assert.equal(owner.getSnapshot().command?.status, 'unknown', interrupt);
+      assert.equal(owner.getSnapshot().uncertain, true, interrupt);
+    }
+  }
+
+  await run('background');
+  await run('close-view');
+  await run('game-ABA');
+  await run('account');
+});
+
 test('#522 APK48: delayed token actor/view permit yields zero PUT', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();
