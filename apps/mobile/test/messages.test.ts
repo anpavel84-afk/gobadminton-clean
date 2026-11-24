@@ -661,8 +661,8 @@ test('#522 APK46 manager revoke: managed projection eligibility, selected revoke
   assert.equal(sent[0]!.path, '/invitations/invite-mgr/revoke');
   assert.deepEqual(sent[0]!.body, { expectedVersion: 4 });
   assert.ok(Object.isFrozen(sent[0]!.body));
-  assert.equal(owner.getSnapshot().detail?.header && 'status' in owner.getSnapshot().detail!.header!
-    ? owner.getSnapshot().detail!.header.status : null, 'revoked');
+  const header = owner.getSnapshot().detail?.header;
+  assert.equal(header && 'status' in header ? header.status : null, 'revoked');
 
   // Rights loss fail-closed: no POST when managed projection no longer includes the game.
   port.invitation = async () => ({ ...base, id: 'invite-mgr', version: 6 });
