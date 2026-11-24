@@ -303,7 +303,7 @@ describe("Avatar / profile cover / game-cover controller ordering", () => {
     expect(bearerCapture.headers.Vary).toBe("Authorization, Cookie, Accept");
   });
 
-  it("game cover: optionalSession/read denial not converted; Cookie+Accept Vary after success", async () => {
+  it("game cover: optionalSession/read denial not converted; Authorization+Cookie+Accept Vary after success", async () => {
     const denied = Object.assign(new Error("COVER_UNAVAILABLE"), { status: 404 });
     const optionalSession = vi.fn().mockResolvedValue(null);
     const read = vi.fn().mockRejectedValue(denied);
@@ -328,7 +328,7 @@ describe("Avatar / profile cover / game-cover controller ordering", () => {
     expect(read).toHaveBeenCalledOnce();
     expect(resolveSpy).not.toHaveBeenCalled();
     expect(captured.body).toBeUndefined();
-    expect(captured.headers.Vary).toBe("Cookie, Accept");
+    expect(captured.headers.Vary).toBe("Authorization, Cookie, Accept");
     resolveSpy.mockRestore();
 
     const png = await sharp({
@@ -346,7 +346,7 @@ describe("Avatar / profile cover / game-cover controller ordering", () => {
       webpCapture.reply as never,
     );
     expect(webpCapture.contentType).toBe("image/webp");
-    expect(webpCapture.headers.Vary).toBe("Cookie, Accept");
+    expect(webpCapture.headers.Vary).toBe("Authorization, Cookie, Accept");
     expect(webpCapture.headers["Cache-Control"]).toBe("no-store");
   });
 });
