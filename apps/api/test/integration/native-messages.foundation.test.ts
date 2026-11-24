@@ -508,6 +508,8 @@ run("native Messages · self-migrating isolated database", () => {
     const csrf=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:{cookie:viewer.cookie,origin,'idempotency-key':randomUUID()},payload}); expect(csrf.statusCode).toBe(403);
   });
   it('POST /games/:gameId/invitations NativeBearer create: manager receipt, no seat, replay/rights, boundaries, cookie CSRF and closed neighbors', async () => {
+    // Prior cases in this suite share the fixture IP native-auth budget; reset owned disposable DB so this case's actor() setup is unrelated.
+    await pool.query('DELETE FROM native_auth_budgets');
     const owner=await actor(), player=await actor(), other=await actor();
     await profile(owner); const p=await profile(player); await profile(other);
     const g=await game(owner);
