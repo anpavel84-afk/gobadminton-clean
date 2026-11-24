@@ -350,7 +350,8 @@ test('foreground return refreshes; background clears private UI; delayed open fa
 });
 
 test('omitted/null/empty fields clear previous data; denied/error never keep old private values', async () => {
-  let body = contactsBody();
+  // Mutable raw body as unknown/record so null/omission fixtures type-check for the parser.
+  let body: Record<string, unknown> = contactsBody();
   const s = setup({
     read: async (id, venue) => parsePrivateGameVenueContacts(body, id, venue),
   });

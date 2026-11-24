@@ -34,7 +34,15 @@ export type AuthSnapshot = {
   notice: 'unavailable' | 'signin' | 'storage' | 'network' | 'cancelled' | 'remote-unconfirmed' | null;
 };
 type Store = { getItem: (key: string) => Promise<string | null>; setItem: (key: string, value: string) => Promise<void> };
-export type AuthDependencies = { api: NativeApi; store: Store; random: () => string; challenge: (verifier: string) => Promise<string>; now?: () => number };
+export type AuthDependencies = {
+  api: NativeApi;
+  store: Store;
+  random: () => string;
+  challenge: (verifier: string) => Promise<string>;
+  now?: () => number;
+  /** Optional OS opener (e.g. Linking.openURL). Injected by auth-runtime; absent under node tests. */
+  openExternalUrl?: (url: string) => Promise<void>;
+};
 /** Sole owner of credentials, pending login and private caches. UI never receives bearer/refresh/verifier. */
 export class AuthCoordinator {
   private readonly deps: AuthDependencies;
@@ -206,16 +214,13 @@ export class AuthCoordinator {
     }, deps.random);
     // Private game-detail venue contacts: existing GET /games/:id bearer only; never via gameDetail() shared parser.
     // Surface/read permit rechecked after token await immediately before native-api.
+    // Opener is an injected AuthDependencies port (static Linking in auth-runtime) — no lazy RN require here.
     this.privateGameVenueContacts = new PrivateGameVenueContactsCoordinator({
       read: (gameId, venueId, permit) => this.participationRead(access => {
         if (!permit()) throw new ParticipationError('stale');
         return deps.api.privateGameVenueContacts(access, gameId, venueId);
       }),
-      // Lazy require keeps AuthCoordinator loadable under node test runners without RN.
-      openUrl: async url => {
-        const { Linking } = require('react-native') as { Linking: { openURL: (value: string) => Promise<unknown> } };
-        await Linking.openURL(url);
-      },
+      openUrl: deps.openExternalUrl,
     });
     // avatar ↔ cover ↔ trainer busy fences are closed over `this` and resolve after fields exist.
     this.messages = new MessagesCoordinator({

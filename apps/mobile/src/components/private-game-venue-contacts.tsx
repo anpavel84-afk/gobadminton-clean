@@ -2,10 +2,10 @@ import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { AppState, Pressable, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../auth.tsx';
-import { nativeAuth } from '../auth-runtime.ts';
 import {
   PRIVATE_CONTACTS_OPEN_FAILURE,
   hasPrivateVenueContacts,
+  type PrivateGameVenueContactsCoordinator,
   type PrivateVenueContactAction,
 } from '../private-game-venue-contacts.ts';
 import { colors } from '../theme.ts';
@@ -93,7 +93,7 @@ function ContactRow({
 }: {
   label: string;
   action: PrivateVenueContactAction;
-  owner: typeof nativeAuth.privateGameVenueContacts;
+  owner: PrivateGameVenueContactsCoordinator;
 }) {
   // Immutable permit captured at render — not re-acquired inside onPress.
   const onPress = owner.createContactOpenHandler(action) ?? undefined;

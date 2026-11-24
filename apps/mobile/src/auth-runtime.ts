@@ -1,6 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { AuthCoordinator } from './auth-coordinator.ts';
 import { createExpoReinstallGuard } from './ios-reinstall.ts';
 import { createNativeApi } from './native-api.ts';
@@ -25,4 +25,6 @@ export const nativeAuth = new AuthCoordinator({
   random: () => base64Url(Crypto.getRandomBytes(32)),
   challenge: async verifier => (await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier,
     { encoding: Crypto.CryptoEncoding.BASE64 })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  // Immediate static Linking invocation — no async gap after private-contact admission.
+  openExternalUrl: url => Promise.resolve(Linking.openURL(url)).then(() => undefined),
 });
