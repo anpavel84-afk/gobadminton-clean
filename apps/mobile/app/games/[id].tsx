@@ -6,6 +6,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
 import { PublicGameMedia } from '../../src/components/game-card.tsx';
+import {
+  GameDetailRoleLane,
+  GameDetailRoleReputation,
+} from '../../src/components/game-role-reputation.tsx';
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { canApply, dominantParticipation, participationLabels } from '../../src/participation.ts';
 import { BackLink, ErrorState, Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from '../../src/components/ui.tsx';
@@ -36,7 +40,7 @@ export default function PublicGameDetails() {
     <BackLink title="← Все игры" onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />
     {loading && <Loading title="Загружаем условия игры…" />}
     {error && <ErrorState error={authenticated ? gameRead?.error : state.error} retry={retryDetail} />}
-    {game && <>
+    {game && <GameDetailRoleReputation game={game} canWrite={false}>
       <Label accessibilityRole="header" style={styles.title}>{game.title}</Label>
       <Label>{statusLabel(game)}</Label>
       <PublicGameMedia key={game.id} game={game} />
@@ -59,15 +63,17 @@ export default function PublicGameDetails() {
         <Label>{game.settlement.terms || 'Дополнительные условия расчётов не указаны.'}</Label>
         <Label>Расчёты проходят вне приложения.</Label>
         {game.activityKind === 'trainer_led' && <Label>{game.trainer ? `Тренер: ${game.trainer.displayName}` : 'Занятие с тренером'}</Label>}
+        {game.activityKind === 'trainer_led' && game.trainer ? <GameDetailRoleLane role="training" /> : null}
         {game.trainingDescription && <Label>{game.trainingDescription}</Label>}
       </View>
       <View style={styles.card}>
         <Label accessibilityRole="header" style={styles.subtitle}>Организатор</Label>
         <Label>{game.organizer.displayName}</Label>
         <Label selectable>{game.organizer.publicContact || 'Публичный контакт не указан.'}</Label>
+        <GameDetailRoleLane role="organization" />
       </View>
       <ParticipationArea gameId={game.id} />
-    </>}
+    </GameDetailRoleReputation>}
   </Page>;
 }
 

@@ -1,4 +1,11 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useAuth } from '../auth.tsx';
 import { publicApi } from '../public-api.ts';
@@ -6,14 +13,16 @@ import type { PublicGame } from '../public-api.ts';
 import {
   RoleReputationCoordinator,
   compactHistoryLabel,
+  gameDetailWantsTrainingRole,
   heldHistoryLabel,
   publishedReviewsLabel,
   reviewReplyLabel,
+  roleLaneCanAuthor,
   roleSectionTitle,
   roleTitle,
   ROLE_TOPIC_LABEL,
 } from '../role-reputation.ts';
-import type { RoleKind, RoleLaneState } from '../role-reputation.ts';
+import type { RoleKind, RoleLaneState, RoleReputationCardState } from '../role-reputation.ts';
 import {
   publicAuthorLocalGoal,
   publicAuthorReturnPath,
@@ -35,6 +44,17 @@ function createCardCoordinator() {
     byHandle: (roleHandle, query, signal) => publicApi.roleReputation(roleHandle, query, signal),
   });
 }
+
+type GameDetailRoleContextValue = {
+  gameId: string;
+  wantTraining: boolean;
+  canWrite: boolean;
+  state: RoleReputationCardState;
+  retry: (role: RoleKind) => void;
+  loadMore: (role: RoleKind) => void;
+};
+
+const GameDetailRoleContext = createContext<GameDetailRoleContextValue | null>(null);
 
 /**
  * Inline public role-history disclosure for discovery cards — expand-gated read + author entry.
@@ -82,6 +102,57 @@ export function GameRoleReputationDisclosure({
   </View>;
 }
 
+/**
+ * Direct `/games/:id` public role history — one coordinator, expand on bind, canWrite omitted.
+ * Children place {@link GameDetailRoleLane} next to trainer / organizer identity.
+ */
+export function GameDetailRoleReputation({
+  game,
+  canWrite = false,
+  children,
+}: {
+  game: PublicGame;
+  /** Web game-detail omits canWrite; default false. Discovery disclosure keeps its own default. */
+  canWrite?: boolean;
+  children: ReactNode;
+}) {
+  const [coordinator] = useState(createCardCoordinator);
+  const state = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
+  const wantTraining = gameDetailWantsTrainingRole(game);
+
+  useEffect(() => {
+    coordinator.bind(game.id, { wantTraining });
+    coordinator.expand();
+    return () => { coordinator.collapse(); };
+  }, [coordinator, game.id, wantTraining]);
+
+  const value: GameDetailRoleContextValue = {
+    gameId: game.id,
+    wantTraining,
+    canWrite,
+    state,
+    retry: role => coordinator.retry(role),
+    loadMore: role => coordinator.loadMore(role),
+  };
+
+  return <GameDetailRoleContext.Provider value={value}>{children}</GameDetailRoleContext.Provider>;
+}
+
+/** Lane slot for {@link GameDetailRoleReputation}; training renders only when a trainer is specified. */
+export function GameDetailRoleLane({ role }: { role: RoleKind }) {
+  const ctx = useContext(GameDetailRoleContext);
+  if (!ctx || ctx.state.gameId !== ctx.gameId) return null;
+  if (role === 'training' && !ctx.wantTraining) return null;
+  const lane = role === 'training' ? ctx.state.training : ctx.state.organization;
+  return <RoleLaneView
+    lane={lane}
+    gameId={ctx.gameId}
+    canWrite={ctx.canWrite}
+    onRetry={() => ctx.retry(role)}
+    onMore={() => ctx.loadMore(role)}
+  />;
+}
+
 /** Shared read-only role lane body — game disclosure and profile surface reuse the same rows/labels. */
 export function RoleLaneView({
   lane,
@@ -89,14 +160,20 @@ export function RoleLaneView({
   onMore,
   gameId,
   publicPlayerId,
+  canWrite,
 }: {
   lane: RoleLaneState;
   onRetry: () => void;
   onMore: () => void;
-  /** When set, shows public author entry for this game+role handle. Profile read-only omits it. */
+  /** When set, may show public author entry for this game+role handle (see canWrite). */
   gameId?: string;
   /** Profile origin for actor-aware reader sheet — mutually exclusive with inventing a gameId. */
   publicPlayerId?: string;
+  /**
+   * Explicit author policy. Omitted/true preserves Discovery «Поделиться опытом»;
+   * false matches web game-detail (read + reply/report entry only).
+   */
+  canWrite?: boolean;
 }) {
   const role: RoleKind = lane.role;
   return <View style={styles.section} accessibilityLabel={roleSectionTitle(role)}>
@@ -112,18 +189,25 @@ export function RoleLaneView({
       встречи — подтверждённая история может отсутствовать.
     </Label> : null}
     {lane.phase === 'ready' && lane.summary ? (
-      <ReadyRoleBody lane={lane} gameId={gameId} publicPlayerId={publicPlayerId} onMore={onMore} />
+      <ReadyRoleBody
+        lane={lane}
+        gameId={gameId}
+        publicPlayerId={publicPlayerId}
+        canWrite={canWrite}
+        onMore={onMore}
+      />
     ) : null}
   </View>;
 }
 
 function ReadyRoleBody({
-  lane, onMore, gameId, publicPlayerId,
+  lane, onMore, gameId, publicPlayerId, canWrite,
 }: {
   lane: RoleLaneState;
   onMore: () => void;
   gameId?: string;
   publicPlayerId?: string;
+  canWrite?: boolean;
 }) {
   const summary = lane.summary!;
   const auth = useAuth();
@@ -131,7 +215,7 @@ function ReadyRoleBody({
     ? (compactHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete)
       ?? heldHistoryLabel(summary.heldGamesCount, summary.historyMayBeIncomplete))
     : null;
-  const canAuthor = !!gameId && !!summary.roleHandle;
+  const canAuthor = roleLaneCanAuthor({ canWrite, gameId, roleHandle: summary.roleHandle });
   const canOpenReader = !!summary.roleHandle && (!!gameId || !!publicPlayerId);
   return <>
     {history ? <Label style={styles.history}>{history}</Label> : null}
