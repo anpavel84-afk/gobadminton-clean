@@ -15,6 +15,13 @@ import {
 } from '../src/postgame.ts';
 import {
   boundRoleDiscrepancyFieldError,
+  feedbackResultsNavParams,
+  formatPrivateReviewWhen,
+  parseResultsFeedbackSection,
+  peerReviewHistoryLabel,
+  privateHubHistoryEmptyText,
+  privateReviewHistoryDetail,
+  privateReviewKindHistoryLabel,
   roleDiscrepancyActiveDecision,
   roleDiscrepancyContextFromResults,
   roleDiscrepancyDecisionFromError,
@@ -2110,5 +2117,60 @@ test('ROOT: UNKNOWN role retry keeps original owned packet discrepancy context',
     heldContext,
     'UNKNOWN retry must keep original owned-packet context, not recapture not_held',
   );
+});
+
+test('#522 hub private feedback history helpers + read-only loadReviews (no write)', async () => {
+  assert.deepEqual(feedbackResultsNavParams(game.id), { gameId: game.id, section: 'feedback' });
+  assert.throws(() => feedbackResultsNavParams('bad id'));
+  assert.equal(parseResultsFeedbackSection('feedback'), 'feedback');
+  assert.equal(parseResultsFeedbackSection('clarification'), null);
+  assert.equal(peerReviewHistoryLabel('neutral'), 'Нейтрально');
+  assert.equal(privateReviewKindHistoryLabel('peer'), 'Отзыв игроку');
+  assert.equal(privateReviewKindHistoryLabel('training'), 'Тренировочный отзыв');
+  assert.equal(privateHubHistoryEmptyText('sent'), 'Пока нет отправленных отзывов');
+  assert.equal(privateReviewHistoryDetail(peerReview({ kind: 'peer', peerRating: 'difficulties' })), 'Были трудности');
+  assert.match(formatPrivateReviewWhen(date), /\d/);
+
+  const ui = readFileSync(new NodeURL('../src/components/postgame-feedback.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /draft\.mode \?\? \(openFeedback \? 'received' : undefined\)/);
+  assert.match(ui, /PrivateFeedbackHistorySheet/);
+  const rowFn = ui.match(/function PrivateHistoryRow\([\s\S]*?\n\}\n\n\/\*\*/)?.[0] ?? '';
+  assert.match(rowFn, /PrivateHistoryRow/);
+  assert.doesNotMatch(rowFn, /owner\.review|setFeedbackDraft/);
+
+  let writes = 0;
+  const calls: Array<{ direction: string; cursor?: string }> = [];
+  const page1 = {
+    items: [
+      peerReview({ id: 'hub-1', direction: 'received', comment: 'private-text', recipientDisplay: 'Name' }),
+      peerReview({
+        id: 'hub-2', gameId: 'other-game', direction: 'received', kind: 'organization',
+        subjectContextId: null, peerRating: null, organizationScore: 5, reply: {
+          text: 'row-reply', version: 1, editedAt: null, updatedAt: date,
+        },
+      }),
+    ],
+    nextCursor: 'cur-1' as string | null,
+  };
+  const s = setup({ reviews: { received: [] } });
+  s.port.reviews = async (_a, direction, cursor) => {
+    calls.push({ direction, cursor });
+    if (!cursor) return { items: structuredClone(page1.items), nextCursor: page1.nextCursor };
+    return { items: [peerReview({ id: 'hub-3', direction: 'received' })], nextCursor: null };
+  };
+  s.port.send = async () => { writes++; throw new PostgameError('invalid'); };
+  await s.coordinator.loadReviews('received');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.status, 'ready');
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.items.length, 2);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, 'cur-1');
+  assert.equal(
+    s.coordinator.getSnapshot().reviewsById['hub-2']?.reply?.text,
+    'row-reply',
+  );
+  await s.coordinator.loadReviews('received', true);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.items.length, 3);
+  assert.equal(s.coordinator.getSnapshot().reviewHistory.received.data?.nextCursor, null);
+  assert.deepEqual(calls.map(c => c.cursor), [undefined, 'cur-1']);
+  assert.equal(writes, 0);
 });
 

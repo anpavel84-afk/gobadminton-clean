@@ -627,6 +627,72 @@ export function peerHistoryEmptyText(
     : 'Пока нет отправленных отзывов по этой игре.';
 }
 
+/** Hub private history empty copy (cross-game; not same-game lane). */
+export function privateHubHistoryEmptyText(direction: 'received' | 'sent'): string {
+  return direction === 'received'
+    ? 'Пока нет полученных отзывов'
+    : 'Пока нет отправленных отзывов';
+}
+
+/**
+ * Validated results deep-link section from My Games private history.
+ * Only `feedback` is admitted — unknown/array noise falls back to null.
+ */
+export function parseResultsFeedbackSection(
+  raw: string | string[] | null | undefined,
+): 'feedback' | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === 'feedback' ? 'feedback' : null;
+}
+
+/**
+ * Expo-router params for exact-game results with feedback section.
+ * Never carries comment, recipient name, or other private review fields.
+ */
+export function feedbackResultsNavParams(gameId: string): { gameId: string; section: 'feedback' } {
+  return { gameId: postgameId(gameId), section: 'feedback' };
+}
+
+/** History-surface peer rating labels (web GameReviewsHistory parity; distinct from create titles). */
+export function peerReviewHistoryLabel(rating: PeerRating | null | undefined): string {
+  if (rating === 'play_again') return 'Сыграл бы снова';
+  if (rating === 'neutral') return 'Нейтрально';
+  if (rating === 'difficulties') return 'Были трудности';
+  return '—';
+}
+
+/** History-surface kind eyebrow (web reviewKindLabel parity). */
+export function privateReviewKindHistoryLabel(kind: ReviewKind): string {
+  if (kind === 'peer') return 'Отзыв игроку';
+  if (kind === 'organization') return 'Отзыв организации';
+  return 'Тренировочный отзыв';
+}
+
+/** Rating/score line for a hub private-history row. */
+export function privateReviewHistoryDetail(review: PrivateReview): string {
+  if (review.kind === 'peer') return peerReviewHistoryLabel(review.peerRating);
+  if (review.kind === 'organization' && review.organizationScore != null) {
+    return `Оценка ${review.organizationScore} из 5`;
+  }
+  return 'Без оценки';
+}
+
+/** Russian date line for hub private-history rows; invalid Date falls back to raw ISO. */
+export function formatPrivateReviewWhen(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return iso;
+  }
+}
+
 export function organizationScoreValue(v: unknown): number {
   const n = num(v, 1);
   return n >= 1 && n <= 5 ? n : invalid();

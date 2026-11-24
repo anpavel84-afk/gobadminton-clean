@@ -199,14 +199,14 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 
 | Field | Content |
 | --- | --- |
-| Authority | Accepted web `GameFeedbackPanel` peer + Astra High review; `POST /games/{id}/reviews`, `GET /me/reviews`, `PUT /reviews/{id}/reply`, `POST /reviews/{id}/report`; native same root `PostgameCoordinator` + `postgame-feedback` |
-| Entry | Authenticated `/my-games/[gameId]/results` section «Как вам встреча?» — modes Игроку / Полученные / Отправленные; history also when full Results denied |
-| Trigger | Explicit create (review confirm + experienceAssertion), reply, report with initially-off share consent; no auto-write on mount/reauth; UNKNOWN exact packet retry only |
-| Expected | Create only from current `peerSubjects`/`canCreatePeer`; ratings without preselect; comment≤500 + tags; reply `expectedVersion` = reply.version\|0; report exact `review.version` + `gameId` + `shareReviewWithSupport:true`; canReport independent of writesEnabled; consent reset on revision/409 with detail preserved; non-peer rows parsed not rendered; honest empty/loading/error/cursor; no public rating/skill/attendance change |
-| Accessibility | Named recipient/rating/consent/result; keyboard-safe scroll; busy/UNKNOWN announced; existing tokens/safe areas |
-| Non-scope | PATCH edit UI; org/training create UI; public review/Cases; note listing; PROD; APK32 binary/device/iOS/OTA claim |
-| Evidence | Mobile unit `postgame-feedback.test.ts` / notes·postgame; API `game-feedback.disposable` 7th native peer lifecycle; source APK counter 32 |
-| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native peer feedback source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+| Authority | Accepted web `GameFeedbackPanel` peer + Astra High review + web `GameReviewsHistory`; `POST /games/{id}/reviews`, `GET /me/reviews`, `PUT /reviews/{id}/reply`, `POST /reviews/{id}/report`; native same root `PostgameCoordinator` + `postgame-feedback` |
+| Entry | Authenticated `/my-games` «Отзывы» → «Обратная связь» hub private received/sent history (web GameReviewsHistory parity; works without preloaded game cards); row → `/my-games/[gameId]/results?section=feedback` (gameId+section only). Same-game `/my-games/[gameId]/results` section «Как вам встреча?» — modes Игроку / Полученные / Отправленные; history also when full Results denied |
+| Trigger | Hub: explicit open + direction + «Показать ещё» / row navigation only (GET `loadReviews`); create/reply/report stay on results with initially-off share consent; no auto-write on mount/reauth; UNKNOWN exact packet retry only |
+| Expected | Hub: both directions, page limit20/exact cursor, loaded count, per-row reply belonging to that row, honest empty/auth/unavailable/error, no game-title invention, no private text/name in URL, GET never settles UNKNOWN; results `section=feedback` prefers visible history lane without writing draft.mode. Create only from current `peerSubjects`/`canCreatePeer`; ratings without preselect; comment≤500 + tags; reply `expectedVersion` = reply.version\|0; report exact `review.version` + `gameId` + `shareReviewWithSupport:true`; canReport independent of writesEnabled; consent reset on revision/409 with detail preserved; non-peer rows parsed not rendered as peer; no public rating/skill/attendance change |
+| Accessibility | Named recipient/rating/consent/result; hub sheet heading/loaded count; keyboard-safe scroll; busy/UNKNOWN announced; existing tokens/safe areas |
+| Non-scope | PATCH edit UI; org/training create UI; public review/Cases; note listing; PROD; APK40 binary/device/iOS/OTA claim |
+| Evidence | Mobile unit `my-games.test.ts` + `postgame-feedback.test.ts` / notes·postgame; API `game-feedback.disposable` 7th native peer lifecycle; source APK counter 40 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native peer feedback + hub private history source; full app still PARTIAL; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
 ## R-09 · Native exact-game venue experience private/public + Profile own history (#522 PARTIAL)
 
@@ -225,14 +225,14 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 
 | Field | Content |
 | --- | --- |
-| Authority | Accepted web `GameFeedbackPanel` organization/training + Astra High UX; same `POST /games/{id}/reviews` (`kind=organization\|training`), `GET /me/reviews`, `PUT /reviews/{id}/reply`; native same root `PostgameCoordinator` + `postgame-feedback` |
-| Entry | Authenticated `/my-games/[gameId]/results` «Как вам встреча?» — modes Организатору лично / Тренировка beside peer; history Полученные/Отправленные show all three private kinds |
-| Trigger | Explicit create (CommandReview + `experienceAssertion=i_experienced_this_game`); no public consent; no auto-write on mount/reauth/login; UNKNOWN exact packet retry only |
-| Expected | Caps from current `canCreateOrganization`/`canCreateTraining`/`organizationRecipientDisplay` + `writesEnabled`; org score1–5 unset initially or comment≤500; training comment required, no score/peerRating/tags; recipient server-derived; kind-separated drafts; discrepancy omit when present/not_participant_manager, optional otherwise; FEEDBACK_DISCREPANCY_REQUIRED/UNEXPECTED preserve draft + Russian field message + re-review; reply reply.version\|0 all kinds; report remains received peer only; no public reputation/skill copy |
+| Authority | Accepted web `GameFeedbackPanel` organization/training + Astra High UX + web `GameReviewsHistory`; same `POST /games/{id}/reviews` (`kind=organization\|training`), `GET /me/reviews`, `PUT /reviews/{id}/reply`; native same root `PostgameCoordinator` + `postgame-feedback` |
+| Entry | Authenticated `/my-games` hub «Обратная связь» lists all three private kinds in received/sent; same-game `/my-games/[gameId]/results` «Как вам встреча?» — modes Организатору лично / Тренировка beside peer; history Полученные/Отправленные show all three private kinds |
+| Trigger | Explicit create (CommandReview + `experienceAssertion=i_experienced_this_game`); hub history remains GET-only; no public consent; no auto-write on mount/reauth/login; UNKNOWN exact packet retry only |
+| Expected | Caps from current `canCreateOrganization`/`canCreateTraining`/`organizationRecipientDisplay` + `writesEnabled`; org score1–5 unset initially or comment≤500; training comment required, no score/peerRating/tags; recipient server-derived; kind-separated drafts; discrepancy omit when present/not_participant_manager, optional otherwise; FEEDBACK_DISCREPANCY_REQUIRED/UNEXPECTED preserve draft + Russian field message + re-review; reply reply.version\|0 all kinds; report remains received peer only; hub row reply stays bound to that review; no public reputation/skill copy |
 | Accessibility | Named mode/recipient/score/comment/discrepancy; keyboard-safe scroll; busy/UNKNOWN announced; existing tokens/safe areas |
-| Non-scope | Public role authoring/consent; PATCH edit UI; backend/OpenAPI/schema; PROD; APK33 binary/device/iOS/OTA claim |
-| Evidence | Mobile unit `postgame-feedback.test.ts`; API `game-feedback.disposable` 8th native organization/training lifecycle (cases 1–7 bodies exact); source APK counter 33 |
-| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private role feedback source; full app still PARTIAL; public role authoring unfinished; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+| Non-scope | Public role authoring/consent; PATCH edit UI; backend/OpenAPI/schema; PROD; APK40 binary/device/iOS/OTA claim |
+| Evidence | Mobile unit `my-games.test.ts` + `postgame-feedback.test.ts`; API `game-feedback.disposable` 8th native organization/training lifecycle (cases 1–7 bodies exact); source APK counter 40 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 native private role feedback + hub private history source; full app still PARTIAL; public role authoring unfinished; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
 ## P-04 · Own profile «Ищу игру» enable/edit 1h|3h / stop (#522)
 

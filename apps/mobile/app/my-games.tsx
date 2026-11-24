@@ -16,6 +16,7 @@ import { colors } from '../src/theme.ts';
 import { GameCard } from '../src/components/game-card.tsx';
 import { MyGameInvitations } from '../src/components/my-game-invitation.tsx';
 import { PostgameSurface, CommandReview, ReminderActions, SourceNotice } from '../src/components/postgame.tsx';
+import { PrivateFeedbackHistoryEntry } from '../src/components/postgame-feedback.tsx';
 import { DiscoveryChip, ErrorState, Header, Label, Loading, OutlineButton, Page, PrimaryButton, TextButton, styles } from '../src/components/ui.tsx';
 const filters = [
   { value: 'all', label: 'Все' },
@@ -91,6 +92,7 @@ export default function MyGames() {
       }} />
       <View style={{ gap: 8 }}>
         <Label accessibilityRole="header" style={{ fontSize: 20, fontWeight: '700' }}>Отзывы</Label>
+        <PrivateFeedbackHistoryEntry />
         <PublicOwnReviewsEntry onOpen={() => owner.openOwnPublicHistory()} />
       </View>
     </>}
