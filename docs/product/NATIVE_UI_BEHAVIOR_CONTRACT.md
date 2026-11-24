@@ -221,6 +221,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `private-game-venue-contacts.test.ts` + `auth.test.ts` + participation strip assertion; API `native-participation.foundation` bounded contacts case; source APK counter 49 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL private game venue contacts; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED / Device/OTA/iOS NOT_COMPLETE |
 
+## R-16 · Native game-detail compact public venue community summary (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameVenueContacts` compact rating section / GameDetailPage signed-in mount; existing public `GET /venue-community-summaries?venueIds=` via `publicApi.communitySummary` (credentials omit) + `parseSummaries`; native community presentation copy from `venue-community.tsx` |
+| Entry | Authenticated `/games/[id]` sibling of private contacts; venue-keyed `useResource` / LatestResource only — no community owner / private coordinator |
+| Trigger | Mount load for displayed venue; venue change retires prior key; AbortSignal cancellation; explicit retry after transport error |
+| Expected | Honest loading / error+retry / unavailable / empty / available average·count (no fabricated scores); remains visible when private contacts empty/denied; stale venue A must not paint under B; CTA «Оценки и обсуждение» → `/venues/[id]` with `from=game` return (no native `#ratings` scroll claim); never mounts `NativeVenueCommunity` or private vote/comment/photo actions |
+| Accessibility | Label «Оценки площадки»; header «Оценки сообщества»; existing Label/TextButton tokens; average a11y includes count |
+| Non-scope | Full community owner; private votes/comments/photos; backend/deps; device/OTA/iOS/full parity completion; PROD; Mode B READY claim; APK49 publication |
+| Evidence | Mobile unit `game-venue-community-summary.test.ts`; source APK counter 50 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL compact public venue summary; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED / Device/OTA/iOS PARTIAL |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |
