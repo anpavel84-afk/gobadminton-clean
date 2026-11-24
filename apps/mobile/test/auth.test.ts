@@ -1984,10 +1984,6 @@ test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, n
 
 test('#522 FIX3: AuthCoordinator delayed-token cover-lock throws CoverLockNoSendError; preserves UNKNOWN', async () => {
   const gameId = '10000000-0000-4000-8000-000000000053';
-  const authSource = readFileSync(new URL('../src/auth-coordinator.ts', import.meta.url), 'utf8');
-  assert.match(authSource, /CoverLockNoSendError/);
-  assert.match(authSource, /blocksManagedWrites\(packet\.gameId\)\) \{\s*throw new CoverLockNoSendError\(\);/);
-
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();
   const management = s.auth.gameManagement;

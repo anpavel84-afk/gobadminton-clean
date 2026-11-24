@@ -8,6 +8,7 @@ import {
   gameCoverMutationSucceeded,
   type GameCoverRenderedPermit,
 } from '../game-cover.ts';
+import { sameActor } from '../participation.ts';
 import {
   createExpoAvatarRuntime,
   pickOwnAvatarAsset,
@@ -98,7 +99,7 @@ export function GameCoverEditor({
   const scopedPrepareError = draft.scope === draftScope ? draft.prepareError : null;
   const scopedCrop = draft.scope === draftScope ? draft.crop : { x: 0.5, y: 0.5 };
 
-  // Route focus owns the openView lease (shared with open/auth/game). Real blur releases; picker AppState is separate.
+  // Route focus owns the openView lease (shared with open/auth/game). Real blur/unmount always releases; picker AppState is separate.
   useFocusEffect(useCallback(() => {
     if (!open || auth.status !== 'authenticated' || !gameId) {
       leaseRef.current = null;
@@ -120,7 +121,8 @@ export function GameCoverEditor({
     });
     return () => {
       sub.remove();
-      if (owner.expectingPickerHandoff()) return;
+      // Expo route blur/unmount is real view retirement — always end picker + release lease.
+      // Native picker Activity background does not navigate Expo routes (AppState + handoff handle that).
       endPickerRef.current?.();
       endPickerRef.current = null;
       release();
@@ -203,6 +205,23 @@ export function GameCoverEditor({
 
   function close() {
     if (saving) return;
+    // Guard stale original rendered permit (actor/game/view) before ALL close effects — not full foreground permitLive.
+    // Current idle/loading/denied of THIS view still closes; old-view close no-ops. Do not mint authority at click.
+    const snap = owner.getSnapshot();
+    const lease = leaseRef.current;
+    if (lease === null
+      || !snap.actor
+      || snap.focus?.gameId !== gameId
+      || snap.focus.viewGen !== lease) {
+      return;
+    }
+    if (permit) {
+      if (!sameActor(permit.actor, snap.actor)
+        || permit.gameId !== gameId
+        || permit.viewGen !== lease) {
+        return;
+      }
+    }
     const live = !!permit && owner.permitLive(permit);
     endPickerRef.current?.();
     endPickerRef.current = null;
