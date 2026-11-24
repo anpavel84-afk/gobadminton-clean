@@ -310,22 +310,33 @@ export class AuthCoordinator {
       coverBlocksWrites: gameId => this.gameCover.blocksManagedWrites(gameId),
       saveCreationCover: async ({ gameId, gameVersion, derivative, actor, live }) => {
         if (!live() || !sameActor(actor, this.gameCover.getSnapshot().actor)) return null;
-        await this.gameCover.load(gameId);
-        if (!live()) return null;
-        const before = this.gameCover.getSnapshot();
-        if (before.gameId !== gameId || before.status !== 'ready' || !before.access) return null;
-        if (before.access.version < gameVersion) return null;
-        await this.gameCover.change(async retired => {
-          if (retired() || !live()) return 'cancelled';
-          return Object.freeze({
-            mime: derivative.mime,
-            bytes: cloneDerivativeBytes(derivative.bytes),
-          });
-        });
-        if (!live()) return null;
-        const after = this.gameCover.getSnapshot();
-        if (!gameCoverMutationSucceeded(after) || !after.access || after.access.version < gameVersion) return null;
-        return { version: after.access.version };
+        // Bind cover view BEFORE awaits so post-token admission has a real viewGen (not null).
+        const release = this.gameCover.openView(gameId);
+        try {
+          if (!live()) return null;
+          this.gameCover.setForeground(true);
+          const permit = this.gameCover.renderedPermit();
+          if (!permit || permit.gameId !== gameId) return null;
+          await this.gameCover.load(gameId, permit);
+          if (!live() || !this.gameCover.permitLive(permit)) return null;
+          const before = this.gameCover.getSnapshot();
+          if (before.gameId !== gameId || before.status !== 'ready' || !before.access) return null;
+          if (before.access.version < gameVersion) return null;
+          // Pass original permit — do not mint a fresh lease after load I/O.
+          await this.gameCover.change(async retired => {
+            if (retired() || !live() || !this.gameCover.permitLive(permit)) return 'cancelled';
+            return Object.freeze({
+              mime: derivative.mime,
+              bytes: cloneDerivativeBytes(derivative.bytes),
+            });
+          }, permit);
+          if (!live() || !this.gameCover.permitLive(permit)) return null;
+          const after = this.gameCover.getSnapshot();
+          if (!gameCoverMutationSucceeded(after) || !after.access || after.access.version < gameVersion) return null;
+          return { version: after.access.version };
+        } finally {
+          release();
+        }
       },
     });
     // Managed game photo: GET/PUT/DELETE principal opt-in; hasCover gates remove; receipt refreshes managed detail version.
@@ -348,7 +359,10 @@ export class AuthCoordinator {
         }, authority);
       },
     }, deps.random, {
-      onReceipt: (gameId) => { void this.gameManagement.loadDetail(gameId); },
+      onReceipt: (gameId) => {
+        this.gameManagement.acknowledgeCreationCoverResolved(gameId);
+        void this.gameManagement.loadDetail(gameId);
+      },
       accessToken: () => this.access?.token ?? null,
       managementBlocksWrites: gameId => {
         const command = this.gameManagement.getSnapshot().command;

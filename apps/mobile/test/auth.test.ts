@@ -1908,16 +1908,75 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
   assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
 });
 
-test('#522 APK52: AuthCoordinator wires saveCreationCover through existing gameCover owner', async () => {
-  const source = readFileSync(new URL('../src/auth-coordinator.ts', import.meta.url), 'utf8');
-  assert.match(source, /saveCreationCover:/);
-  assert.match(source, /gameCover\.load\(/);
-  assert.match(source, /gameCover\.change\(/);
-  assert.match(source, /gameCoverMutationSucceeded/);
-  assert.doesNotMatch(source, /mutateGameCover\(access,\s*\{[^}]*creation/);
-  const management = readFileSync(new URL('../src/game-management.ts', import.meta.url), 'utf8');
-  assert.match(management, /create→cover→publish|saveCreationCover/);
-  assert.match(management, /GAME_PHOTO_SELECTION_COPY\.saveFailed/);
+test('#522 APK52/FIX3: AuthCoordinator saveCreationCover openView+transport; create-view retire → zero PUT', async t => {
+  async function run(retireView: boolean) {
+    const s = setup(sessionEnvelope());
+    await s.auth.hydrate();
+    t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+    const management = s.auth.gameManagement;
+    const cover = s.auth.gameCover;
+    const gameId = retireView
+      ? '10000000-0000-4000-8000-000000000153'
+      : '10000000-0000-4000-8000-000000000152';
+    const hex = 'ab'.repeat(32);
+    const gameUrl = `/v1/media/game-covers/${hex}.png`;
+    const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
+    const puts: string[] = [];
+    let row = { version: 7, hasCover: false, cover: { uploadedUrl: null as string | null } };
+    const createGate = deferred<typeof draft>();
+    s.setHandler(async (path, init) => {
+      if (path === '/me') return me;
+      if (path === '/auth/native/refresh') return credentials;
+      if (path === '/me/social-profile') return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+      if (path === '/me/game-preferences') return { version: 0, defaultPublicGameContact: null };
+      if (path === `/games/${gameId}/cover`) {
+        if ((init.method ?? 'GET') === 'PUT') {
+          puts.push('PUT');
+          row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+          return row;
+        }
+        return row;
+      }
+      if (path.startsWith('/me/games')) {
+        return { items: [{ ...draft, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+      }
+      if (path === `/games/${gameId}`) return { ...draft, version: row.version, status: 'draft' };
+      if (path === '/games' && (init.method ?? 'GET') === 'POST') {
+        if (retireView) return createGate.promise;
+        return draft;
+      }
+      if (path === `/games/${gameId}/publish`) {
+        return { ...draft, status: 'published', version: row.version + 1 };
+      }
+      if (path.includes('/participations')) return { items: [], nextCursor: null };
+      return { ok: true };
+    });
+
+    await management.loadContext('city-1');
+    management.update({ venueId: fixture.venue.id, date: '2026-11-20', time: '18:30', contact: '@creator' });
+    management.preview();
+    management.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([255, 216, 255, 217]) });
+    const release = management.bindCreationView();
+    if (!retireView) {
+      await management.publishPreview();
+      assert.equal(puts.length, 1);
+      assert.equal(management.getSnapshot().created?.status, 'published');
+      assert.equal(cover.getSnapshot().access?.hasCover, true);
+      release();
+      return;
+    }
+    const work = management.publishPreview();
+    await new Promise(r => setImmediate(r));
+    release();
+    createGate.resolve(draft);
+    await work;
+    assert.equal(puts.length, 0);
+    assert.equal(management.getSnapshot().created?.status, 'draft');
+    assert.equal(management.getSnapshot().created?.id, gameId);
+  }
+
+  await run(false);
+  await run(true);
 });
 
 test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, no auto-publish', async () => {

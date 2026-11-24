@@ -10,6 +10,7 @@ import {
   durationChipSelected,
   DURATION_CHIPS,
 } from '../src/game-form.ts';
+import { GAME_COVER_EDITOR_COPY } from '../src/game-cover.ts';
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 
@@ -67,10 +68,17 @@ test('create-game UI source: section cards, sticky footer, no intermediate venue
   assert.match(create, /publishPreview/);
   assert.match(controls, /photoSlot/);
   const photoSelection = read('../src/components/game-photo-selection.tsx');
-  assert.match(photoSelection, /Подтвердить выбор фото/);
+  assert.match(photoSelection, /GAME_COVER_EDITOR_COPY\.confirmPick/);
+  assert.equal(GAME_COVER_EDITOR_COPY.confirmPick, 'Подтвердить выбор фото');
   assert.match(photoSelection, /Без своего фото/);
   assert.match(photoSelection, /prepareGameCoverDerivative/);
+  assert.match(photoSelection, /aspectRatio: COVER_PREVIEW_ASPECT|aspectRatio: 3/);
+  assert.doesNotMatch(photoSelection, /aspectRatio: 2\.5/);
   assert.doesNotMatch(photoSelection, /owner\.change|mutateGameCover|gameCover\.change/);
+  // Preview↔edit keeps photo selection mounted (display:none under preview).
+  assert.match(create, /display:\s*['"]none['"]/);
+  assert.match(create, /bindCreationView/);
+  assert.match(create, /creationCoverBlocksPublish/);
   assert.match(create, /title="Отмена"/);
   assert.match(create, /title="Далее — к созданию"/);
   assert.match(create, /footer: formFooter/);
@@ -107,4 +115,21 @@ test('create-game UI source: section cards, sticky footer, no intermediate venue
 test('create-game-controls lives next to create-game for the extracted UI', () => {
   assert.equal(fileURLToPath(new URL('../src/components/create-game-controls.tsx', import.meta.url)).endsWith('create-game-controls.tsx'), true);
   assert.match(read('../src/components/create-game.tsx'), /create-game-controls\.tsx/);
+});
+
+test('#522 FIX3: photo selection fences confirm/pick with live scope epoch; 3:1 preview; parent clear only on real retire', () => {
+  const photo = read('../src/components/game-photo-selection.tsx');
+  const create = read('../src/components/create-game.tsx');
+  // Stale confirm/reset/pick capture epoch at press and recheck before onChange.
+  assert.match(photo, /const epoch = scopeEpoch\.current/);
+  assert.match(photo, /liveScopeRef\.current !== scope/);
+  assert.match(photo, /scopeEpoch\.current \+= 1/);
+  // Real unmount/background retire generation; expected picker handoff keeps armed path.
+  assert.match(photo, /pickerArmedRef/);
+  assert.match(photo, /Real unmount retires generation|scopeEpoch\.current \+= 1/);
+  assert.match(photo, /Real background \(not expected OS picker\)/);
+  // Create keeps photo mount across preview↔edit; scopeKey excludes ordinary preview.
+  assert.match(create, /Form stays mounted under preview|display:\s*['"]none['"]/);
+  assert.match(create, /photoScopeKey = `\$\{actor/);
+  assert.equal(GAME_COVER_EDITOR_COPY.confirmPick, 'Подтвердить выбор фото');
 });

@@ -470,6 +470,7 @@ function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue, opt
         effects.push(() => { focusCleanup?.(); if (focused) focusCleanup = callback(); }); }
     },
     useResource: () => ({state:{status:'ready',data:target},retry:() => {}}),
+    AppState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) },
     publicApi: {}, venueCreatePath: (id: string) => `/games/create/venue/${id}`,
   }) as (props: {venueId?: string}) => {selectVenue: () => Promise<void>; selecting: boolean; selected: boolean; continuePress: () => void};
   return {
@@ -884,7 +885,8 @@ test('#522 APK52 cover reject/UNKNOWN leaves draft and never publishes; reconcil
       send: async p => {
         sent.push(p);
         if (p.kind === 'create') return draft;
-        throw new Error('publish must not run');
+        if (p.kind === 'publish') return { ...draft, status: 'published' as const, version: 8 };
+        throw new Error('unexpected');
       },
     }, () => `key-${++serial}`, () => now, {
       saveCreationCover: async () => null,
@@ -901,14 +903,110 @@ test('#522 APK52 cover reject/UNKNOWN leaves draft and never publishes; reconcil
     assert.equal(owner.getSnapshot().created?.status, 'draft');
     assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
     assert.match(owner.getSnapshot().notice ?? '', /Фото не сохранено|черновик/i);
+    assert.equal(owner.creationCoverBlocksPublish(draft.id), true);
     await owner.reconcile();
     assert.equal(sent.length, 1);
+    // Plain Publish on failed-photo create summary must not POST — hold until managed resolve/omit.
     await owner.publishDraft(draft.id);
-    assert.equal(sent.length, outcome === 'unknown' ? 1 : 2);
-    if (outcome === 'reject') {
+    assert.equal(sent.length, 1);
+    if (outcome === 'unknown') {
+      // Uncertain cover still blocks even after acknowledge until coverBlocksWrites clears.
+      owner.acknowledgeCreationCoverResolved(draft.id);
+      assert.equal(owner.creationCoverBlocksPublish(draft.id), true);
+      await owner.publishDraft(draft.id);
+      assert.equal(sent.length, 1);
+    } else {
+      owner.acknowledgeCreationCoverResolved(draft.id);
+      assert.equal(owner.creationCoverBlocksPublish(draft.id), false);
+      await owner.publishDraft(draft.id);
+      assert.equal(sent.length, 2);
       assert.equal(sent[1]?.kind, 'publish');
     }
   }
+});
+
+test('#522 FIX3: create-view lease retires cover/publish after create; draft retained', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const coverCalls: string[] = [];
+  const createGate = deferred<Game>();
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return createGate.promise;
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async () => {
+      coverCalls.push('cover');
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  const release = owner.bindCreationView();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.length, 1);
+  // Real blur/unmount retires continuation before create settles.
+  release();
+  createGate.resolve(draft);
+  await work;
+  assert.equal(coverCalls.length, 0);
+  assert.equal(sent.some(p => p.kind === 'publish'), false);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
+});
+
+test('#522 FIX3: create foreground retire stops cover/publish; expected draft kept', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const coverGate = deferred<{ version: number } | null>();
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return draft;
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async ({ live }) => {
+      assert.equal(live(), true);
+      return coverGate.promise;
+    },
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  owner.bindCreationView();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  owner.setCreationForeground(false);
+  coverGate.resolve({ version: 8 });
+  await work;
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
 });
 
 test('#522 APK52 failed create never calls cover save; reconcile settles create only', async () => {

@@ -14,6 +14,9 @@ import {
 import type { AvatarDerivative } from '../profile-avatar.ts';
 import { Label, PrimaryButton, TextButton, styles } from './ui.tsx';
 
+/** True crop ratio for 1200×400 game-cover derivative. */
+const COVER_PREVIEW_ASPECT = 3;
+
 function step(value: number, delta: number) {
   return Math.min(1, Math.max(0, Math.round((value + delta) * 10) / 10));
 }
@@ -83,6 +86,7 @@ const emptyDraft = (scope: string): DraftBundle => ({
 /**
  * Create-game optional photo — accepted-web GamePhotoSelection order/copy.
  * Local preparation only; no game id and no upload owner. Confirmed bytes go to management.
+ * Kept mounted across create preview↔edit by CreateGame (display:none under preview).
  */
 export function GamePhotoSelection({
   scopeKey,
@@ -99,12 +103,26 @@ export function GamePhotoSelection({
   const pickerArmedRef = useRef(false);
   const onChangeRef = useRef(onChange);
   const onReadyRef = useRef(onReady);
+  const disabledRef = useRef(disabled);
   onChangeRef.current = onChange;
   onReadyRef.current = onReady;
+  disabledRef.current = disabled;
   const [draft, setDraft] = useState<DraftBundle>(() => emptyDraft(scopeKey));
   const [preparing, setPreparing] = useState(false);
   const scopeEpoch = useRef(0);
+  const liveScopeRef = useRef(scopeKey);
+  liveScopeRef.current = scopeKey;
   const prevScopeRef = useRef<string | null>(null);
+
+  const retireGeneration = useCallback((clearParent: boolean) => {
+    scopeEpoch.current += 1;
+    retireOwnedPicker(ownedPickerRef);
+    setPreparing(false);
+    if (clearParent) {
+      onChangeRef.current(null);
+      onReadyRef.current(true);
+    }
+  }, []);
 
   useEffect(() => {
     const changed = prevScopeRef.current !== null && prevScopeRef.current !== scopeKey;
@@ -113,8 +131,8 @@ export function GamePhotoSelection({
     retireOwnedPicker(ownedPickerRef);
     setDraft(emptyDraft(scopeKey));
     setPreparing(false);
-    // First mount / preview→edit remount must not wipe parent-confirmed bytes.
     // Actor/session/view scope change clears local + parent selection.
+    // Ordinary preview↔edit remount must not wipe parent-confirmed bytes (CreateGame keeps mount).
     if (changed) {
       onChangeRef.current(null);
       onReadyRef.current(true);
@@ -123,7 +141,9 @@ export function GamePhotoSelection({
 
   useEffect(() => {
     return () => {
+      // Real unmount retires generation so late confirm/pick cannot inject into a new create mount.
       pickerArmedRef.current = false;
+      scopeEpoch.current += 1;
       retireOwnedPicker(ownedPickerRef);
     };
   }, []);
@@ -131,14 +151,13 @@ export function GamePhotoSelection({
   useEffect(() => {
     const sub = AppState.addEventListener('change', next => {
       if (next === 'active' || pickerArmedRef.current) return;
-      retireOwnedPicker(ownedPickerRef, scopeKey);
-      setDraft(d => (d.scope !== scopeKey ? d : emptyDraft(scopeKey)));
-      setPreparing(false);
-      onChangeRef.current(null);
-      onReadyRef.current(true);
+      // Real background (not expected OS picker): retire generation + owned assets; clear parent.
+      const scope = liveScopeRef.current;
+      retireGeneration(true);
+      setDraft(d => (d.scope !== scope ? d : emptyDraft(scope)));
     });
     return () => sub.remove();
-  }, [scopeKey]);
+  }, [retireGeneration]);
 
   const scopedAsset = draft.scope === scopeKey ? draft.asset : null;
   const scopedPreviewUri = draft.scope === scopeKey ? draft.previewUri : null;
@@ -209,13 +228,16 @@ export function GamePhotoSelection({
   }, []);
 
   function resetSelection() {
-    if (disabled) return;
-    retireOwnedPicker(ownedPickerRef, scopeKey);
+    const epoch = scopeEpoch.current;
+    const scope = scopeKey;
+    if (disabledRef.current || scopeEpoch.current !== epoch || liveScopeRef.current !== scope) return;
+    retireOwnedPicker(ownedPickerRef, scope);
     setDraft({
-      ...emptyDraft(scopeKey),
+      ...emptyDraft(scope),
       statusMessage: GAME_PHOTO_SELECTION_COPY.omitStatus,
     });
     setPreparing(false);
+    if (scopeEpoch.current !== epoch || liveScopeRef.current !== scope) return;
     onChangeRef.current(null);
     onReadyRef.current(true);
   }
@@ -225,15 +247,18 @@ export function GamePhotoSelection({
       <Label style={{ textAlign: 'left' }}>{GAME_PHOTO_SELECTION_COPY.explanation}</Label>
       <Label style={{ textAlign: 'left' }}>{GAME_COVER_EDITOR_COPY.formats}</Label>
       <TextButton title={GAME_COVER_EDITOR_COPY.pick} onPress={() => {
-        if (disabled) return;
+        if (disabledRef.current) return;
         const scope = scopeKey;
         const epoch = scopeEpoch.current;
         pickerArmedRef.current = true;
         const runtime = createExpoAvatarRuntime();
         void pickOwnAvatarAsset(runtime, () => scopeEpoch.current !== epoch).then(picked => {
-          const armed = pickerArmedRef.current && scopeEpoch.current === epoch;
+          const armed = pickerArmedRef.current && scopeEpoch.current === epoch && liveScopeRef.current === scope;
           pickerArmedRef.current = false;
-          if (!armed) return;
+          if (!armed) {
+            if (picked !== 'cancelled' && picked) retirePickerSource(picked);
+            return;
+          }
           if (picked === 'cancelled') return;
           installOwnedPicker(ownedPickerRef, scope, picked);
           invalidateConfirmed();
@@ -249,7 +274,7 @@ export function GamePhotoSelection({
           });
         }, failure => {
           pickerArmedRef.current = false;
-          if (scopeEpoch.current !== epoch) return;
+          if (scopeEpoch.current !== epoch || liveScopeRef.current !== scope) return;
           setDraft(d => d.scope === scope ? {
             ...d,
             prepareError: failure instanceof Error
@@ -264,7 +289,8 @@ export function GamePhotoSelection({
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Pressable accessibilityRole="button" accessibilityLabel="По горизонтали меньше"
               disabled={disabled} onPress={() => {
-                if (disabled) return;
+                const epoch = scopeEpoch.current;
+                if (disabledRef.current || scopeEpoch.current !== epoch) return;
                 invalidateConfirmed();
                 setDraft(d => d.scope === scopeKey ? { ...d, crop: { ...d.crop, x: step(d.crop.x, -0.1) }, confirmed: false } : d);
               }}
@@ -272,7 +298,8 @@ export function GamePhotoSelection({
             <Label accessibilityLabel={`По горизонтали ${scopedCrop.x.toFixed(1)}`}>{scopedCrop.x.toFixed(1)}</Label>
             <Pressable accessibilityRole="button" accessibilityLabel="По горизонтали больше"
               disabled={disabled} onPress={() => {
-                if (disabled) return;
+                const epoch = scopeEpoch.current;
+                if (disabledRef.current || scopeEpoch.current !== epoch) return;
                 invalidateConfirmed();
                 setDraft(d => d.scope === scopeKey ? { ...d, crop: { ...d.crop, x: step(d.crop.x, 0.1) }, confirmed: false } : d);
               }}
@@ -282,7 +309,8 @@ export function GamePhotoSelection({
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Pressable accessibilityRole="button" accessibilityLabel="По вертикали меньше"
               disabled={disabled} onPress={() => {
-                if (disabled) return;
+                const epoch = scopeEpoch.current;
+                if (disabledRef.current || scopeEpoch.current !== epoch) return;
                 invalidateConfirmed();
                 setDraft(d => d.scope === scopeKey ? { ...d, crop: { ...d.crop, y: step(d.crop.y, -0.1) }, confirmed: false } : d);
               }}
@@ -290,7 +318,8 @@ export function GamePhotoSelection({
             <Label accessibilityLabel={`По вертикали ${scopedCrop.y.toFixed(1)}`}>{scopedCrop.y.toFixed(1)}</Label>
             <Pressable accessibilityRole="button" accessibilityLabel="По вертикали больше"
               disabled={disabled} onPress={() => {
-                if (disabled) return;
+                const epoch = scopeEpoch.current;
+                if (disabledRef.current || scopeEpoch.current !== epoch) return;
                 invalidateConfirmed();
                 setDraft(d => d.scope === scopeKey ? { ...d, crop: { ...d.crop, y: step(d.crop.y, 0.1) }, confirmed: false } : d);
               }}
@@ -299,7 +328,7 @@ export function GamePhotoSelection({
           {scopedPreviewUri ? (
             <View accessibilityLabel="Предпросмотр фото игры" style={{ gap: 8 }}>
               <Label>{GAME_COVER_EDITOR_COPY.previewCaption}</Label>
-              <View style={{ width: '100%', aspectRatio: 2.5, overflow: 'hidden', borderRadius: 12 }}>
+              <View style={{ width: '100%', aspectRatio: COVER_PREVIEW_ASPECT, overflow: 'hidden', borderRadius: 12 }}>
                 <Image source={{ uri: scopedPreviewUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover"
                   accessibilityLabel="Выбранный фрагмент фото игры" />
               </View>
@@ -308,14 +337,18 @@ export function GamePhotoSelection({
           {!scopedConfirmed && scopedPreviewBytes && !preparingScoped ? (
             <PrimaryButton title={GAME_COVER_EDITOR_COPY.confirmPick} disabled={disabled}
               onPress={() => {
-                if (!scopedPreviewBytes || disabled) return;
+                const epoch = scopeEpoch.current;
+                const scope = scopeKey;
+                if (!scopedPreviewBytes || disabledRef.current) return;
+                if (scopeEpoch.current !== epoch || liveScopeRef.current !== scope) return;
                 const derivative = Object.freeze({
                   mime: scopedPreviewBytes.mime,
                   bytes: scopedPreviewBytes.bytes,
                 });
-                setDraft(d => d.scope === scopeKey
+                setDraft(d => d.scope === scope
                   ? { ...d, confirmed: true, statusMessage: GAME_PHOTO_SELECTION_COPY.confirmStatus }
                   : d);
+                if (scopeEpoch.current !== epoch || liveScopeRef.current !== scope) return;
                 onChangeRef.current(derivative);
                 onReadyRef.current(true);
               }} />
