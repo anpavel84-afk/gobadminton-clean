@@ -5,6 +5,7 @@ import { AppState, FlatList, Image, Platform, Pressable, RefreshControl, TextInp
 import type { FlatListProps } from 'react-native';
 import { useFocusEffect, usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
+import { nativeAuth } from '../auth-runtime.ts';
 import type { MessagesCoordinator } from '../messages-coordinator.ts';
 import { resourceKey } from '../messages-coordinator.ts';
 import { inboxDestination } from '../messages.ts';
@@ -14,6 +15,7 @@ import { playerMediaUrl } from '../media.ts';
 import { formatLabel, levelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
 import { DiscoveryIcon } from './discovery-icon.tsx';
+import { InvitationChooser } from './invitation-chooser.tsx';
 import { DiscoveryChip, DiscoverySheet, Header, Label, Page, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 
 /** Web-parity inbox date: day + short month in ru-RU (#604). */
@@ -177,6 +179,8 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const detail = state.detail && resourceKey(state.detail.resource) === key ? state.detail : null;
   const pending = state.pending[key], draft = state.drafts[key] ?? '';
   const [showMembers, setShowMembers] = useState(false);
+  const [chooser, setChooser] = useState(false);
+  const inviteTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const list = useRef<FlatList<DirectMessage>>(null), nearBottom = useRef(false), visibleIds = useRef<string[]>([]), initialScroll = useRef(true);
   const readVisible = useCallback(() => owner.visible(resourceRef.current, visibleIds.current, nearBottom.current), [owner]);
   const onViewable = useRef<NonNullable<FlatListProps<DirectMessage>['onViewableItemsChanged']>>(({ viewableItems }) => {
@@ -186,12 +190,19 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     if (auth.status !== 'authenticated') return;
     initialScroll.current = true; nearBottom.current = false; visibleIds.current = [];
     const release = owner.leaseFocus(resourceRef.current);
-    return () => { nearBottom.current = false; visibleIds.current = []; release(); };
+    return () => { nearBottom.current = false; visibleIds.current = []; release(); setChooser(false); };
   }, [owner, key, auth.status]));
   const h = detail?.header, direct = h && 'requestState' in h ? h : null, chat = h && 'lifecycleState' in h ? h : null, invitation = h && 'status' in h ? h : null;
   const title = direct?.peer.displayName ?? (chat ? 'Чат игры' : 'Приглашение в игру');
+  const inviteAuthoring = useSyncExternalStore(
+    nativeAuth.invitationAuthoring.subscribe,
+    nativeAuth.invitationAuthoring.getSnapshot,
+    nativeAuth.invitationAuthoring.getSnapshot,
+  );
   const notice = <>{state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}{pending?.state === 'unknown' && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource, state.viewGeneration, state.actor); }} />}
-    {pending?.state === 'sending' && <Label accessibilityLiveRegion="polite">Отправляем…</Label>}</>;
+    {pending?.state === 'sending' && <Label accessibilityLiveRegion="polite">Отправляем…</Label>}
+    {inviteAuthoring.command?.status === 'unknown' && !chooser && <Label accessibilityRole="alert">{inviteAuthoring.notice}</Label>}
+    {inviteAuthoring.command?.status === 'unknown' && !chooser && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void nativeAuth.invitationAuthoring.retry(); }} />}</>;
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
   if (!detail || detail.status !== 'ready' || !h) return <Page header={<MessageHeader name={title} />}><Label>{detail?.status === 'error' ? detail.error : 'Загружаем…'}</Label><TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />{notice}</Page>;
   if (invitation) {
@@ -204,7 +215,10 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
       /></View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
     </Page>;
   }
-  const canSend = direct ? direct.requestState === 'accepted' && !owner.isPeerSafetyHeld(direct.peer.publicPlayerId) : chat?.lifecycleState === 'active';
+  const safetyHeld = !!direct && owner.isPeerSafetyHeld(direct.peer.publicPlayerId);
+  const canSend = direct ? direct.requestState === 'accepted' && !safetyHeld : chat?.lifecycleState === 'active';
+  const inviteBusy = inviteAuthoring.checking || inviteAuthoring.command?.status === 'sending';
+  const canInvite = !!direct && direct.requestState === 'accepted' && !safetyHeld && !pending && !inviteBusy;
   return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} />}>
     {direct && <NativeSafety peerId={direct.peer.publicPlayerId} name={direct.peer.displayName} conversationId={direct.id} messages={detail.messages} />}
     {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники (${detail.members.length})`} onPress={() => setShowMembers(v => !v)} />
@@ -222,9 +236,26 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     <View style={{ padding: 12, borderTopWidth: 1, borderColor: colors.line, gap: 8 }}>
       {direct && direct.requestState !== 'accepted' && <><Label>{direct.requestState === 'pending' && direct.role === 'recipient' ? 'Принять запрос на общение?' : direct.requestState === 'pending' ? 'Запрос отправлен. Дождитесь ответа.' : requestCopy[direct.requestState]}</Label>
         {direct.requestState === 'pending' && direct.role === 'recipient' && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}><PrimaryButton title="Принять" disabled={!!pending} onPress={() => { void owner.act(resource, 'accept'); }} /><TextButton title="Отклонить" onPress={() => { if (!pending) void owner.act(resource, 'decline'); }} /></View>}</>}
+      {direct && direct.requestState === 'accepted' && !safetyHeld ? <Pressable
+        ref={inviteTrigger}
+        accessibilityRole="button"
+        accessibilityLabel="Пригласить на игру"
+        accessibilityState={{ disabled: !canInvite }}
+        disabled={!canInvite}
+        onPress={() => { if (canInvite) setChooser(true); }}
+        style={({ pressed }) => [styles.textButton, { opacity: canInvite ? 1 : 0.5 }, canInvite && pressed && { backgroundColor: colors.paper }]}>
+        <Label style={{ color: colors.ink, textAlign: 'center' }}>Пригласить на игру</Label>
+      </Pressable> : null}
       {canSend && <><TextInput accessibilityLabel="Текст сообщения" multiline editable={!pending} value={draft} onChangeText={text => owner.draft(resource, text, state.viewGeneration, state.actor)} placeholder="Сообщение" style={[styles.input, { fontSize: 16, padding: 10 }]} />
         <PrimaryButton title="Отправить" disabled={!!pending || !draft.trim()} onPress={() => { void owner.act(resource, 'send', undefined, state.viewGeneration, state.actor); }} /></>}
       {notice}<View style={{ flexDirection: 'row', flexWrap: 'wrap' }}><TextButton title="Обновить" onPress={() => { initialScroll.current = true; void owner.loadDetail(resource); }} /><TextButton title="Новые сообщения" onPress={() => { void owner.catchUp(resource); }} /></View>
     </View>
+    {direct && chooser && !safetyHeld ? <InvitationChooser
+      conversationId={direct.id}
+      peerId={direct.peer.publicPlayerId}
+      visible={chooser}
+      onClose={() => setChooser(false)}
+      returnFocusRef={inviteTrigger}
+    /> : null}
   </ScreenFrame>;
 }

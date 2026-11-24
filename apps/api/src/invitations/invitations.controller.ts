@@ -28,7 +28,9 @@ export class InvitationsController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    // Explicit NativeBearer opt-in on create only; cookie Origin/CSRF preserved via requirePrincipalMutation.
+    // Outgoing GET game invitations and revoke remain cookie-only.
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       inviteePublicPlayerId?: string;
