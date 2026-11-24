@@ -391,6 +391,20 @@ export class PrivateGameVenueContactsCoordinator {
     }
   };
 
+  /**
+   * Production link callback factory: captures immutable renderedPermit ON CREATION (not on click).
+   * ContactRow and behavioral tests invoke the returned handler; retired handlers open zero URLs
+   * even when a later projection shows the same phone/site.
+   */
+  createContactOpenHandler = (action: PrivateVenueContactAction): (() => void) | null => {
+    const permit = this.renderedPermit(action);
+    if (!permit) return null;
+    return () => {
+      this.clearOpenFailure(permit);
+      void this.open(permit);
+    };
+  };
+
   clearOpenFailure = (permit?: PrivateContactsRenderedPermit) => {
     if (permit && !this.permitLive(permit)) return;
     if (!this.state.openFailure) return;

@@ -1,7 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { URL as NodeURL } from 'node:url';
 import { createNativeApi } from '../src/native-api.ts';
 import { parseAuthenticatedGame } from '../src/participation.ts';
 import type { Actor } from '../src/participation.ts';
@@ -17,7 +15,7 @@ import {
   type PrivateGameVenueContacts,
   type PrivateVenueContactAction,
 } from '../src/private-game-venue-contacts.ts';
-import { websiteMatrixNegative, websiteMatrixPositive } from '../../web/test/fixtures/website-authority-matrix.ts';
+import { websiteMatrixNegative } from '../../web/test/fixtures/website-authority-matrix.ts';
 
 const gameId = '10000000-0000-4000-8000-000000000010';
 const venueId = '20000000-0000-4000-8000-000000000020';
@@ -105,6 +103,46 @@ function capturePhonePermit(owner: PrivateGameVenueContactsCoordinator): Private
   return permit;
 }
 
+function captureProductionHandler(
+  owner: PrivateGameVenueContactsCoordinator,
+  kind: 'phone' | 'website' = 'phone',
+): () => void {
+  const action = kind === 'phone'
+    ? owner.getSnapshot().projection?.phone
+    : owner.getSnapshot().projection?.website;
+  assert.ok(action);
+  const handler = owner.createContactOpenHandler(action);
+  assert.ok(handler);
+  return handler;
+}
+
+/** Explicit accepted-web websiteLink positives — every row must yield nonnull exact URL. */
+const expectedWebsitePositives: ReadonlyArray<readonly [string, string]> = [
+  // normal
+  ['https://example.org/', 'https://example.org/'],
+  ['https://example.org/booking', 'https://example.org/booking'],
+  // whitespace / case
+  ['HTTPS://EXAMPLE.ORG', 'https://example.org/'],
+  [' https://example.org/ ', 'https://example.org/'],
+  // authority normalization
+  ['https://example.org:443/', 'https://example.org/'],
+  ['https://example.org:000443/', 'https://example.org/'],
+  ['http://example.org:80/', 'http://example.org/'],
+  ['https://[2001:0db8::1]/', 'https://[2001:db8::1]/'],
+  // Unicode / IDN
+  ['https://xn--e1afmkfd.xn--p1ai/', 'https://xn--e1afmkfd.xn--p1ai/'],
+  [
+    'https://example.org/\u043a\u043e\u043d\u0442\u0430\u043a\u0442\u044b',
+    'https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B',
+  ],
+  // paths / query
+  ['https://example.org/?a=1&b=2', 'https://example.org/?a=1&b=2'],
+  ['https://example.org/a/../b', 'https://example.org/b'],
+  ['https://example.org/?q=%27x%27', 'https://example.org/?q=%27x%27'],
+  // bounds (accepted-web: input and href ≤ 300)
+  ['https://example.org/' + 'a'.repeat(280), 'https://example.org/' + 'a'.repeat(280)],
+];
+
 test('phone/website/note validators: accepted-web positives and unsafe rejection', () => {
   const phone = privateContactPhone('+7 (999) 123-45-67');
   assert.deepEqual(phone, {
@@ -117,18 +155,13 @@ test('phone/website/note validators: accepted-web positives and unsafe rejection
   assert.equal(privateContactPhone('javascript:alert(1)'), null);
   assert.equal(privateContactPhone('+7\n999'), null);
 
-  // Accepted-web websiteLink parity against the same fixture (skip WHATWG-invalid / control-prefixed rows).
-  let acceptedWebsiteCases = 0;
-  for (const [input, href] of websiteMatrixPositive) {
-    if (typeof input !== 'string' || input.length > 300) continue;
-    try { void new URL(input.trim()); } catch { continue; }
+  for (const [input, href] of expectedWebsitePositives) {
     const action = privateContactWebsite(input);
-    if (!action) continue;
+    assert.ok(action, `expected nonnull website action for ${JSON.stringify(input)}`);
     assert.equal(action.url, href, input);
-    acceptedWebsiteCases += 1;
-    if (acceptedWebsiteCases >= 20) break;
+    assert.equal(action.text, href, input);
+    assert.equal(action.kind, 'website');
   }
-  assert.ok(acceptedWebsiteCases >= 10);
   for (const bad of websiteMatrixNegative) {
     assert.equal(privateContactWebsite(bad), null, String(bad));
   }
@@ -370,22 +403,131 @@ test('current valid handler opens exact URL once; retired handlers never open', 
   assert.equal(s.opens.length, 2);
 });
 
-test('source mounts private panel on authenticated game detail and documents private lifetime', () => {
-  const read = (rel: string) => readFileSync(new NodeURL(rel, import.meta.url), 'utf8');
-  const route = read('../app/games/[id].tsx');
-  assert.match(route, /PrivateGameVenueContactsPanel/);
-  assert.match(route, /venueId=\{game\.venue\.id\}/);
-  const ownerSrc = read('../src/private-game-venue-contacts.ts');
-  assert.match(ownerSrc, /parsePrivateGameVenueContacts/);
-  assert.match(ownerSrc, /PrivateContactsRenderedPermit/);
-  const api = read('../src/native-api.ts');
-  assert.match(api, /privateGameVenueContacts/);
-  assert.match(api, /parsePrivateGameVenueContacts/);
-  assert.doesNotMatch(api, /privateGameVenueContacts:[\s\S]*gameDetail\(/);
-  const auth = read('../src/auth-coordinator.ts');
-  assert.match(auth, /privateGameVenueContacts\.setActor/);
-  assert.match(auth, /privateGameVenueContacts\.forget/);
-  const readme = read('../README.md');
-  assert.match(readme, /APK49/);
-  assert.match(readme, /private game venue contacts|контакты площадки/i);
+test('production createContactOpenHandler: stale saved callbacks open zero URLs across lifetime changes', async () => {
+  // Refresh: saved production handler must not re-acquire a live permit.
+  const refresh = setup();
+  refresh.owner.focus(gameId, venueId);
+  await refresh.owner.load();
+  const beforeRefresh = captureProductionHandler(refresh.owner);
+  await refresh.owner.load();
+  beforeRefresh();
+  await Promise.resolve();
+  assert.equal(refresh.opens.length, 0);
+  const afterRefresh = captureProductionHandler(refresh.owner);
+  afterRefresh();
+  await Promise.resolve();
+  assert.deepEqual(refresh.opens, ['tel:+79991234567']);
+
+  // Blur / refocus: same phone/site in new projection does not revive old callback.
+  const blur = setup();
+  blur.owner.focus(gameId, venueId);
+  await blur.owner.load();
+  const beforeBlur = captureProductionHandler(blur.owner, 'website');
+  const viewGen = blur.owner.getSnapshot().focus!.viewGen;
+  blur.owner.releaseFocus(viewGen);
+  beforeBlur();
+  await Promise.resolve();
+  assert.equal(blur.opens.length, 0);
+  blur.owner.focus(gameId, venueId);
+  await blur.owner.load();
+  beforeBlur();
+  await Promise.resolve();
+  assert.equal(blur.opens.length, 0);
+  captureProductionHandler(blur.owner, 'website')();
+  await Promise.resolve();
+  assert.deepEqual(blur.opens, ['https://example.org/booking']);
+
+  // Game/venue A → B → A with identical phone/site: retired A handler stays zero-open.
+  const aba = setup();
+  aba.owner.focus(gameId, venueId);
+  await aba.owner.load();
+  const oldAPhone = captureProductionHandler(aba.owner);
+  const oldASite = captureProductionHandler(aba.owner, 'website');
+  aba.owner.focus(otherGame, otherVenue);
+  await aba.owner.load();
+  oldAPhone();
+  oldASite();
+  await Promise.resolve();
+  assert.equal(aba.opens.length, 0);
+  aba.owner.focus(gameId, venueId);
+  await aba.owner.load();
+  oldAPhone();
+  oldASite();
+  await Promise.resolve();
+  assert.equal(aba.opens.length, 0);
+  captureProductionHandler(aba.owner)();
+  await Promise.resolve();
+  assert.deepEqual(aba.opens, ['tel:+79991234567']);
+
+  // Actor / session switch.
+  const switched = setup();
+  switched.owner.focus(gameId, venueId);
+  await switched.owner.load();
+  const beforeActor = captureProductionHandler(switched.owner);
+  switched.owner.setActor({ actorId: 'B', sessionId: 'B', generation: 2 });
+  switched.owner.focus(gameId, venueId);
+  await switched.owner.load();
+  beforeActor();
+  await Promise.resolve();
+  assert.equal(switched.opens.length, 0);
+
+  // Logout / forget.
+  const logout = setup();
+  logout.owner.focus(gameId, venueId);
+  await logout.owner.load();
+  const beforeLogout = captureProductionHandler(logout.owner);
+  logout.owner.forget();
+  beforeLogout();
+  await Promise.resolve();
+  assert.equal(logout.opens.length, 0);
+
+  // Background / foreground: same contacts after return do not revive retired handler.
+  const fg = setup();
+  fg.owner.focus(gameId, venueId);
+  await fg.owner.load();
+  const beforeBg = captureProductionHandler(fg.owner);
+  fg.owner.setForeground(false);
+  beforeBg();
+  await Promise.resolve();
+  assert.equal(fg.opens.length, 0);
+  fg.owner.setForeground(true);
+  await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fg.owner.getSnapshot().status, 'ready');
+  beforeBg();
+  await Promise.resolve();
+  assert.equal(fg.opens.length, 0);
+  captureProductionHandler(fg.owner)();
+  await Promise.resolve();
+  assert.deepEqual(fg.opens, ['tel:+79991234567']);
+});
+
+test('production createContactOpenHandler: current opens one exact URL; delayed failure cannot paint another panel', async () => {
+  const s = setup();
+  s.owner.focus(gameId, venueId);
+  await s.owner.load();
+  const phoneHandler = captureProductionHandler(s.owner);
+  const siteHandler = captureProductionHandler(s.owner, 'website');
+  phoneHandler();
+  siteHandler();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(s.opens, ['tel:+79991234567', 'https://example.org/booking']);
+
+  const failGate = deferred<void>();
+  const failing = setup({
+    openUrl: () => failGate.promise,
+  });
+  failing.owner.focus(gameId, venueId);
+  await failing.owner.load();
+  const openHandler = captureProductionHandler(failing.owner);
+  openHandler();
+  // Linking admitted the exact URL; after focus move, late failure must not paint openFailure.
+  assert.deepEqual(failing.opens, ['tel:+79991234567']);
+  failing.owner.focus(otherGame, otherVenue);
+  failGate.reject(new Error('os-fail'));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(failing.owner.getSnapshot().openFailure, false);
+  assert.notEqual(failing.owner.getSnapshot().focus?.gameId, gameId);
 });

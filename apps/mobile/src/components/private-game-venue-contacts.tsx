@@ -95,17 +95,14 @@ function ContactRow({
   action: PrivateVenueContactAction;
   owner: typeof nativeAuth.privateGameVenueContacts;
 }) {
+  // Immutable permit captured at render — not re-acquired inside onPress.
+  const onPress = owner.createContactOpenHandler(action) ?? undefined;
   return <View style={{ gap: 4, minWidth: 0 }}>
     <Label style={{ color: colors.secondary, fontSize: 13 }}>{label}</Label>
     <Pressable
       accessibilityRole="link"
       accessibilityLabel={`${label}: ${action.text}`}
-      onPress={() => {
-        const live = owner.renderedPermit(action);
-        if (!live) return;
-        owner.clearOpenFailure(live);
-        void owner.open(live);
-      }}
+      onPress={onPress}
       style={({ pressed }) => [
         styles.textButton,
         pressed && { backgroundColor: colors.paper },
