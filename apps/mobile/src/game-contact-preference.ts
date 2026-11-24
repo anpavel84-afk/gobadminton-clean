@@ -56,11 +56,14 @@ export class GameContactPreferenceCoordinator {
   private listeners = new Set<() => void>();
   private serial = 0;
   private draftInitialized = false;
+  /** True after updateDraft until draft is replaced from an authoritative server value. */
+  private draftDirty = false;
   private quarantine: {
     actorId: string;
     packet?: GameContactPacket;
     draft: string;
     preference: GamePreferences | null;
+    draftDirty: boolean;
   } | null = null;
   private port: GameContactPort;
   private random: () => string;
@@ -90,6 +93,7 @@ export class GameContactPreferenceCoordinator {
         packet: this.state.command?.packet,
         draft: this.state.draft,
         preference: this.state.preference,
+        draftDirty: this.draftDirty,
       };
     }
     if (actor && this.quarantine?.actorId !== actor.actorId) this.quarantine = null;
@@ -97,12 +101,14 @@ export class GameContactPreferenceCoordinator {
     if (actor) this.quarantine = null;
     this.serial++;
     this.draftInitialized = false;
+    this.draftDirty = false;
     this.state = initial(actor ? Object.freeze({ ...actor }) : null);
     if (saved) {
       const restoredPacket = saved.packet
         ? Object.freeze({ ...saved.packet, actor: Object.freeze({ ...actor }) }) as GameContactPacket
         : undefined;
       this.draftInitialized = true;
+      this.draftDirty = saved.draftDirty;
       this.show({
         draft: saved.draft,
         preference: saved.preference,
@@ -118,6 +124,7 @@ export class GameContactPreferenceCoordinator {
     this.quarantine = null;
     this.serial++;
     this.draftInitialized = false;
+    this.draftDirty = false;
     this.state = initial();
     this.show({});
   };
@@ -125,24 +132,23 @@ export class GameContactPreferenceCoordinator {
   updateDraft = (value: string) => {
     if (!this.state.actor || this.locked()) return;
     this.draftInitialized = true;
+    this.draftDirty = true;
     this.show({ draft: value.slice(0, GAME_CONTACT_MAX), notice: null });
   };
 
-  /** Explicit read only — never writes; preserves unsaved draft across in-place refresh. */
+  /** Explicit read only — never writes; dirty draft survives GET (incl. same-account reauth). */
   load = async (options?: { preserveDraft?: boolean }) => {
     const actor = this.state.actor;
     if (!actor || this.state.command || this.state.status === 'loading') return;
     const serial = ++this.serial;
-    const preserveDraft = options?.preserveDraft === true
-      || this.state.status === 'ready'
-      || this.state.status === 'stale'
-      || (this.state.status === 'error' && this.draftInitialized);
+    const preserveDraft = options?.preserveDraft === true || this.draftDirty;
     const priorDraft = this.state.draft;
     this.show({ status: 'loading', notice: null });
     try {
       const preference = parsePreferences(await this.port.read());
       if (!this.current(actor) || serial !== this.serial) return;
       this.draftInitialized = true;
+      if (!preserveDraft) this.draftDirty = false;
       this.show({
         preference,
         draft: preserveDraft ? priorDraft : (preference.defaultPublicGameContact ?? ''),
@@ -241,6 +247,7 @@ export class GameContactPreferenceCoordinator {
       }
       if (ack.version <= packet.body.expectedVersion) throw new ParticipationError('invalid');
       this.draftInitialized = true;
+      this.draftDirty = false;
       this.show({
         preference: ack,
         draft: ack.defaultPublicGameContact ?? '',

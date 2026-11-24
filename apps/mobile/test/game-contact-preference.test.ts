@@ -231,6 +231,55 @@ test('native transport: exact PATCH path/headers/body; guest path has no mutate 
   assert.equal(wires[1]!.auth, 'Bearer access-token');
 });
 
+test('#522 same-account reauth: dirty draft (incl empty) survives load; clean takes server', async () => {
+  const s = setup();
+  s.setStored(prefs(1, '@server'));
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().draft, '@server');
+
+  s.owner.updateDraft('@unsaved-user-draft');
+  s.owner.setActor(null);
+  s.owner.setActor({ actorId: 'A', sessionId: 'session-2', generation: 1 });
+  assert.equal(s.owner.getSnapshot().draft, '@unsaved-user-draft');
+  s.setStored(prefs(2, '@server-v2'));
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().preference?.version, 2);
+  assert.equal(s.owner.getSnapshot().preference?.defaultPublicGameContact, '@server-v2');
+  assert.equal(s.owner.getSnapshot().draft, '@unsaved-user-draft');
+
+  // Deliberately cleared empty draft is still dirty and must not snap back to server text.
+  s.owner.updateDraft('');
+  s.owner.setActor(null);
+  s.owner.setActor({ actorId: 'A', sessionId: 'session-3', generation: 1 });
+  await s.owner.load();
+  assert.equal(s.owner.getSnapshot().draft, '');
+  assert.equal(s.owner.getSnapshot().preference?.defaultPublicGameContact, '@server-v2');
+
+  // Clean (no updateDraft) reauth must refresh draft from current server, not stale quarantine text.
+  const clean = setup();
+  clean.setStored(prefs(1, '@old-server'));
+  await clean.owner.load();
+  assert.equal(clean.owner.getSnapshot().draft, '@old-server');
+  clean.owner.setActor(null);
+  clean.owner.setActor({ actorId: 'A', sessionId: 'session-2', generation: 1 });
+  clean.setStored(prefs(3, '@new-server'));
+  await clean.owner.load();
+  assert.equal(clean.owner.getSnapshot().draft, '@new-server');
+  assert.equal(clean.owner.getSnapshot().preference?.version, 3);
+
+  // Different account / forget must not leak private draft.
+  const leak = setup();
+  leak.setStored(prefs(1, '@a'));
+  await leak.owner.load();
+  leak.owner.updateDraft('@private-a');
+  leak.owner.setActor({ actorId: 'B', sessionId: 'B', generation: 1 });
+  assert.equal(leak.owner.getSnapshot().draft, '');
+  assert.equal(leak.owner.getSnapshot().preference, null);
+  leak.owner.forget();
+  assert.equal(leak.owner.getSnapshot().actor, null);
+  assert.equal(leak.owner.getSnapshot().draft, '');
+});
+
 test('#522 APK44 source wiring: profile card, coordinator, PATCH opt-in, counter 44', () => {
   const component = read('../src/components/game-contact-preference.tsx');
   assert.match(component, /Контакт для игр/);
