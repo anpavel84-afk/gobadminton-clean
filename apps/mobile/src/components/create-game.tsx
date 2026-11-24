@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
-import { AppState, Platform, ScrollView, useWindowDimensions, View } from 'react-native';
+import { AppState, Image, Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../auth.tsx';
@@ -25,6 +25,15 @@ import type { AvatarDerivative } from '../profile-avatar.ts';
 
 export { GameField } from './create-game-controls.tsx';
 
+function creationPhotoDataUri(bytes: Uint8Array, mime: string): string {
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return `data:${mime};base64,${globalThis.btoa(binary)}`;
+}
+
 export function CreateGame({ venueId }: { venueId?: string }) {
   const auth = useAuth(), owner = auth.gameManagement, router = useRouter();
   const { preferences, hydrated } = usePreferences();
@@ -35,6 +44,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const [selecting, setSelecting] = useState(false);
   const [photoReady, setPhotoReady] = useState(true);
   const [hasConfirmedPhoto, setHasConfirmedPhoto] = useState(false);
+  const [confirmedPreviewUri, setConfirmedPreviewUri] = useState<string | null>(null);
   // Blur/refocus fences local reads + create→cover→publish lease; AppState retires continuation (picker is local).
   useFocusEffect(useCallback(() => {
     view.current++;
@@ -48,6 +58,10 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       sub.remove();
       release();
       view.current++;
+      // Real route departure — sync React flags with coordinator photo retirement (not preview↔edit).
+      setHasConfirmedPhoto(false);
+      setConfirmedPreviewUri(null);
+      setPhotoReady(true);
     };
   }, [owner]));
   const [selectedIntent, setSelected] = useState<string | null>(null), [attemptedIntent, setAttempted] = useState<string | null>(null);
@@ -121,12 +135,18 @@ export function CreateGame({ venueId }: { venueId?: string }) {
 
   const photoScopeKey = `${actor?.actorId ?? ''}:${actor?.sessionId ?? ''}:${actor?.generation ?? ''}:${view.current}`;
   useEffect(() => {
-    // Actor/session reset or newCreation clears coordinator photo — keep React flags honest.
-    if (!owner.hasCreationPhoto()) setHasConfirmedPhoto(false);
+    // Actor/session reset, view departure, or newCreation clears coordinator photo — keep React flags honest.
+    if (!owner.hasCreationPhoto()) {
+      setHasConfirmedPhoto(false);
+      setConfirmedPreviewUri(null);
+    }
   }, [owner, actor?.actorId, actor?.sessionId, actor?.generation, state.created, state.creationReference, state.preview]);
   const onPhotoChange = useCallback((derivative: AvatarDerivative | null) => {
     owner.setCreationPhoto(derivative);
     setHasConfirmedPhoto(!!derivative);
+    setConfirmedPreviewUri(derivative
+      ? creationPhotoDataUri(derivative.bytes, derivative.mime)
+      : null);
   }, [owner]);
   const onPhotoReady = useCallback((ready: boolean) => {
     setPhotoReady(ready);
@@ -175,6 +195,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       )}
       {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => {
         setHasConfirmedPhoto(false);
+        setConfirmedPreviewUri(null);
         setPhotoReady(true);
         void owner.newCreation(contextCity);
       }} />}
@@ -229,11 +250,17 @@ export function CreateGame({ venueId }: { venueId?: string }) {
           <Label style={{ textAlign: 'left' }}>Публичный контакт: {state.preview.hostPublicContact}</Label>
           {!!previewTerms && <Label style={{ textAlign: 'left' }}>{`${termsLabel}${previewTerms}`}</Label>}
           {!!state.preview.trainingDescription && <Label style={{ textAlign: 'left' }}>{state.preview.trainingDescription}</Label>}
-          <Label style={{ textAlign: 'left' }}>
-            {hasConfirmedPhoto || owner.hasCreationPhoto()
-              ? GAME_PHOTO_SELECTION_COPY.previewSelected
-              : GAME_PHOTO_SELECTION_COPY.previewOmitted}
-          </Label>
+          {(hasConfirmedPhoto || owner.hasCreationPhoto()) && confirmedPreviewUri ? (
+            <View accessibilityLabel="Предпросмотр выбранного фото игры" style={{ gap: 8 }}>
+              <Label style={{ textAlign: 'left' }}>{GAME_PHOTO_SELECTION_COPY.previewSelected}</Label>
+              <View style={{ width: '100%', aspectRatio: 3, overflow: 'hidden', borderRadius: 12 }}>
+                <Image source={{ uri: confirmedPreviewUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover"
+                  accessibilityLabel="Выбранное фото этой игры" />
+              </View>
+            </View>
+          ) : (
+            <Label style={{ textAlign: 'left' }}>{GAME_PHOTO_SELECTION_COPY.previewOmitted}</Label>
+          )}
         </View>
         <ManagementCommand />
         <LeftLink title="Назад к редактированию" onPress={owner.edit} />

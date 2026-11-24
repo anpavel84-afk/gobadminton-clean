@@ -32,6 +32,8 @@ function setup(override: Partial<ManagementPort> = {}) {
     send: async p => p.kind === 'create' ? g : p.kind === 'publish' ? { ...g, status: 'published', version: 8 } : { ...part, version: 4, status: p.kind === 'confirm' ? 'confirmed' : p.kind === 'reject' ? 'rejected' : 'removed' }, ...override };
   const owner = new GameManagementCoordinator({ ...port, send: async p => { sent.push(p); return port.send(p); } }, () => `key-${++serial}`, () => now);
   owner.setActor(actor);
+  // Production create screen always binds a view lease before publishPreview (fail-closed without it).
+  owner.bindCreationView();
   return { owner, sent, trainerReads: () => trainerReads };
 }
 async function preview(owner: GameManagementCoordinator) { await owner.loadContext('city-1'); owner.update(form); owner.preview(); assert.ok(owner.getSnapshot().preview); }
@@ -851,6 +853,7 @@ test('#522 APK52 confirmed photo: exactly one create, one cover save, one publis
     },
   });
   owner.setActor(actor);
+  owner.bindCreationView();
   await owner.loadContext('city-1');
   owner.update(form);
   owner.preview();
@@ -893,6 +896,7 @@ test('#522 APK52 cover reject/UNKNOWN leaves draft and never publishes; reconcil
       coverBlocksWrites: () => outcome === 'unknown',
     });
     owner.setActor(actor);
+    owner.bindCreationView();
     await owner.loadContext('city-1');
     owner.update(form);
     owner.preview();
@@ -1034,6 +1038,7 @@ test('#522 APK52 failed create never calls cover save; reconcile settles create 
     },
   });
   owner.setActor(actor);
+  owner.bindCreationView();
   await owner.loadContext('city-1');
   owner.update(form);
   owner.preview();
@@ -1079,6 +1084,7 @@ test('#522 APK52 expired start after create stops before publish; draft kept', a
     saveCreationCover: async () => ({ version: 8 }),
   });
   owner.setActor(actor);
+  owner.bindCreationView();
   await owner.loadContext('city-1');
   owner.update(form);
   owner.preview();
@@ -1087,4 +1093,81 @@ test('#522 APK52 expired start after create stops before publish; draft kept', a
   assert.equal(sent.length, 1);
   assert.equal(owner.getSnapshot().created?.status, 'draft');
   assert.match(owner.getSnapshot().notice ?? '', /Начало уже прошло/);
+});
+
+test('#522 FIX4: absent creation lease fails closed; no create without bind', async () => {
+  const unbound = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...g, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => g,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async () => { throw new Error('must not send'); },
+  }, () => 'key-x', () => now);
+  unbound.setActor(actor);
+  await unbound.loadContext('city-1');
+  unbound.update(form);
+  unbound.preview();
+  // No bindCreationView — fail closed (no actor-only bypass).
+  await unbound.publishPreview();
+  assert.equal(unbound.getSnapshot().created, null);
+  assert.equal(unbound.getSnapshot().command, undefined);
+});
+
+test('#522 FIX4: lease retire during publishDraft profile await → zero publish; draft kept', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const profileGate = deferred<typeof profile>();
+  let profileCalls = 0;
+  const owner = new GameManagementCoordinator({
+    profile: async () => {
+      profileCalls += 1;
+      // First create-context profile reads resolve immediately; publishDraft awaits the gate.
+      if (profileCalls <= 1) return profile;
+      return profileGate.promise;
+    },
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return draft;
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => now);
+  owner.setActor(actor);
+  const release = owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.kind, 'create');
+  // Late boundary: retire after create, during publish profile await.
+  release();
+  profileGate.resolve(profile);
+  await work;
+  assert.equal(sent.some(p => p.kind === 'publish'), false);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
+});
+
+test('#522 FIX4: view departure clears parent creation photo; remount has no hidden bytes', async () => {
+  const s = setup();
+  await preview(s.owner);
+  s.owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1, 2, 3]) });
+  assert.equal(s.owner.hasCreationPhoto(), true);
+  // Real route departure via bind release.
+  const release = s.owner.bindCreationView();
+  s.owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([4]) });
+  assert.equal(s.owner.hasCreationPhoto(), true);
+  release();
+  assert.equal(s.owner.hasCreationPhoto(), false);
 });

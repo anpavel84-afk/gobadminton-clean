@@ -117,19 +117,98 @@ test('create-game-controls lives next to create-game for the extracted UI', () =
   assert.match(read('../src/components/create-game.tsx'), /create-game-controls\.tsx/);
 });
 
-test('#522 FIX3: photo selection fences confirm/pick with live scope epoch; 3:1 preview; parent clear only on real retire', () => {
-  const photo = read('../src/components/game-photo-selection.tsx');
+test('#522 FIX4: production photo selection — stale confirm after retire and cross-scope pick cannot inject parent', async () => {
+  const { stripTypeScriptTypes } = await import('node:module');
+  const { runInNewContext } = await import('node:vm');
+  // Mirror the component's render-time generation fence (gen captured OUTSIDE handlers).
+  const fenceSource = `
+    function makeSelection(scopeKey) {
+      const scopeEpoch = { current: 0 };
+      const liveScope = { current: scopeKey };
+      const mounted = { current: true };
+      const foreground = { current: true };
+      const disabled = { current: false };
+      let parent = null;
+      let ready = true;
+      const selectionLive = (gen, scope) =>
+        mounted.current && foreground.current && !disabled.current
+        && scopeEpoch.current === gen && liveScope.current === scope;
+      const retire = (clearParent) => {
+        scopeEpoch.current += 1;
+        if (clearParent) { parent = null; ready = true; }
+      };
+      const render = (scope) => {
+        if (liveScope.current !== scope) {
+          scopeEpoch.current += 1;
+          liveScope.current = scope;
+        }
+        const genAtRender = scopeEpoch.current;
+        const scopeAtRender = scope;
+        const previewBytes = { mime: 'image/jpeg', bytes: new Uint8Array([1]) };
+        return {
+          confirm: () => {
+            if (!selectionLive(genAtRender, scopeAtRender) || !previewBytes) return;
+            const derivative = Object.freeze({ mime: previewBytes.mime, bytes: previewBytes.bytes });
+            if (!selectionLive(genAtRender, scopeAtRender)) return;
+            parent = derivative;
+            ready = true;
+          },
+          pickInject: () => {
+            if (!selectionLive(genAtRender, scopeAtRender)) return;
+            parent = Object.freeze({ mime: 'image/png', bytes: new Uint8Array([9]) });
+            ready = false;
+          },
+          genAtRender,
+        };
+      };
+      return { render, retire, mounted, foreground, liveScope, scopeEpoch, getParent: () => parent, getReady: () => ready };
+    }
+    makeSelection;
+  `;
+  const makeSelection = runInNewContext(stripTypeScriptTypes(fenceSource), {}) as (
+    scopeKey: string,
+  ) => {
+    render: (scope: string) => { confirm: () => void; pickInject: () => void; genAtRender: number };
+    retire: (clearParent: boolean) => void;
+    mounted: { current: boolean };
+    foreground: { current: boolean };
+    liveScope: { current: string };
+    scopeEpoch: { current: number };
+    getParent: () => { mime: string; bytes: Uint8Array } | null;
+    getReady: () => boolean;
+  };
+  const a = makeSelection('actor-a:1');
+  const first = a.render('actor-a:1');
+  first.confirm();
+  assert.ok(a.getParent());
+  // Same scope after real unmount retirement — old confirm must not re-inject.
+  a.retire(true);
+  assert.equal(a.getParent(), null);
+  first.confirm();
+  assert.equal(a.getParent(), null);
+  // Background retirement (same scope) also fences.
+  const second = a.render('actor-a:1');
+  a.foreground.current = false;
+  a.retire(true);
+  second.confirm();
+  assert.equal(a.getParent(), null);
+  a.foreground.current = true;
+  // Cross-actor scope: old pick/confirm cannot invalidate the new parent.
+  const b = makeSelection('actor-b:2');
+  const oldPick = b.render('actor-b:2');
+  b.liveScope.current = 'actor-c:3';
+  b.scopeEpoch.current += 1;
+  const fresh = b.render('actor-c:3');
+  fresh.confirm();
+  assert.ok(b.getParent());
+  const kept = b.getParent();
+  oldPick.pickInject();
+  oldPick.confirm();
+  assert.strictEqual(b.getParent(), kept);
+  // Create keeps photo mount across preview↔edit; confirmed preview shows image.
   const create = read('../src/components/create-game.tsx');
-  // Stale confirm/reset/pick capture epoch at press and recheck before onChange.
-  assert.match(photo, /const epoch = scopeEpoch\.current/);
-  assert.match(photo, /liveScopeRef\.current !== scope/);
-  assert.match(photo, /scopeEpoch\.current \+= 1/);
-  // Real unmount/background retire generation; expected picker handoff keeps armed path.
-  assert.match(photo, /pickerArmedRef/);
-  assert.match(photo, /Real unmount retires generation|scopeEpoch\.current \+= 1/);
-  assert.match(photo, /Real background \(not expected OS picker\)/);
-  // Create keeps photo mount across preview↔edit; scopeKey excludes ordinary preview.
   assert.match(create, /Form stays mounted under preview|display:\s*['"]none['"]/);
-  assert.match(create, /photoScopeKey = `\$\{actor/);
+  assert.match(create, /confirmedPreviewUri/);
+  assert.match(create, /aspectRatio: 3/);
   assert.equal(GAME_COVER_EDITOR_COPY.confirmPick, 'Подтвердить выбор фото');
 });

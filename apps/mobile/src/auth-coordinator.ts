@@ -293,10 +293,13 @@ export class AuthCoordinator {
         if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
           throw new CoverLockNoSendError();
         }
+        // Capture create-continuation guard before token — unrelated managed publish leaves it open.
+        const creationLive = () => this.gameManagement.isCreationContinuationLive();
         const result = await this.participationRead(access => {
           if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
             throw new CoverLockNoSendError();
           }
+          if (!creationLive()) throw new ParticipationError('stale');
           return deps.api.managementMutation(access,packet);
         },packet.actor);
         if (packet.kind !== 'create') {
@@ -311,10 +314,10 @@ export class AuthCoordinator {
       saveCreationCover: async ({ gameId, gameVersion, derivative, actor, live }) => {
         if (!live() || !sameActor(actor, this.gameCover.getSnapshot().actor)) return null;
         // Bind cover view BEFORE awaits so post-token admission has a real viewGen (not null).
+        // Do not force cover foreground true — that would override a real background lifecycle.
         const release = this.gameCover.openView(gameId);
         try {
           if (!live()) return null;
-          this.gameCover.setForeground(true);
           const permit = this.gameCover.renderedPermit();
           if (!permit || permit.gameId !== gameId) return null;
           await this.gameCover.load(gameId, permit);
@@ -345,11 +348,14 @@ export class AuthCoordinator {
       mutate: (packet, authority) => {
         // Capture original photo-command admission BEFORE token await — no minting a new permit later.
         const admission = this.gameCover.captureDispatchAdmission(packet);
+        // Original create-intent live guard (when armed) — creation blur must stop delayed PUT.
+        const creationLive = () => this.gameManagement.isCreationContinuationLive();
         return this.participationRead(access => {
           // Recheck actor/session/game/view/foreground generation + packet identity after token, before API.
           if (!this.gameCover.dispatchAdmissionLive(admission, packet)) {
             throw new ParticipationError('stale');
           }
+          if (!creationLive()) throw new ParticipationError('stale');
           const command = this.gameManagement.getSnapshot().command;
           if (command && ['sending','unknown'].includes(command.status)
             && command.packet.kind !== 'create' && command.packet.gameId === packet.gameId) {
