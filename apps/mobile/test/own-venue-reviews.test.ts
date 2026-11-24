@@ -1424,7 +1424,7 @@ test('source wiring: Profile entry + controller bearer + APK38 + fixture owner c
   assert.match(openapi, /"operationId": "getOwnVenueReview"[\s\S]*"NativeBearer"/);
   assert.match(openapi, /"operationId": "ownVenueReviewCommand"[\s\S]*"NativeBearer"/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 43);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 44);
 
   const auth = read('../src/auth-coordinator.ts');
   assert.match(auth, /venueExperienceOwnList/);

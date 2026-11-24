@@ -40,6 +40,8 @@ import type { AvatarPacket } from './profile-avatar.ts';
 import type { CoverPacket } from './profile-cover.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
+import { gameContactPreferenceWire } from './game-contact-preference.ts';
+import type { GameContactPacket } from './game-contact-preference.ts';
 import {
   parseTrainerProfile, trainerDeactivateWire, trainerUpsertWire,
 } from './trainer-profile.ts';
@@ -86,7 +88,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         try {
           const problem = await response.json();
           const candidate = problem?.code;
-          if (typeof candidate === 'string' && ['FORM_INVALID', 'TRAINER_PROFILE_INACTIVE', 'GAME_PREFERENCES_VERSION_CONFLICT', 'COMMAND_IN_PROGRESS', 'VERSION_CONFLICT', 'GAME_FULL', 'APPLICATION_CLOSED', 'GAME_ALREADY_STARTED', 'GAME_NOT_PUBLISHED', 'EXPECTED_GAME_VERSION_INVALID', 'EXPECTED_VERSION_INVALID', 'PARTICIPATION_NOT_FOUND', 'CAPABILITY_RESTRICTED', 'PARTICIPATION_STATUS_CONFLICT', 'KEY_REUSED'].includes(candidate)) code = candidate;
+          if (typeof candidate === 'string' && ['FORM_INVALID', 'TRAINER_PROFILE_INACTIVE', 'GAME_PREFERENCES_VERSION_CONFLICT', 'GAME_PREFERENCES_INVALID', 'HOST_PUBLIC_CONTACT_INVALID', 'COMMAND_IN_PROGRESS', 'VERSION_CONFLICT', 'GAME_FULL', 'APPLICATION_CLOSED', 'GAME_ALREADY_STARTED', 'GAME_NOT_PUBLISHED', 'EXPECTED_GAME_VERSION_INVALID', 'EXPECTED_VERSION_INVALID', 'PARTICIPATION_NOT_FOUND', 'CAPABILITY_RESTRICTED', 'PARTICIPATION_STATUS_CONFLICT', 'KEY_REUSED'].includes(candidate)) code = candidate;
         } catch { /* Do not expose raw responses. */ }
         throw new ParticipationError(response.status === 401 ? 'authority'
           : [400, 403, 404, 409, 422].includes(response.status) ? 'business' : 'network', response.status, code);
@@ -633,6 +635,9 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
 
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
+    /** Closed PATCH own game-contact preference — Idempotency-Key + expectedVersion CAS; cookie CSRF stays on requirePrincipalMutation. */
+    mutateGamePreferences: async (access: string, packet: GameContactPacket) =>
+      parsePreferences(await request('/me/game-preferences', 'PATCH', gameContactPreferenceWire(packet.body), access, packet.key, true)),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),
     /** Full own TrainerProfile DTO for editor CAS — genuine 404 → null; other failures stay errors. */
     ownTrainerProfile: async (access: string) => {

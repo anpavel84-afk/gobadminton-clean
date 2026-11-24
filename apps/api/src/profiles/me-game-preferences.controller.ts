@@ -16,7 +16,8 @@ export class MeGamePreferencesController {
   @Patch()
   @Header("Cache-Control", "no-store")
   async patchOwn(@Req() request: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    // Explicit NativeBearer opt-in; cookie Origin/CSRF preserved via requirePrincipalMutation.
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const result = await this.preferences.patchOwn(consumer.userId, consumer.sessionId, key, request.body as PatchGamePreferencesInput);
     reply.status(result.statusCode);

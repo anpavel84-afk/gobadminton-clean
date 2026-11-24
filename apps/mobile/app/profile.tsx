@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../src/auth.tsx';
 import { usePreferences } from '../src/state.tsx';
 import { OwnProfileCard } from '../src/components/own-profile.tsx';
+import { GameContactPreferenceCard } from '../src/components/game-contact-preference.tsx';
 import { OwnVenueReviewsEntry, OwnVenueReviewsHost } from '../src/components/own-venue-reviews.tsx';
 import { ProfileEditor } from '../src/components/profile-editor.tsx';
 import { canonicalReturnPath } from '../src/native-auth-protocol.ts';
@@ -110,6 +111,7 @@ export default function Profile() {
       </View>}
       {auth.status === 'authenticated' && auth.me && <>
         {!editing && <OwnProfileCard onEdit={() => setEditing(true)} onSettings={toggleSettings} settingsOpen={settingsOpen} />}
+        {!editing && <GameContactPreferenceCard />}
         {!editing && <View style={{ gap: 8 }}>
           <Label accessibilityRole="header" style={styles.subtitle}>Отзывы о площадках</Label>
           <Label>Этот список видите только вы.</Label>
