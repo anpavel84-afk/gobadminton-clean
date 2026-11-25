@@ -305,21 +305,44 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const [chooser, setChooser] = useState(false);
   const inviteTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const memberTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const memberFocusEpoch = useRef(0);
+  const memberFocusFrame = useRef<number | null>(null);
   const list = useRef<FlatList<DirectMessage>>(null), nearBottom = useRef(false), visibleIds = useRef<string[]>([]), initialScroll = useRef(true);
   const readVisible = useCallback(() => owner.visible(resourceRef.current, visibleIds.current, nearBottom.current), [owner]);
   const onViewable = useRef<NonNullable<FlatListProps<DirectMessage>['onViewableItemsChanged']>>(({ viewableItems }) => {
     visibleIds.current = viewableItems.filter(v => v.isViewable).map(v => v.item.id); readVisible();
   }).current;
+  const retireMemberSafety = useCallback(() => {
+    memberFocusEpoch.current += 1;
+    if (memberFocusFrame.current != null) {
+      cancelAnimationFrame(memberFocusFrame.current);
+      memberFocusFrame.current = null;
+    }
+    setSelectedMemberId(null);
+  }, []);
+  // Normal close restores focus to the selected trigger; ignored onPress cleanup cannot cancel a late frame.
   const closeMemberSafety = useCallback(() => {
     const target = memberTrigger.current;
+    if (memberFocusFrame.current != null) {
+      cancelAnimationFrame(memberFocusFrame.current);
+      memberFocusFrame.current = null;
+    }
+    const epoch = ++memberFocusEpoch.current;
     setSelectedMemberId(null);
-    const frame = requestAnimationFrame(() => {
+    memberFocusFrame.current = requestAnimationFrame(() => {
+      memberFocusFrame.current = null;
+      if (epoch !== memberFocusEpoch.current) return;
       target?.focus();
       const node = findNodeHandle(target);
       if (node) AccessibilityInfo.setAccessibilityFocus(node);
     });
-    return () => cancelAnimationFrame(frame);
   }, []);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state !== 'active') retireMemberSafety();
+    });
+    return () => { sub.remove(); retireMemberSafety(); };
+  }, [retireMemberSafety]);
   useFocusEffect(useCallback(() => {
     if (auth.status !== 'authenticated') return;
     initialScroll.current = true; nearBottom.current = false; visibleIds.current = [];
@@ -332,10 +355,10 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
       // chooser still true — InvitationChooser lease release + explicit close fence the surface.
       setChooser(false);
       setShowMembers(false);
-      setSelectedMemberId(null);
+      retireMemberSafety();
       nativeAuth.invitationAuthoring.close();
     };
-  }, [owner, key, auth.status]));
+  }, [owner, key, auth.status, retireMemberSafety]));
   const h = detail?.header, direct = h && 'requestState' in h ? h : null, chat = h && 'lifecycleState' in h ? h : null, invitation = h && 'status' in h ? h : null;
   const title = direct?.peer.displayName ?? (chat ? 'Чат игры' : 'Приглашение в игру');
   const inviteAuthoring = useSyncExternalStore(
@@ -362,8 +385,8 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     ? detail.members.find(m => m.publicPlayerId === selectedMemberId && m.publicPlayerId !== ownId)
     : undefined;
   useEffect(() => {
-    if (selectedMemberId && !selectedMember) setSelectedMemberId(null);
-  }, [selectedMemberId, selectedMember]);
+    if (selectedMemberId && !selectedMember) retireMemberSafety();
+  }, [selectedMemberId, selectedMember, retireMemberSafety]);
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
   if (!detail || detail.status !== 'ready' || !h) return <Page header={<MessageHeader name={title} />}><Label>{detail?.status === 'error' ? detail.error : 'Загружаем…'}</Label><TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />{notice}</Page>;
   if (invitation) {
@@ -382,7 +405,7 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const canInvite = !!direct && direct.requestState === 'accepted' && !safetyHeld && !pending && !inviteBusy;
   return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} />}>
     {direct && <NativeSafety peerId={direct.peer.publicPlayerId} name={direct.peer.displayName} conversationId={direct.id} messages={detail.messages} />}
-    {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники${memberSafetyReady ? ' и безопасность' : ''} (${detail.members.length})`} onPress={() => { setShowMembers(v => !v); if (showMembers) setSelectedMemberId(null); }} />
+    {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники${memberSafetyReady ? ' и безопасность' : ''} (${detail.members.length})`} onPress={() => { setShowMembers(v => !v); if (showMembers) retireMemberSafety(); }} />
       {showMembers && <>
         {memberSafetyReady && <Label>Блокировка личного общения не меняет участие в игре и доступ к общему чату.</Label>}
         {detail.members.map((item: GameChatMember) => {

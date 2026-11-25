@@ -43,11 +43,13 @@ export function NativeSafety({ peerId, name, conversationId, gameId, messages = 
   const matching = command?.packet.context.peerId === peerId
     && command.packet.context.conversationId === conversationId
     && command.packet.context.gameId === gameId;
-  const originalTarget = command?.packet.context.gameId
-    ? `/messages/game/${command.packet.context.gameId}`
-    : command?.packet.context.conversationId
-      ? `/messages/direct/${command.packet.context.conversationId}`
-      : `/players/${command!.packet.context.peerId}`;
+  // Destination only from an existing original command — initial NativeSafety has none.
+  const originalTarget = !command ? null
+    : command.packet.context.gameId
+      ? `/messages/game/${command.packet.context.gameId}`
+      : command.packet.context.conversationId
+        ? `/messages/direct/${command.packet.context.conversationId}`
+        : `/players/${command.packet.context.peerId}`;
   const content = <>
     {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
     {command && <Label>{command.packet.context.name}: {command.packet.action === 'report' ? 'жалоба' : command.packet.action === 'block' ? 'блокировка' : 'снятие блокировки'}.</Label>}
@@ -55,7 +57,7 @@ export function NativeSafety({ peerId, name, conversationId, gameId, messages = 
     {command?.status === 'unknown' && (matching ? <>
       <Label>Сверка может завершить исходное действие, если сервер ещё не выполнил его. Ключ, цель и данные останутся прежними.</Label>
       <PrimaryButton title="Проверить исходное действие тем же запросом" onPress={() => { void owner.reconcile(view, actor); }} />
-    </> : <TextButton title="Открыть исходную цель для проверки" onPress={() => router.push(originalTarget as '/players')} />)}
+    </> : originalTarget ? <TextButton title="Открыть исходную цель для проверки" onPress={() => router.push(originalTarget as '/players')} /> : null)}
   </>;
   const messageReportAvailable = !!conversationId;
   return <View style={{ gap: 4 }}>

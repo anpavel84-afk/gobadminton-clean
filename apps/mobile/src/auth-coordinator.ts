@@ -289,11 +289,27 @@ export class AuthCoordinator {
       isPeerHeld: peerId => this.messages.isPeerSafetyHeld(peerId),
     }, deps.random, this.now);
     this.safety = new SafetyCoordinator({
-      send: (packet, authority, permit) => this.participationRead(access => {
-        // Recheck after token await: retired game/member view must not start a delayed request.
-        if (!permit()) throw new SafetyError('network');
-        return deps.api.safetyMutation(access, packet);
-      }, authority),
+      send: (packet, authority, permit) => {
+        // Capture messages view + foreground epoch before token await for game/member safety only.
+        const gameId = packet.context.gameId;
+        const conversationId = packet.context.conversationId;
+        const gameBound = gameId !== undefined;
+        const messagesView = gameBound ? this.messages.getSnapshot().viewGeneration : 0;
+        const foregroundGeneration = gameBound ? this.messages.foregroundLifecycle() : 0;
+        return this.participationRead(access => {
+          // Recheck after token await: retired game/member view must not start a delayed request.
+          if (!permit()) throw new SafetyError('network');
+          if (gameBound) {
+            if (!conversationId || !this.messages.mayDispatchGameSafety(
+              { peerId: packet.context.peerId, conversationId, gameId: gameId! },
+              authority,
+              messagesView,
+              foregroundGeneration,
+            )) throw new SafetyError('network');
+          }
+          return deps.api.safetyMutation(access, packet);
+        }, authority);
+      },
       verified: (peer, blocked, context) => {
         this.contact.setPeerSafety(peer, blocked);
         // Game chat conversation IDs must not enter the direct-peer map; block remains personal only.

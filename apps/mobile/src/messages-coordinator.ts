@@ -362,6 +362,28 @@ export class MessagesCoordinator {
     && this.foregroundGeneration === foregroundGeneration
     && this.focused === resourceKey(packet.resource)
     && this.snapshot.viewGeneration === viewGeneration;
+  /**
+   * Game/member safety final wire permit (post token await): current actor/session + focused
+   * game+server conversation + selected other member + ready active source + captured messages
+   * view + captured foreground epoch. Direct/profile safety do not use this port.
+   */
+  mayDispatchGameSafety = (
+    context: Readonly<{ peerId: string; conversationId: string; gameId: string }>,
+    actor: Actor,
+    viewGeneration: number,
+    foregroundGeneration: number,
+  ) => {
+    if (!sameActor(actor, this.snapshot.actor) || !this.foreground) return false;
+    if (this.foregroundGeneration !== foregroundGeneration || this.snapshot.viewGeneration !== viewGeneration) return false;
+    const resource = { kind: 'game' as const, id: context.gameId };
+    if (this.focused !== resourceKey(resource)) return false;
+    const detail = this.snapshot.detail;
+    if (!detail || detail.status !== 'ready' || !detail.header || detail.resource.kind !== 'game') return false;
+    if (!('lifecycleState' in detail.header) || detail.header.lifecycleState !== 'active') return false;
+    if (detail.header.gameId !== context.gameId || detail.header.id !== context.conversationId) return false;
+    if (!detail.ownId || detail.ownId === context.peerId) return false;
+    return detail.members.some(m => m.publicPlayerId === context.peerId);
+  };
   private safetyHeld(resource: MessageResource, action: MessageAction) {
     return resource.kind === 'direct' && action !== 'read' && this.safetyPeers.has(this.directPeers.get(resource.id) ?? '');
   }
