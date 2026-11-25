@@ -13,6 +13,7 @@ import {
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { canApply, dominantParticipation, participationLabels } from '../../src/participation.ts';
 import { GameChatEntryPanel } from '../../src/components/game-chat-entry.tsx';
+import { NativeGameComments } from '../../src/components/game-comments.tsx';
 import { GameCourtBookingPanel } from '../../src/components/game-court-booking.tsx';
 import { GameVenueCommunitySummaryPanel } from '../../src/components/game-venue-community-summary.tsx';
 import { PrivateGameVenueContactsPanel } from '../../src/components/private-game-venue-contacts.tsx';
@@ -40,7 +41,7 @@ export default function PublicGameDetails() {
   const retryDetail = authenticated ? () => void auth.participation.loadDetail(id) : retry;
   const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
-  return <Page header={<Header />}>
+  return <Page keyboard header={<Header />}>
     <BackLink title="← Все игры" onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />
     {loading && <Loading title="Загружаем условия игры…" />}
     {error && <ErrorState error={authenticated ? gameRead?.error : state.error} retry={retryDetail} />}
@@ -82,6 +83,9 @@ export default function PublicGameDetails() {
       {authenticated ? <GameCourtBookingPanel gameId={game.id} proof="detail" /> : null}
       {authenticated
         ? <GameChatEntryPanel gameId={game.id} status={game.status} endsAt={game.endsAt} />
+        : null}
+      {game.status === 'published' && game.visibility === 'public'
+        ? <NativeGameComments gameId={game.id} />
         : null}
     </GameDetailRoleReputation>}
   </Page>;

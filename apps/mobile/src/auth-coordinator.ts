@@ -1,4 +1,5 @@
 import type { Packet as CommunityPacket, Query as CommunityQuery } from './venue-community.ts';
+import type { GameCommentPacket, GameCommentQuery } from './game-comments.ts';
 import { PostgameCoordinator } from './postgame-coordinator.ts';
 import { PostgameError } from './postgame.ts';
 import type { RadarCommand, RadarRead } from './radar.ts';
@@ -458,6 +459,12 @@ export class AuthCoordinator {
   communityMutation = (packet: CommunityPacket, permit: () => boolean) => this.participationRead(access => {
     if (!permit()) throw new ParticipationError('stale');
     return this.deps.api.communityMutation(access, packet);
+  }, packet.actor);
+  /** Closed public-game discussion ports — same actor/session/generation fence; no guest fallback. */
+  gameComments = (query: GameCommentQuery, actor: Actor) => this.participationRead(access => this.deps.api.gameComments(access, query), actor);
+  gameCommentMutation = (packet: GameCommentPacket, permit: () => boolean) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.gameCommentMutation(access, packet);
   }, packet.actor);
   /** Bearer stays inside the coordinator — same closed wrapper as avatar binary ports. */
   uploadCommentPhoto = (

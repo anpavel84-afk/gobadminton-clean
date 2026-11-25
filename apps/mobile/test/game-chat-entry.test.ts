@@ -296,5 +296,5 @@ test('#522 APK53: native game-chat entry wiring + version counter', () => {
   assert.match(auth, /deps\.api\.gameChat\(access, gameId\)/);
   assert.match(auth, /gameChatEntry\.setActor\(actor\)/);
   assert.match(auth, /gameChatEntry\.forget\(\)/);
-  assert.equal(app.expo.android.versionCode, 55);
+  assert.equal(app.expo.android.versionCode, 56);
 });

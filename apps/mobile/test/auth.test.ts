@@ -1382,6 +1382,27 @@ test('closed community ports use real same-actor auth, exact packet and permit; 
   assert.equal(comments.length,1);assert.match((comments[0]!.init.headers as Record<string,string>).Authorization!,/^Bearer /);
 });
 
+test('closed game-comment ports use same-actor auth, exact text-only packet and permit; invalid bearer has no guest fallback', async () => {
+  const {freezeGameCommentPacket} = await import('../src/game-comments.ts');
+  const gameId='10000000-0000-4000-8000-000000000001';
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const actor=s.auth.participation.getSnapshot().actor!;
+  const packet=freezeGameCommentPacket(actor,{gameId},{kind:'create',text:'Native game question',parentCommentId:null},'10000000-0000-4000-8000-000000000002');
+  s.setHandler(async()=>({ok:true}));
+  await assert.rejects(s.auth.gameCommentMutation(packet,()=>false));
+  assert.equal(s.calls.filter(c=>c.path===`/games/${gameId}/comments`).length,0);
+  await s.auth.gameCommentMutation(packet,()=>true);
+  const write=s.calls.find(c=>c.path===`/games/${gameId}/comments`)!;
+  assert.deepEqual(JSON.parse(String(write.init.body)),{text:'Native game question'});
+  assert.equal(Object.hasOwn(JSON.parse(String(write.init.body)),'photoIds'),false);
+  assert.equal(write.init.method,'POST');
+  s.setHandler(async()=>new Response('{}',{status:401}));
+  const before=s.calls.length;
+  await assert.rejects(s.auth.gameComments({gameId,order:'asc',parentCommentId:null,cursor:null},actor));
+  assert.equal(s.auth.participation.getSnapshot().actor,null);
+  const comments=s.calls.slice(before).filter(c=>c.path.includes(`/games/${gameId}/comments`));
+  assert.equal(comments.length,1);assert.match((comments[0]!.init.headers as Record<string,string>).Authorization!,/^Bearer /);
+});
+
 const roleHandle = 'a'.repeat(32);
 const gameAuthorGoal: PublicRoleLocalGoal = {
   mode: 'author', role: 'organization', roleHandle, origin: { kind: 'game', gameId: 'same-game' },

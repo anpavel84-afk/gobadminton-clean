@@ -1,5 +1,7 @@
 import { CommunityError, communityWire, commentsPath, id as communityId } from './venue-community.ts';
 import type { Packet as CommunityPacket, Query as CommunityQuery } from './venue-community.ts';
+import { gameCommentWire, gameCommentsPath } from './game-comments.ts';
+import type { GameCommentPacket, GameCommentQuery } from './game-comments.ts';
 import {
   COMMENT_PHOTO_MAX_BYTES, PHOTO_RIGHTS, isCommentPhotoMime, isPhotoReceipt,
 } from './venue-comment-photos.ts';
@@ -169,7 +171,11 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       throw new PostgameError(error instanceof SyntaxError ? 'invalid' : 'network');
     } finally { clearTimeout(timer); }
   }
-  async function communityRequest(path: string, access: string, packet?: CommunityPacket): Promise<unknown> {
+  async function communityRequest(
+    path: string,
+    access: string,
+    packet?: Readonly<{ method: string; key: string; body: Readonly<Record<string, unknown>> }>,
+  ): Promise<unknown> {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
@@ -197,6 +203,11 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     communityOwn: (access: string, venueId: string) => communityRequest(`/venues/${communityId(venueId)}/community-rating/me`, access),
     communityComments: (access: string, query: CommunityQuery) => communityRequest(commentsPath(query), access),
     communityMutation: (access: string, packet: CommunityPacket) => { const wire = communityWire(packet); return communityRequest(wire.path, access, packet); },
+    gameComments: (access: string, query: GameCommentQuery) => communityRequest(gameCommentsPath(query), access),
+    gameCommentMutation: (access: string, packet: GameCommentPacket) => {
+      const wire = gameCommentWire(packet);
+      return communityRequest(wire.path, access, { key: packet.key, method: wire.method, body: wire.body });
+    },
     /** Closed RAW BINARY comment-photo upload — image bytes only; never CSRF or cookie auth. */
     uploadCommentPhoto: async (
       access: string,
