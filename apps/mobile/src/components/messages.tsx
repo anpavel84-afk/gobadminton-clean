@@ -16,6 +16,7 @@ import { inboxDestination } from '../messages.ts';
 import type { DirectMessage, GameChatMember, GameInvitation, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
 import { isInviteClockExpired } from '../my-games.ts';
 import { playerMediaUrl } from '../media.ts';
+import { gamePath } from '../native-auth-protocol.ts';
 import type { Actor } from '../participation.ts';
 import { formatLabel, levelLabel } from '../presentation.ts';
 import { colors } from '../theme.ts';
@@ -130,8 +131,15 @@ function MessageAvatar({ peer }: { peer: MessagePeer }) {
     {uri ? <Image source={{ uri }} style={{ width: 44, height: 44 }} onError={() => setFailed(v => [...v, uri])} /> : <Label>{peer.displayName.trim().split(/\s+/).slice(0, 2).map(s => s[0]).join('')}</Label>}
   </View>;
 }
-function MessageHeader({ name, subtitle, peer }: { name: string; subtitle?: string; peer?: MessagePeer }) {
+function MessageHeader({ name, subtitle, peer, openGamePath }: {
+  name: string;
+  subtitle?: string;
+  peer?: MessagePeer;
+  /** Canonical `/games/<id>` only — set by caller after matching loaded game-chat header to route resource. */
+  openGamePath?: string;
+}) {
   const router = useRouter();
+  const renderedOpenGamePath = openGamePath;
   return <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
     <Pressable accessibilityRole="button" accessibilityLabel="Назад" onPress={() => router.navigate('/messages')}
       style={({ pressed }) => [{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }, pressed && { backgroundColor: colors.paper }]}>
@@ -139,6 +147,7 @@ function MessageHeader({ name, subtitle, peer }: { name: string; subtitle?: stri
     </Pressable>
     {peer && <MessageAvatar key={`${peer.publicPlayerId}:${peer.avatar?.uploadedUrl}`} peer={peer} />}
     <View style={{ flex: 1, minWidth: 100 }}><Label accessibilityRole="header" style={{ fontWeight: '700' }}>{name}</Label>{subtitle && <Label style={{ color: colors.secondary }}>{subtitle}</Label>}</View>
+    {renderedOpenGamePath ? <TextButton title="Открыть игру" onPress={() => { router.push(renderedOpenGamePath as '/games'); }} /> : null}
   </View>;
 }
 function PrivateEntry() {
@@ -403,7 +412,11 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const canSend = direct ? direct.requestState === 'accepted' && !safetyHeld : chat?.lifecycleState === 'active';
   const inviteBusy = inviteAuthoring.checking || inviteAuthoring.command?.status === 'sending';
   const canInvite = !!direct && direct.requestState === 'accepted' && !safetyHeld && !pending && !inviteBusy;
-  return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} />}>
+  // Accepted-web game-chat «Открыть игру»: only matching loaded header gameId vs route resource; never conversation id.
+  const openGamePath = chat && resource.kind === 'game' && chat.gameId === resource.id
+    ? gamePath(chat.gameId) ?? undefined
+    : undefined;
+  return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} openGamePath={openGamePath} />}>
     {direct && <NativeSafety peerId={direct.peer.publicPlayerId} name={direct.peer.displayName} conversationId={direct.id} messages={detail.messages} />}
     {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники${memberSafetyReady ? ' и безопасность' : ''} (${detail.members.length})`} onPress={() => { setShowMembers(v => !v); if (showMembers) retireMemberSafety(); }} />
       {showMembers && <>

@@ -286,6 +286,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Source APK counter 54; root repair3 (foreground full-source freshness barrier) + repair2 (absent-command target, game safety lifetime/permit, member-focus fence) + bounded safety/messages/auth checks; independent QA not yet run |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native game-chat member safety; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-21 · Native game-chat Open game navigation (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameConversation` header `href=/games/<encoded id>` «Открыть игру →»; native existing `gamePath` + `/games/[id]` detail |
+| Entry | Authenticated ready `/messages/game/[id]` with matching loaded game-chat header (`chat.gameId === resource.id`) |
+| Trigger | Explicit header TextButton «Открыть игру»; synchronous `router.push` of canonical game path only |
+| Expected | Action only when resource kind is game and header gameId matches route id; never conversation id or prior-thread destination; guest/loading/error omit the control; DM and invitation retain existing controls; drafts/UNKNOWN message/safety packets unchanged; destination owns visibility/error; no POST/PUT/DELETE or participation side effect |
+| Accessibility | Existing Russian «Открыть игру» TextButton / tokens; large-text/safe-area retained |
+| Non-scope | Header title/time parity; comments; new controller/API/deps; safety54 changes; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Source APK counter 55; `messages.tsx` header wiring + twelve version pins; no new unit (sync route) |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native game-chat Open game; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |
