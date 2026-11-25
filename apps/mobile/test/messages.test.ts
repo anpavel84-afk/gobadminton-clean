@@ -916,3 +916,37 @@ test('#522 APK54 root: mayDispatchGameSafety requires ready active member + capt
   assert.match(source, /AppState\.addEventListener\('change'/);
   assert.match(source, /epoch !== memberFocusEpoch\.current/);
 });
+
+test('#522 APK54 QA1: successful full game source notifies with ready detail and true freshness atomically', async () => {
+  const game = { kind: 'game' as const, id: 'game-a' };
+  const chat = {
+    id: 'chat-a', gameId: 'game-a', kind: 'game' as const, lifecycleState: 'active' as const, version: 1,
+    lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member' as const,
+  };
+  const members = [
+    { publicPlayerId: 'public-a', displayName: 'Self', role: 'member' as const },
+    { publicPlayerId: 'peer-b', displayName: 'Peer', role: 'member' as const },
+  ];
+  const membersGate = deferred<typeof members>();
+  const { owner } = setup({
+    game: async () => chat,
+    members: async () => membersGate.promise,
+    history: async () => ({ items: [], nextCursor: null }),
+  });
+  let observedReadyFresh = 0;
+  const unsub = owner.subscribe(() => {
+    const detail = owner.getSnapshot().detail;
+    // Production owner reacts on notification; ready game detail must already carry true freshness.
+    if (detail?.status === 'ready' && detail.resource.kind === 'game' && detail.header
+      && 'gameId' in detail.header && detail.header.gameId === 'game-a' && owner.gameSafetySourceFresh())
+      observedReadyFresh++;
+  });
+  owner.focus(game); await tick();
+  assert.equal(owner.gameSafetySourceFresh(), false);
+  assert.equal(observedReadyFresh, 0);
+  membersGate.resolve(members); await tick();
+  assert.equal(owner.getSnapshot().detail?.status, 'ready');
+  assert.equal(owner.gameSafetySourceFresh(), true);
+  assert.ok(observedReadyFresh >= 1, 'subscriber must observe ready matching detail with true freshness during the success notification');
+  unsub();
+});

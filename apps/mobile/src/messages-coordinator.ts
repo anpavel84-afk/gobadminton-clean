@@ -351,10 +351,10 @@ export class MessagesCoordinator {
         const resolved = this.accessLoss?.revision === revision && this.accessLoss.key === key;
         if (resolved) this.accessLoss = null;
         if (resource.kind === 'direct' && detail.header && 'peer' in detail.header) this.directPeers.set(resource.id, detail.header.peer.publicPlayerId);
-        this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
-        // Only a matching current full game source marks fresh; failure/old in-flight never reaches here.
+        // Only a matching current full game source marks fresh; publish before notify so subscribers see ready+fresh atomically. Failure/old in-flight never reaches here.
         if (resource.kind === 'game' && !older && lifecycle === this.foregroundGeneration)
           this.gameSafetySourceLifecycle = lifecycle;
+        this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
       }
     } catch (error) {
       if (this.valid(revision, safety) && request === this.detailRevision && !this.failed(error, safety)) this.show({ detail: (older || safety || soft) && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
