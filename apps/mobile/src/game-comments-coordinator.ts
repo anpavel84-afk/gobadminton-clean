@@ -57,6 +57,12 @@ export class GameCommentsCoordinator {
    * Irreversibly advanced by safety/disarm/full source refresh/authority retirement.
    */
   private authorityGen = 0;
+  /**
+   * Guest auto-read arm. Initial guest and distinct-game browsing start armed.
+   * Auth→null retirement disarms; only explicit refresh (CTA) re-arms. Remount/focus/
+   * foreground/order/reply must not silently fetch guest data while disarmed.
+   */
+  private guestAutoRead = true;
   private ports: GameCommentPorts;
   constructor(ports: GameCommentPorts) { this.ports = ports; }
   getSnapshot = () => this.state;
@@ -102,20 +108,29 @@ export class GameCommentsCoordinator {
   }
   setActor = (actor: Actor | null) => {
     if ((!actor && !this.state.actor) || sameActor(this.state.actor, actor)) return;
+    const retiring = !!this.state.actor && !actor;
     this.reset(actor ? Object.freeze({ ...actor }) : null, this.state.gameId);
+    if (retiring) this.guestAutoRead = false;
     if (this.state.gameId && actor && this.liveView()) void this.refresh();
   };
   /**
    * Bind current game discussion view. Returns release that retires only this viewGen.
    * UNKNOWN packets stay; reviews and in-flight read tickets are cancelled.
+   * After auth retirement, same-game remount stays idle until explicit guest refresh.
    */
   attach = (gameId: string): (() => void) => {
     id(gameId);
-    if (this.state.gameId !== gameId) this.reset(this.state.actor, gameId);
+    if (this.state.gameId !== gameId) {
+      this.reset(this.state.actor, gameId);
+      // Distinct public game: restore normal guest browsing (not the retired same-game fence).
+      if (!this.state.actor) this.guestAutoRead = true;
+    }
     const lease = ++this.viewGen;
     this.show({ focused: true, scope: Object.freeze({ gameId }) });
-    this.disarmAuthority('loading');
-    void this.refresh();
+    if (this.state.actor || this.guestAutoRead) {
+      this.disarmAuthority('loading');
+      void this.refresh();
+    }
     return () => {
       if (this.viewGen !== lease) return;
       this.blur();
@@ -146,7 +161,7 @@ export class GameCommentsCoordinator {
       return;
     }
     this.show({ foreground: true });
-    if (this.state.focused && this.state.gameId) {
+    if (this.state.focused && this.state.gameId && (this.state.actor || this.guestAutoRead)) {
       this.disarmAuthority('loading');
       void this.refresh();
     }
@@ -189,6 +204,8 @@ export class GameCommentsCoordinator {
   }
   refresh = async () => {
     const gameId = this.state.gameId; if (!gameId || !this.liveView()) return;
+    // Explicit guest CTA («Загрузить обсуждение как гость») re-arms auto-read for this owner.
+    if (!this.state.actor) this.guestAutoRead = true;
     // Full source refresh retires captured dispatch permits before new authority is read.
     this.authorityGen++;
     const scope = Object.freeze({ gameId });
@@ -211,6 +228,8 @@ export class GameCommentsCoordinator {
   }
   loadThread = async (parent: string | null, more = false, reload = false) => {
     const { gameId, actor, scope } = this.state; if (!gameId || !scope || !this.liveView()) return;
+    // Session-retired guest: block order/reply/loadMore/indirect reads until explicit refresh.
+    if (!actor && !this.guestAutoRead) return;
     if (parent && !this.rows().some(c => c.id === parent && c.parentCommentId === null)) return;
     const current = this.getThread(parent);
     if (more && (current.phase === 'loading' || !current.pages.at(-1)?.page.nextCursor)) return;
@@ -251,6 +270,7 @@ export class GameCommentsCoordinator {
   };
   setOrder = (order: 'asc' | 'desc') => {
     if (!['asc', 'desc'].includes(order) || order === this.state.order || this.busy() || !this.liveView()) return;
+    if (!this.state.actor && !this.guestAutoRead) return;
     this.epoch++; this.show({ order, roots: thread(), replies: {} }); void this.loadThread(null);
   };
   rows = (): GameComment[] => [

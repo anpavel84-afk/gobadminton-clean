@@ -479,3 +479,96 @@ test('actor retirement stays idle without guest fallback; explicit public reload
   assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
   assert.equal(owner.getSnapshot().roots.pages[0]?.page.items[0]?.body, 'Guest row');
 });
+
+test('session-retired guest: remount/focus/foreground/order/reply stay silent until explicit reload', async () => {
+  const otherGame = '10000000-0000-4000-8000-000000000099';
+  const { owner, ports } = await fixture();
+  let guest = 0;
+  ports.guestComments = async (q: GameCommentQuery) => {
+    guest++;
+    const item = row({
+      mine: false,
+      body: q.gameId === otherGame ? 'Other guest' : 'Guest row',
+      entityId: q.gameId,
+      id: q.gameId === otherGame ? replyId : rootId,
+    });
+    return {
+      ...page(q, [item]),
+      entityId: q.gameId,
+      canCreate: false,
+    };
+  };
+
+  owner.setActor(null);
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+  const release = owner.attach(gameId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 0);
+  assert.equal(owner.getSnapshot().focused, true);
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+
+  release();
+  assert.equal(owner.getSnapshot().focused, false);
+  owner.open(gameId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 0);
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+
+  owner.setForeground(false);
+  owner.setForeground(true);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 0);
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+
+  owner.setOrder('desc');
+  await owner.loadThread(null);
+  await owner.loadThread(rootId);
+  assert.equal(guest, 0);
+  assert.equal(owner.getSnapshot().order, 'asc');
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+
+  await owner.refresh();
+  assert.equal(guest, 1);
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.items[0]?.body, 'Guest row');
+
+  owner.detach();
+  owner.open(gameId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 2, 'explicit reload restores normal guest remount browsing');
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+
+  owner.setForeground(false);
+  owner.setForeground(true);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 3);
+
+  // Distinct public game still arms guest browse after a prior retirement fence.
+  const cold = new GameCommentsCoordinator({
+    guestComments: async (q: GameCommentQuery) => {
+      guest++;
+      return { ...page(q), canCreate: false, items: [row({
+        mine: false, body: 'Cold guest', entityId: q.gameId, id: rootId,
+      })] };
+    },
+    comments: async () => { throw new Error('auth unexpected'); },
+    send: async () => { throw new Error('send unexpected'); },
+    random: () => replyId,
+  });
+  cold.open(gameId);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 4, 'initial guest attach still auto-reads');
+  assert.equal(cold.getSnapshot().roots.phase, 'ready');
+
+  owner.setActor(actor);
+  await owner.refresh();
+  const beforeDistinct = guest;
+  owner.setActor(null);
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+  owner.open(otherGame);
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, beforeDistinct + 1, 'distinct-game public browsing preserved');
+  assert.equal(owner.getSnapshot().gameId, otherGame);
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.items[0]?.body, 'Other guest');
+});
