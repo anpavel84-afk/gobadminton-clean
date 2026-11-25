@@ -52,6 +52,11 @@ export class GameCommentsCoordinator {
   private viewGen = 0;
   /** Bumps on every foreground transition — invalidates captured dispatch permits. */
   private foregroundGen = 0;
+  /**
+   * Source-authority revision — independent of read epoch (dispatch bumps epoch only).
+   * Irreversibly advanced by safety/disarm/full source refresh/authority retirement.
+   */
+  private authorityGen = 0;
   private ports: GameCommentPorts;
   constructor(ports: GameCommentPorts) { this.ports = ports; }
   getSnapshot = () => this.state;
@@ -70,6 +75,7 @@ export class GameCommentsCoordinator {
   }
   private reset(actor: Actor | null, gameId: string | null) {
     this.epoch++; this.reads.clear(); this.edits.clear();
+    this.authorityGen++;
     this.retireAuthority(actor);
     this.show({
       editNotice: null, actor, gameId,
@@ -88,6 +94,7 @@ export class GameCommentsCoordinator {
       Object.entries(this.state.replies).map(([k, v]) => [k, disarm(v)]),
     );
     this.epoch++; this.reads.clear(); this.edits.clear();
+    this.authorityGen++;
     this.show({ roots: disarm(this.state.roots), replies, editNotice: null });
   }
   private liveView() {
@@ -146,14 +153,22 @@ export class GameCommentsCoordinator {
   };
   viewLifecycle = () => this.viewGen;
   foregroundLifecycle = () => this.foregroundGen;
+  authorityLifecycle = () => this.authorityGen;
   /**
-   * After a verified same-actor block/unblock acknowledgement: invalidate comment pages/
-   * permissions before reuse and refresh the focused game. Does not touch UNKNOWN packets.
+   * After a verified same-actor block/unblock acknowledgement: clear cached publication and
+   * permissions immediately, then refresh. Does not touch UNKNOWN packets or owned drafts.
+   * Safety-specific clearing — ordinary blur/foreground disarm may keep honest cached rows.
    */
   invalidateAfterSafety = () => {
     if (!this.state.actor || !this.state.gameId || !this.liveView()) return;
     this.cancelReviews();
-    this.disarmAuthority('loading');
+    this.epoch++; this.reads.clear(); this.edits.clear();
+    this.authorityGen++;
+    this.show({
+      roots: { phase: 'loading', pages: [], error: null },
+      replies: {},
+      editNotice: null,
+    });
     void this.refresh();
   };
   private ticket(key: string) {
@@ -163,6 +178,7 @@ export class GameCommentsCoordinator {
   }
   private clearPermissions() {
     this.epoch++; this.reads.clear(); this.edits.clear();
+    this.authorityGen++;
     this.show({
       scope: null,
       editNotice: 'Редактирование недоступно. Несовместимые черновики удалены.',
@@ -172,6 +188,8 @@ export class GameCommentsCoordinator {
   }
   refresh = async () => {
     const gameId = this.state.gameId; if (!gameId || !this.liveView()) return;
+    // Full source refresh retires captured dispatch permits before new authority is read.
+    this.authorityGen++;
     const scope = Object.freeze({ gameId });
     this.show({ scope });
     await this.reloadThreads();
@@ -359,10 +377,13 @@ export class GameCommentsCoordinator {
     const p = operation.packet;
     const capturedView = this.viewGen;
     const capturedForeground = this.foregroundGen;
+    const capturedAuthority = this.authorityGen;
     const permit = () => this.permitted(p)
       && this.viewGen === capturedView
-      && this.foregroundGen === capturedForeground;
+      && this.foregroundGen === capturedForeground
+      && this.authorityGen === capturedAuthority;
     if (!permit()) return;
+    // Epoch only — must not advance authorityGen or this dispatch's own permit dies.
     this.epoch++; this.reads.clear();
     const pending: GameCommentOperation = { ...operation, status: 'pending', notice: 'Отправляем…' };
     this.history.set(p.key, pending); this.show();
@@ -389,10 +410,9 @@ export class GameCommentsCoordinator {
         notice: refused ? gameCommentNotice(error)
           : 'Результат неизвестен. Сохранено исходное действие; автоматического повтора нет.',
       });
-      if (permit()) {
-        if (error instanceof CommunityError && error.kind === 'private') this.clearPermissions();
-        this.show();
-      }
+      // Always surface UNKNOWN/refused into the snapshot; permit only gates live side effects.
+      this.show();
+      if (permit() && error instanceof CommunityError && error.kind === 'private') this.clearPermissions();
     } finally {
       if (permit() && sameActor(this.state.actor, p.actor) && this.state.gameId === p.scope.gameId && this.history.has(p.key)) {
         this.show();

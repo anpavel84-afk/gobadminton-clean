@@ -333,9 +333,10 @@ test('leave/background during token wait blocks POST; return awaits fresh author
   assert.equal(owner.canReconcile(packet.key), true);
 });
 
-test('safety acknowledgement invalidates pages and late read cannot restore stale canCreate mid-refresh', async () => {
+test('safety acknowledgement clears cached rows immediately; late read cannot restore stale authority', async () => {
   const { owner, ports } = await fixture();
   assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
+  assert.ok(owner.rows().length > 0);
   const late = deferred<unknown>();
   let calls = 0;
   ports.comments = async (q: GameCommentQuery) => {
@@ -345,13 +346,95 @@ test('safety acknowledgement invalidates pages and late read cannot restore stal
   };
   owner.invalidateAfterSafety();
   assert.equal(owner.getSnapshot().roots.phase, 'loading');
-  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.getSnapshot().roots.pages.length, 0);
+  assert.equal(owner.rows().length, 0);
   assert.equal(owner.review({ kind: 'create', text: 'Blocked', parentCommentId: null }), null);
   // Detach before late read lands — must not paint/restore authority on a retired view.
   owner.detach();
   late.resolve(page({ gameId, order: 'asc', parentCommentId: null, cursor: null }, [row()], null));
   await new Promise(r => setImmediate(r));
   assert.equal(owner.getSnapshot().focused, false);
-  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.getSnapshot().roots.pages.length, 0);
   assert.notEqual(owner.getSnapshot().roots.phase, 'ready');
+});
+
+test('safety during token wait: original permit never revalidates after authority refresh; explicit same-key recovery', async () => {
+  const { owner, ports, packets } = await fixture();
+  const gate = deferred<void>();
+  let permitAtSend: boolean | null = null;
+  let posts = 0;
+  ports.send = async (_p, permit) => {
+    await gate.promise;
+    permitAtSend = permit();
+    if (!permitAtSend) throw new CommunityError('network');
+    posts++;
+    return row({ body: 'Frozen reply' });
+  };
+  const packet = owner.review({ kind: 'create', text: 'Frozen reply', parentCommentId: null })!;
+  const writing = owner.commit(packet.key);
+
+  const afterSafety = deferred<unknown>();
+  let reads = 0;
+  ports.comments = async (q: GameCommentQuery) => {
+    reads++;
+    if (reads === 1) return afterSafety.promise;
+    return page(q, [row({ mine: false, body: 'Public after block' })]);
+  };
+  owner.invalidateAfterSafety();
+  assert.equal(owner.rows().length, 0);
+  assert.equal(owner.getSnapshot().roots.pages.length, 0);
+
+  afterSafety.resolve(page({ gameId, order: 'asc', parentCommentId: null, cursor: null },
+    [row({ mine: false, body: 'Public after block' })]));
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
+
+  gate.resolve();
+  await writing;
+  assert.equal(permitAtSend, false);
+  assert.equal(posts, 0);
+  assert.equal(owner.getSnapshot().operations[0]?.status, 'unknown');
+  assert.equal(owner.getSnapshot().operations[0]?.packet, packet);
+  assert.equal(owner.canReconcile(packet.key), true);
+
+  ports.send = async (p, permit) => {
+    assert.equal(permit(), true);
+    posts++;
+    packets.push(p);
+    return row({ body: String(p.body.text) });
+  };
+  await owner.reconcile(packet.key);
+  assert.equal(posts, 1);
+  assert.equal(packets.at(-1), packet);
+  assert.equal(owner.getSnapshot().operations[0]?.status, 'confirmed');
+});
+
+test('actor retirement stays idle without guest fallback; explicit public reload works', async () => {
+  const { owner, ports } = await fixture();
+  let guest = 0;
+  let auth = 0;
+  ports.guestComments = async (q: GameCommentQuery) => {
+    guest++;
+    return { ...page(q), canCreate: false, items: [row({ mine: false, body: 'Guest row' })] };
+  };
+  ports.comments = async (q: GameCommentQuery) => {
+    auth++;
+    return page(q);
+  };
+  owner.setActor(null);
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().gameId, gameId);
+  assert.equal(owner.getSnapshot().roots.phase, 'idle');
+  await new Promise(r => setImmediate(r));
+  assert.equal(guest, 0);
+  assert.equal(auth, 0);
+  assert.equal(owner.review({ kind: 'create', text: 'Nope', parentCommentId: null }), null);
+
+  await owner.refresh();
+  assert.equal(guest, 1);
+  assert.equal(auth, 0);
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.items[0]?.body, 'Guest row');
 });

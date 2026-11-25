@@ -196,7 +196,10 @@ function GameCommentsPanel() {
           : s.roots.phase === 'ready' ? <Label>Чтение доступно. Отправка комментариев сейчас недоступна.</Label>
             : null}
       <Outcomes owner={owner} match={o => o.packet.action.kind === 'create' && !o.packet.action.parentCommentId} />
-      <ThreadNotice thread={s.roots} reload={() => void owner.loadThread(null)} />
+      {!s.actor && s.roots.phase === 'idle' && live ? <View style={{ gap: 8 }}>
+        <Label>Сессия чтения завершена. Автоматической гостевой загрузки нет.</Label>
+        <ActionButton title="Загрузить обсуждение как гость" onPress={() => void owner.refresh()} />
+      </View> : <ThreadNotice thread={s.roots} reload={() => void owner.loadThread(null)} />}
       {s.roots.phase === 'ready' && !s.roots.pages.flatMap(p => p.page.items).length
         && <Label>Пока нет комментариев. Начните разговор.</Label>}
       {s.roots.pages.flatMap(p => p.page.items).map(comment =>
@@ -233,7 +236,7 @@ function GameCommentsPanel() {
 
 function ThreadNotice({ thread, reload }: { thread: GameCommentThread; reload: () => void }) {
   return <>
-    {(thread.phase === 'idle' || thread.phase === 'loading')
+    {thread.phase === 'loading'
       && <Label accessibilityLiveRegion="polite">Загружаем комментарии…</Label>}
     {thread.phase === 'error' && <>
       <Label accessibilityRole="alert">{thread.error}</Label>
