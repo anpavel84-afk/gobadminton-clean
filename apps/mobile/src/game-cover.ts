@@ -811,3 +811,65 @@ export const GAME_COVER_EDITOR_COPY = {
   loading: 'Проверяем право изменения фото…',
   retryLoad: 'Повторить проверку',
 } as const;
+
+/** Accepted-web CreateGamePage / GamePhotoSelection copy for optional creation photo. */
+export const GAME_PHOTO_SELECTION_COPY = {
+  sectionLabel: 'Фото этой игры',
+  title: 'Фото этой игры · необязательно',
+  explanation:
+    'Без своего фото используется текущая одобренная обложка выбранной площадки, а если её нет — стандартная. Своё фото относится только к этой игре и не меняет площадку или другие игры.',
+  confirmStatus: 'Фото выбрано. Оно будет проверено при сохранении игры.',
+  omitStatus: 'Используется текущая обложка площадки или стандартная.',
+  previewSelected: 'Выбрано своё фото этой игры. Перед публикацией сервер проверит изображение.',
+  previewOmitted: 'Будет использована текущая одобренная обложка площадки или стандартная.',
+  saveFailed:
+    'Фото не сохранено или проверка не пройдена. Черновик сохранён, игра не опубликована. Повторите загрузку или удалите своё фото в сводке, затем опубликуйте черновик.',
+  startExpiredAfterCreate: 'Начало уже прошло. Черновик сохранён, игра не опубликована.',
+} as const;
+
+/**
+ * Create-game photo selection fence captured at render — generation + concrete selection
+ * identity (asset/crop/preview). Handlers admit only when live state still matches.
+ */
+export type GamePhotoSelectionFence = Readonly<{
+  generation: number;
+  scope: string;
+  assetUri: string | null;
+  cropX: number;
+  cropY: number;
+  /** Referential preview-bytes identity from the rendering draft; null when none. */
+  previewBytes: Readonly<{ bytes: Uint8Array; mime: string }> | null;
+}>;
+
+/** Live create-game photo selection + lifecycle flags rechecked at handler time. */
+export type GamePhotoSelectionLiveState = Readonly<{
+  mounted: boolean;
+  foreground: boolean;
+  disabled: boolean;
+  generation: number;
+  scope: string;
+  assetUri: string | null;
+  cropX: number;
+  cropY: number;
+  previewBytes: Readonly<{ bytes: Uint8Array; mime: string }> | null;
+}>;
+
+/**
+ * Pure production admission for GamePhotoSelection confirm/pick/crop/reset callbacks.
+ * Gen alone is insufficient: same-scope new pick/crop/reset must reject stale confirm
+ * carrying an older preview/asset/crop identity.
+ */
+export function gamePhotoSelectionLive(
+  fence: GamePhotoSelectionFence,
+  live: GamePhotoSelectionLiveState,
+): boolean {
+  return live.mounted
+    && live.foreground
+    && !live.disabled
+    && live.generation === fence.generation
+    && live.scope === fence.scope
+    && live.assetUri === fence.assetUri
+    && live.cropX === fence.cropX
+    && live.cropY === fence.cropY
+    && live.previewBytes === fence.previewBytes;
+}

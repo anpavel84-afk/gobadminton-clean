@@ -1346,5 +1346,5 @@ test('source wiring: results entry + dual-auth guards + APK38 pins', () => {
   assert.match(controller, /submit_revision[\s\S]*withdraw[\s\S]*requirePrincipalMutation/);
   assert.match(controller, /ownCommand[\s\S]*requireCookieMutation\(request\)/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 51);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 52);
 });

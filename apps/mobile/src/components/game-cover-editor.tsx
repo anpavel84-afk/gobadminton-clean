@@ -281,6 +281,10 @@ export function GameCoverEditor({
     retireOwnedPicker(ownedPickerRef, draftScope);
     setDraft(d => (d.scope !== draftScope ? d : emptyDraft(draftScope)));
     setPreparing(false);
+    // Explicit «Без своего фото» after authoritative ready cover — clears failed create-photo publish hold.
+    if (access && !uncertain && state.status === 'ready') {
+      auth.gameManagement.acknowledgeCreationCoverResolved(gameId);
+    }
   }
 
   const showReconcile = focused && uncertain;
@@ -475,7 +479,9 @@ export function GameCoverEditor({
                     });
                   }} />
                 ) : null}
-                {scopedAsset ? <TextButton title="Без своего фото" onPress={resetSelection} /> : null}
+                {(scopedAsset || (access && !hasCover && !uncertain && state.status === 'ready')) ? (
+                  <TextButton title="Без своего фото" onPress={resetSelection} />
+                ) : null}
               </>
             ) : null}
             {!access && !uncertain && state.status !== 'idle' ? (

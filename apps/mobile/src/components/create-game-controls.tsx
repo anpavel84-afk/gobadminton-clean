@@ -90,7 +90,7 @@ const VISIBILITY_OPTIONS: { value: CreationForm['visibility']; label: string }[]
   { value: 'unlisted', label: 'Только по ссылке' },
 ];
 
-export function CreateGameFormSections({ form, venues, trainer, timezone, coverUrl, onUpdate, onOpenCity, contactAlert = null, onContactAlertLayout }: {
+export function CreateGameFormSections({ form, venues, trainer, timezone, coverUrl, onUpdate, onOpenCity, contactAlert = null, onContactAlertLayout, photoSlot = null }: {
   form: CreationForm;
   venues: Venue[];
   trainer: boolean;
@@ -100,6 +100,8 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
   onOpenCity: () => void;
   contactAlert?: string | null;
   onContactAlertLayout?: (anchor: ComponentRef<typeof View>) => void;
+  /** Optional create-game photo selection (accepted-web GamePhotoSelection). */
+  photoSlot?: ReactNode;
 }) {
   const selected = venues.find(v => v.id === form.venueId);
   const catalogueTrigger = useRef<ComponentRef<typeof Pressable>>(null);
@@ -245,8 +247,8 @@ export function CreateGameFormSections({ form, venues, trainer, timezone, coverU
         </>}
     </FormSection>
 
-    <FormSection title="Фото этой игры">
-      <Label style={{ textAlign: 'left' }}>Будет использована текущая одобренная обложка площадки или стандартная.</Label>
+    <FormSection title="Фото этой игры · необязательно">
+      {photoSlot ?? <Label style={{ textAlign: 'left' }}>Будет использована текущая одобренная обложка площадки или стандартная.</Label>}
     </FormSection>
 
     <DiscoverySheet visible={catalogueOpen} title="Из каталога площадок" onClose={() => setCatalogueOpen(false)} returnFocusRef={catalogueTrigger}>

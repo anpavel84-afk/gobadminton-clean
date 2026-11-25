@@ -31,10 +31,12 @@ test('#623 contact-scroll path is keyed on contactAlert; generic notice scroll g
   assert.doesNotMatch(create, /participationSectionY/);
 
   // NEGATIVE / regression: bottom generic notice must not steal scroll when contactAlert is set.
-  const noticeOnLayout = create.slice(
-    create.indexOf('{state.notice && <Label accessibilityRole="alert" onLayout='),
-    create.indexOf('>{state.notice}</Label>}'),
-  );
+  const noticeStart = create.indexOf('{state.notice && !state.preview && <Label accessibilityRole="alert" onLayout=');
+  const noticeEnd = create.indexOf('>{state.notice}</Label>}');
+  assert.ok(noticeStart >= 0);
+  assert.ok(noticeEnd >= 0);
+  assert.ok(noticeEnd > noticeStart);
+  const noticeOnLayout = create.slice(noticeStart, noticeEnd);
   assert.match(noticeOnLayout, /if \(contactAlert\) return/);
   assert.match(noticeOnLayout, /scrollTo/);
   assert.doesNotMatch(

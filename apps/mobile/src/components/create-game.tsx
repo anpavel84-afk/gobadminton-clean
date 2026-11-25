@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
-import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
+import { AppState, Image, Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../auth.tsx';
@@ -19,8 +19,20 @@ import {
   OutlineButton,
   StepIndicator,
 } from './create-game-controls.tsx';
+import { GamePhotoSelection } from './game-photo-selection.tsx';
+import { GAME_PHOTO_SELECTION_COPY } from '../game-cover.ts';
+import type { AvatarDerivative } from '../profile-avatar.ts';
 
 export { GameField } from './create-game-controls.tsx';
+
+function creationPhotoDataUri(bytes: Uint8Array, mime: string): string {
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return `data:${mime};base64,${globalThis.btoa(binary)}`;
+}
 
 export function CreateGame({ venueId }: { venueId?: string }) {
   const auth = useAuth(), owner = auth.gameManagement, router = useRouter();
@@ -30,8 +42,32 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const view = useRef(0);
   const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const [selecting, setSelecting] = useState(false);
-  // Blur/refocus fences local reads; returning to a mounted form must not reload or replace its draft.
-  useFocusEffect(useCallback(() => { view.current++; setSelecting(false); return () => { view.current++; }; }, []));
+  const [photoReady, setPhotoReady] = useState(true);
+  const [hasConfirmedPhoto, setHasConfirmedPhoto] = useState(false);
+  const [confirmedPreviewUri, setConfirmedPreviewUri] = useState<string | null>(null);
+  // Blur/refocus fences local reads + create→cover→publish lease; AppState retires continuation (picker is local).
+  // Bind to actor identity/session/generation only — not transient auth.status. Cold launch has no actor
+  // yet (no bind); hydration/identity change rebinds while focused; same-session token refresh keeps
+  // the lease and accepted photo. Cleanup still runs on real departure / identity change.
+  useFocusEffect(useCallback(() => {
+    if (!actor) return;
+    view.current++;
+    setSelecting(false);
+    const release = owner.bindCreationView();
+    owner.setCreationForeground(AppState.currentState === 'active');
+    const sub = AppState.addEventListener('change', next => {
+      owner.setCreationForeground(next === 'active');
+    });
+    return () => {
+      sub.remove();
+      release();
+      view.current++;
+      // Real route departure — sync React flags with coordinator photo retirement (not preview↔edit).
+      setHasConfirmedPhoto(false);
+      setConfirmedPreviewUri(null);
+      setPhotoReady(true);
+    };
+  }, [owner, actor?.actorId, actor?.sessionId, actor?.generation]));
   const [selectedIntent, setSelected] = useState<string | null>(null), [attemptedIntent, setAttempted] = useState<string | null>(null);
   const selectionKey = `${venueId}:${actor?.actorId}:${actor?.sessionId}:${actor?.generation}`;
   const selected = selectedIntent === selectionKey, attempted = attemptedIntent === selectionKey;
@@ -101,9 +137,27 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   </ScreenFrame>;
   const shell = (body: ReactNode, opts?: { footer?: ReactNode }) => sheet ? <IosSheetSafeArea>{frame(body, opts)}</IosSheetSafeArea> : frame(body, opts);
 
+  const photoScopeKey = `${actor?.actorId ?? ''}:${actor?.sessionId ?? ''}:${actor?.generation ?? ''}:${view.current}`;
+  useEffect(() => {
+    // Actor/session reset, view departure, or newCreation clears coordinator photo — keep React flags honest.
+    if (!owner.hasCreationPhoto()) {
+      setHasConfirmedPhoto(false);
+      setConfirmedPreviewUri(null);
+    }
+  }, [owner, actor?.actorId, actor?.sessionId, actor?.generation, state.created, state.creationReference, state.preview]);
+  const onPhotoChange = useCallback((derivative: AvatarDerivative | null) => {
+    owner.setCreationPhoto(derivative);
+    setHasConfirmedPhoto(!!derivative);
+    setConfirmedPreviewUri(derivative
+      ? creationPhotoDataUri(derivative.bytes, derivative.mime)
+      : null);
+  }, [owner]);
+  const onPhotoReady = useCallback((ready: boolean) => {
+    setPhotoReady(ready);
+  }, []);
   const formFooter = <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.card }}>
     <OutlineButton title="Отмена" onPress={() => sheet ? closeSheet() : (router.canGoBack() ? router.back() : router.replace('/games'))} />
-    <View style={{ flex: 1 }}><PrimaryButton title="Далее — к созданию" onPress={owner.preview} /></View>
+    <View style={{ flex: 1 }}><PrimaryButton title="Далее — к созданию" disabled={!photoReady || blocked} onPress={() => { if (photoReady) owner.preview(); }} /></View>
   </View>;
   const showFormFooter = active && auth.status !== 'hydrating' && !(blocked && state.command) && !awaitingVenue
     && state.context === 'ready' && !state.created && !state.creationReference && !state.preview;
@@ -135,53 +189,89 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       <ManagedTerms game={state.created} />
       <Label>{state.created.activityKind === 'regular' ? 'Создатель обычной игры занимает место по правилам сервиса.' : 'Тренер не занимает место участника автоматически.'}</Label>
       <ManagementCommand />
-      {state.created.status === 'draft' && !blocked && <PrimaryButton title="Опубликовать черновик" onPress={() => void owner.publishDraft(state.created!.id)} />}
-      {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => void owner.newCreation(contextCity)} />}
+      {state.created.status === 'draft' && !blocked && !owner.creationCoverBlocksPublish(state.created.id) && <PrimaryButton title="Опубликовать черновик"
+        onPress={() => {
+          if (owner.creationCoverBlocksPublish(state.created!.id)) return;
+          void owner.publishDraft(state.created!.id);
+        }} />}
+      {state.created.status === 'draft' && owner.creationCoverBlocksPublish(state.created.id) && (
+        <TextButton title="Открыть сводку — фото и публикация" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.created!.id } })} />
+      )}
+      {state.created.status === 'published' && !blocked && <TextButton title="Создать ещё игру" onPress={() => {
+        setHasConfirmedPhoto(false);
+        setConfirmedPreviewUri(null);
+        setPhotoReady(true);
+        void owner.newCreation(contextCity);
+      }} />}
       <TextButton title="Открыть сводку" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.created!.id } })} />
     </> : state.creationReference ? <>
       <Label>Игра уже создана. Сначала проверьте её сводку; повторное создание недоступно.</Label>
       <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />
     </> : state.context === 'loading' || state.context === 'idle' ? <Loading title="Проверяем профиль и площадки…" />
     : state.context === 'error' ? <><Label>Не удалось проверить профиль, настройки или каталог площадок.</Label><TextButton title="Повторить" onPress={reloadContext} /></>
-    : state.preview ? <>
-      <StepIndicator step={2} />
-      <Label accessibilityRole="header" style={[styles.subtitle, { textAlign: 'left' }]}>Проверка перед созданием</Label>
-      <Label style={{ textAlign: 'left' }}>Проверьте данные. Игра появится после нажатия «Создать игру».</Label>
-      <View style={[styles.card, { gap: 12 }]}>
-        <Label style={{ textAlign: 'left', fontWeight: '700' }}>{state.preview.title || (state.preview.activityKind === 'regular' ? 'Игра' : 'Игра с тренером')}</Label>
-        <Label style={{ textAlign: 'left' }}>{state.venues.find(v => v.id === state.preview!.venueId)?.name}</Label>
-        <Label style={{ textAlign: 'left' }}>{createGameInstant(state.preview.startsAt, state.preview.timezone)} · {state.preview.timezone}</Label>
-        <Label style={{ textAlign: 'left' }}>Длительность: {f.duration} мин · Количество мест: {state.preview.capacity}</Label>
-        <Label style={{ textAlign: 'left' }}>{({ doubles: 'Парная игра', singles: 'Одиночная игра', mixed: 'Микст' })[f.format]} · Уровни игроков: от {f.lower.toFixed(1)} до {f.upper.toFixed(1)}</Label>
-        <Label style={{ textAlign: 'left' }}>{f.visibility === 'public' ? 'В поиске' : 'Только по ссылке'}</Label>
-        <Label style={{ textAlign: 'left' }}>Публичный контакт: {state.preview.hostPublicContact}</Label>
-        {!!previewTerms && <Label style={{ textAlign: 'left' }}>{`${termsLabel}${previewTerms}`}</Label>}
-        {!!state.preview.trainingDescription && <Label style={{ textAlign: 'left' }}>{state.preview.trainingDescription}</Label>}
+    : <>
+      {/* Form stays mounted under preview so GamePhotoSelection keeps crop/confirm across preview↔edit. */}
+      <View style={state.preview ? { display: 'none' } : undefined} collapsable={false}>
+        <StepIndicator step={1} />
+        <Label accessibilityRole="header" style={[styles.title, { textAlign: 'left' }]}>Создать игру</Label>
+        <CreateGameFormSections
+          form={f}
+          venues={state.venues}
+          trainer={Boolean(state.trainer)}
+          timezone={timezone}
+          coverUrl={coverUrl}
+          onUpdate={patch => owner.update(patch)}
+          onOpenCity={() => router.push('/city')}
+          contactAlert={contactAlert}
+          onContactAlertLayout={anchor => {
+            const content = scrollRef.current?.getInnerViewRef?.();
+            if (content) anchor.measureLayout(content, (_x, y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true }), () => undefined);
+          }}
+          photoSlot={<GamePhotoSelection
+            scopeKey={photoScopeKey}
+            disabled={blocked}
+            onChange={onPhotoChange}
+            onReady={onPhotoReady}
+          />}
+        />
+        {state.notice && !state.preview && <Label accessibilityRole="alert" onLayout={e => {
+          // Empty-contact path scrolls to the field-level alert; do not steal that with the bottom notice.
+          if (contactAlert) return;
+          scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 24), animated: true });
+        }}>{state.notice}</Label>}
       </View>
-      <ManagementCommand />
-      <LeftLink title="Назад к редактированию" onPress={owner.edit} />
-      <PrimaryButton title="Создать игру" disabled={blocked} onPress={() => void owner.publishPreview()} />
-    </> : <>
-      <StepIndicator step={1} />
-      <Label accessibilityRole="header" style={[styles.title, { textAlign: 'left' }]}>Создать игру</Label>
-      <CreateGameFormSections
-        form={f}
-        venues={state.venues}
-        trainer={Boolean(state.trainer)}
-        timezone={timezone}
-        coverUrl={coverUrl}
-        onUpdate={patch => owner.update(patch)}
-        onOpenCity={() => router.push('/city')}
-        contactAlert={contactAlert}
-        onContactAlertLayout={anchor => {
-          const content = scrollRef.current?.getInnerViewRef?.();
-          if (content) anchor.measureLayout(content, (_x, y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true }), () => undefined);
-        }}
-      />
-      {state.notice && <Label accessibilityRole="alert" onLayout={e => {
-        // Empty-contact path scrolls to the field-level alert; do not steal that with the bottom notice.
-        if (contactAlert) return;
-        scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 24), animated: true });
-      }}>{state.notice}</Label>}
+      {state.preview ? <>
+        <StepIndicator step={2} />
+        <Label accessibilityRole="header" style={[styles.subtitle, { textAlign: 'left' }]}>Проверка перед созданием</Label>
+        <Label style={{ textAlign: 'left' }}>Проверьте данные. Игра появится после нажатия «Создать игру».</Label>
+        <View style={[styles.card, { gap: 12 }]}>
+          <Label style={{ textAlign: 'left', fontWeight: '700' }}>{state.preview.title || (state.preview.activityKind === 'regular' ? 'Игра' : 'Игра с тренером')}</Label>
+          <Label style={{ textAlign: 'left' }}>{state.venues.find(v => v.id === state.preview!.venueId)?.name}</Label>
+          <Label style={{ textAlign: 'left' }}>{createGameInstant(state.preview.startsAt, state.preview.timezone)} · {state.preview.timezone}</Label>
+          <Label style={{ textAlign: 'left' }}>Длительность: {f.duration} мин · Количество мест: {state.preview.capacity}</Label>
+          <Label style={{ textAlign: 'left' }}>{({ doubles: 'Парная игра', singles: 'Одиночная игра', mixed: 'Микст' })[f.format]} · Уровни игроков: от {f.lower.toFixed(1)} до {f.upper.toFixed(1)}</Label>
+          <Label style={{ textAlign: 'left' }}>{f.visibility === 'public' ? 'В поиске' : 'Только по ссылке'}</Label>
+          <Label style={{ textAlign: 'left' }}>Публичный контакт: {state.preview.hostPublicContact}</Label>
+          {!!previewTerms && <Label style={{ textAlign: 'left' }}>{`${termsLabel}${previewTerms}`}</Label>}
+          {!!state.preview.trainingDescription && <Label style={{ textAlign: 'left' }}>{state.preview.trainingDescription}</Label>}
+          {(hasConfirmedPhoto || owner.hasCreationPhoto()) && confirmedPreviewUri ? (
+            <View accessibilityLabel="Предпросмотр выбранного фото игры" style={{ gap: 8 }}>
+              <Label style={{ textAlign: 'left' }}>{GAME_PHOTO_SELECTION_COPY.previewSelected}</Label>
+              <View style={{ width: '100%', aspectRatio: 3, overflow: 'hidden', borderRadius: 12 }}>
+                <Image source={{ uri: confirmedPreviewUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover"
+                  accessibilityLabel="Выбранное фото этой игры" />
+              </View>
+            </View>
+          ) : (
+            <Label style={{ textAlign: 'left' }}>{GAME_PHOTO_SELECTION_COPY.previewOmitted}</Label>
+          )}
+        </View>
+        <ManagementCommand />
+        <LeftLink title="Назад к редактированию" onPress={owner.edit} />
+        <PrimaryButton title="Создать игру" disabled={blocked || !photoReady} onPress={() => {
+          if (!photoReady) return;
+          void owner.publishPreview();
+        }} />
+      </> : null}
     </>, showFormFooter ? { footer: formFooter } : undefined);
 }

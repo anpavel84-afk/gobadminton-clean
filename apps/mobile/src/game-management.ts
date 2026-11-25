@@ -2,6 +2,8 @@ import type { CreateGame, Game, GamePreferences, Participation } from '@gobadmin
 import { ParticipationError, sameActor } from './participation.ts';
 import type { Actor, CursorPage, ManagedGame } from './participation.ts';
 import { gameSchedule, gameStartIsFuture } from './game-form.ts';
+import { GAME_PHOTO_SELECTION_COPY } from './game-cover.ts';
+import { cloneDerivativeBytes, type AvatarDerivative } from './profile-avatar.ts';
 
 export type CreatorProfile = { cityId: string | null; trainer: boolean; displayName: string };
 export type OwnTrainer = { id: string; status: 'active' | 'inactive'; displayName: string };
@@ -73,7 +75,26 @@ function freeze<T>(v: T): T { if (v && typeof v === 'object') { Object.values(v)
 export type ManagementGate = {
   /** Unresolved managed-game photo blocks publish/roster writes for that game (not create / other games). */
   coverBlocksWrites?: (gameId: string) => boolean;
+  /**
+   * Optional create→cover stage — existing game-cover owner only.
+   * Returns fresh version on definite save; null on reject/UNKNOWN/stale (never auto-publish).
+   */
+  saveCreationCover?: (input: {
+    gameId: string;
+    gameVersion: number;
+    derivative: Readonly<AvatarDerivative>;
+    actor: Actor;
+    live: () => boolean;
+  }) => Promise<{ version: number } | null>;
 };
+
+/** Immutable create-screen action lease — actor/session/view/foreground/context at press time. */
+export type CreationActionLease = Readonly<{
+  actor: Actor;
+  viewGen: number;
+  contextSerial: number;
+  foregroundGen: number;
+}>;
 
 /**
  * Auth/port cover-lock no-send — distinct from unrelated ParticipationError('stale').
@@ -93,6 +114,23 @@ export class GameManagementCoordinator {
   private resumePending: ManagementPacket | null = null;
   // A domain-local continuation, fenced by identity, context generation and observed search city.
   private ordinaryResume: { actor: Actor; serial: number; cityId: string | null } | null = null;
+  /** Confirmed local creation photo — immutable bytes until create succeeds or actor/form reset. */
+  private creationPhoto: Readonly<AvatarDerivative> | null = null;
+  /**
+   * Mounted create-game view lease — blur/unmount/background retires create→cover→publish continuation.
+   * Not minted after async I/O; expected OS picker handoff is local to GamePhotoSelection only.
+   */
+  private creationViewGen = 0;
+  private creationBoundView: number | null = null;
+  private creationForeground = true;
+  private creationForegroundGen = 0;
+  /** Failed/UNKNOWN create-time cover — blocks publish until managed resolve/omit (not plain Publish). */
+  private creationCoverHold: string | null = null;
+  /**
+   * Original create-intent live guard while create→cover mutate or create→publish awaits token.
+   * Unrelated explicit managed cover/publish/reconcile leave this null (not gated).
+   */
+  private creationContinuationLive: (() => boolean) | null = null;
   private port: ManagementPort; private random: () => string; private now: () => number;
   private gate: ManagementGate;
   constructor(port: ManagementPort, random: () => string, now: () => number = Date.now, gate: ManagementGate = {}) {
@@ -101,9 +139,68 @@ export class GameManagementCoordinator {
   private coverBlocked(gameId: string) {
     return !!gameId && !!this.gate.coverBlocksWrites?.(gameId);
   }
+  /** True when failed create-photo still requires managed resolve/omit before publish. */
+  creationCoverBlocksPublish = (gameId: string) =>
+    !!gameId && (this.creationCoverHold === gameId || this.coverBlocked(gameId));
+  /**
+   * Auth token-boundary recheck for in-flight create→cover/publish only.
+   * When no continuation is armed, unrelated managed sends stay ungated.
+   */
+  isCreationContinuationLive = () => {
+    const live = this.creationContinuationLive;
+    return live ? live() : true;
+  };
+  /** Focus binds create-game view; release retires in-flight create→cover→publish only. */
+  bindCreationView = (): (() => void) => {
+    const viewGen = ++this.creationViewGen;
+    this.creationBoundView = viewGen;
+    return () => {
+      if (this.creationBoundView === viewGen) this.creationBoundView = null;
+      // Retire any lease captured under this view without minting a replacement for in-flight work.
+      this.creationViewGen++;
+      // Real route/view departure clears parent selection; preview↔edit keeps the same bind.
+      this.creationPhoto = null;
+    };
+  };
+  /** App foreground fence for create-game continuation (picker handoff is UI-local). */
+  setCreationForeground = (active: boolean) => {
+    if (active === this.creationForeground) return;
+    this.creationForeground = active;
+    this.creationForegroundGen++;
+  };
+  /** Capture before first await of publishPreview — never remint after I/O. */
+  captureCreationActionLease = (): CreationActionLease | null => {
+    const actor = this.state.actor;
+    if (!actor || this.creationBoundView === null || !this.creationForeground) return null;
+    return Object.freeze({
+      actor: Object.freeze({ ...actor }),
+      viewGen: this.creationBoundView,
+      contextSerial: this.contextRead,
+      foregroundGen: this.creationForegroundGen,
+    });
+  };
+  creationActionLive = (lease: CreationActionLease) =>
+    this.current(lease.actor)
+    && this.creationBoundView === lease.viewGen
+    && this.creationForeground
+    && this.creationForegroundGen === lease.foregroundGen
+    && this.contextRead === lease.contextSerial;
+  /** Managed cover success/omit after failed create-photo — unlocks later explicit publish. */
+  acknowledgeCreationCoverResolved = (gameId: string) => {
+    if (this.creationCoverHold === gameId) this.creationCoverHold = null;
+  };
   getSnapshot = () => this.state;
   subscribe = (f: () => void) => { this.listeners.add(f); return () => { this.listeners.delete(f); }; };
   private show(p: Partial<ManagementSnapshot>) { this.state = { ...this.state, ...p }; this.listeners.forEach(f => f()); }
+  /** Optional confirmed game photo for create→cover→publish. Omission clears. */
+  setCreationPhoto = (derivative: AvatarDerivative | null) => {
+    if (!this.state.actor || this.locked() || this.state.creationReference) return;
+    this.creationPhoto = derivative
+      ? Object.freeze({ mime: derivative.mime, bytes: cloneDerivativeBytes(derivative.bytes) })
+      : null;
+  };
+  /** Test/read helper — confirmed creation photo presence only (never raw bytes). */
+  hasCreationPhoto = () => this.creationPhoto !== null;
   setActor(actor: Actor | null) {
     if (sameActor(actor,this.state.actor) || !actor && !this.state.actor) return;
     if (this.state.actor) {
@@ -115,13 +212,25 @@ export class GameManagementCoordinator {
     if (actor && this.resumePending?.actor.actorId !== actor.actorId) this.resumePending = null;
     const pending = actor && this.resumePending ? freeze({ ...this.resumePending, actor: { ...actor } }) : null;
     if (actor) this.resumePending = null;
+    this.creationPhoto = null;
+    this.creationCoverHold = null;
+    this.creationBoundView = null;
+    this.creationViewGen++;
+    this.creationForeground = true;
+    this.creationForegroundGen++;
     this.ordinaryResume = null; this.contextRead++; this.contactEdited = false; this.detailReads.clear(); this.state = initial(); this.show({ actor: actor ? Object.freeze({ ...actor }) : null,
       creationReference: actor && this.resumeKnown ? { id: this.resumeKnown.id, version: this.resumeKnown.version } : null,
       ...(pending ? { command: { packet: pending, status: 'unknown' as const }, notice: 'Результат прежнего действия неизвестен. Проверка повторит только его с прежними условиями и ключом; публикация после создания потребует отдельного подтверждения.' } : {}) });
   }
   /** Explicit logout wipes quarantined packets and active private data before fencing auth. */
   forgetCreation = () => {
-    this.resumeKnown = null; this.resumePending = null; this.ordinaryResume = null; this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
+    this.resumeKnown = null; this.resumePending = null; this.ordinaryResume = null; this.creationPhoto = null;
+    this.creationCoverHold = null;
+    this.creationBoundView = null;
+    this.creationViewGen++;
+    this.creationForeground = true;
+    this.creationForegroundGen++;
+    this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
     this.state = initial(); this.show({});
   };
   private current(actor: Actor | null) { return sameActor(actor,this.state.actor); }
@@ -226,47 +335,144 @@ export class GameManagementCoordinator {
   };
   newCreation = async (cityId: string | null) => {
     if (this.state.created?.status !== 'published' || this.locked()) return;
-    this.resumeKnown = null; this.contactEdited = false;
+    this.resumeKnown = null; this.contactEdited = false; this.creationPhoto = null;
+    this.creationCoverHold = null;
     this.show({ form: emptyCreationForm(), preview: null, created: null, creationReference: null, command: undefined, notice: undefined });
     await this.loadContext(cityId);
   };
   edit = () => { if (!this.locked() && !this.state.created) this.show({ preview: null }); };
-  /** Explicit preview confirmation owns normal draft→publish. Reconciliation never chains. */
+  /**
+   * Explicit preview confirmation: omit → create→publish; confirmed photo → create→cover→publish.
+   * Failed/UNKNOWN create never uploads. Failed/UNKNOWN cover leaves draft and never publishes.
+   * Reconciliation never chains publication. Retired create-view keeps draft/reference but no next step.
+   */
   publishPreview = async () => {
     const actor = this.state.actor, input = this.state.preview;
     if (!actor || !input || this.state.context !== 'ready' || this.locked() || this.state.creationReference) return;
     if (!gameStartIsFuture(input.startsAt,this.now())) {
       this.show({ preview: null, notice: 'Время начала уже прошло. Укажите будущие дату и время.' }); return;
     }
+    // Capture mounted create lease before first await — absent lease fails closed (no actor-only bypass).
+    const lease = this.captureCreationActionLease();
+    if (!lease) return;
+    const live = () => this.creationActionLive(lease) && this.current(actor);
+    const photo = this.creationPhoto;
     const packet: ManagementPacket = freeze({ actor, kind: 'create', key: this.random(), body: input });
-    const result = await this.dispatch(packet);
-    if (result && this.current(actor) && this.state.created?.status === 'draft') await this.publishDraft(this.state.created.id);
+    // Arm create lease at token boundary BEFORE dispatch — not only cover/publish continuation.
+    const priorContinuation = this.creationContinuationLive;
+    this.creationContinuationLive = live;
+    try {
+      // Create may still settle after view retirement (draft recoverable); cover/publish are gated.
+      const result = await this.dispatch(packet);
+      // Retired create result keeps draft/reference — no automatic cover/publish next step.
+      if (!result || !live() || this.state.created?.status !== 'draft') return;
+      const created = this.state.created;
+      if (!gameStartIsFuture(created.startsAt, this.now())) {
+        this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
+        return;
+      }
+      if (photo) {
+        const coverLive = () => live()
+          && this.state.created?.id === created.id
+          && this.state.creationReference?.id === created.id;
+        this.creationContinuationLive = coverLive;
+        let cover: { version: number } | null = null;
+        try {
+          cover = this.gate.saveCreationCover
+            ? await this.gate.saveCreationCover({
+              gameId: created.id,
+              gameVersion: created.version,
+              derivative: photo,
+              actor,
+              live: coverLive,
+            })
+            : null;
+        } finally {
+          this.creationContinuationLive = null;
+        }
+        if (!coverLive()) return;
+        if (!cover) {
+          // Hold until managed resolve/omit after authoritative cover read — not permanent on honest omit.
+          this.creationCoverHold = created.id;
+          this.show({ notice: GAME_PHOTO_SELECTION_COPY.saveFailed });
+          return;
+        }
+        this.creationCoverHold = null;
+        const current = this.state.created;
+        if (current?.id === created.id && current.version < cover.version) {
+          this.show({
+            created: { ...current, version: cover.version },
+            creationReference: { id: created.id, version: cover.version },
+          });
+        }
+        // Await receipt/detail refresh before publication capture (onReceipt may soft-refresh in parallel).
+        await this.loadDetail(created.id);
+        if (!coverLive()) return;
+        const forPublish = this.state.created ?? created;
+        if (forPublish.status !== 'draft') return;
+        if (!gameStartIsFuture(forPublish.startsAt, this.now())) {
+          this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
+          return;
+        }
+      }
+      if (live() && this.state.created?.status === 'draft' && !this.creationCoverBlocksPublish(this.state.created.id)) {
+        await this.publishDraft(this.state.created.id, { creationLive: live });
+      }
+    } finally {
+      if (this.creationContinuationLive === live) this.creationContinuationLive = priorContinuation;
+    }
   };
-  publishDraft = async (id: string) => {
-    const actor = this.state.actor, d = this.state.details[id], game = this.state.created?.id === id ? this.state.created : d?.game;
+  /**
+   * Explicit managed-draft publish, or create-flow continuation when creationLive is supplied.
+   * Creation lease is rechecked after profile await and at Auth token boundaries via continuation.
+   */
+  publishDraft = async (id: string, opts?: { creationLive?: () => boolean }) => {
+    const actor = this.state.actor, d = this.state.details[id];
+    let game = this.state.created?.id === id ? this.state.created : d?.game;
     if (!actor || !game || game.status !== 'draft' || this.locked() || (this.state.created?.id !== id && (d?.status !== 'ready' || !d.management))) return;
+    // Owner send guard: failed create-photo is not cleared by a plain Publish on the create summary.
+    if (this.creationCoverBlocksPublish(id)) {
+      this.show({ notice: GAME_PHOTO_SELECTION_COPY.saveFailed });
+      return;
+    }
+    const creationLive = opts?.creationLive;
+    if (creationLive && !creationLive()) return;
     // A new publish intent needs an authoritative profile, including direct managed-draft entry.
     // UNKNOWN reconciliation bypasses this read and retains its immutable command packet.
     const serial = ++this.publishRead, contextRead = this.contextRead, detailRead = this.detailReads.get(id);
     const valid = () => this.current(actor) && serial === this.publishRead && contextRead === this.contextRead && detailRead === this.detailReads.get(id);
+    const liveAfterIo = () => valid() && (!creationLive || creationLive());
+    const priorContinuation = this.creationContinuationLive;
+    if (creationLive) this.creationContinuationLive = creationLive;
     try {
-      const profile = parseCreatorProfile(await this.port.profile());
-      if (!valid()) return;
-      if (!profile.cityId || !profile.displayName.trim()) {
-        this.show({ profile, context: 'setup', preview: null,
-          notice: 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.' }); return;
+      try {
+        const profile = parseCreatorProfile(await this.port.profile());
+        if (!liveAfterIo()) return;
+        if (!profile.cityId || !profile.displayName.trim()) {
+          this.show({ profile, context: 'setup', preview: null,
+            notice: 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.' }); return;
+        }
+        const detail = this.state.details[id], currentGame = this.state.created?.id === id ? this.state.created : detail?.game;
+        // Admit cover-receipt refreshed game (new object, same id/draft) — reference inequality must not abort.
+        if (this.locked() || !currentGame || currentGame.status !== 'draft' || currentGame.id !== game.id
+          || (this.state.created?.id !== id && (detail?.status !== 'ready' || !detail.management))) return;
+        if (creationLive && !creationLive()) return;
+        this.show({ profile, ...(this.state.context === 'setup' ? { context: 'idle' as const } : {}) });
+        // Authoritative version after receipt refresh (cover may have bumped it).
+        game = currentGame;
+      } catch (e) {
+        if (liveAfterIo()) this.show({ profile: null, ...(e instanceof ParticipationError && e.status === 404 ? { context: 'setup' as const, preview: null } : {}),
+          notice: e instanceof ParticipationError && e.status === 404
+            ? 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.'
+            : 'Не удалось проверить профиль. Повторите публикацию после проверки соединения. Черновик сохранён.' });
+        return;
       }
-      const detail = this.state.details[id], currentGame = this.state.created?.id === id ? this.state.created : detail?.game;
-      if (this.locked() || currentGame !== game || (this.state.created?.id !== id && (detail?.status !== 'ready' || !detail.management))) return;
-      this.show({ profile, ...(this.state.context === 'setup' ? { context: 'idle' as const } : {}) });
-    } catch (e) {
-      if (valid()) this.show({ profile: null, ...(e instanceof ParticipationError && e.status === 404 ? { context: 'setup' as const, preview: null } : {}),
-        notice: e instanceof ParticipationError && e.status === 404
-          ? 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.'
-          : 'Не удалось проверить профиль. Повторите публикацию после проверки соединения. Черновик сохранён.' });
-      return;
+      if (liveAfterIo() && !this.locked() && !this.creationCoverBlocksPublish(id)) {
+        await this.dispatch(freeze({ actor, kind: 'publish', gameId: id, key: this.random(), body: { expectedVersion: game.version } }));
+      }
+    } finally {
+      if (creationLive) this.creationContinuationLive = priorContinuation;
     }
-    if (valid() && !this.locked()) await this.dispatch(freeze({ actor, kind: 'publish', gameId: id, key: this.random(), body: { expectedVersion: game.version } }));
   };
   reconcile = async () => { const command = this.state.command; if (command?.status === 'unknown' && this.current(command.packet.actor)) await this.dispatch(command.packet); };
   private async dispatch(packet: ManagementPacket): Promise<boolean> {
@@ -274,6 +480,11 @@ export class GameManagementCoordinator {
     // Actual gate (not UI-only): delayed token / saved publish/roster callbacks cannot dispatch while cover unresolved.
     if (packet.kind !== 'create' && this.coverBlocked(packet.gameId)) {
       this.show({ notice: 'Сначала завершите или проверьте сохранение фото этой игры.' });
+      return false;
+    }
+    // Failed create-photo hold — publish only after managed resolve/omit (not create-summary Publish alone).
+    if (packet.kind === 'publish' && this.creationCoverHold === packet.gameId) {
+      this.show({ notice: GAME_PHOTO_SELECTION_COPY.saveFailed });
       return false;
     }
     // Preserve prior UNKNOWN identity across a prevented no-send retry (cover-lock stale after token).
@@ -286,6 +497,9 @@ export class GameManagementCoordinator {
       if (packet.kind === 'create' || packet.kind === 'publish') {
         const game = result as Game;
         if (!game.id || !Number.isInteger(game.version) || (packet.kind === 'create' ? game.status !== 'draft' : game.id !== packet.gameId || game.status !== 'published' || game.version <= packet.body.expectedVersion)) throw new ParticipationError('invalid');
+        // Drop local selection once create is acknowledged — cover stage uses the captured local copy only.
+        // Reconcile settle never chains cover/publish.
+        if (packet.kind === 'create') this.creationPhoto = null;
         this.show({ created: game, creationReference: { id: game.id, version: game.version }, command: { packet, status: 'settled' } });
         if (packet.kind === 'publish') await this.loadDetail(game.id);
       } else {
@@ -312,6 +526,17 @@ export class GameManagementCoordinator {
           command: undefined,
           notice: 'Сначала завершите или проверьте сохранение фото этой игры.',
         });
+        return false;
+      }
+      // Create/publish intent lease retired at token boundary before API — clear safely; keep draft/reference.
+      // Already-sent results are not wiped: stale is thrown only before managementMutation.
+      if (
+        e instanceof ParticipationError
+        && e.kind === 'stale'
+        && (packet.kind === 'publish' || packet.kind === 'create')
+        && this.creationContinuationLive !== null
+      ) {
+        this.show({ command: undefined });
         return false;
       }
       const definite = e instanceof ParticipationError && (e.kind === 'business' || e.kind === 'authority') && e.code !== 'COMMAND_IN_PROGRESS';

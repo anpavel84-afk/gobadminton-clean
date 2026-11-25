@@ -13,7 +13,8 @@ import { CoverLockNoSendError, GameManagementCoordinator } from './game-manageme
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
-import { GameCoverCoordinator } from './game-cover.ts';
+import { GameCoverCoordinator, gameCoverMutationSucceeded } from './game-cover.ts';
+import { cloneDerivativeBytes } from './profile-avatar.ts';
 import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
 import { InvitationAuthoringCoordinator } from './invitation-authoring.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
@@ -292,10 +293,13 @@ export class AuthCoordinator {
         if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
           throw new CoverLockNoSendError();
         }
+        // Capture create-continuation guard before token — unrelated managed publish leaves it open.
+        const creationLive = () => this.gameManagement.isCreationContinuationLive();
         const result = await this.participationRead(access => {
           if (packet.kind !== 'create' && this.gameCover.blocksManagedWrites(packet.gameId)) {
             throw new CoverLockNoSendError();
           }
+          if (!creationLive()) throw new ParticipationError('stale');
           return deps.api.managementMutation(access,packet);
         },packet.actor);
         if (packet.kind !== 'create') {
@@ -307,6 +311,36 @@ export class AuthCoordinator {
       },
     },deps.random,this.now,{
       coverBlocksWrites: gameId => this.gameCover.blocksManagedWrites(gameId),
+      saveCreationCover: async ({ gameId, gameVersion, derivative, actor, live }) => {
+        if (!live() || !sameActor(actor, this.gameCover.getSnapshot().actor)) return null;
+        // Bind cover view BEFORE awaits so post-token admission has a real viewGen (not null).
+        // Do not force cover foreground true — that would override a real background lifecycle.
+        const release = this.gameCover.openView(gameId);
+        try {
+          if (!live()) return null;
+          const permit = this.gameCover.renderedPermit();
+          if (!permit || permit.gameId !== gameId) return null;
+          await this.gameCover.load(gameId, permit);
+          if (!live() || !this.gameCover.permitLive(permit)) return null;
+          const before = this.gameCover.getSnapshot();
+          if (before.gameId !== gameId || before.status !== 'ready' || !before.access) return null;
+          if (before.access.version < gameVersion) return null;
+          // Pass original permit — do not mint a fresh lease after load I/O.
+          await this.gameCover.change(async retired => {
+            if (retired() || !live() || !this.gameCover.permitLive(permit)) return 'cancelled';
+            return Object.freeze({
+              mime: derivative.mime,
+              bytes: cloneDerivativeBytes(derivative.bytes),
+            });
+          }, permit);
+          if (!live() || !this.gameCover.permitLive(permit)) return null;
+          const after = this.gameCover.getSnapshot();
+          if (!gameCoverMutationSucceeded(after) || !after.access || after.access.version < gameVersion) return null;
+          return { version: after.access.version };
+        } finally {
+          release();
+        }
+      },
     });
     // Managed game photo: GET/PUT/DELETE principal opt-in; hasCover gates remove; receipt refreshes managed detail version.
     this.gameCover = new GameCoverCoordinator({
@@ -314,11 +348,14 @@ export class AuthCoordinator {
       mutate: (packet, authority) => {
         // Capture original photo-command admission BEFORE token await — no minting a new permit later.
         const admission = this.gameCover.captureDispatchAdmission(packet);
+        // Original create-intent live guard (when armed) — creation blur must stop delayed PUT.
+        const creationLive = () => this.gameManagement.isCreationContinuationLive();
         return this.participationRead(access => {
           // Recheck actor/session/game/view/foreground generation + packet identity after token, before API.
           if (!this.gameCover.dispatchAdmissionLive(admission, packet)) {
             throw new ParticipationError('stale');
           }
+          if (!creationLive()) throw new ParticipationError('stale');
           const command = this.gameManagement.getSnapshot().command;
           if (command && ['sending','unknown'].includes(command.status)
             && command.packet.kind !== 'create' && command.packet.gameId === packet.gameId) {
@@ -328,7 +365,10 @@ export class AuthCoordinator {
         }, authority);
       },
     }, deps.random, {
-      onReceipt: (gameId) => { void this.gameManagement.loadDetail(gameId); },
+      onReceipt: (gameId) => {
+        this.gameManagement.acknowledgeCreationCoverResolved(gameId);
+        void this.gameManagement.loadDetail(gameId);
+      },
       accessToken: () => this.access?.token ?? null,
       managementBlocksWrites: gameId => {
         const command = this.gameManagement.getSnapshot().command;

@@ -32,6 +32,8 @@ function setup(override: Partial<ManagementPort> = {}) {
     send: async p => p.kind === 'create' ? g : p.kind === 'publish' ? { ...g, status: 'published', version: 8 } : { ...part, version: 4, status: p.kind === 'confirm' ? 'confirmed' : p.kind === 'reject' ? 'rejected' : 'removed' }, ...override };
   const owner = new GameManagementCoordinator({ ...port, send: async p => { sent.push(p); return port.send(p); } }, () => `key-${++serial}`, () => now);
   owner.setActor(actor);
+  // Production create screen always binds a view lease before publishPreview (fail-closed without it).
+  owner.bindCreationView();
   return { owner, sent, trainerReads: () => trainerReads };
 }
 async function preview(owner: GameManagementCoordinator) { await owner.loadContext('city-1'); owner.update(form); owner.preview(); assert.ok(owner.getSnapshot().preview); }
@@ -470,6 +472,7 @@ function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue, opt
         effects.push(() => { focusCleanup?.(); if (focused) focusCleanup = callback(); }); }
     },
     useResource: () => ({state:{status:'ready',data:target},retry:() => {}}),
+    AppState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) },
     publicApi: {}, venueCreatePath: (id: string) => `/games/create/venue/${id}`,
   }) as (props: {venueId?: string}) => {selectVenue: () => Promise<void>; selecting: boolean; selected: boolean; continuePress: () => void};
   return {
@@ -804,4 +807,480 @@ test('#522 FIX3: CoverLockNoSendError on UNKNOWN retry preserves packet/key; unr
   assert.equal(owner.getSnapshot().command?.packet.key, original.key);
   assert.strictEqual(owner.getSnapshot().command?.packet, original);
   assert.match(owner.getSnapshot().notice ?? '', /неизвестен|Проверка повторит/);
+});
+
+test('#522 APK52 omit photo keeps create→publish; no cover stage', async () => {
+  let latest: Game = g;
+  const s = setup({
+    game: async () => latest,
+    send: async p => {
+      if (p.kind === 'create') {
+        latest = { ...g, status: 'draft', version: 7 };
+        return latest;
+      }
+      if (p.kind === 'publish') {
+        latest = { ...g, status: 'published', version: 8 };
+        return latest;
+      }
+      return { ...part, version: 4, status: p.kind === 'confirm' ? 'confirmed' : p.kind === 'reject' ? 'rejected' : 'removed' };
+    },
+  });
+  await preview(s.owner);
+  assert.equal(s.owner.hasCreationPhoto(), false);
+  await s.owner.publishPreview();
+  assert.equal(s.sent.length, 2);
+  assert.equal(s.sent[0]?.kind, 'create');
+  assert.equal(s.sent[1]?.kind, 'publish');
+  assert.equal(s.owner.getSnapshot().created?.status, 'published');
+});
+
+test('#522 APK52 confirmed photo: exactly one create, one cover save, one publish with fresh versions', async () => {
+  const coverCalls: { gameId: string; gameVersion: number }[] = [];
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const published = { ...g, status: 'published' as const, version: 9 };
+  let latest: Game = draft;
+  const sent: ManagementPacket[] = [];
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...latest, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => latest,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') {
+        latest = draft;
+        return draft;
+      }
+      if (p.kind === 'publish') {
+        assert.equal(p.body.expectedVersion, 8);
+        latest = published;
+        return published;
+      }
+      throw new Error('unexpected');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async ({ gameId, gameVersion, live }) => {
+      coverCalls.push({ gameId, gameVersion });
+      assert.equal(live(), true);
+      assert.equal(gameId, draft.id);
+      assert.equal(gameVersion, 7);
+      latest = { ...draft, version: 8 };
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes });
+  assert.equal(owner.hasCreationPhoto(), true);
+  const first = owner.publishPreview();
+  const second = owner.publishPreview();
+  await Promise.all([first, second]);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(sent[1]?.kind, 'publish');
+  assert.equal(coverCalls.length, 1);
+  assert.equal(owner.hasCreationPhoto(), false);
+  assert.equal(owner.getSnapshot().created?.status, 'published');
+  assert.equal(owner.getSnapshot().created?.version, 9);
+});
+
+test('#522 APK52 cover reject/UNKNOWN leaves draft and never publishes; reconcile does not chain', async () => {
+  for (const outcome of ['reject', 'unknown'] as const) {
+    let serial = 0;
+    const draft = { ...g, version: 7 };
+    const sent: ManagementPacket[] = [];
+    const owner = new GameManagementCoordinator({
+      profile: async () => profile,
+      preferences: async () => preferences,
+      trainer: async () => { throw new ParticipationError('business', 404); },
+      venues: async () => ({ items: [venue], nextCursor: null }),
+      managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+      game: async () => draft,
+      participants: async () => ({ items: [], nextCursor: null }),
+      send: async p => {
+        sent.push(p);
+        if (p.kind === 'create') return draft;
+        if (p.kind === 'publish') return { ...draft, status: 'published' as const, version: 8 };
+        throw new Error('unexpected');
+      },
+    }, () => `key-${++serial}`, () => now, {
+      saveCreationCover: async () => null,
+      coverBlocksWrites: () => outcome === 'unknown',
+    });
+    owner.setActor(actor);
+    owner.bindCreationView();
+    await owner.loadContext('city-1');
+    owner.update(form);
+    owner.preview();
+    owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([9]) });
+    await owner.publishPreview();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.kind, 'create');
+    assert.equal(owner.getSnapshot().created?.status, 'draft');
+    assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
+    assert.match(owner.getSnapshot().notice ?? '', /Фото не сохранено|черновик/i);
+    assert.equal(owner.creationCoverBlocksPublish(draft.id), true);
+    await owner.reconcile();
+    assert.equal(sent.length, 1);
+    // Plain Publish on failed-photo create summary must not POST — hold until managed resolve/omit.
+    await owner.publishDraft(draft.id);
+    assert.equal(sent.length, 1);
+    if (outcome === 'unknown') {
+      // Uncertain cover still blocks even after acknowledge until coverBlocksWrites clears.
+      owner.acknowledgeCreationCoverResolved(draft.id);
+      assert.equal(owner.creationCoverBlocksPublish(draft.id), true);
+      await owner.publishDraft(draft.id);
+      assert.equal(sent.length, 1);
+    } else {
+      owner.acknowledgeCreationCoverResolved(draft.id);
+      assert.equal(owner.creationCoverBlocksPublish(draft.id), false);
+      await owner.publishDraft(draft.id);
+      assert.equal(sent.length, 2);
+      assert.equal(sent[1]?.kind, 'publish');
+    }
+  }
+});
+
+test('#522 FIX3: create-view lease retires cover/publish after create; draft retained', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const coverCalls: string[] = [];
+  const createGate = deferred<Game>();
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return createGate.promise;
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async () => {
+      coverCalls.push('cover');
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  const release = owner.bindCreationView();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.length, 1);
+  // Real blur/unmount retires continuation before create settles.
+  release();
+  createGate.resolve(draft);
+  await work;
+  assert.equal(coverCalls.length, 0);
+  assert.equal(sent.some(p => p.kind === 'publish'), false);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
+});
+
+test('#522 FIX3: create foreground retire stops cover/publish; expected draft kept', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const coverGate = deferred<{ version: number } | null>();
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return draft;
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async ({ live }) => {
+      assert.equal(live(), true);
+      return coverGate.promise;
+    },
+  });
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  owner.bindCreationView();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  owner.setCreationForeground(false);
+  coverGate.resolve({ version: 8 });
+  await work;
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+});
+
+test('#522 APK52 failed create never calls cover save; reconcile settles create only', async () => {
+  let coverCalls = 0;
+  let serial = 0;
+  const sent: ManagementPacket[] = [];
+  let failOnce = true;
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...g, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => g,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (failOnce) { failOnce = false; throw new ParticipationError('network'); }
+      return g;
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async () => {
+      coverCalls += 1;
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  await owner.publishPreview();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(coverCalls, 0);
+  assert.equal(owner.getSnapshot().created, null);
+  assert.equal(owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(owner.hasCreationPhoto(), true);
+  await owner.reconcile();
+  assert.equal(coverCalls, 0);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]?.kind, 'create');
+  assert.equal(sent.some(p => p.kind === 'publish'), false);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.equal(owner.hasCreationPhoto(), false);
+});
+
+test('#522 APK52 expired start after create stops before publish; draft kept', async () => {
+  let tick = now;
+  let serial = 0;
+  const draft = { ...g, version: 7, startsAt: '2026-11-20T17:30:00Z' };
+  const sent: ManagementPacket[] = [];
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') {
+        tick = Date.parse('2026-11-21T00:00:00Z');
+        return draft;
+      }
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => tick, {
+    saveCreationCover: async () => ({ version: 8 }),
+  });
+  owner.setActor(actor);
+  owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  await owner.publishPreview();
+  assert.equal(sent.length, 1);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.match(owner.getSnapshot().notice ?? '', /Начало уже прошло/);
+});
+
+test('#522 FIX4: absent creation lease fails closed; no create without bind', async () => {
+  const unbound = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...g, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => g,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async () => { throw new Error('must not send'); },
+  }, () => 'key-x', () => now);
+  unbound.setActor(actor);
+  await unbound.loadContext('city-1');
+  unbound.update(form);
+  unbound.preview();
+  // No bindCreationView — fail closed (no actor-only bypass).
+  await unbound.publishPreview();
+  assert.equal(unbound.getSnapshot().created, null);
+  assert.equal(unbound.getSnapshot().command, undefined);
+});
+
+test('#522 FIX4: lease retire during publishDraft profile await → zero publish; draft kept', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const profileGate = deferred<typeof profile>();
+  let profileCalls = 0;
+  const owner = new GameManagementCoordinator({
+    profile: async () => {
+      profileCalls += 1;
+      // First create-context profile reads resolve immediately; publishDraft awaits the gate.
+      if (profileCalls <= 1) return profile;
+      return profileGate.promise;
+    },
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') return draft;
+      throw new Error('publish must not run');
+    },
+  }, () => `key-${++serial}`, () => now);
+  owner.setActor(actor);
+  const release = owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.kind, 'create');
+  // Late boundary: retire after create, during publish profile await.
+  release();
+  profileGate.resolve(profile);
+  await work;
+  assert.equal(sent.some(p => p.kind === 'publish'), false);
+  assert.equal(owner.getSnapshot().created?.status, 'draft');
+  assert.deepEqual(owner.getSnapshot().creationReference, { id: draft.id, version: 7 });
+});
+
+test('#522 FIX4: view departure clears parent creation photo; remount has no hidden bytes', async () => {
+  const s = setup();
+  await preview(s.owner);
+  s.owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1, 2, 3]) });
+  assert.equal(s.owner.hasCreationPhoto(), true);
+  // Real route departure via bind release.
+  const release = s.owner.bindCreationView();
+  s.owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([4]) });
+  assert.equal(s.owner.hasCreationPhoto(), true);
+  release();
+  assert.equal(s.owner.hasCreationPhoto(), false);
+});
+
+test('#522 FIX8: initial create arms lease before dispatch; retire before send → zero POST; not UNKNOWN', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const tokenGate = deferred<void>();
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      // Simulate AuthCoordinator post-token recheck of isCreationContinuationLive.
+      await tokenGate.promise;
+      if (!owner.isCreationContinuationLive()) throw new ParticipationError('stale');
+      sent.push(p);
+      return draft;
+    },
+  }, () => `key-${++serial}`, () => now);
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  const release = owner.bindCreationView();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.isCreationContinuationLive(), true, 'create lease armed before token/API');
+  release();
+  assert.equal(owner.isCreationContinuationLive(), false);
+  tokenGate.resolve();
+  await work;
+  assert.equal(sent.length, 0);
+  assert.equal(owner.getSnapshot().created, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+});
+
+test('#522 FIX8: cover→publish awaits detail refresh and admits authoritative version (no identity abort)', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  let latest: Game = draft;
+  const sent: ManagementPacket[] = [];
+  let detailReads = 0;
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => {
+      detailReads += 1;
+      return { items: [{ ...latest, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    },
+    game: async () => latest,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') {
+        latest = draft;
+        return draft;
+      }
+      if (p.kind === 'publish') {
+        assert.equal(p.body.expectedVersion, 8);
+        latest = { ...latest, status: 'published', version: 9 };
+        return latest;
+      }
+      throw new Error('unexpected');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async ({ gameId, gameVersion }) => {
+      assert.equal(gameId, draft.id);
+      assert.equal(gameVersion, 7);
+      latest = { ...draft, version: 8 };
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  await owner.publishPreview();
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(sent[1]?.kind, 'publish');
+  assert.ok(detailReads >= 1, 'cover path must refresh detail before publish capture');
+  assert.equal(owner.getSnapshot().created?.status, 'published');
+  assert.equal(owner.getSnapshot().created?.version, 9);
+  const source = readFileSync(new URL('../src/game-management.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /currentGame !== game/);
+  assert.match(source, /currentGame\.id !== game\.id/);
 });

@@ -380,7 +380,8 @@ test('new root management owner shares secure actor fences, leaves Messages UNKN
   const resource={kind:'direct',id:'thread'} as const;
   s.auth.messages.focus(resource); await new Promise(resolve=>setImmediate(resolve)); s.auth.messages.draft(resource,'private'); await s.auth.messages.act(resource,'send');
   const message=s.auth.messages.getSnapshot().pending['direct:thread']?.packet; assert.ok(message);
-  await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@creator'}); owner.preview(); await owner.publishPreview();
+  await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@creator'}); owner.preview();
+  owner.bindCreationView(); await owner.publishPreview();
   const packet=owner.getSnapshot().command?.packet; assert.ok(packet); assert.equal(owner.getSnapshot().command?.status,'unknown');
   assert.equal(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
   const participationBefore = participation.getSnapshot();
@@ -417,7 +418,7 @@ test('involuntary auth loss preserves UNKNOWN create until authoritative same-ow
     return {ok:true};
   });
   await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@private-creator'});
-  owner.preview(); await owner.publishPreview();
+  owner.preview(); owner.bindCreationView(); await owner.publishPreview();
   const original = owner.getSnapshot().command!.packet;
   assert.equal(owner.getSnapshot().command?.status,'unknown');
   phase = 'lost'; await s.auth.refresh();
@@ -443,6 +444,8 @@ test('involuntary auth loss preserves UNKNOWN create until authoritative same-ow
   assert.equal(s.calls.filter(c => c.path.endsWith('/publish')).length,0);
   assert.equal(owner.getSnapshot().created?.status,'draft');
   // Explicit logout must also erase an active UNKNOWN, not merely its visible reference.
+  // Session rotate cleared the create-view lease; rebind before user create/publish intent.
+  owner.bindCreationView();
   phase = 'unknown'; await owner.publishDraft(fixture.id); assert.equal(owner.getSnapshot().command?.status,'unknown');
   await s.auth.logout(); assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().creationReference,null);
   assert.equal(owner.getSnapshot().actor,null); assert.equal(owner.getSnapshot().form.contact,'');
@@ -1906,6 +1909,237 @@ test('#522 APK48: court-booking AuthCoordinator fences, GET/PUT transport, no au
   owner.updateDraft('not_arranged');
   await owner.save();
   assert.equal(calls.filter(c => c.method === 'PUT').length, putCount);
+});
+
+test('#522 APK52/FIX3: AuthCoordinator saveCreationCover openView+transport; create-view retire → zero PUT', async t => {
+  async function run(retireView: boolean) {
+    const s = setup(sessionEnvelope());
+    await s.auth.hydrate();
+    t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+    const management = s.auth.gameManagement;
+    const cover = s.auth.gameCover;
+    const gameId = retireView
+      ? '10000000-0000-4000-8000-000000000153'
+      : '10000000-0000-4000-8000-000000000152';
+    const hex = 'ab'.repeat(32);
+    const gameUrl = `/v1/media/game-covers/${hex}.png`;
+    const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
+    const puts: string[] = [];
+    let row = { version: 7, hasCover: false, cover: { uploadedUrl: null as string | null } };
+    let latest: Omit<typeof draft, 'status'> & { status: 'draft' | 'published' } = { ...draft };
+    const createGate = deferred<typeof draft>();
+    s.setHandler(async (path, init) => {
+      if (path === '/me') return me;
+      if (path === '/auth/native/refresh') return credentials;
+      if (path === '/me/social-profile') return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+      if (path === '/me/game-preferences') return { version: 0, defaultPublicGameContact: null };
+      if (path === `/games/${gameId}/cover`) {
+        if ((init.method ?? 'GET') === 'PUT') {
+          puts.push('PUT');
+          row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+          latest = { ...latest, version: row.version };
+          return row;
+        }
+        return row;
+      }
+      if (path.startsWith('/me/games')) {
+        return { items: [{ ...latest, version: latest.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+      }
+      if (path === `/games/${gameId}`) return { ...latest };
+      if (path === '/games' && (init.method ?? 'GET') === 'POST') {
+        if (retireView) return createGate.promise;
+        latest = { ...draft };
+        return draft;
+      }
+      if (path === `/games/${gameId}/publish`) {
+        latest = { ...draft, status: 'published', version: row.version + 1 };
+        return latest;
+      }
+      if (path.includes('/participations')) return { items: [], nextCursor: null };
+      return { ok: true };
+    });
+
+    await management.loadContext('city-1');
+    management.update({ venueId: fixture.venue.id, date: '2026-11-20', time: '18:30', contact: '@creator' });
+    management.preview();
+    management.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([255, 216, 255, 217]) });
+    const release = management.bindCreationView();
+    if (!retireView) {
+      await management.publishPreview();
+      assert.equal(puts.length, 1);
+      assert.equal(management.getSnapshot().created?.status, 'published');
+      assert.equal(cover.getSnapshot().access?.hasCover, true);
+      release();
+      return;
+    }
+    const work = management.publishPreview();
+    await new Promise(r => setImmediate(r));
+    release();
+    createGate.resolve(draft);
+    await work;
+    assert.equal(puts.length, 0);
+    assert.equal(management.getSnapshot().created?.status, 'draft');
+    assert.equal(management.getSnapshot().created?.id, gameId);
+  }
+
+  await run(false);
+  await run(true);
+});
+
+test('#522 FIX4: deferred token after create-view retire during cover mutate → zero PUT', async t => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+  const management = s.auth.gameManagement;
+  const gameId = '10000000-0000-4000-8000-000000000154';
+  const hex = 'ab'.repeat(32);
+  const gameUrl = `/v1/media/game-covers/${hex}.png`;
+  const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
+  const puts: string[] = [];
+  const refreshGate = deferred<typeof credentials>();
+  let row = { version: 7, hasCover: false, cover: { uploadedUrl: null as string | null } };
+  let expireForMutate = false;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return expireForMutate ? refreshGate.promise : credentials;
+    if (path === '/me/social-profile') return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+    if (path === '/me/game-preferences') return { version: 0, defaultPublicGameContact: null };
+    if (path === `/games/${gameId}/cover`) {
+      if ((init.method ?? 'GET') === 'PUT') {
+        puts.push('PUT');
+        row = { version: row.version + 1, hasCover: true, cover: { uploadedUrl: gameUrl } };
+        return row;
+      }
+      // After authoritative cover GET for create→cover, expire so mutate awaits refresh.
+      if (expireForMutate) {
+        const access = (s.auth as unknown as { access: { expiresAt: number } | null }).access;
+        if (access) access.expiresAt = 0;
+      }
+      return row;
+    }
+    if (path.startsWith('/me/games')) {
+      return { items: [{ ...draft, version: row.version, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) return { ...draft, version: row.version, status: 'draft' };
+    if (path === '/games' && (init.method ?? 'GET') === 'POST') {
+      expireForMutate = true;
+      return draft;
+    }
+    if (path === `/games/${gameId}/publish`) {
+      return { ...draft, status: 'published', version: row.version + 1 };
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  await management.loadContext('city-1');
+  management.update({ venueId: fixture.venue.id, date: '2026-11-20', time: '18:30', contact: '@creator' });
+  management.preview();
+  management.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([255, 216, 255, 217]) });
+  const release = management.bindCreationView();
+  const work = management.publishPreview();
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.getSnapshot().created?.status, 'draft');
+  // Late boundary: retire create lease while cover mutate token refresh is deferred.
+  release();
+  refreshGate.resolve(credentials);
+  await work;
+  assert.equal(puts.length, 0);
+  assert.equal(management.getSnapshot().created?.status, 'draft');
+  assert.equal(management.getSnapshot().created?.id, gameId);
+});
+
+test('#522 FIX4: deferred profile/token during create-publish after lease retire → zero publish POST', async t => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+  const management = s.auth.gameManagement;
+  const gameId = '10000000-0000-4000-8000-000000000155';
+  const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
+  const publishPosts: string[] = [];
+  const profileGate = deferred<unknown>();
+  let profileReads = 0;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === '/me/social-profile') {
+      profileReads += 1;
+      if (profileReads > 1) return profileGate.promise;
+      return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+    }
+    if (path === '/me/game-preferences') return { version: 0, defaultPublicGameContact: null };
+    if (path.startsWith('/me/games')) {
+      return { items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) return { ...draft, status: 'draft' };
+    if (path === '/games' && (init.method ?? 'GET') === 'POST') return draft;
+    if (path === `/games/${gameId}/publish`) {
+      publishPosts.push(path);
+      return { ...draft, status: 'published', version: 8 };
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  await management.loadContext('city-1');
+  management.update({ venueId: fixture.venue.id, date: '2026-11-20', time: '18:30', contact: '@creator' });
+  management.preview();
+  // Omit photo → create→publish; retire during publish profile await.
+  const release = management.bindCreationView();
+  const work = management.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.getSnapshot().created?.status, 'draft');
+  release();
+  profileGate.resolve({ cityId: 'city-1', trainer: false, displayName: 'Creator' });
+  await work;
+  assert.equal(publishPosts.length, 0);
+  assert.equal(management.getSnapshot().created?.status, 'draft');
+  assert.deepEqual(management.getSnapshot().creationReference, { id: gameId, version: 7 });
+});
+
+test('#522 FIX8: deferred token during initial create after view retire → zero POST /games', async t => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+  const management = s.auth.gameManagement;
+  const gameId = '10000000-0000-4000-8000-000000000158';
+  const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
+  const createPosts: string[] = [];
+  const refreshGate = deferred<typeof credentials>();
+  let deferRefresh = false;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return deferRefresh ? refreshGate.promise : credentials;
+    if (path === '/me/social-profile') return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+    if (path === '/me/game-preferences') return { version: 0, defaultPublicGameContact: null };
+    if (path.startsWith('/me/games')) {
+      return { items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) return { ...draft, status: 'draft' };
+    if (path === '/games' && (init.method ?? 'GET') === 'POST') {
+      createPosts.push(path);
+      return draft;
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  await management.loadContext('city-1');
+  management.update({ venueId: fixture.venue.id, date: '2026-11-20', time: '18:30', contact: '@creator' });
+  management.preview();
+  // Expire only for the create send so POST awaits refresh after lease capture.
+  deferRefresh = true;
+  const access = (s.auth as unknown as { access: { expiresAt: number } | null }).access;
+  if (access) access.expiresAt = 0;
+  const release = management.bindCreationView();
+  const work = management.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.isCreationContinuationLive(), true);
+  // Retire create view while token refresh is deferred — initial POST must not fire.
+  release();
+  refreshGate.resolve(credentials);
+  await work;
+  assert.equal(createPosts.length, 0);
+  assert.equal(management.getSnapshot().created, null);
+  assert.equal(management.getSnapshot().command, undefined);
 });
 
 test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, no auto-publish', async () => {
