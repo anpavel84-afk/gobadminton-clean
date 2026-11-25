@@ -50,7 +50,7 @@
           ]
         }
       ],
-      "versionCode": 52
+      "versionCode": 53
     },
     "plugins": [
       "expo-router",

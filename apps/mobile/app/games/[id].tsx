@@ -12,6 +12,7 @@ import {
 } from '../../src/components/game-role-reputation.tsx';
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { canApply, dominantParticipation, participationLabels } from '../../src/participation.ts';
+import { GameChatEntryPanel } from '../../src/components/game-chat-entry.tsx';
 import { GameCourtBookingPanel } from '../../src/components/game-court-booking.tsx';
 import { GameVenueCommunitySummaryPanel } from '../../src/components/game-venue-community-summary.tsx';
 import { PrivateGameVenueContactsPanel } from '../../src/components/private-game-venue-contacts.tsx';
@@ -79,6 +80,9 @@ export default function PublicGameDetails() {
       {authenticated ? <GameVenueCommunitySummaryPanel venueId={game.venue.id} /> : null}
       {authenticated ? <PrivateGameVenueContactsPanel gameId={game.id} venueId={game.venue.id} /> : null}
       {authenticated ? <GameCourtBookingPanel gameId={game.id} proof="detail" /> : null}
+      {authenticated
+        ? <GameChatEntryPanel gameId={game.id} status={game.status} endsAt={game.endsAt} />
+        : null}
     </GameDetailRoleReputation>}
   </Page>;
 }
