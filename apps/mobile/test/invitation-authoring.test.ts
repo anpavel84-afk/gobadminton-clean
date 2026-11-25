@@ -391,5 +391,5 @@ test('#522 APK45 source wiring: DM chooser, create opt-in (create retained; revo
   assert.match(revokeBlock, /requirePrincipalMutation\(request\)/);
   assert.doesNotMatch(revokeBlock, /requireCookieMutation\(request\)/);
 
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 53);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 54);
 });

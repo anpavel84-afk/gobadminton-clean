@@ -188,3 +188,62 @@ test('late historical block reconciliation cannot reread or fence a replaced foc
     assert.equal(s.calls.length, 2);
   }
 });
+
+test('#522 APK54 root: game message report wires gameId-only after consent; DM conversationId regression', async () => {
+  const s = setup();
+  const gameContext = { peerId: 'peer', name: 'Игрок', conversationId: 'chat-conv', gameId: 'game-1' };
+  const gameMessage: DirectMessage = { ...message, conversationId: 'chat-conv' };
+  s.owner.open(gameContext);
+  const v = s.view();
+  s.owner.choose('message', v, actor);
+  s.owner.select(gameMessage.id, [gameMessage], v, actor);
+  s.owner.consent(true, v, actor);
+  s.owner.edit('spam', 'Detail', v, actor);
+  await s.owner.submit([gameMessage], v, actor);
+  assert.deepEqual(JSON.parse(s.calls[0]!.init.body as string), {
+    targetKind: 'message', messageId: gameMessage.id, gameId: 'game-1',
+    reasonCode: 'spam', detail: 'Detail', shareMessageWithSupport: true,
+  });
+  assert.doesNotMatch(s.calls[0]!.init.body as string, /conversationId|Private loaded message|excerpt|authorPublicPlayerId|evidenceRefs/);
+  // Incomplete game shape fails closed.
+  const before = s.owner.getSnapshot();
+  s.owner.open({ peerId: 'peer', name: 'Игрок', gameId: 'game-1' });
+  assert.strictEqual(s.owner.getSnapshot(), before);
+  // DM regression: conversationId on wire, no gameId.
+  s.owner.open(context);
+  const dm = s.view();
+  s.owner.choose('message', dm, actor);
+  s.owner.select(message.id, [message], dm, actor);
+  s.owner.consent(true, dm, actor);
+  s.owner.edit('inappropriate', 'DM', dm, actor);
+  await s.owner.submit([message], dm, actor);
+  assert.deepEqual(JSON.parse(s.calls[1]!.init.body as string), {
+    targetKind: 'message', messageId: message.id, conversationId: 'conversation',
+    reasonCode: 'inappropriate', detail: 'DM', shareMessageWithSupport: true,
+  });
+  assert.doesNotMatch(s.calls[1]!.init.body as string, /"gameId"/);
+});
+
+test('#522 APK54 root: UNKNOWN original packet retained across member/game change; recovery target safe without command', async () => {
+  const s = setup();
+  const gameA = { peerId: 'peer', name: 'A', conversationId: 'chat-a', gameId: 'game-a' };
+  s.owner.open(gameA);
+  s.handler(async () => { throw new SafetyError('network'); });
+  s.owner.choose('block', s.view(), actor);
+  await s.owner.submit([], s.view(), actor);
+  const packet = s.owner.getSnapshot().command!.packet;
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  assert.equal(packet.context.gameId, 'game-a');
+  s.owner.open({ ...gameA, peerId: 'other-member', name: 'B' });
+  assert.strictEqual(s.owner.getSnapshot().command?.packet, packet);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  s.owner.open({ peerId: 'peer', name: 'A', conversationId: 'chat-b', gameId: 'game-b' });
+  assert.strictEqual(s.owner.getSnapshot().command?.packet, packet);
+  assert.equal(packet.context.gameId, 'game-a');
+  const controls = readFileSync(new URL('../src/components/safety.tsx', import.meta.url), 'utf8');
+  assert.match(controls, /const originalTarget = !command \? null/);
+  assert.doesNotMatch(controls, /command!\.packet/);
+  assert.match(controls, /\/messages\/game\/\$\{command\.packet\.context\.gameId\}/);
+  assert.match(controls, /\/messages\/direct\/\$\{command\.packet\.context\.conversationId\}/);
+  assert.match(controls, /\/players\/\$\{command\.packet\.context\.peerId\}/);
+});

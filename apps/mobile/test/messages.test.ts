@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { MessagesCoordinator } from '../src/messages-coordinator.ts';
 import type { MessagePacket, MessagesPort, MessagesClock } from '../src/messages-coordinator.ts';
 import { inboxDestination, mergeMessages, MessagesError, mutationPath, parseInbox, parseMessage, parseMessageMutation, parseOwnMessageIdentity, seq } from '../src/messages.ts';
@@ -859,4 +861,92 @@ test('#522 APK46 revoke: stale rendered viewGeneration/actor → zero dispatch; 
   await afterRevoke.owner.act(inviteB, 'revoke', undefined, afterRevoke.owner.getSnapshot().viewGeneration, afterRevoke.owner.getSnapshot().actor);
   assert.equal(sent.length, before + 1);
   assert.equal(sent[before]!.action, 'revoke');
+});
+
+test('#522 APK54 root: mayDispatchGameSafety requires ready active member + captured view/foreground epoch', async () => {
+  const game = { kind: 'game' as const, id: 'game-a' };
+  const chat = {
+    id: 'chat-a', gameId: 'game-a', kind: 'game' as const, lifecycleState: 'active' as const, version: 1,
+    lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member' as const,
+  };
+  const members = [
+    { publicPlayerId: 'public-a', displayName: 'Self', role: 'member' as const },
+    { publicPlayerId: 'peer-b', displayName: 'Peer', role: 'member' as const },
+  ];
+  let membersImpl: () => Promise<typeof members> = async () => members;
+  const { owner } = setup({
+    game: async () => chat,
+    members: async () => membersImpl(),
+    history: async () => ({ items: [], nextCursor: null }),
+  });
+  owner.focus(game); await tick();
+  const ctx = { peerId: 'peer-b', conversationId: 'chat-a', gameId: 'game-a' };
+  const view = owner.getSnapshot().viewGeneration;
+  const life = owner.foregroundLifecycle();
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, life), true);
+  assert.equal(owner.mayDispatchGameSafety({ ...ctx, peerId: 'public-a' }, actor, view, life), false);
+  assert.equal(owner.mayDispatchGameSafety({ ...ctx, peerId: 'missing' }, actor, view, life), false);
+  assert.equal(owner.mayDispatchGameSafety({ ...ctx, conversationId: 'other' }, actor, view, life), false);
+  owner.setForeground(false);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, life), false);
+  const gate = deferred<typeof members>();
+  membersImpl = async () => gate.promise;
+  owner.setForeground(true);
+  assert.equal(owner.getSnapshot().viewGeneration, view);
+  assert.notEqual(owner.foregroundLifecycle(), life);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, life), false);
+  // Newly captured epoch stays blocked until matching current full source (incl. members) returns.
+  const resumed = owner.foregroundLifecycle();
+  assert.equal(owner.gameSafetySourceFresh(), false);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, resumed), false);
+  gate.resolve(members); await tick();
+  assert.equal(owner.gameSafetySourceFresh(), true);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, resumed), true);
+  // Network refusal cannot mark the next foreground epoch fresh from cached detail.
+  membersImpl = async () => { throw new MessagesError('network'); };
+  owner.setForeground(false);
+  owner.setForeground(true);
+  const failedLife = owner.foregroundLifecycle();
+  await tick();
+  assert.equal(owner.gameSafetySourceFresh(), false);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, failedLife), false);
+  const source = readFileSync(new URL('../src/components/messages.tsx', import.meta.url), 'utf8');
+  assert.match(source, /retireMemberSafety/);
+  assert.match(source, /gameSafetySourceFresh/);
+  assert.match(source, /AppState\.addEventListener\('change'/);
+  assert.match(source, /epoch !== memberFocusEpoch\.current/);
+});
+
+test('#522 APK54 QA1: successful full game source notifies with ready detail and true freshness atomically', async () => {
+  const game = { kind: 'game' as const, id: 'game-a' };
+  const chat = {
+    id: 'chat-a', gameId: 'game-a', kind: 'game' as const, lifecycleState: 'active' as const, version: 1,
+    lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member' as const,
+  };
+  const members = [
+    { publicPlayerId: 'public-a', displayName: 'Self', role: 'member' as const },
+    { publicPlayerId: 'peer-b', displayName: 'Peer', role: 'member' as const },
+  ];
+  const membersGate = deferred<typeof members>();
+  const { owner } = setup({
+    game: async () => chat,
+    members: async () => membersGate.promise,
+    history: async () => ({ items: [], nextCursor: null }),
+  });
+  let observedReadyFresh = 0;
+  const unsub = owner.subscribe(() => {
+    const detail = owner.getSnapshot().detail;
+    // Production owner reacts on notification; ready game detail must already carry true freshness.
+    if (detail?.status === 'ready' && detail.resource.kind === 'game' && detail.header
+      && 'gameId' in detail.header && detail.header.gameId === 'game-a' && owner.gameSafetySourceFresh())
+      observedReadyFresh++;
+  });
+  owner.focus(game); await tick();
+  assert.equal(owner.gameSafetySourceFresh(), false);
+  assert.equal(observedReadyFresh, 0);
+  membersGate.resolve(members); await tick();
+  assert.equal(owner.getSnapshot().detail?.status, 'ready');
+  assert.equal(owner.gameSafetySourceFresh(), true);
+  assert.ok(observedReadyFresh >= 1, 'subscriber must observe ready matching detail with true freshness during the success notification');
+  unsub();
 });

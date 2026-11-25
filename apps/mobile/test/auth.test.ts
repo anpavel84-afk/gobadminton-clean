@@ -3014,3 +3014,81 @@ test('#522 APK46: revoke deferred token fence — blur/focus/account → zero PO
   await messages.retry(invite);
   assert.equal(revokePosts.length, postsBeforeRetry);
 });
+
+test('#522 APK54 root: delayed token game safety permit yields zero POST after background', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const gameId = 'game-safety-a';
+  const conversationId = 'chat-safety-a';
+  const peerId = 'peer-member';
+  const posts: { path: string; body: unknown }[] = [];
+  const refreshGate = deferred<typeof credentials>();
+  let refreshResult: Promise<typeof credentials> | typeof credentials = credentials;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshResult;
+    if (path === '/me/social-profile') return { publicPlayerId: 'own-player' };
+    if (path === `/games/${gameId}/chat`) {
+      return {
+        id: conversationId, gameId, kind: 'game', lifecycleState: 'active', version: 1,
+        lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member',
+      };
+    }
+    if (path === `/games/${gameId}/chat/members`) {
+      return {
+        items: [
+          { publicPlayerId: 'own-player', displayName: 'Self', role: 'member' },
+          { publicPlayerId: peerId, displayName: 'Peer', role: 'member' },
+        ],
+      };
+    }
+    if (path.startsWith(`/games/${gameId}/chat/messages`)) return { items: [], nextCursor: null };
+    if (path === '/reports' || path.startsWith('/me/blocks/')) {
+      posts.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+      return path === '/reports'
+        ? { reportId: 'ec05b131-750e-4b91-a1a1-425373c3fba0', status: 'submitted', createdAt: '2026-11-14T00:00:00.000Z' }
+        : { publicPlayerId: peerId, blocked: init.method === 'PUT' };
+    }
+    return { ok: true };
+  });
+  const messages = s.auth.messages;
+  const safety = s.auth.safety;
+  messages.focus({ kind: 'game', id: gameId });
+  await new Promise(r => setImmediate(r));
+  assert.equal(messages.getSnapshot().detail?.status, 'ready');
+  assert.equal(messages.gameSafetySourceFresh(), true);
+  const gameContext = { peerId, name: 'Peer', conversationId, gameId };
+  safety.open(gameContext);
+  const state = safety.getSnapshot();
+  safety.choose('block', state.viewGeneration, state.actor);
+  // APK46 pattern: expire access so the admitted submit reaches token acquisition itself.
+  // Do not start auth.refresh before submit — hydrating retires SafetyCoordinator actor.
+  const access = (s.auth as unknown as { access: { expiresAt: number } | null }).access;
+  if (access) access.expiresAt = 0;
+  refreshResult = refreshGate.promise;
+  let sawSending = false;
+  let sendingPacket: { context: { gameId?: string } } | undefined;
+  const stop = safety.subscribe(() => {
+    const command = safety.getSnapshot().command;
+    if (command?.status === 'sending') {
+      sawSending = true;
+      sendingPacket = command.packet;
+    }
+  });
+  const submitWork = safety.submit([], state.viewGeneration, state.actor);
+  await new Promise(r => setImmediate(r));
+  stop();
+  assert.equal(sawSending, true);
+  assert.ok(sendingPacket);
+  assert.equal(sendingPacket.context.gameId, gameId);
+  assert.equal(posts.length, 0);
+  assert.ok(s.calls.some(c => c.path === '/auth/native/refresh'));
+  messages.setForeground(false);
+  refreshGate.resolve(credentials);
+  await submitWork;
+  assert.equal(posts.length, 0);
+  assert.equal(safety.getSnapshot().command?.status, 'unknown');
+  assert.equal(safety.getSnapshot().command?.packet.context.gameId, gameId);
+  assert.strictEqual(safety.getSnapshot().command?.packet, sendingPacket);
+  assert.match(readFileSync(new URL('../src/auth-coordinator.ts', import.meta.url), 'utf8'), /mayDispatchGameSafety/);
+});

@@ -294,7 +294,7 @@ test('#522 APK51 managed game photo budget pin (no source-regex mirror)', () => 
   assert.equal(GAME_COVER_DERIVATIVE_MAX_BYTES, 512 * 1024);
   assert.equal(GAME_COVER_UPLOAD_MAX_BYTES, GAME_COVER_DERIVATIVE_MAX_BYTES);
   assert.ok(COVER_DERIVATIVE_MAX_BYTES > GAME_COVER_DERIVATIVE_MAX_BYTES);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 53);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 54);
 });
 
 test('#522 FIX2: openView release retires load/prep; sending→UNKNOWN; reopen not stuck busy', async () => {

@@ -273,6 +273,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `game-chat-entry.test.ts` + `auth.test.ts`; source APK counter 53 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native game-chat entry; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-20 · Native game-chat member profile and safety actions (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameConversation` / `ConversationSafety` game reportContext; existing `POST /v1/reports` + block routes via `requirePrincipalMutation`; native `SafetyCoordinator` / `safetyWire` / bearer `safetyMutation` |
+| Entry | Authenticated active `/messages/game/[id]` with loaded members and verified own public-player id |
+| Trigger | Explicit select of another loaded member → single selected-member safety host; profile; block/unblock; player report; message report after fresh sharing consent |
+| Expected | Own member and closed/unreadable chat offer no safety host; only loaded live nonempty messages by selected member matching current chat conversation id; wire uses `gameId` XOR (not plus) DM `conversationId`; no excerpt/author/credentials on wire; retired selection/game cannot delayed-dispatch; UNKNOWN keeps original packet; recovery opens original game/DM/profile target; personal block does not revoke membership or suppress game-chat send/history; existing DM/profile safety unchanged; background→return retires selection and blocks new member safety until a successful full game source (incl. members) for the current foreground epoch — cached ready detail / catchUp alone never enables |
+| Accessibility | Accepted-web Russian copy; existing TextButton/Modal tokens; close restores focus to member trigger |
+| Non-scope | Backend/deps/new navigation/framework; recommendations/friendship cookie routes; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Source APK counter 54; root repair3 (foreground full-source freshness barrier) + repair2 (absent-command target, game safety lifetime/permit, member-focus fence) + bounded safety/messages/auth checks; independent QA not yet run |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native game-chat member safety; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

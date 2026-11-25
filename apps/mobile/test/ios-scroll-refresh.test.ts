@@ -9,7 +9,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 test('messages inbox: iOS-only RefreshControl tintColor reuses brand purple', () => {
   assert.ok(root.includes('mobile'));
   const messages = read('../src/components/messages.tsx');
-  assert.match(messages, /import \{ AppState, FlatList, Image, Platform, Pressable, RefreshControl, TextInput, View \} from 'react-native';/);
+  const rnImport = messages.match(/import \{([^}]+)\} from 'react-native';/)?.[1] ?? '';
+  for (const name of ['AppState', 'FlatList', 'Image', 'Platform', 'Pressable', 'RefreshControl', 'TextInput', 'View']) {
+    assert.match(rnImport, new RegExp(`\\b${name}\\b`));
+  }
   assert.match(messages, /refreshControl=\{<RefreshControl refreshing=\{state\.inboxStatus === 'loading'\} onRefresh=\{\(\) => \{ void owner\.loadInbox\(\); \}\}[\s\S]*?tintColor=\{Platform\.OS === 'ios' \? colors\.purple : undefined\} \/>\}/);
   assert.doesNotMatch(messages, /<FlatList[^>]*\brefreshing=/);
   assert.doesNotMatch(messages, /Platform\.OS === 'android'|Platform\.OS !== 'ios'|Platform\.select\(/);

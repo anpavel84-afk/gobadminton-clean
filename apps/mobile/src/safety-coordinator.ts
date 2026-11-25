@@ -18,14 +18,18 @@ type Snapshot = { actor: Actor | null; context: SafetyContext | null; viewGenera
 const empty = (actor: Actor | null, viewGeneration: number): Snapshot => ({ actor, context: null, viewGeneration, dialog: null,
   reason: 'harassment', detail: '', selected: null, consent: false, lastBlocks: {}, lastNames: {}, notice: null });
 const unknown = 'Результат неизвестен. Проверка повторит исходное действие с тем же ключом и данными. Новое действие пока недоступно.';
-const sameContext = (a: SafetyContext | null, b: SafetyContext | null) => !!a && !!b && a.peerId === b.peerId && a.conversationId === b.conversationId;
+const sameContext = (a: SafetyContext | null, b: SafetyContext | null) =>
+  !!a && !!b && a.peerId === b.peerId && a.conversationId === b.conversationId && a.gameId === b.gameId;
 /** One bounded in-memory command owner. Navigation and reauthentication never create a replacement packet. */
 export class SafetyCoordinator {
   private snapshot = empty(null, 0); private generation = 0; private listeners = new Set<() => void>();
   private quarantine: { owner: string; snapshot: Snapshot } | null = null;
   private inFlight: SafetyPacket | null = null;
-  private port: { send: (packet: SafetyPacket, authority: Actor) => Promise<unknown>; verified: (peer: string, blocked: boolean, context: SafetyContext) => void;
-    reread: (context: SafetyContext, authority: Actor) => void };
+  private port: {
+    send: (packet: SafetyPacket, authority: Actor, permit: () => boolean) => Promise<unknown>;
+    verified: (peer: string, blocked: boolean, context: SafetyContext) => void;
+    reread: (context: SafetyContext, authority: Actor) => void;
+  };
   private random: () => string;
   constructor(port: SafetyCoordinator['port'], random: () => string) { this.port = port; this.random = random; }
   getSnapshot = () => this.snapshot;
@@ -48,6 +52,9 @@ export class SafetyCoordinator {
   open = (context: SafetyContext) => {
     if (!this.snapshot.actor) return;
     if (!safetyPeerId(context.peerId) || context.conversationId !== undefined && !safetyPeerId(context.conversationId)) return;
+    if (context.gameId !== undefined && !safetyPeerId(context.gameId)) return;
+    // Game requires binding conversationId; incomplete or ambiguous shapes fail closed.
+    if (context.gameId !== undefined && context.conversationId === undefined) return;
     // setActor restores context/form only for the verified same owner. Its focus reopen
     // keeps that form, but always fences the prior view and requires fresh message sharing.
     const retainForm = sameContext(this.snapshot.context, context);
@@ -91,7 +98,9 @@ export class SafetyCoordinator {
       if (dialog === 'message') {
         const m = messages.find(m => m.id === selected);
         if (!consent || !m || !reportable(m, context)) return;
-        body = Object.freeze({ targetKind: 'message', messageId: m.id, conversationId: context.conversationId!, reasonCode: reason, detail: reportDetail(detail), shareMessageWithSupport: true });
+        body = context.gameId
+          ? Object.freeze({ targetKind: 'message', messageId: m.id, gameId: context.gameId, reasonCode: reason, detail: reportDetail(detail), shareMessageWithSupport: true })
+          : Object.freeze({ targetKind: 'message', messageId: m.id, conversationId: context.conversationId!, reasonCode: reason, detail: reportDetail(detail), shareMessageWithSupport: true });
       } else body = Object.freeze({ targetKind: 'player', targetPublicPlayerId: context.peerId, reasonCode: reason, detail: reportDetail(detail) });
       packet = Object.freeze({ ...base, action: 'report', method: 'POST', path: '/reports', body });
     }
@@ -109,7 +118,8 @@ export class SafetyCoordinator {
     this.show({ command: { packet, status: 'sending' }, notice: null, consent: false });
     const valid = () => this.current(view, actor) && this.snapshot.command?.packet === packet && sameContext(this.snapshot.context, packet.context);
     try {
-      const receipt = parseSafetyReceipt(packet, await this.port.send(packet, actor));
+      // Permit rechecked after token await so a retired game/member view cannot start a delayed request.
+      const receipt = parseSafetyReceipt(packet, await this.port.send(packet, actor, valid));
       if (!valid()) return;
       if ('blocked' in receipt) {
         this.show({ lastBlocks: { ...this.snapshot.lastBlocks, [packet.context.peerId]: receipt.blocked },

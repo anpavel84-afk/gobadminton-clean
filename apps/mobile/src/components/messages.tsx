@@ -1,7 +1,7 @@
 import { NativeSafety } from './safety.tsx';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, PropsWithChildren, ReactNode } from 'react';
-import { AppState, FlatList, Image, Platform, Pressable, RefreshControl, TextInput, View } from 'react-native';
+import { AccessibilityInfo, AppState, findNodeHandle, FlatList, Image, Platform, Pressable, RefreshControl, TextInput, View } from 'react-native';
 import type { FlatListProps } from 'react-native';
 import { useFocusEffect, usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
@@ -13,7 +13,7 @@ import {
 import type { MessagesCoordinator } from '../messages-coordinator.ts';
 import { resourceKey } from '../messages-coordinator.ts';
 import { inboxDestination } from '../messages.ts';
-import type { DirectMessage, GameInvitation, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
+import type { DirectMessage, GameChatMember, GameInvitation, InboxFilter, MessagePeer, MessageResource } from '../messages.ts';
 import { isInviteClockExpired } from '../my-games.ts';
 import { playerMediaUrl } from '../media.ts';
 import type { Actor } from '../participation.ts';
@@ -301,13 +301,48 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const detail = state.detail && resourceKey(state.detail.resource) === key ? state.detail : null;
   const pending = state.pending[key], draft = state.drafts[key] ?? '';
   const [showMembers, setShowMembers] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [chooser, setChooser] = useState(false);
   const inviteTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const memberTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const memberFocusEpoch = useRef(0);
+  const memberFocusFrame = useRef<number | null>(null);
   const list = useRef<FlatList<DirectMessage>>(null), nearBottom = useRef(false), visibleIds = useRef<string[]>([]), initialScroll = useRef(true);
   const readVisible = useCallback(() => owner.visible(resourceRef.current, visibleIds.current, nearBottom.current), [owner]);
   const onViewable = useRef<NonNullable<FlatListProps<DirectMessage>['onViewableItemsChanged']>>(({ viewableItems }) => {
     visibleIds.current = viewableItems.filter(v => v.isViewable).map(v => v.item.id); readVisible();
   }).current;
+  const retireMemberSafety = useCallback(() => {
+    memberFocusEpoch.current += 1;
+    if (memberFocusFrame.current != null) {
+      cancelAnimationFrame(memberFocusFrame.current);
+      memberFocusFrame.current = null;
+    }
+    setSelectedMemberId(null);
+  }, []);
+  // Normal close restores focus to the selected trigger; ignored onPress cleanup cannot cancel a late frame.
+  const closeMemberSafety = useCallback(() => {
+    const target = memberTrigger.current;
+    if (memberFocusFrame.current != null) {
+      cancelAnimationFrame(memberFocusFrame.current);
+      memberFocusFrame.current = null;
+    }
+    const epoch = ++memberFocusEpoch.current;
+    setSelectedMemberId(null);
+    memberFocusFrame.current = requestAnimationFrame(() => {
+      memberFocusFrame.current = null;
+      if (epoch !== memberFocusEpoch.current) return;
+      target?.focus();
+      const node = findNodeHandle(target);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+  }, []);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state !== 'active') retireMemberSafety();
+    });
+    return () => { sub.remove(); retireMemberSafety(); };
+  }, [retireMemberSafety]);
   useFocusEffect(useCallback(() => {
     if (auth.status !== 'authenticated') return;
     initialScroll.current = true; nearBottom.current = false; visibleIds.current = [];
@@ -319,9 +354,11 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
       // setChooser alone does not run chooser cleanup when this screen unmounts with
       // chooser still true — InvitationChooser lease release + explicit close fence the surface.
       setChooser(false);
+      setShowMembers(false);
+      retireMemberSafety();
       nativeAuth.invitationAuthoring.close();
     };
-  }, [owner, key, auth.status]));
+  }, [owner, key, auth.status, retireMemberSafety]));
   const h = detail?.header, direct = h && 'requestState' in h ? h : null, chat = h && 'lifecycleState' in h ? h : null, invitation = h && 'status' in h ? h : null;
   const title = direct?.peer.displayName ?? (chat ? 'Чат игры' : 'Приглашение в игру');
   const inviteAuthoring = useSyncExternalStore(
@@ -340,6 +377,16 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     {inviteOutsideProgress && <Label accessibilityLiveRegion="polite">{inviteOutsideProgress}</Label>}
     {inviteAuthoring.command?.status === 'unknown' && !chooser && <Label accessibilityRole="alert">{inviteAuthoring.notice}</Label>}
     {inviteAuthoring.command?.status === 'unknown' && !chooser && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void nativeAuth.invitationAuthoring.retry(); }} />}</>;
+  const chatActive = !!chat && chat.lifecycleState === 'active';
+  const ownId = detail?.status === 'ready' ? detail.ownId : null;
+  // Missing own identity or unproven foreground full source fails closed: no member safety from cached members.
+  const memberSafetyReady = chatActive && !!ownId && detail?.status === 'ready' && owner.gameSafetySourceFresh();
+  const selectedMember: GameChatMember | undefined = memberSafetyReady && detail
+    ? detail.members.find(m => m.publicPlayerId === selectedMemberId && m.publicPlayerId !== ownId)
+    : undefined;
+  useEffect(() => {
+    if (selectedMemberId && !selectedMember) retireMemberSafety();
+  }, [selectedMemberId, selectedMember, retireMemberSafety]);
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
   if (!detail || detail.status !== 'ready' || !h) return <Page header={<MessageHeader name={title} />}><Label>{detail?.status === 'error' ? detail.error : 'Загружаем…'}</Label><TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />{notice}</Page>;
   if (invitation) {
@@ -358,8 +405,34 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const canInvite = !!direct && direct.requestState === 'accepted' && !safetyHeld && !pending && !inviteBusy;
   return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} />}>
     {direct && <NativeSafety peerId={direct.peer.publicPlayerId} name={direct.peer.displayName} conversationId={direct.id} messages={detail.messages} />}
-    {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники (${detail.members.length})`} onPress={() => setShowMembers(v => !v)} />
-      {showMembers && <FlatList data={detail.members} keyExtractor={m => m.publicPlayerId} style={{ flexGrow: 0 }} renderItem={({ item }) => <Label style={{ padding: 8 }}>{item.displayName} · {item.role === 'manager' ? 'Организатор' : 'Участник'}</Label>} />}</>}
+    {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники${memberSafetyReady ? ' и безопасность' : ''} (${detail.members.length})`} onPress={() => { setShowMembers(v => !v); if (showMembers) retireMemberSafety(); }} />
+      {showMembers && <>
+        {memberSafetyReady && <Label>Блокировка личного общения не меняет участие в игре и доступ к общему чату.</Label>}
+        {detail.members.map((item: GameChatMember) => {
+          const own = !!ownId && item.publicPlayerId === ownId;
+          const actionable = memberSafetyReady && !own;
+          const selected = selectedMember?.publicPlayerId === item.publicPlayerId;
+          const row = <Label style={{ padding: 8 }}>{item.displayName} · {item.role === 'manager' ? 'Организатор' : 'Участник'}</Label>;
+          if (!actionable) return <View key={item.publicPlayerId}>{row}</View>;
+          return <Pressable key={item.publicPlayerId} ref={selected ? memberTrigger : undefined}
+            accessibilityRole="button" accessibilityState={{ selected }}
+            accessibilityLabel={`${item.displayName}, действия безопасности`}
+            onPress={() => setSelectedMemberId(selected ? null : item.publicPlayerId)}
+            style={({ pressed }) => [pressed && { backgroundColor: colors.paper }]}>
+            {row}
+          </Pressable>;
+        })}
+        {selectedMember && chat ? <>
+          <TextButton title="К участникам" onPress={closeMemberSafety} />
+          <NativeSafety
+            peerId={selectedMember.publicPlayerId}
+            name={selectedMember.displayName}
+            gameId={chat.gameId}
+            conversationId={chat.id}
+            messages={detail.messages}
+          />
+        </> : null}
+      </>}</>}
     <FlatList ref={list} data={detail.messages} keyExtractor={m => m.id} contentContainerStyle={{ padding: 12, gap: 8, flexGrow: 1 }}
       onViewableItemsChanged={onViewable} viewabilityConfig={{ itemVisiblePercentThreshold: 80, minimumViewTime: 250 }}
       onContentSizeChange={() => { if (initialScroll.current && detail.messages.length) { initialScroll.current = false; list.current?.scrollToEnd({ animated: false }); } }}
