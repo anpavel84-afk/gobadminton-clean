@@ -259,7 +259,7 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     };
   }
 
-  it("native venue+public-game create/reply/edit/delete; unknown/private targets refused; no invalid bearer fallback", async () => {
+  it("native venue+public-game create/reply/edit/delete; unknown/unlisted targets refused; no invalid bearer fallback", async () => {
     const {game,venueId} = await createPublishedGame(author);
     const credentials = await nativeCredentials(author), other = await nativeCredentials(peer);
     const headers = {authorization:`Bearer ${credentials.accessToken}`,"idempotency-key":key()};
@@ -360,6 +360,28 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     expect(tombstoneReplies.statusCode).toBe(200);
     expect(tombstoneReplies.json().items[0].id).toBe(gameReply.json().id);
 
+    // Published+unlisted is unavailable for native principal (not a private enum).
+    await pool.query("UPDATE games SET visibility='unlisted' WHERE id=$1", [game.id]);
+    const unlistedGet = await app.inject({ url: gameUrl, headers });
+    expect(unlistedGet.statusCode).toBe(404);
+    expect(unlistedGet.body).not.toContain("Native public game question");
+    expect(unlistedGet.body).not.toContain("Native changed question");
+    expect(unlistedGet.body).not.toContain("Native one-level answer");
+    expect(unlistedGet.body).not.toContain("PRIVATE TERMS SENTINEL");
+    expect(unlistedGet.body).not.toMatch(/visibleCount|canCreate|"items"/);
+    const unlistedPost = await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${credentials.accessToken}`, "idempotency-key": key() },
+      payload: { text: "Native unlisted refused" },
+    });
+    expect(unlistedPost.statusCode).toBe(404);
+    expect(unlistedPost.body).not.toContain("Native public game question");
+    expect(unlistedPost.body).not.toContain("Native changed question");
+    expect(unlistedPost.body).not.toContain("Native one-level answer");
+    expect(unlistedPost.body).not.toContain("PRIVATE TERMS SENTINEL");
+    expect(unlistedPost.body).not.toMatch(/visibleCount|canCreate|"items"/);
+    await pool.query("UPDATE games SET visibility='public' WHERE id=$1", [game.id]);
+
     // Unknown / missing IDs stay unavailable without sentinel content.
     for (const target of [randomUUID()]) {
       for (const method of ["GET", "PUT", "DELETE"] as const) {
@@ -451,6 +473,17 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     expect(restrictedList.json().visibleCount).toBe(0);
     const restrictedWrite = await post(outsider, gameUrl, { text: "restricted deny", parentCommentId: null });
     expect(restrictedWrite.statusCode).toBe(403);
+    const restrictedNative = await nativeCredentials(outsider);
+    const restrictedNativeList = await app.inject({
+      url: gameUrl, headers: { authorization: `Bearer ${restrictedNative.accessToken}` },
+    });
+    expect(restrictedNativeList.statusCode).toBe(200);
+    expect(restrictedNativeList.json().canCreate).toBe(false);
+    expect((await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${restrictedNative.accessToken}`, "idempotency-key": key() },
+      payload: { text: "native restricted deny", parentCommentId: null },
+    })).statusCode).toBe(403);
     expect((await get(author, gameUrl)).json().canCreate).toBe(true);
     expect((await get(null, gameUrl)).json().canCreate).toBe(false);
     // Explicit reversal so later outsider block cases keep dedicated fixture semantics.
@@ -672,6 +705,24 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     expect((await get(null, `/v1/games/${draftId}/comments`)).statusCode).toBe(404);
     expect((await post(author, `/v1/games/${draftId}/comments`, { text: "nope" })).statusCode).toBe(404);
     expect((await get(null, `/v1/games/${randomUUID()}/comments`)).statusCode).toBe(404);
+    const draftNative = await nativeCredentials(author);
+    expect((await app.inject({
+      url: `/v1/games/${draftId}/comments`,
+      headers: { authorization: `Bearer ${draftNative.accessToken}` },
+    })).statusCode).toBe(404);
+    expect((await app.inject({
+      method: "POST", url: `/v1/games/${draftId}/comments`,
+      headers: { authorization: `Bearer ${draftNative.accessToken}`, "idempotency-key": key() },
+      payload: { text: "native draft deny" },
+    })).statusCode).toBe(404);
+
+    // Live author root so block projection can hide a real body (prior root is tombstoned).
+    const liveBlockRoot = await post(author, gameUrl, {
+      text: "Live author for native block projection",
+      parentCommentId: null,
+    });
+    expect(liveBlockRoot.statusCode).toBe(201);
+    const liveBlockRootId = liveBlockRoot.json().id as string;
 
     // Block hides author identity/body/count for authenticated reader; writer cannot reply.
     const client = await pool.connect();
@@ -697,6 +748,27 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
       parentCommentId: rootId,
     });
     expect([403, 404]).toContain(blockedReply.statusCode);
+
+    const outsiderNative = await nativeCredentials(outsider);
+    const nativeBlockedList = await app.inject({
+      url: gameUrl, headers: { authorization: `Bearer ${outsiderNative.accessToken}` },
+    });
+    expect(nativeBlockedList.statusCode).toBe(200);
+    expect(nativeBlockedList.json().canCreate).toBe(false);
+    expect(nativeBlockedList.json().items.some((row: { id: string }) => row.id === liveBlockRootId)).toBe(false);
+    expect(JSON.stringify(nativeBlockedList.json())).not.toContain("Live author for native block projection");
+    expect(nativeBlockedList.json().items.every((row: { author?: { publicPlayerId?: string | null } }) =>
+      row.author?.publicPlayerId !== author.publicPlayerId)).toBe(true);
+    expect([403, 404]).toContain((await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${outsiderNative.accessToken}`, "idempotency-key": key() },
+      payload: { text: "native blocked root", parentCommentId: null },
+    })).statusCode);
+    expect([403, 404]).toContain((await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${outsiderNative.accessToken}`, "idempotency-key": key() },
+      payload: { text: "native blocked reply", parentCommentId: liveBlockRootId },
+    })).statusCode);
 
     // Capacity / public game projection unchanged by comments.
     const publicGame = await get(outsider, `/v1/games/${game.id}`);
