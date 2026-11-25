@@ -1926,7 +1926,7 @@ test('#522 APK52/FIX3: AuthCoordinator saveCreationCover openView+transport; cre
     const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
     const puts: string[] = [];
     let row = { version: 7, hasCover: false, cover: { uploadedUrl: null as string | null } };
-    let latest: typeof draft & { status: 'draft' | 'published' } = { ...draft };
+    let latest: Omit<typeof draft, 'status'> & { status: 'draft' | 'published' } = { ...draft };
     const createGate = deferred<typeof draft>();
     s.setHandler(async (path, init) => {
       if (path === '/me') return me;
