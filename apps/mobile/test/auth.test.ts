@@ -2700,6 +2700,77 @@ test('#522 APK53: delayed token chat permit yields zero gameChat GET', async () 
   assert.equal(owner.getSnapshot().available, false);
 });
 
+test('#522 QA1 FIX3: deferred token past chat endsAt → zero gameChat GET; live entry settles closed', async () => {
+  const endsAt = '2099-12-01T12:00:00.000Z';
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  let clock = Date.parse('2099-12-01T11:00:00.000Z');
+  const farCreds = {
+    ...credentials,
+    refreshExpiresAt: '2100-01-01T00:00:00.000Z',
+    refreshAbsoluteExpiresAt: '2100-01-01T00:00:00.000Z',
+  };
+  const farEnvelope = {
+    version: 1, generation: token('g'), returnPath: '/games/same-game',
+    session: {
+      refreshToken: farCreds.refreshToken, sessionId: me.session.id, actorId: me.id,
+      refreshExpiresAt: farCreds.refreshExpiresAt, refreshAbsoluteExpiresAt: farCreds.refreshAbsoluteExpiresAt,
+    },
+  };
+  let stored: string | null = JSON.stringify(farEnvelope);
+  let serial = 0;
+  const gets: string[] = [];
+  const refreshGate = deferred<unknown>();
+  let holdRefresh = false;
+  const auth = new AuthCoordinator({
+    api: createNativeApi(async (url, init) => {
+      const path = String(url).replace('https://dev.gobadminton.ru/v1', '');
+      let value: unknown;
+      if (path === '/me') value = me;
+      else if (path === '/auth/native/refresh') value = holdRefresh ? refreshGate.promise : farCreds;
+      else if (path === `/games/${gameId}/chat`) {
+        gets.push(path);
+        value = {
+          id: 'c1', gameId, kind: 'game', lifecycleState: 'active', version: 1,
+          lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member',
+        };
+      } else if (path.startsWith('/me/games')) value = { items: [], nextCursor: null };
+      else if (path === '/auth/native/logout') value = { ok: true };
+      else value = farCreds;
+      return value instanceof Response ? value : new Response(JSON.stringify(await value));
+    }),
+    store: {
+      getItem: async () => stored,
+      setItem: async (_key, value) => { stored = value; },
+    },
+    random: () => String.fromCharCode(65 + serial++).repeat(43),
+    challenge: async verifier => createHash('sha256').update(verifier).digest('base64url'),
+    now: () => clock,
+  });
+  await auth.hydrate();
+  const owner = auth.gameChatEntry;
+  auth.participation.getSnapshot().details[gameId] = {
+    status: 'ready',
+    parts: [{
+      id: 'p1', gameId, userId: me.id, status: 'confirmed', version: 1, attemptNumber: 1,
+      requestedAt: '2026-01-01T00:00:00.000Z',
+    }],
+  };
+  // Second refresh held: load awaits token while endsAt is still open at focus time.
+  holdRefresh = true;
+  const refreshWork = auth.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.focus(gameId, { status: 'published', endsAt });
+  const loadWork = owner.load();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(owner.getSnapshot().status, 'loading');
+  clock = Date.parse(endsAt) + 1;
+  refreshGate.resolve(farCreds);
+  await Promise.all([loadWork, refreshWork]);
+  assert.equal(gets.length, 0);
+  assert.equal(owner.getSnapshot().available, false);
+  assert.equal(owner.getSnapshot().status, 'closed');
+});
+
 test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

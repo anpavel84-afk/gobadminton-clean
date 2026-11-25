@@ -13,7 +13,7 @@ import { CoverLockNoSendError, GameManagementCoordinator } from './game-manageme
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
-import { GameChatEntryCoordinator } from './game-chat-entry.ts';
+import { GameChatEntryCoordinator, isChatWindowOpen } from './game-chat-entry.ts';
 import { GameCoverCoordinator, gameCoverMutationSucceeded } from './game-cover.ts';
 import { cloneDerivativeBytes } from './profile-avatar.ts';
 import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
@@ -218,7 +218,7 @@ export class AuthCoordinator {
       }, authority),
     }, deps.random);
     // Game-detail chat entry: eligibility before GET /games/:id/chat; never focuses Messages to probe.
-    // Permit rechecked after token await on managed pages and private chat header.
+    // Permit + chat window rechecked after token await immediately before private chat header.
     this.gameChatEntry = new GameChatEntryCoordinator({
       detailParts: gameId => {
         const detail = this.participation.getSnapshot().details[gameId];
@@ -231,7 +231,12 @@ export class AuthCoordinator {
         return deps.api.managedGames(access, cursor);
       }),
       readChat: (gameId, permit) => this.participationRead(access => {
+        // Actor/view/foreground first; then eligibility window at actual post-token dispatch.
         if (!permit()) throw new ParticipationError('stale');
+        const focus = this.gameChatEntry.getSnapshot().focus;
+        if (!focus || focus.gameId !== gameId || !isChatWindowOpen(focus.window, this.now())) {
+          throw new ParticipationError('business', 0, 'CHAT_WINDOW_CLOSED');
+        }
         return deps.api.gameChat(access, gameId);
       }),
     });

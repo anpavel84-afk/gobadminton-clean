@@ -265,7 +265,12 @@ export class GameChatEntryCoordinator {
       }
       this.show({ status: 'ready', available: true, notice: null });
     } catch (error) {
+      // Retired view/generation: leave without painting. Ended window on the same live entry: closed.
       if (!live()) return;
+      if (error instanceof ParticipationError && error.code === 'CHAT_WINDOW_CLOSED') {
+        this.show({ status: 'closed', available: false, notice: null });
+        return;
+      }
       if (
         (error instanceof ParticipationError && error.kind === 'business' && (error.status === 404 || error.status === 401))
         || (error instanceof MessagesError && (error.kind === 'private' || error.status === 404 || error.status === 401))
