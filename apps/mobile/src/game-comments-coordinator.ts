@@ -156,11 +156,12 @@ export class GameCommentsCoordinator {
   authorityLifecycle = () => this.authorityGen;
   /**
    * After a verified same-actor block/unblock acknowledgement: clear cached publication and
-   * permissions immediately, then refresh. Does not touch UNKNOWN packets or owned drafts.
+   * permissions immediately (even if the game view is inactive), then refresh only while
+   * focused+foreground. Does not touch UNKNOWN packets or owned drafts.
    * Safety-specific clearing — ordinary blur/foreground disarm may keep honest cached rows.
    */
   invalidateAfterSafety = () => {
-    if (!this.state.actor || !this.state.gameId || !this.liveView()) return;
+    if (!this.state.actor || !this.state.gameId) return;
     this.cancelReviews();
     this.epoch++; this.reads.clear(); this.edits.clear();
     this.authorityGen++;
@@ -169,7 +170,7 @@ export class GameCommentsCoordinator {
       replies: {},
       editNotice: null,
     });
-    void this.refresh();
+    if (this.liveView()) void this.refresh();
   };
   private ticket(key: string) {
     const serial = ++this.serial, epoch = this.epoch;
@@ -307,6 +308,7 @@ export class GameCommentsCoordinator {
   private authorized(action: GameCommentAction, reviewing = false): boolean {
     const s = this.state;
     if (!this.liveView() || !s.actor || !s.scope || !reviewing && this.busy()) return false;
+    const scope = s.scope;
     if (action.kind === 'create') {
       return !!((!action.parentCommentId
         || this.getThread(action.parentCommentId).phase === 'ready'
@@ -314,7 +316,7 @@ export class GameCommentsCoordinator {
         && s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate
         && (action.parentCommentId === null
           || this.rows().some(c => c.id === action.parentCommentId && !c.parentCommentId && !c.deleted
-            && c.entityId === s.scope.gameId)));
+            && c.entityId === scope.gameId)));
     }
     return !!(s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate
       && this.rows().some(c => c.id === action.comment.id && c.version === action.comment.version

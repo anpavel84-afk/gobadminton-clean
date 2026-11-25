@@ -41,7 +41,7 @@ export default function PublicGameDetails() {
   const retryDetail = authenticated ? () => void auth.participation.loadDetail(id) : retry;
   const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
-  return <Page header={<Header />}>
+  return <Page keyboard header={<Header />}>
     <BackLink title="← Все игры" onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />
     {loading && <Loading title="Загружаем условия игры…" />}
     {error && <ErrorState error={authenticated ? gameRead?.error : state.error} retry={retryDetail} />}

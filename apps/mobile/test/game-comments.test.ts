@@ -333,6 +333,47 @@ test('leave/background during token wait blocks POST; return awaits fresh author
   assert.equal(owner.canReconcile(packet.key), true);
 });
 
+test('offscreen safety clears cached publication without read; reattach defers fresh authority', async () => {
+  const { owner, ports } = await fixture();
+  const staleBody = owner.rows()[0]?.body;
+  assert.ok(staleBody);
+  assert.ok(owner.rows().length > 0);
+  let reads = 0;
+  ports.comments = async (q: GameCommentQuery) => {
+    reads++;
+    return page(q, [row({ mine: false, body: 'Fresh after block' })]);
+  };
+  owner.blur();
+  assert.equal(owner.getSnapshot().focused, false);
+  assert.ok(owner.rows().length > 0);
+  owner.invalidateAfterSafety();
+  assert.equal(owner.getSnapshot().roots.phase, 'loading');
+  assert.equal(owner.getSnapshot().roots.pages.length, 0);
+  assert.equal(owner.rows().length, 0);
+  assert.equal(reads, 0);
+  assert.equal(owner.review({ kind: 'create', text: 'Offscreen', parentCommentId: null }), null);
+
+  const fresh = deferred<unknown>();
+  ports.comments = async () => {
+    reads++;
+    return fresh.promise;
+  };
+  owner.open(gameId);
+  assert.equal(owner.getSnapshot().focused, true);
+  assert.equal(owner.getSnapshot().roots.phase, 'loading');
+  assert.equal(owner.rows().length, 0);
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.review({ kind: 'create', text: 'Early', parentCommentId: null }), null);
+  assert.equal(reads, 1);
+  fresh.resolve(page({ gameId, order: 'asc', parentCommentId: null, cursor: null },
+    [row({ mine: false, body: 'Fresh after block' })]));
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+  assert.equal(owner.rows()[0]?.body, 'Fresh after block');
+  assert.notEqual(owner.rows()[0]?.body, staleBody);
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
+});
+
 test('safety acknowledgement clears cached rows immediately; late read cannot restore stale authority', async () => {
   const { owner, ports } = await fixture();
   assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
