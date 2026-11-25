@@ -9,19 +9,29 @@ import { iosModalOrientations, Label, Page, PrimaryButton, TextButton, styles } 
 
 const noMessages: DirectMessage[] = [];
 /** Native controls only. The root owner, never the modal, owns uncertain commands. */
-export function NativeSafety({ peerId, name, conversationId, messages = noMessages }: {
-  peerId: string; name: string; conversationId?: string; messages?: DirectMessage[];
+export function NativeSafety({ peerId, name, conversationId, gameId, messages = noMessages }: {
+  peerId: string; name: string; conversationId?: string; gameId?: string; messages?: DirectMessage[];
 }) {
   const auth = useAuth(), owner = auth.safety, router = useRouter();
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const nameRef = useRef(name); nameRef.current = name;
   useFocusEffect(useCallback(() => {
-    if (auth.status !== 'authenticated' || !safetyPeerId(peerId) || conversationId !== undefined && !safetyPeerId(conversationId)) return;
-    owner.open({ peerId, name: nameRef.current, ...(conversationId ? { conversationId } : {}) });
+    if (auth.status !== 'authenticated' || !safetyPeerId(peerId)) return;
+    if (conversationId !== undefined && !safetyPeerId(conversationId)) return;
+    if (gameId !== undefined && !safetyPeerId(gameId)) return;
+    owner.open({
+      peerId,
+      name: nameRef.current,
+      ...(conversationId ? { conversationId } : {}),
+      ...(gameId ? { gameId } : {}),
+    });
     const view = owner.getSnapshot().viewGeneration;
     return () => owner.blur(view);
-  }, [owner, auth.status, peerId, conversationId]));
-  const active = state.context?.peerId === peerId && state.context.conversationId === conversationId && auth.status === 'authenticated';
+  }, [owner, auth.status, peerId, conversationId, gameId]));
+  const active = state.context?.peerId === peerId
+    && state.context.conversationId === conversationId
+    && state.context.gameId === gameId
+    && auth.status === 'authenticated';
   const view = state.viewGeneration, actor = state.actor, context = state.context;
   const selected = messages.find(m => m.id === state.selected);
   // A changed/deleted source requires fresh sharing consent, even for the same ID.
@@ -30,7 +40,14 @@ export function NativeSafety({ peerId, name, conversationId, messages = noMessag
   const command = state.command, locked = !!command, sending = command?.status === 'sending';
   const selectable = messages.filter(m => reportable(m, context));
   const cancel = () => owner.cancel(view, actor);
-  const matching = command?.packet.context.peerId === peerId && command.packet.context.conversationId === conversationId;
+  const matching = command?.packet.context.peerId === peerId
+    && command.packet.context.conversationId === conversationId
+    && command.packet.context.gameId === gameId;
+  const originalTarget = command?.packet.context.gameId
+    ? `/messages/game/${command.packet.context.gameId}`
+    : command?.packet.context.conversationId
+      ? `/messages/direct/${command.packet.context.conversationId}`
+      : `/players/${command!.packet.context.peerId}`;
   const content = <>
     {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
     {command && <Label>{command.packet.context.name}: {command.packet.action === 'report' ? 'жалоба' : command.packet.action === 'block' ? 'блокировка' : 'снятие блокировки'}.</Label>}
@@ -38,17 +55,18 @@ export function NativeSafety({ peerId, name, conversationId, messages = noMessag
     {command?.status === 'unknown' && (matching ? <>
       <Label>Сверка может завершить исходное действие, если сервер ещё не выполнил его. Ключ, цель и данные останутся прежними.</Label>
       <PrimaryButton title="Проверить исходное действие тем же запросом" onPress={() => { void owner.reconcile(view, actor); }} />
-    </> : <TextButton title="Открыть исходную цель для проверки" onPress={() => router.push((command.packet.context.conversationId
-      ? `/messages/direct/${command.packet.context.conversationId}` : `/players/${command.packet.context.peerId}`) as '/players')} />)}
+    </> : <TextButton title="Открыть исходную цель для проверки" onPress={() => router.push(originalTarget as '/players')} />)}
   </>;
+  const messageReportAvailable = !!conversationId;
   return <View style={{ gap: 4 }}>
     <Label accessibilityRole="header">Безопасность общения</Label>
     {state.lastBlocks[peerId] !== undefined && <Label>Последнее подтверждённое действие: {state.lastBlocks[peerId] ? 'блокировка' : 'снятие блокировки'}. Текущее состояние после других действий проверяется сервером.</Label>}
     <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+      {gameId ? <TextButton title="Профиль" onPress={() => router.push(`/players/${peerId}` as '/players')} /> : null}
       <TextButton title="Заблокировать" onPress={() => owner.choose('block', view, actor)} />
       <TextButton title="Снять мою блокировку" onPress={() => owner.choose('unblock', view, actor)} />
       <TextButton title="Пожаловаться на игрока" onPress={() => owner.choose('player', view, actor)} />
-      {conversationId && <TextButton title="Пожаловаться на сообщение" onPress={() => owner.choose('message', view, actor)} />}
+      {messageReportAvailable && <TextButton title="Пожаловаться на сообщение" onPress={() => owner.choose('message', view, actor)} />}
     </View>
     {!state.dialog && content}
     <Modal visible={!!state.dialog} animationType="slide" onRequestClose={cancel} supportedOrientations={iosModalOrientations}>

@@ -10,9 +10,11 @@ export const REPORT_REASONS = [
   { code: 'other', label: 'Другое' },
 ] as const;
 export type ReportReason = typeof REPORT_REASONS[number]['code'];
-export type SafetyContext = Readonly<{ peerId: string; name: string; conversationId?: string }>;
+/** Profile: neither wire id. Direct: conversationId only. Game: gameId + binding conversationId (wire sends only gameId). */
+export type SafetyContext = Readonly<{ peerId: string; name: string; conversationId?: string; gameId?: string }>;
 export type ReportBody = Readonly<{ targetKind: 'player'; targetPublicPlayerId: string; reasonCode: ReportReason; detail: string | null }>
-  | Readonly<{ targetKind: 'message'; messageId: string; conversationId: string; reasonCode: ReportReason; detail: string | null; shareMessageWithSupport: true }>;
+  | Readonly<{ targetKind: 'message'; messageId: string; conversationId: string; reasonCode: ReportReason; detail: string | null; shareMessageWithSupport: true }>
+  | Readonly<{ targetKind: 'message'; messageId: string; gameId: string; reasonCode: ReportReason; detail: string | null; shareMessageWithSupport: true }>;
 export type SafetyPacket = Readonly<{ actor: Readonly<Actor>; context: SafetyContext; key: string } & (
   { action: 'block' | 'unblock'; method: 'PUT' | 'DELETE'; path: string; body: Readonly<Record<string, never>> }
   | { action: 'report'; method: 'POST'; path: '/reports'; body: ReportBody }
@@ -43,8 +45,18 @@ export function safetyWire(packet: SafetyPacket): { path: string; method: 'PUT' 
     if (b.targetPublicPlayerId !== peer) return invalid();
     return { path: '/reports', method: 'POST', body: { targetKind: 'player', targetPublicPlayerId: peer, reasonCode: b.reasonCode, detail } };
   }
-  if (b.targetKind !== 'message' || b.shareMessageWithSupport !== true || b.conversationId !== packet.context.conversationId) return invalid();
-  return { path: '/reports', method: 'POST', body: { targetKind: 'message', messageId: messageId(b.messageId), conversationId: messageId(b.conversationId),
+  if (b.targetKind !== 'message' || b.shareMessageWithSupport !== true) return invalid();
+  const wireGameId = 'gameId' in b ? b.gameId : undefined;
+  const wireConversationId = 'conversationId' in b ? b.conversationId : undefined;
+  // Exactly one wire context: DM conversationId XOR gameId (internal binding conversationId stays off the wire for game).
+  if ((wireGameId && wireConversationId) || (!wireGameId && !wireConversationId)) return invalid();
+  if (wireGameId) {
+    if (wireGameId !== packet.context.gameId || !packet.context.conversationId) return invalid();
+    return { path: '/reports', method: 'POST', body: { targetKind: 'message', messageId: messageId(b.messageId), gameId: messageId(wireGameId),
+      reasonCode: b.reasonCode, detail, shareMessageWithSupport: true } };
+  }
+  if (wireConversationId !== packet.context.conversationId || packet.context.gameId !== undefined) return invalid();
+  return { path: '/reports', method: 'POST', body: { targetKind: 'message', messageId: messageId(b.messageId), conversationId: messageId(wireConversationId!),
     reasonCode: b.reasonCode, detail, shareMessageWithSupport: true } };
 }
 export function parseSafetyReceipt(packet: SafetyPacket, value: unknown): BlockReceipt | ReportReceipt {
