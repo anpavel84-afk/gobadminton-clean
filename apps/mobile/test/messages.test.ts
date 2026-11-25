@@ -873,9 +873,10 @@ test('#522 APK54 root: mayDispatchGameSafety requires ready active member + capt
     { publicPlayerId: 'public-a', displayName: 'Self', role: 'member' as const },
     { publicPlayerId: 'peer-b', displayName: 'Peer', role: 'member' as const },
   ];
+  let membersImpl: () => Promise<typeof members> = async () => members;
   const { owner } = setup({
     game: async () => chat,
-    members: async () => members,
+    members: async () => membersImpl(),
     history: async () => ({ items: [], nextCursor: null }),
   });
   owner.focus(game); await tick();
@@ -888,13 +889,30 @@ test('#522 APK54 root: mayDispatchGameSafety requires ready active member + capt
   assert.equal(owner.mayDispatchGameSafety({ ...ctx, conversationId: 'other' }, actor, view, life), false);
   owner.setForeground(false);
   assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, life), false);
+  const gate = deferred<typeof members>();
+  membersImpl = async () => gate.promise;
   owner.setForeground(true);
   assert.equal(owner.getSnapshot().viewGeneration, view);
   assert.notEqual(owner.foregroundLifecycle(), life);
   assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, life), false);
-  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, owner.foregroundLifecycle()), true);
+  // Newly captured epoch stays blocked until matching current full source (incl. members) returns.
+  const resumed = owner.foregroundLifecycle();
+  assert.equal(owner.gameSafetySourceFresh(), false);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, resumed), false);
+  gate.resolve(members); await tick();
+  assert.equal(owner.gameSafetySourceFresh(), true);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, resumed), true);
+  // Network refusal cannot mark the next foreground epoch fresh from cached detail.
+  membersImpl = async () => { throw new MessagesError('network'); };
+  owner.setForeground(false);
+  owner.setForeground(true);
+  const failedLife = owner.foregroundLifecycle();
+  await tick();
+  assert.equal(owner.gameSafetySourceFresh(), false);
+  assert.equal(owner.mayDispatchGameSafety(ctx, actor, view, failedLife), false);
   const source = readFileSync(new URL('../src/components/messages.tsx', import.meta.url), 'utf8');
   assert.match(source, /retireMemberSafety/);
+  assert.match(source, /gameSafetySourceFresh/);
   assert.match(source, /AppState\.addEventListener\('change'/);
   assert.match(source, /epoch !== memberFocusEpoch\.current/);
 });

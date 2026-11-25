@@ -49,6 +49,13 @@ export class MessagesCoordinator {
   private foreground = true;
   /** Monotonic lifecycle epoch; any background/foreground transition bumps it. Revoke wire captures before token await. */
   private foregroundGeneration = 0;
+  /**
+   * Foreground lifecycle last proven by a successful full game detail source (header+history+members).
+   * Background→return bumps lifecycle; catchUp alone never marks this — stale cached members cannot enable new safety.
+   */
+  private gameSafetySourceLifecycle = -1;
+  /** One-shot: foreground asked for full game source while detail lane may still be occupied. */
+  private gameSafetySourceKick = false;
   private focused: string | null = null;
   private focusResource: MessageResource | null = null;
   private roots = new Set<symbol>();
@@ -131,8 +138,29 @@ export class MessagesCoordinator {
   }
   private endRead(lane: ReadLane) {
     this.reads.delete(lane); this.runSafetyRead(lane);
-    if (lane === 'detail') this.runPendingDetail();
+    if (lane === 'detail') {
+      this.runPendingDetail();
+      // Foreground bump can invalidate an in-flight detail while the lane is still occupied;
+      // retry full game source once the lane frees so safety is not stuck on cached members.
+      this.ensureGameSafetySource();
+    }
     this.schedule();
+  }
+  /** At most one deferred full game source after an occupied-lane foreground kick; failures do not loop. */
+  private ensureGameSafetySource() {
+    if (this.gameSafetySourceLifecycle === this.foregroundGeneration) {
+      this.gameSafetySourceKick = false;
+      return;
+    }
+    if (!this.gameSafetySourceKick) return;
+    if (!this.snapshot.actor || !this.foreground || this.blocked() || this.reads.has('detail')) return;
+    const detail = this.snapshot.detail;
+    if (!detail || detail.resource.kind !== 'game' || this.focused !== resourceKey(detail.resource)) {
+      this.gameSafetySourceKick = false;
+      return;
+    }
+    this.gameSafetySourceKick = false;
+    void this.loadDetail(detail.resource);
   }
   private runPendingDetail() {
     const pending = this.pendingDetail;
@@ -181,13 +209,19 @@ export class MessagesCoordinator {
       const detail = this.snapshot.detail;
       if (this.focused === 'inbox') void this.loadInbox(this.snapshot.filter,undefined,true);
       else if (detail && this.focused === resourceKey(detail.resource)) {
-        if (detail.status === 'ready' && detail.resource.kind !== 'invitation') void this.catchUp(detail.resource);
+        // Game: full source incl. members before new safety. Direct keeps catchUp (header+history only).
+        if (detail.status === 'ready' && detail.resource.kind === 'game') {
+          this.gameSafetySourceKick = true;
+          void this.loadDetail(detail.resource);
+        } else if (detail.status === 'ready' && detail.resource.kind !== 'invitation') void this.catchUp(detail.resource);
         else void this.loadDetail(detail.resource);
       } else this.runPendingDetail();
     }
   }
   /** Captured per selected-revoke dispatch attempt; background→return invalidates the old attempt. */
   foregroundLifecycle = () => this.foregroundGeneration;
+  /** True only after a successful full game detail source for the live foreground lifecycle. */
+  gameSafetySourceFresh = () => this.gameSafetySourceLifecycle === this.foregroundGeneration;
   focus(resource: MessageResource | null) {
     this.clearSafetyReads();
     ++this.detailRevision; ++this.listRevision; ++this.focusLease; this.pendingDetail = null;
@@ -286,8 +320,11 @@ export class MessagesCoordinator {
     }
     this.pendingDetail = null;
     const revision = this.revision, request = ++this.detailRevision;
+    const lifecycle = this.foregroundGeneration;
+    // Soft keep ready game/direct UI across foreground full reread — safety stays gated until mark below.
+    const soft = !older && !safety && previous?.status === 'ready' && resourceKey(previous.resource) === key;
     const fresh: Detail = { resource, status: 'loading', header: null, messages: [], cursor: null, members: [], ownId: null, error: null, loadingMore: false, managerEligible: false };
-    this.show({ detail: previous && (older || safety) ? { ...previous, loadingMore: older, error: null } : fresh });
+    this.show({ detail: previous && (older || safety || soft) ? { ...previous, loadingMore: older, error: null } : fresh });
     try {
       let detail: Detail;
       if (older && previous) {
@@ -315,9 +352,12 @@ export class MessagesCoordinator {
         if (resolved) this.accessLoss = null;
         if (resource.kind === 'direct' && detail.header && 'peer' in detail.header) this.directPeers.set(resource.id, detail.header.peer.publicPlayerId);
         this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
+        // Only a matching current full game source marks fresh; failure/old in-flight never reaches here.
+        if (resource.kind === 'game' && !older && lifecycle === this.foregroundGeneration)
+          this.gameSafetySourceLifecycle = lifecycle;
       }
     } catch (error) {
-      if (this.valid(revision, safety) && request === this.detailRevision && !this.failed(error, safety)) this.show({ detail: (older || safety) && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
+      if (this.valid(revision, safety) && request === this.detailRevision && !this.failed(error, safety)) this.show({ detail: (older || safety || soft) && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
     } finally { this.endRead('detail'); }
   };
   /** Catch up with decimal strings. Every page is authorized; generation prevents cursor/A→B→A publication. */
@@ -364,8 +404,9 @@ export class MessagesCoordinator {
     && this.snapshot.viewGeneration === viewGeneration;
   /**
    * Game/member safety final wire permit (post token await): current actor/session + focused
-   * game+server conversation + selected other member + ready active source + captured messages
-   * view + captured foreground epoch. Direct/profile safety do not use this port.
+   * game+server conversation + selected other member + ready active source whose full read
+   * (incl. members) matches the captured foreground epoch + captured messages view.
+   * Cached ready detail after background→return is not enough. Direct/profile safety skip this port.
    */
   mayDispatchGameSafety = (
     context: Readonly<{ peerId: string; conversationId: string; gameId: string }>,
@@ -375,6 +416,7 @@ export class MessagesCoordinator {
   ) => {
     if (!sameActor(actor, this.snapshot.actor) || !this.foreground) return false;
     if (this.foregroundGeneration !== foregroundGeneration || this.snapshot.viewGeneration !== viewGeneration) return false;
+    if (this.gameSafetySourceLifecycle !== foregroundGeneration) return false;
     const resource = { kind: 'game' as const, id: context.gameId };
     if (this.focused !== resourceKey(resource)) return false;
     const detail = this.snapshot.detail;

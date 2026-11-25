@@ -379,8 +379,8 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     {inviteAuthoring.command?.status === 'unknown' && !chooser && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void nativeAuth.invitationAuthoring.retry(); }} />}</>;
   const chatActive = !!chat && chat.lifecycleState === 'active';
   const ownId = detail?.status === 'ready' ? detail.ownId : null;
-  // Missing own identity fails closed: no member safety host without a verified self-exclusion key.
-  const memberSafetyReady = chatActive && !!ownId && detail?.status === 'ready';
+  // Missing own identity or unproven foreground full source fails closed: no member safety from cached members.
+  const memberSafetyReady = chatActive && !!ownId && detail?.status === 'ready' && owner.gameSafetySourceFresh();
   const selectedMember: GameChatMember | undefined = memberSafetyReady && detail
     ? detail.members.find(m => m.publicPlayerId === selectedMemberId && m.publicPlayerId !== ownId)
     : undefined;
