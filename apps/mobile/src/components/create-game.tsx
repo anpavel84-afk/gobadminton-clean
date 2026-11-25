@@ -46,10 +46,11 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const [hasConfirmedPhoto, setHasConfirmedPhoto] = useState(false);
   const [confirmedPreviewUri, setConfirmedPreviewUri] = useState<string | null>(null);
   // Blur/refocus fences local reads + create→cover→publish lease; AppState retires continuation (picker is local).
-  // Bind only after authentication: cold launch into create focuses before hydrate, then setActor clears
-  // creationBoundView — rebind when actor/session/generation changes while focused.
+  // Bind to actor identity/session/generation only — not transient auth.status. Cold launch has no actor
+  // yet (no bind); hydration/identity change rebinds while focused; same-session token refresh keeps
+  // the lease and accepted photo. Cleanup still runs on real departure / identity change.
   useFocusEffect(useCallback(() => {
-    if (auth.status !== 'authenticated' || !actor) return;
+    if (!actor) return;
     view.current++;
     setSelecting(false);
     const release = owner.bindCreationView();
@@ -66,7 +67,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
       setConfirmedPreviewUri(null);
       setPhotoReady(true);
     };
-  }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation]));
+  }, [owner, actor?.actorId, actor?.sessionId, actor?.generation]));
   const [selectedIntent, setSelected] = useState<string | null>(null), [attemptedIntent, setAttempted] = useState<string | null>(null);
   const selectionKey = `${venueId}:${actor?.actorId}:${actor?.sessionId}:${actor?.generation}`;
   const selected = selectedIntent === selectionKey, attempted = attemptedIntent === selectionKey;

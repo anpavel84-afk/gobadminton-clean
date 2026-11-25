@@ -219,8 +219,10 @@ test('#522 FIX5: production gamePhotoSelectionLive — current confirm; stale af
 
 test('#522 FIX8: create-view rebinds after auth/actor generation; crop boundary no-op preserves confirm', () => {
   const create = read('../src/components/create-game.tsx');
-  assert.match(create, /auth\.status !== 'authenticated' \|\| !actor/);
-  assert.match(create, /actor\?\.actorId,\s*actor\?\.sessionId,\s*actor\?\.generation/);
+  // Focus lifetime binds on actor identity — not auth.status (same-session refresh must not release).
+  assert.match(create, /if\s*\(\s*!actor\s*\)\s*return/);
+  assert.doesNotMatch(create, /useFocusEffect\(useCallback\(\(\)\s*=>\s*\{[^}]*auth\.status/);
+  assert.match(create, /\[owner,\s*actor\?\.actorId,\s*actor\?\.sessionId,\s*actor\?\.generation\]/);
   assert.match(create, /bindCreationView/);
 
   const photoSelection = read('../src/components/game-photo-selection.tsx');
