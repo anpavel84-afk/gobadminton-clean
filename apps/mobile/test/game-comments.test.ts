@@ -362,7 +362,7 @@ test('offscreen safety clears cached publication without read; reattach defers f
   assert.equal(owner.getSnapshot().focused, true);
   assert.equal(owner.getSnapshot().roots.phase, 'loading');
   assert.equal(owner.rows().length, 0);
-  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.getSnapshot().roots.pages.length, 0);
   assert.equal(owner.review({ kind: 'create', text: 'Early', parentCommentId: null }), null);
   assert.equal(reads, 1);
   fresh.resolve(page({ gameId, order: 'asc', parentCommentId: null, cursor: null },
