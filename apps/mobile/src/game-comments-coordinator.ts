@@ -21,6 +21,10 @@ export type GameCommentsSnapshot = {
   actor: Actor | null; gameId: string | null; scope: GameCommentScope | null; order: 'asc' | 'desc';
   roots: GameCommentThread; replies: Record<string, GameCommentThread>;
   drafts: Record<string, string>; editNotice: string | null; operations: GameCommentOperation[];
+  /** Live route focus — Expo Stack keeps prior screens mounted. */
+  focused: boolean;
+  /** App foreground — background does not unmount. */
+  foreground: boolean;
 };
 export type GameCommentPorts = {
   guestComments: (q: GameCommentQuery) => Promise<unknown>;
@@ -36,6 +40,7 @@ export class GameCommentsCoordinator {
   private state: GameCommentsSnapshot = {
     actor: null, gameId: null, scope: null, order: 'asc',
     roots: thread(), replies: {}, drafts: {}, editNotice: null, operations: [],
+    focused: false, foreground: true,
   };
   private listeners = new Set<() => void>();
   private history = new Map<string, GameCommentOperation>();
@@ -43,6 +48,10 @@ export class GameCommentsCoordinator {
   private epoch = 0;
   private reads = new Map<string, number>();
   private serial = 0;
+  /** Bumps on every focus/blur so release only retires its own lease. */
+  private viewGen = 0;
+  /** Bumps on every foreground transition — invalidates captured dispatch permits. */
+  private foregroundGen = 0;
   private ports: GameCommentPorts;
   constructor(ports: GameCommentPorts) { this.ports = ports; }
   getSnapshot = () => this.state;
@@ -68,21 +77,89 @@ export class GameCommentsCoordinator {
       roots: thread(), replies: {}, drafts: {},
     });
   }
+  /** Strip cached canCreate so stale ready pages cannot authorize during refresh. */
+  private disarmAuthority(phase: Phase = 'loading') {
+    const disarm = (t: GameCommentThread): GameCommentThread => ({
+      phase: t.pages.length || phase === 'loading' ? phase : t.phase,
+      error: null,
+      pages: t.pages.map(p => ({ query: p.query, page: { ...p.page, canCreate: false } })),
+    });
+    const replies = Object.fromEntries(
+      Object.entries(this.state.replies).map(([k, v]) => [k, disarm(v)]),
+    );
+    this.epoch++; this.reads.clear(); this.edits.clear();
+    this.show({ roots: disarm(this.state.roots), replies, editNotice: null });
+  }
+  private liveView() {
+    return this.state.focused && this.state.foreground;
+  }
   setActor = (actor: Actor | null) => {
     if ((!actor && !this.state.actor) || sameActor(this.state.actor, actor)) return;
     this.reset(actor ? Object.freeze({ ...actor }) : null, this.state.gameId);
-    if (this.state.gameId && actor) void this.refresh();
+    if (this.state.gameId && actor && this.liveView()) void this.refresh();
   };
-  open = (gameId: string) => {
+  /**
+   * Bind current game discussion view. Returns release that retires only this viewGen.
+   * UNKNOWN packets stay; reviews and in-flight read tickets are cancelled.
+   */
+  attach = (gameId: string): (() => void) => {
     id(gameId);
     if (this.state.gameId !== gameId) this.reset(this.state.actor, gameId);
+    const lease = ++this.viewGen;
+    this.show({ focused: true, scope: Object.freeze({ gameId }) });
+    this.disarmAuthority('loading');
+    void this.refresh();
+    return () => {
+      if (this.viewGen !== lease) return;
+      this.blur();
+    };
+  };
+  /** Take the current-game view lease (same as attach without retaining the release). */
+  open = (gameId: string) => { this.attach(gameId); };
+  blur = () => {
+    this.viewGen++;
+    this.cancelReviews();
+    const phase = this.state.roots.phase === 'ready' ? 'loading' : this.state.roots.phase;
+    this.disarmAuthority(phase);
+    this.show({ focused: false });
+  };
+  detach = () => { this.blur(); };
+  /**
+   * App foreground fence. Background invalidates dispatch permits and review callbacks;
+   * return requires a fresh current-authority read before any new command/reconcile.
+   */
+  setForeground = (active: boolean) => {
+    if (active === this.state.foreground) return;
+    this.foregroundGen++;
+    this.cancelReviews();
+    if (!active) {
+      const phase = this.state.roots.phase === 'ready' ? 'loading' : this.state.roots.phase;
+      this.disarmAuthority(phase);
+      this.show({ foreground: false });
+      return;
+    }
+    this.show({ foreground: true });
+    if (this.state.focused && this.state.gameId) {
+      this.disarmAuthority('loading');
+      void this.refresh();
+    }
+  };
+  viewLifecycle = () => this.viewGen;
+  foregroundLifecycle = () => this.foregroundGen;
+  /**
+   * After a verified same-actor block/unblock acknowledgement: invalidate comment pages/
+   * permissions before reuse and refresh the focused game. Does not touch UNKNOWN packets.
+   */
+  invalidateAfterSafety = () => {
+    if (!this.state.actor || !this.state.gameId || !this.liveView()) return;
+    this.cancelReviews();
+    this.disarmAuthority('loading');
     void this.refresh();
   };
-  detach = () => { this.epoch++; this.reads.clear(); };
   private ticket(key: string) {
     const serial = ++this.serial, epoch = this.epoch;
     this.reads.set(key, serial);
-    return () => epoch === this.epoch && this.reads.get(key) === serial;
+    return () => epoch === this.epoch && this.reads.get(key) === serial && this.liveView();
   }
   private clearPermissions() {
     this.epoch++; this.reads.clear(); this.edits.clear();
@@ -94,7 +171,7 @@ export class GameCommentsCoordinator {
     });
   }
   refresh = async () => {
-    const gameId = this.state.gameId; if (!gameId) return;
+    const gameId = this.state.gameId; if (!gameId || !this.liveView()) return;
     const scope = Object.freeze({ gameId });
     this.show({ scope });
     await this.reloadThreads();
@@ -109,15 +186,20 @@ export class GameCommentsCoordinator {
   private setThread(parent: string | null, value: GameCommentThread) {
     this.show(parent ? { replies: { ...this.state.replies, [parent]: value } } : { roots: value });
   }
+  /** Accepted web: root order is user-selected; reply pages ALWAYS request/validate asc. */
+  private threadOrder(parent: string | null): 'asc' | 'desc' {
+    return parent ? 'asc' : this.state.order;
+  }
   loadThread = async (parent: string | null, more = false, reload = false) => {
-    const { gameId, actor, scope, order } = this.state; if (!gameId || !scope) return;
+    const { gameId, actor, scope } = this.state; if (!gameId || !scope || !this.liveView()) return;
     if (parent && !this.rows().some(c => c.id === parent && c.parentCommentId === null)) return;
     const current = this.getThread(parent);
     if (more && (current.phase === 'loading' || !current.pages.at(-1)?.page.nextCursor)) return;
     const matches = this.ticket(`thread:${parent ?? 'root'}`);
     const next = more ? current.pages.at(-1)!.page.nextCursor : null;
+    const order = this.threadOrder(parent);
     const queries: GameCommentQuery[] = reload && current.pages.length
-      ? current.pages.map(p => p.query)
+      ? current.pages.map(p => ({ ...p.query, order }))
       : [{ gameId, parentCommentId: parent, order, cursor: next }];
     this.setThread(parent, { ...current, phase: 'loading', error: null });
     try {
@@ -149,7 +231,7 @@ export class GameCommentsCoordinator {
     }
   };
   setOrder = (order: 'asc' | 'desc') => {
-    if (!['asc', 'desc'].includes(order) || order === this.state.order || this.busy()) return;
+    if (!['asc', 'desc'].includes(order) || order === this.state.order || this.busy() || !this.liveView()) return;
     this.epoch++; this.show({ order, roots: thread(), replies: {} }); void this.loadThread(null);
   };
   rows = (): GameComment[] => [
@@ -160,7 +242,8 @@ export class GameCommentsCoordinator {
     return JSON.stringify([c.entityId, c.version, c.updatedAt, c.body, c.mine, c.deleted, c.parentCommentId]);
   }
   private editable(commentId: string) {
-    return this.state.actor && this.state.scope && this.state.roots.phase === 'ready' && this.state.roots.pages[0]?.page.canCreate
+    return this.state.actor && this.state.scope && this.liveView()
+      && this.state.roots.phase === 'ready' && this.state.roots.pages[0]?.page.canCreate
       ? this.rows().find(c => c.id === commentId && c.mine && !c.deleted && c.parentCommentId === null && c.body !== null)
       : undefined;
   }
@@ -198,14 +281,14 @@ export class GameCommentsCoordinator {
     return true;
   };
   setDraft = (key: string, value: string) => {
-    if (!this.state.actor || this.busy()) return;
+    if (!this.state.actor || this.busy() || !this.liveView()) return;
     if (key.startsWith('edit:') && !this.compatibleEdit(key.slice(5))) { this.retireEdits(); return; }
     this.show({ drafts: { ...this.state.drafts, [key]: value } });
   };
   busy = () => this.state.operations.some(o => ['review', 'pending', 'unknown'].includes(o.status));
   private authorized(action: GameCommentAction, reviewing = false): boolean {
     const s = this.state;
-    if (!s.actor || !s.scope || !reviewing && this.busy()) return false;
+    if (!this.liveView() || !s.actor || !s.scope || !reviewing && this.busy()) return false;
     if (action.kind === 'create') {
       return !!((!action.parentCommentId
         || this.getThread(action.parentCommentId).phase === 'ready'
@@ -240,7 +323,7 @@ export class GameCommentsCoordinator {
   unresolved = (): GameCommentOperation[] => this.state.operations.filter(o => o.status === 'unknown' || o.status === 'pending');
   private permitted(p: GameCommentPacket) {
     const s = this.state;
-    return sameActor(s.actor, p.actor) && s.gameId === p.scope.gameId && s.scope?.gameId === p.scope.gameId
+    return this.liveView() && sameActor(s.actor, p.actor) && s.gameId === p.scope.gameId && s.scope?.gameId === p.scope.gameId
       && s.roots.phase === 'ready' && !!s.roots.pages[0]?.page.canCreate;
   }
   canReconcile = (key: string) => {
@@ -274,7 +357,11 @@ export class GameCommentsCoordinator {
   };
   private async dispatch(operation: GameCommentOperation) {
     const p = operation.packet;
-    const permit = () => this.permitted(p);
+    const capturedView = this.viewGen;
+    const capturedForeground = this.foregroundGen;
+    const permit = () => this.permitted(p)
+      && this.viewGen === capturedView
+      && this.foregroundGen === capturedForeground;
     if (!permit()) return;
     this.epoch++; this.reads.clear();
     const pending: GameCommentOperation = { ...operation, status: 'pending', notice: 'Отправляем…' };
@@ -285,6 +372,7 @@ export class GameCommentsCoordinator {
       parseGameCommentReceipt(raw, p);
       if (this.history.get(p.key)?.packet !== p || !sameActor(this.state.actor, p.actor)) return;
       this.history.set(p.key, { ...operation, status: 'confirmed', notice: 'Действие подтверждено.' });
+      // Late ACK may keep original history for the same actor; never paint/clear/refresh a detached view.
       if (!permit()) return;
       const drafts = { ...this.state.drafts };
       const draftKey = p.action.kind === 'create' ? p.action.parentCommentId ?? 'root'
@@ -306,7 +394,7 @@ export class GameCommentsCoordinator {
         this.show();
       }
     } finally {
-      if (sameActor(this.state.actor, p.actor) && this.state.gameId === p.scope.gameId && this.history.has(p.key)) {
+      if (permit() && sameActor(this.state.actor, p.actor) && this.state.gameId === p.scope.gameId && this.history.has(p.key)) {
         this.show();
       }
     }

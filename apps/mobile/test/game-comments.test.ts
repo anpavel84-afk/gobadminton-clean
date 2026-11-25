@@ -141,9 +141,10 @@ test('guest→login journey: sorted pages, ascending replies, mine/canCreate, ro
   ports.comments = async (q: GameCommentQuery) =>
     q.parentCommentId ? page(q, []) : page(q, [row()]);
   await owner.refresh();
+  const liveRoot = owner.rows().find(c => c.id === rootId)!;
   assert.equal(owner.beginEdit(rootId), true);
   owner.setDraft(`edit:${rootId}`, 'Edited root');
-  const edited = owner.review({ kind: 'edit', comment: row(), text: 'Edited root' })!;
+  const edited = owner.review({ kind: 'edit', comment: liveRoot, text: 'Edited root' })!;
   ports.send = async (p) => {
     packets.push(p);
     return row({ version: 2, body: 'Edited root', edited: true });
@@ -154,9 +155,8 @@ test('guest→login journey: sorted pages, ascending replies, mine/canCreate, ro
   ports.comments = async (q: GameCommentQuery) =>
     q.parentCommentId ? page(q, []) : page(q, [row({ version: 2, body: 'Edited root', edited: true })]);
   await owner.refresh();
-  const removed = owner.review({
-    kind: 'delete', comment: row({ version: 2, body: 'Edited root', edited: true }),
-  })!;
+  const liveEdited = owner.rows().find(c => c.id === rootId)!;
+  const removed = owner.review({ kind: 'delete', comment: liveEdited })!;
   ports.send = async (p) => {
     packets.push(p);
     return row({ version: 3, body: null, deleted: true, edited: true });
@@ -247,14 +247,111 @@ test('production guest transport omits credentials; native bearer bodies use Ide
 test('composition mounts only for published/public game; provider above Stack; SOURCE_PENDING contract', () => {
   const detail = read('../app/games/[id].tsx');
   const layout = read('../app/_layout.tsx');
-  const contract = read('../../docs/product/NATIVE_UI_BEHAVIOR_CONTRACT.md');
+  const contract = read('../../../docs/product/NATIVE_UI_BEHAVIOR_CONTRACT.md');
   const readme = read('../README.md');
+  const ui = read('../src/components/game-comments.tsx');
   assert.match(detail, /NativeGameComments/);
   assert.match(detail, /game\.status === 'published' && game\.visibility === 'public'/);
   assert.match(layout, /GameCommentsProvider/);
   assert.ok(layout.indexOf('GameCommentsProvider') < layout.indexOf('MessagesOwner'));
+  assert.match(ui, /\/players\/\[publicPlayerId\]/);
+  assert.match(ui, /useFocusEffect/);
   assert.match(contract, /R-22/);
   assert.match(contract, /SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE/);
   assert.match(readme, /APK56|counter \*\*55→56\*\*/);
   assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 56);
+});
+
+test('descending roots still transport reply reads as order=asc', async () => {
+  const { owner, ports } = await fixture();
+  const seen: GameCommentQuery[] = [];
+  ports.comments = async (q: GameCommentQuery) => {
+    seen.push(q);
+    if (q.parentCommentId) {
+      assert.equal(q.order, 'asc');
+      return page(q, [row({
+        id: replyId, parentCommentId: q.parentCommentId, mine: false, body: 'Answer',
+        createdAt: '2026-11-15T11:00:00Z',
+      })]);
+    }
+    assert.equal(q.order, 'desc');
+    return page(q, [row({ createdAt: '2026-11-15T13:00:00Z' })]);
+  };
+  owner.setOrder('desc');
+  await owner.loadThread(null);
+  assert.equal(owner.getSnapshot().order, 'desc');
+  assert.equal(seen.at(-1)?.order, 'desc');
+  await owner.loadThread(rootId);
+  assert.equal(seen.at(-1)?.parentCommentId, rootId);
+  assert.equal(seen.at(-1)?.order, 'asc');
+  assert.equal(owner.getSnapshot().replies[rootId]!.pages[0]!.query.order, 'asc');
+});
+
+test('leave/background during token wait blocks POST; return awaits fresh authority before actions', async () => {
+  const { owner, ports } = await fixture();
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
+  const gate = deferred<void>();
+  let permitAtSend: boolean | null = null;
+  let posts = 0;
+  ports.send = async (_p, permit) => {
+    await gate.promise;
+    permitAtSend = permit();
+    if (!permitAtSend) throw new CommunityError('network');
+    posts++;
+    return row({ body: 'Deferred' });
+  };
+  const packet = owner.review({ kind: 'create', text: 'Deferred', parentCommentId: null })!;
+  const writing = owner.commit(packet.key);
+  owner.setForeground(false);
+  assert.equal(owner.getSnapshot().foreground, false);
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.review({ kind: 'create', text: 'Nope', parentCommentId: null }), null);
+  gate.resolve();
+  await writing;
+  assert.equal(permitAtSend, false);
+  assert.equal(posts, 0);
+
+  const fresh = deferred<unknown>();
+  let reads = 0;
+  ports.comments = async (q: GameCommentQuery) => {
+    reads++;
+    if (reads === 1) return fresh.promise;
+    return page(q);
+  };
+  owner.setForeground(true);
+  assert.equal(owner.getSnapshot().foreground, true);
+  assert.equal(owner.getSnapshot().roots.phase, 'loading');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.canReconcile(packet.key), false);
+  assert.equal(owner.review({ kind: 'create', text: 'Early', parentCommentId: null }), null);
+  fresh.resolve(page({ gameId, order: 'asc', parentCommentId: null, cursor: null }));
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().roots.phase, 'ready');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
+  assert.equal(owner.getSnapshot().operations[0]?.status, 'unknown');
+  assert.equal(owner.getSnapshot().operations[0]?.packet, packet);
+  assert.equal(owner.canReconcile(packet.key), true);
+});
+
+test('safety acknowledgement invalidates pages and late read cannot restore stale canCreate mid-refresh', async () => {
+  const { owner, ports } = await fixture();
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, true);
+  const late = deferred<unknown>();
+  let calls = 0;
+  ports.comments = async (q: GameCommentQuery) => {
+    calls++;
+    if (calls === 1) return late.promise;
+    return page(q, [row({ mine: false, body: 'After block' })], null);
+  };
+  owner.invalidateAfterSafety();
+  assert.equal(owner.getSnapshot().roots.phase, 'loading');
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.equal(owner.review({ kind: 'create', text: 'Blocked', parentCommentId: null }), null);
+  // Detach before late read lands — must not paint/restore authority on a retired view.
+  owner.detach();
+  late.resolve(page({ gameId, order: 'asc', parentCommentId: null, cursor: null }, [row()], null));
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.getSnapshot().focused, false);
+  assert.equal(owner.getSnapshot().roots.pages[0]?.page.canCreate, false);
+  assert.notEqual(owner.getSnapshot().roots.phase, 'ready');
 });

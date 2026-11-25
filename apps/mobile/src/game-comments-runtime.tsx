@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { PropsWithChildren } from 'react';
 import * as Crypto from 'expo-crypto';
 import { nativeAuth } from './auth-runtime.ts';
@@ -15,6 +15,7 @@ export function GameCommentsProvider({ children }: PropsWithChildren) {
     send: nativeAuth.gameCommentMutation,
     random: () => Crypto.randomUUID(),
   }));
+  const blocksRef = useRef<Readonly<Record<string, boolean>>>(nativeAuth.safety.getSnapshot().lastBlocks);
   useLayoutEffect(() => {
     const sync = () => {
       const auth = nativeAuth.getSnapshot();
@@ -23,7 +24,21 @@ export function GameCommentsProvider({ children }: PropsWithChildren) {
     };
     sync();
     const unsubscribe = nativeAuth.subscribe(sync);
-    return () => { unsubscribe(); owner.setActor(null); owner.detach(); };
+    // Successful block/unblock acknowledgements invalidate discussion pages before reuse.
+    const safety = nativeAuth.safety.subscribe(() => {
+      const next = nativeAuth.safety.getSnapshot().lastBlocks;
+      const prev = blocksRef.current;
+      blocksRef.current = next;
+      if (prev === next) return;
+      const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+      for (const peer of keys) {
+        if (prev[peer] !== next[peer]) {
+          owner.invalidateAfterSafety();
+          return;
+        }
+      }
+    });
+    return () => { unsubscribe(); safety(); owner.setActor(null); owner.detach(); };
   }, [owner]);
   return <Context.Provider value={owner}>{children}</Context.Provider>;
 }

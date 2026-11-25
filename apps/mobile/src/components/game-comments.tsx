@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ComponentRef, ReactNode, RefObject } from 'react';
-import { AccessibilityInfo, findNodeHandle, Image, Modal, Pressable, TextInput, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { AccessibilityInfo, AppState, findNodeHandle, Image, Modal, Pressable, TextInput, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { nativeAuth } from '../auth-runtime.ts';
 import { useGameComments } from '../game-comments-runtime.tsx';
 import type { GameCommentsCoordinator, GameCommentThread, GameCommentOperation } from '../game-comments-coordinator.ts';
 import type { GameComment, GameCommentAction, GameCommentPacket } from '../game-comments.ts';
@@ -97,14 +98,23 @@ function Dialog({ title, children, close, trigger }: {
 /**
  * Accepted-web public game text discussion — guest read; authenticated root/reply/edit/delete own roots;
  * one-level replies; author safety via single selected NativeSafety host (not comment report).
+ * Focus + AppState lifetime: Expo Stack keeps prior screens mounted; background does not unmount.
  */
 export function NativeGameComments({ gameId }: { gameId: string }) {
   const { owner, state } = useGameComments();
-  useEffect(() => {
-    owner.open(gameId);
-    return () => { owner.cancelReviews(); owner.detach(); };
-  }, [owner, gameId]);
-  if (state.gameId !== gameId) return <Loading title="Загружаем обсуждение игры…" />;
+  useFocusEffect(useCallback(() => {
+    const release = owner.attach(gameId);
+    owner.setForeground(AppState.currentState === 'active');
+    const sub = AppState.addEventListener('change', next => {
+      owner.setForeground(next === 'active');
+    });
+    return () => {
+      sub.remove();
+      owner.cancelReviews();
+      release();
+    };
+  }, [owner, gameId]));
+  if (state.gameId !== gameId || !state.focused) return <Loading title="Загружаем обсуждение игры…" />;
   const key = `${gameId}:${state.actor?.actorId ?? 'guest'}:${state.actor?.sessionId ?? ''}:${state.actor?.generation ?? ''}`;
   return <GameCommentsPanel key={key} />;
 }
@@ -116,7 +126,14 @@ function GameCommentsPanel() {
   const [orderOpen, setOrderOpen] = useState(false);
   const [safetyAuthor, setSafetyAuthor] = useState<{ publicPlayerId: string; displayName: string } | null>(null);
   const origin = useRef<RefObject<Trigger | null>>(orderTrigger);
+  const lastBlocks = useSyncExternalStore(
+    nativeAuth.safety.subscribe,
+    () => nativeAuth.safety.getSnapshot().lastBlocks,
+    () => nativeAuth.safety.getSnapshot().lastBlocks,
+  );
+  const blocksSeen = useRef(lastBlocks);
   const locked = owner.busy();
+  const live = s.focused && s.foreground;
   const orderLabel = orderOptions.find(([value]) => value === s.order)?.[1] ?? orderOptions[0][1];
   const login = () => router.push({ pathname: '/profile', params: { returnTo: `/games/${s.gameId}` } });
   const commit = (action: GameCommentAction) => {
@@ -131,7 +148,8 @@ function GameCommentsPanel() {
     if (confirmation) owner.cancelReview(confirmation.packet.key);
     setConfirmation(null);
   };
-  const canCreate = s.roots.pages[0]?.page.canCreate;
+  // Cached ready canCreate must not re-enable actions while focus/foreground refresh runs.
+  const canCreate = !!(live && s.roots.phase === 'ready' && s.roots.pages[0]?.page.canCreate);
   // One selected public-author safety host for the panel — never per-row competing owners.
   useEffect(() => {
     if (!safetyAuthor) return;
@@ -139,6 +157,13 @@ function GameCommentsPanel() {
       !c.mine && c.author?.profilePublic && c.author.publicPlayerId === safetyAuthor.publicPlayerId);
     if (!stillVisible) setSafetyAuthor(null);
   }, [owner, safetyAuthor, s.roots, s.replies]);
+  useEffect(() => {
+    const prev = blocksSeen.current;
+    blocksSeen.current = lastBlocks;
+    if (!safetyAuthor) return;
+    const id = safetyAuthor.publicPlayerId;
+    if (prev[id] !== lastBlocks[id] && lastBlocks[id] !== undefined) setSafetyAuthor(null);
+  }, [safetyAuthor, lastBlocks]);
   return <>
     <UnresolvedActions owner={owner} />
     <View style={styles.card}>
@@ -256,7 +281,10 @@ function CommentRow({
         <View style={{ flex: 1, minWidth: 100 }}>
           {c.author?.profilePublic && c.author.publicPlayerId
             ? <ActionButton title={c.author.displayName}
-              onPress={() => router.push({ pathname: '/players/[id]', params: { id: c.author!.publicPlayerId! } })} />
+              onPress={() => router.push({
+                pathname: '/players/[publicPlayerId]',
+                params: { publicPlayerId: c.author!.publicPlayerId! },
+              })} />
             : <Label>{c.author?.displayName ?? 'Игрок'}</Label>}
           <Label style={{ color: colors.secondary }}>
             {new Date(c.createdAt).toLocaleString('ru-RU')}{c.edited ? ' · изменён' : ''}

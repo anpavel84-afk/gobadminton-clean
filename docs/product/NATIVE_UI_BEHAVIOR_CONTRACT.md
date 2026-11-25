@@ -310,7 +310,7 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Accessibility | Accepted-web Russian copy («Вопросы об этой игре…», order, Читать полностью); existing Onest/theme/control tokens; four-line collapse |
 | Non-scope | Photos; reply edit/deeper threads; venue community mount; new moderation policy; PROD; device/OTA/iOS completion; Mode B READY claim |
 | Evidence | Source APK counter 56; `game-comments*` owner/UI + API comments adapt; focused `game-comments.test.ts` + comments unit/disposable/moderation native path; twelve version pins |
-| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native public-game discussion; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native public-game discussion; Root precheck repair2 (route/focus+foreground lease/reply asc/safety freshness) SOURCE_PENDING only — not tests/device/QA results; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
