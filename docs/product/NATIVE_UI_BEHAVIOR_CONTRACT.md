@@ -299,6 +299,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Source APK counter 55; `messages.tsx` header wiring + twelve version pins; no new unit (sync route) |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native game-chat Open game; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-22 · Native public-game text discussion (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameDetailPage` + `CommentsSection(kind=game)`; existing game comment routes with narrow native principal admit (`requirePrincipal` / `requirePrincipalMutation`; dispatch `{venue,game}`); same moderation/CAS/idempotency/records |
+| Entry | `/games/[id]` when currently displayed game is `status=published` and `visibility=public` (no start-time/participation gate) |
+| Trigger | Guest reads roots/replies; authenticated create root/reply, edit/delete own live roots when server `canCreate`+`mine`; order/pagination; optional author safety for non-own public author |
+| Expected | One-level replies only; text-only (never emit `photoIds`); guest `canCreate=false` / no write; login returns to canonical game path without auto-post; root tombstone preserves replies; no game comment-as-venue_community report; single selected `NativeSafety` author host; frozen UNKNOWN same-key recovery; actor/game/view retirement; no guest fallback after 401/block |
+| Accessibility | Accepted-web Russian copy («Вопросы об этой игре…», order, Читать полностью); existing Onest/theme/control tokens; four-line collapse |
+| Non-scope | Photos; reply edit/deeper threads; venue community mount; new moderation policy; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Source APK counter 56; `game-comments*` owner/UI + API comments adapt; focused `game-comments.test.ts` + comments unit/disposable/moderation native path; twelve version pins |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native public-game discussion; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

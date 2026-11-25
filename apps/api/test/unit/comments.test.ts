@@ -88,8 +88,9 @@ describe("#394 comments policy and transport", () => {
     { headers: { origin: "https://evil.invalid", "x-csrf-token": "ok" }, cookies: { [SESSION_COOKIE]: "s" } },
   ])("auth rejects POST before service: %j", async (request) => {
     const auth = {
-      requireCookieMutation: vi.fn().mockRejectedValue(new Error("auth")),
+      requirePrincipalMutation: vi.fn().mockRejectedValue(new Error("auth")),
       optionalSession: vi.fn(),
+      requirePrincipal: vi.fn(),
     };
     const create = vi.fn();
     const controller = new CommentsController(
@@ -105,8 +106,9 @@ describe("#394 comments policy and transport", () => {
     const a = "10000000-0000-4000-8000-000000000001";
     const s = "10000000-0000-4000-8000-000000000002";
     const auth = {
-      requireCookieMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }),
+      requirePrincipalMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s, transport: "cookie" }),
       optionalSession: vi.fn().mockResolvedValue(null),
+      requirePrincipal: vi.fn().mockResolvedValue({ userId: a, sessionId: s, transport: "bearer" }),
     };
     const create = vi.fn().mockResolvedValue({
       statusCode: 201,
@@ -127,8 +129,28 @@ describe("#394 comments policy and transport", () => {
     );
     expect(create).toHaveBeenCalledWith("game", gameId, a, s, "comments-synthetic-key", body);
     expect(reply.status).toHaveBeenCalledWith(201);
-    await controller.listGame({} as never, gameId);
+    await controller.listGame({ headers: {} } as never, gameId);
+    expect(auth.optionalSession).toHaveBeenCalled();
     expect(list).toHaveBeenCalledWith("game", gameId, null, expect.any(Object));
+    await controller.listGame({ headers: { authorization: "Bearer opaque" } } as never, gameId);
+    expect(auth.requirePrincipal).toHaveBeenCalled();
+    expect(list).toHaveBeenLastCalledWith("game", gameId, a, expect.any(Object));
+  });
+
+  it("native comment dispatch admits venue and game targets; unknown stays unavailable", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: commentId }] })
+      .mockResolvedValueOnce({ rows: [] });
+    const service = new CommentsService(
+      { query } as never, env, {} as never,
+      new IdempotencyService({} as never, env), {} as never, {} as never, {} as never, {} as never,
+    );
+    await expect(service.assertNativeCommentTarget(commentId)).resolves.toBeUndefined();
+    expect(query).toHaveBeenCalledWith(
+      "SELECT id FROM entity_comments WHERE id=$1 AND entity_kind IN ('venue','game')",
+      [commentId],
+    );
+    await expect(service.assertNativeCommentTarget(commentId)).rejects.toThrow();
   });
 });
 

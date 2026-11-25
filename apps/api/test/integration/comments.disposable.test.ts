@@ -259,7 +259,7 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     };
   }
 
-  it("native venue create/reply/edit/delete/report; shared game target refused before content; no invalid bearer fallback", async () => {
+  it("native venue+public-game create/reply/edit/delete; unknown/private targets refused; no invalid bearer fallback", async () => {
     const {game,venueId} = await createPublishedGame(author);
     const credentials = await nativeCredentials(author), other = await nativeCredentials(peer);
     const headers = {authorization:`Bearer ${credentials.accessToken}`,"idempotency-key":key()};
@@ -284,25 +284,128 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     const removed = await app.inject({method:"DELETE",url:detailUrl,headers:{...headers,"idempotency-key":key()},payload:{expectedVersion:2}});
     expect(removed.statusCode).toBe(200); expect(removed.json().deleted).toBe(true); expect(removed.json().body).toBeNull();
     const branch = await app.inject({url:`${url}?parentCommentId=${root.id}`,headers}); expect(branch.statusCode).toBe(200); expect(branch.json().items[0].id).toBe(reply.json().id);
-    const gameComment = await post(author,`/v1/games/${game.id}/comments`,{text:"PRIVATE NATIVE GAME SENTINEL"}); expect(gameComment.statusCode).toBe(201);
-    for (const target of [gameComment.json().id,randomUUID()]) {
-      for (const method of ["GET","PUT","DELETE"] as const) {
-        const refused = await app.inject({method,url:`/v1/comments/${target}`,headers:{...headers,"idempotency-key":key()},...(method === "GET" ? {} : {payload:method === "PUT" ? {text:"Rejected native edit",expectedVersion:1} : {expectedVersion:1}})});
-        expect(refused.statusCode).toBe(404); expect(refused.body).not.toContain("PRIVATE NATIVE GAME SENTINEL");
+
+    // Public game discussion admitted for native principal — same rows as cookie/guest.
+    const gameUrl = `/v1/games/${game.id}/comments`;
+    const gameCreateKey = key();
+    const gameCreate = await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${credentials.accessToken}`, "idempotency-key": gameCreateKey },
+      payload: { text: "Native public game question" },
+    });
+    expect(gameCreate.statusCode).toBe(201);
+    expect(gameCreate.json()).toMatchObject({
+      entityKind: "game", entityId: game.id, body: "Native public game question", mine: true, version: 1,
+    });
+    expect((await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${credentials.accessToken}`, "idempotency-key": gameCreateKey },
+      payload: { text: "Native public game question" },
+    })).json().id).toBe(gameCreate.json().id);
+    const gameRootId = gameCreate.json().id as string;
+    const gameGuest = await app.inject({ url: gameUrl });
+    expect(gameGuest.statusCode).toBe(200);
+    expect(gameGuest.json().items.some((item: { id: string }) => item.id === gameRootId)).toBe(true);
+    expect(gameGuest.json().canCreate).toBe(false);
+    const gameCookie = await app.inject({ url: gameUrl, headers: { cookie: author.cookie } });
+    expect(gameCookie.statusCode).toBe(200);
+    expect(gameCookie.json().items.some((item: { id: string }) => item.id === gameRootId)).toBe(true);
+    const gameReply = await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${other.accessToken}`, "idempotency-key": key() },
+      payload: { text: "Native one-level answer", parentCommentId: gameRootId },
+    });
+    expect(gameReply.statusCode).toBe(201);
+    expect(gameReply.json().parentCommentId).toBe(gameRootId);
+    const gameDetail = await app.inject({ url: `/v1/comments/${gameRootId}`, headers });
+    expect(gameDetail.statusCode).toBe(200);
+    expect(gameDetail.json().body).toBe("Native public game question");
+    const gameEdited = await app.inject({
+      method: "PUT", url: `/v1/comments/${gameRootId}`,
+      headers: { ...headers, "idempotency-key": key() },
+      payload: { text: "Native changed question", expectedVersion: 1 },
+    });
+    expect(gameEdited.statusCode).toBe(200);
+    expect(gameEdited.json().version).toBe(2);
+    expect(gameEdited.json().body).toBe("Native changed question");
+    const gamePhotos = await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${credentials.accessToken}`, "idempotency-key": key() },
+      payload: { text: "reject photos", photoIds: [randomUUID()] },
+    });
+    expect([400, 422]).toContain(gamePhotos.statusCode);
+    const wrongEntityReply = await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { authorization: `Bearer ${credentials.accessToken}`, "idempotency-key": key() },
+      payload: { text: "cross entity", parentCommentId: root.id },
+    });
+    expect([400, 404, 422]).toContain(wrongEntityReply.statusCode);
+    const foreignGame = await app.inject({
+      method: "DELETE", url: `/v1/comments/${gameRootId}`,
+      headers: { authorization: `Bearer ${other.accessToken}`, "idempotency-key": key() },
+      payload: { expectedVersion: 2 },
+    });
+    expect(foreignGame.statusCode).toBe(404);
+    const gameRemoved = await app.inject({
+      method: "DELETE", url: `/v1/comments/${gameRootId}`,
+      headers: { ...headers, "idempotency-key": key() },
+      payload: { expectedVersion: 2 },
+    });
+    expect(gameRemoved.statusCode).toBe(200);
+    expect(gameRemoved.json().deleted).toBe(true);
+    expect(gameRemoved.json().body).toBeNull();
+    const tombstoneReplies = await app.inject({
+      url: `${gameUrl}?parentCommentId=${gameRootId}`, headers,
+    });
+    expect(tombstoneReplies.statusCode).toBe(200);
+    expect(tombstoneReplies.json().items[0].id).toBe(gameReply.json().id);
+
+    // Unknown / missing IDs stay unavailable without sentinel content.
+    for (const target of [randomUUID()]) {
+      for (const method of ["GET", "PUT", "DELETE"] as const) {
+        const refused = await app.inject({
+          method, url: `/v1/comments/${target}`,
+          headers: { ...headers, "idempotency-key": key() },
+          ...(method === "GET" ? {} : {
+            payload: method === "PUT"
+              ? { text: "Rejected native edit", expectedVersion: 1 }
+              : { expectedVersion: 1 },
+          }),
+        });
+        expect(refused.statusCode).toBe(404);
+        expect(refused.body).not.toContain("Native public game question");
+        expect(refused.body).not.toContain("Native changed question");
       }
     }
-    expect((await app.inject({url:`/v1/comments/${gameComment.json().id}`,headers:{cookie:author.cookie}})).statusCode).toBe(200);
-    expect((await app.inject({method:"POST",url,headers:{cookie:author.cookie,origin,"idempotency-key":key()},payload:{text:"Missing csrf"}})).statusCode).toBe(403);
-    expect((await app.inject({url})).statusCode).toBe(200);
-    for (const target of [url,`/v1/comments/${reply.json().id}`]) {
-      expect((await app.inject({url:target,headers:{authorization:"Bearer invalid"}})).statusCode).toBe(401);
-      expect((await app.inject({url:target,headers:{authorization:"Bearer invalid",cookie:author.cookie}})).statusCode).toBe(403);
+
+    expect((await app.inject({
+      method: "POST", url, headers: { cookie: author.cookie, origin, "idempotency-key": key() },
+      payload: { text: "Missing csrf" },
+    })).statusCode).toBe(403);
+    expect((await app.inject({
+      method: "POST", url: gameUrl,
+      headers: { cookie: author.cookie, origin, "idempotency-key": key() },
+      payload: { text: "Missing csrf on game" },
+    })).statusCode).toBe(403);
+    expect((await app.inject({ url })).statusCode).toBe(200);
+    for (const target of [url, gameUrl, `/v1/comments/${reply.json().id}`, `/v1/comments/${gameRootId}`]) {
+      expect((await app.inject({ url: target, headers: { authorization: "Bearer invalid" } })).statusCode).toBe(401);
+      expect((await app.inject({
+        url: target, headers: { authorization: "Bearer invalid", cookie: author.cookie },
+      })).statusCode).toBe(403);
     }
-    await pool.query("UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[credentials.sessionId]);
-    expect((await app.inject({url,headers})).statusCode).toBe(401);
+    await pool.query("UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE id=$1", [credentials.sessionId]);
+    expect((await app.inject({ url, headers })).statusCode).toBe(401);
+    expect((await app.inject({ url: gameUrl, headers })).statusCode).toBe(401);
     const expired = await nativeCredentials(author);
-    await pool.query("UPDATE native_access_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE session_id=$1",[expired.sessionId]);
-    expect((await app.inject({url,headers:{authorization:`Bearer ${expired.accessToken}`}})).statusCode).toBe(401);
+    await pool.query(
+      "UPDATE native_access_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE session_id=$1",
+      [expired.sessionId],
+    );
+    expect((await app.inject({ url, headers: { authorization: `Bearer ${expired.accessToken}` } })).statusCode).toBe(401);
+    expect((await app.inject({
+      url: gameUrl, headers: { authorization: `Bearer ${expired.accessToken}` },
+    })).statusCode).toBe(401);
   });
 
   it("create/read/reply/own edit/tombstone, foreign denial, unavailable parent, block and replay/CAS", async () => {

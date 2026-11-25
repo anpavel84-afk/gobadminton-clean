@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { SessionService } from "../../src/auth/session.service";
 import { CommentsModule } from "../../src/comments/comments.module";
@@ -85,6 +86,7 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
   let pool: ReturnType<typeof createDatabase>["pool"];
   let fake: FakeModerationProvider;
   let sessions: SessionService;
+  let native: NativeSessionService;
   let pairs: PairFenceService;
   let author: Actor;
   let peer: Actor;
@@ -112,6 +114,11 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       GAME_MODERATION_INTERNAL_ENABLED: "1",
       COOKIE_SECURE: "false",
       AUTH_PEPPER: "comment-mod-synthetic-pepper-only!!",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{
+        clientId: "comment-mod-native-fixture",
+        redirectUris: ["https://app.example.test/auth/callback"],
+      }]),
     });
     execFileSync("pnpm", ["exec", "tsx", "src/database/migrate.ts"], {
       cwd: apiRoot,
@@ -138,6 +145,11 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       GAME_MODERATION_INTERNAL_ENABLED: "1",
       COOKIE_SECURE: "false",
       AUTH_PEPPER: "comment-mod-synthetic-pepper-only!!",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{
+        clientId: "comment-mod-native-fixture",
+        redirectUris: ["https://app.example.test/auth/callback"],
+      }]),
     });
     fake = new FakeModerationProvider(env);
     const moduleRef = await Test.createTestingModule({
@@ -155,6 +167,7 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       .useValue(fake)
       .compile();
     sessions = moduleRef.get(SessionService);
+    native = moduleRef.get(NativeSessionService);
     pairs = moduleRef.get(PairFenceService);
     app = moduleRef.createNestApplication<NestFastifyApplication>(
       new FastifyAdapter({ logger: false }),
@@ -880,5 +893,92 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       [gameId],
     );
     expect(count.rows[0]!.n).toBe(1);
+  });
+
+  it("native principal safe game create/edit binds publication; rejected edit keeps body; same-key replay skips provider", async () => {
+    const { gameId } = await createPublishedGame(author);
+    const url = `/v1/games/${gameId}/comments`;
+    const issued = await native.transaction(async (client) => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [author.userId]);
+      return native.issue(client, author.userId, "comment-mod-native-fixture");
+    });
+    const nativeHeaders = (idem = key()) => ({
+      authorization: `Bearer ${issued.accessToken}`,
+      "idempotency-key": idem,
+    });
+
+    const createKey = key();
+    const create = await app.inject({
+      method: "POST",
+      url,
+      headers: nativeHeaders(createKey),
+      payload: { text: "Native safe game question", parentCommentId: null },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(create.json().body).toBe("Native safe game question");
+    expect(fake.textCalls).toBe(1);
+    const commentId = create.json().id as string;
+    const binding = await pool.query(
+      `SELECT surface_key, resource_version, binding_kind
+       FROM content_moderation_bindings
+       WHERE entity_id = $1::uuid AND surface_key = 'comment_body'`,
+      [commentId],
+    );
+    expect(binding.rows[0]).toMatchObject({
+      surface_key: "comment_body",
+      resource_version: 1,
+      binding_kind: "publication",
+    });
+
+    const createReplay = await app.inject({
+      method: "POST",
+      url,
+      headers: nativeHeaders(createKey),
+      payload: { text: "Native safe game question", parentCommentId: null },
+    });
+    expect(createReplay.statusCode).toBe(201);
+    expect(createReplay.json().id).toBe(commentId);
+    expect(fake.textCalls).toBe(1);
+
+    const editKey = key();
+    const edit = await app.inject({
+      method: "PUT",
+      url: `/v1/comments/${commentId}`,
+      headers: nativeHeaders(editKey),
+      payload: { text: "Native updated safe question", expectedVersion: 1 },
+    });
+    expect(edit.statusCode).toBe(200);
+    expect(edit.json().body).toBe("Native updated safe question");
+    expect(edit.json().version).toBe(2);
+    expect(fake.textCalls).toBe(2);
+    const editReplay = await app.inject({
+      method: "PUT",
+      url: `/v1/comments/${commentId}`,
+      headers: nativeHeaders(editKey),
+      payload: { text: "Native updated safe question", expectedVersion: 1 },
+    });
+    expect(editReplay.statusCode).toBe(200);
+    expect(editReplay.json().version).toBe(2);
+    expect(fake.textCalls).toBe(2);
+
+    const baseline = fake.textCalls;
+    fake.textFixture = async (input) => flaggedTextBatch(input.texts.length);
+    const rejected = await app.inject({
+      method: "PUT",
+      url: `/v1/comments/${commentId}`,
+      headers: nativeHeaders(),
+      payload: { text: "Native rejected replacement", expectedVersion: 2 },
+    });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(fake.textCalls).toBe(baseline + 1);
+    const afterReject = await app.inject({
+      method: "GET",
+      url: `/v1/comments/${commentId}`,
+      headers: { authorization: `Bearer ${issued.accessToken}` },
+    });
+    expect(afterReject.statusCode).toBe(200);
+    expect(afterReject.json().body).toBe("Native updated safe question");
+    expect(afterReject.json().version).toBe(2);
   });
 });

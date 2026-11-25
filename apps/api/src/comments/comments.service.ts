@@ -90,13 +90,16 @@ export class CommentsService {
     private readonly actorFence: ActorFenceService,
   ) {}
 
-  /** Dispatch fence only: authenticate bearer before this existence-only venue lookup.
-   * Game/unknown IDs share the same unavailable response; no content is projected.
+  /** Dispatch fence only: authenticate bearer before this existence-only venue|game lookup.
+   * Unknown/missing IDs share the same unavailable response; no content is projected.
    * Existing parent, block, moderation, rights and mutation fences still run below.
    */
-  async assertNativeVenueTarget(commentIdRaw: string): Promise<void> {
+  async assertNativeCommentTarget(commentIdRaw: string): Promise<void> {
     const id = parseCommentId(commentIdRaw);
-    const result = await this.pool.query("SELECT id FROM entity_comments WHERE id=$1 AND entity_kind='venue'", [id]);
+    const result = await this.pool.query(
+      "SELECT id FROM entity_comments WHERE id=$1 AND entity_kind IN ('venue','game')",
+      [id],
+    );
     if (!result.rows.length) unavailable();
   }
 
