@@ -2722,7 +2722,7 @@ test('#522 QA1 FIX3: deferred token past chat endsAt → zero gameChat GET; live
   const refreshGate = deferred<unknown>();
   let holdRefresh = false;
   const auth = new AuthCoordinator({
-    api: createNativeApi(async (url, init) => {
+    api: createNativeApi(async (url) => {
       const path = String(url).replace('https://dev.gobadminton.ru/v1', '');
       let value: unknown;
       if (path === '/me') value = me;
