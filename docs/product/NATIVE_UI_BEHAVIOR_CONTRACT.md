@@ -260,6 +260,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Mobile unit `create-game-ui.test.ts` + `game-management.test.ts` + `auth.test.ts` + `game-cover.test.ts`; source APK counter 52 |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL APK52 create-game photo Root FIX5 preQA; UAT=NOT_TESTED; not READY/ACTIVE |
 
+## R-19 · Native game-detail active chat entry (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `GameDetailPage` confirmed membership + published/`endsAt` window + `getGameChat` active only; native `GET /games/:id/chat` via existing `native-api.gameChat` / Messages parser; destination `/messages/game/[id]` unchanged |
+| Entry | Authenticated `/games/[id]` after participation detail settles |
+| Trigger | Focus/foreground lease; eligibility (confirmed or paginated `/me/games`) before private chat-header GET; explicit «Чат игры →» press with rendered actor/game/view/foreground permit + live window recheck |
+| Expected | Guest/loading/denied/closed hide the link; failed proof/read has no stale positive and can retry; never organizer id / createdByMe / pending / invitation as membership; never focuses Messages inbox/thread merely to probe; probe is chat header only (no members/messages/receipts/mutations); destination refetch remains authoritative for revoked membership or ended game |
+| Accessibility | Accepted-web Russian «Чат игры →»; existing TextButton/card tokens; large-text/safe-area retained |
+| Non-scope | New messaging policy/API/design; Messages destination changes; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Mobile unit `game-chat-entry.test.ts` + `auth.test.ts`; source APK counter 53 |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native game-chat entry; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

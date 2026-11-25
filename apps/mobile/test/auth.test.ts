@@ -2607,6 +2607,99 @@ test('#522 APK49: AuthCoordinator injected opener — current callback opens exa
   assert.deepEqual(opens, ['tel:+79991234567', 'https://example.org/booking']);
 });
 
+test('#522 APK53: game-chat entry AuthCoordinator fences, chat GET only when eligible, logout clear', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameChatEntry;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const calls: { path: string; method?: string; auth?: string }[] = [];
+  const chat = {
+    id: 'c1', gameId, kind: 'game', lifecycleState: 'active', version: 1,
+    lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member',
+  };
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/games/${gameId}/chat`) {
+      const headers = (init.headers ?? {}) as Record<string, string>;
+      calls.push({ path, method: init.method ?? 'GET', auth: headers.Authorization });
+      return chat;
+    }
+    if (path.startsWith('/me/games')) {
+      calls.push({ path, method: init.method ?? 'GET' });
+      return { items: [{ id: gameId, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    return { ok: true };
+  });
+  // Confirmed participation proof via detail parts — no managed walk, then chat header.
+  s.auth.participation.getSnapshot().details[gameId] = {
+    status: 'ready',
+    parts: [{
+      id: 'p1', gameId, userId: me.id, status: 'confirmed', version: 1, attemptNumber: 1,
+      requestedAt: '2026-01-01T00:00:00.000Z',
+    }],
+  };
+  owner.focus(gameId, { status: 'published', endsAt: '2099-12-01T12:00:00.000Z' });
+  await owner.load();
+  assert.equal(calls.filter(c => c.path === `/games/${gameId}/chat`).length, 1);
+  assert.equal(calls.find(c => c.path === `/games/${gameId}/chat`)!.auth, `Bearer ${credentials.accessToken}`);
+  assert.equal(calls.some(c => c.path.startsWith('/me/games')), false);
+  assert.equal(owner.getSnapshot().available, true);
+
+  await s.auth.refresh();
+  assert.strictEqual(s.auth.gameChatEntry, owner);
+  assert.equal(owner.getSnapshot().available, true);
+
+  const permit = owner.renderedPermit();
+  assert.ok(permit);
+  assert.equal(owner.mayNavigate(permit!), true);
+  const chatCount = calls.filter(c => c.path === `/games/${gameId}/chat`).length;
+  await s.auth.logout();
+  assert.equal(owner.getSnapshot().actor, null);
+  assert.equal(owner.getSnapshot().available, false);
+  assert.equal(owner.mayNavigate(permit!), false);
+  assert.equal(calls.filter(c => c.path === `/games/${gameId}/chat`).length, chatCount);
+});
+
+test('#522 APK53: delayed token chat permit yields zero gameChat GET', async () => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  const owner = s.auth.gameChatEntry;
+  const gameId = '10000000-0000-4000-8000-000000000010';
+  const gets: string[] = [];
+  const refreshGate = deferred<unknown>();
+  s.setHandler(async (path) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return refreshGate.promise;
+    if (path === `/games/${gameId}/chat`) {
+      gets.push(path);
+      return {
+        id: 'c1', gameId, kind: 'game', lifecycleState: 'active', version: 1,
+        lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0, memberRole: 'member',
+      };
+    }
+    if (path.startsWith('/me/games')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  s.auth.participation.getSnapshot().details[gameId] = {
+    status: 'ready',
+    parts: [{
+      id: 'p1', gameId, userId: me.id, status: 'confirmed', version: 1, attemptNumber: 1,
+      requestedAt: '2026-01-01T00:00:00.000Z',
+    }],
+  };
+  const refreshWork = s.auth.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.focus(gameId, { status: 'published', endsAt: '2099-12-01T12:00:00.000Z' });
+  const loadWork = owner.load();
+  await new Promise(resolve => setImmediate(resolve));
+  owner.setForeground(false);
+  refreshGate.resolve(credentials);
+  await Promise.all([loadWork, refreshWork]);
+  assert.equal(gets.length, 0);
+  assert.equal(owner.getSnapshot().available, false);
+});
+
 test('#522 APK45: invitation-authoring AuthCoordinator fences, create transport, no auto-send', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

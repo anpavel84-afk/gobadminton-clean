@@ -13,6 +13,7 @@ import { CoverLockNoSendError, GameManagementCoordinator } from './game-manageme
 import { TrainerProfileCoordinator } from './trainer-profile.ts';
 import { GameContactPreferenceCoordinator } from './game-contact-preference.ts';
 import { GameCourtBookingCoordinator } from './game-court-booking.ts';
+import { GameChatEntryCoordinator } from './game-chat-entry.ts';
 import { GameCoverCoordinator, gameCoverMutationSucceeded } from './game-cover.ts';
 import { cloneDerivativeBytes } from './profile-avatar.ts';
 import { PrivateGameVenueContactsCoordinator } from './private-game-venue-contacts.ts';
@@ -71,6 +72,7 @@ export class AuthCoordinator {
   readonly trainer: TrainerProfileCoordinator;
   readonly gameContactPreference: GameContactPreferenceCoordinator;
   readonly gameCourtBooking: GameCourtBookingCoordinator;
+  readonly gameChatEntry: GameChatEntryCoordinator;
   readonly gameCover: GameCoverCoordinator;
   readonly privateGameVenueContacts: PrivateGameVenueContactsCoordinator;
   readonly invitationAuthoring: InvitationAuthoringCoordinator;
@@ -215,6 +217,24 @@ export class AuthCoordinator {
         return deps.api.mutateGameCourtBooking(access, packet);
       }, authority),
     }, deps.random);
+    // Game-detail chat entry: eligibility before GET /games/:id/chat; never focuses Messages to probe.
+    // Permit rechecked after token await on managed pages and private chat header.
+    this.gameChatEntry = new GameChatEntryCoordinator({
+      detailParts: gameId => {
+        const detail = this.participation.getSnapshot().details[gameId];
+        if (!detail || detail.status === 'loading') return null;
+        if (detail.status === 'error') return [];
+        return detail.parts;
+      },
+      managed: (cursor, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.managedGames(access, cursor);
+      }),
+      readChat: (gameId, permit) => this.participationRead(access => {
+        if (!permit()) throw new ParticipationError('stale');
+        return deps.api.gameChat(access, gameId);
+      }),
+    });
     // Private game-detail venue contacts: existing GET /games/:id bearer only; never via gameDetail() shared parser.
     // Surface/read permit rechecked after token await immediately before native-api.
     // Opener is an injected AuthDependencies port (static Linking in auth-runtime) — no lazy RN require here.
@@ -475,6 +495,7 @@ export class AuthCoordinator {
       this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
       this.avatar.setActor(actor); this.cover.setActor(actor); this.trainer.setActor(actor);
       this.gameContactPreference.setActor(actor); this.gameCourtBooking.setActor(actor);
+      this.gameChatEntry.setActor(actor);
       this.gameCover.setActor(actor);
       this.privateGameVenueContacts.setActor(actor);
       this.invitationAuthoring.setActor(actor); this.contact.setActor(actor);
@@ -876,6 +897,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.trainer.forget();
     if (forgetCreation) this.gameContactPreference.forget();
     if (forgetCreation) this.gameCourtBooking.forget();
+    if (forgetCreation) this.gameChatEntry.forget();
     if (forgetCreation) this.gameCover.forget();
     if (forgetCreation) this.privateGameVenueContacts.forget();
     if (forgetCreation) this.invitationAuthoring.forget();
