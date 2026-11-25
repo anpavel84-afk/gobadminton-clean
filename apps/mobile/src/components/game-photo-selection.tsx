@@ -396,6 +396,8 @@ export function GamePhotoSelection({
               disabled={disabled} onPress={() => {
                 if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
                 const nextX = step(fenceAtRender.cropX, -0.1);
+                // Clamped no-op at boundary must not clear preview/confirm (prep deps unchanged).
+                if (nextX === fenceAtRender.cropX) return;
                 retireSelectionGeneration();
                 liveIdentityRef.current = {
                   ...liveIdentityRef.current,
@@ -419,6 +421,7 @@ export function GamePhotoSelection({
               disabled={disabled} onPress={() => {
                 if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
                 const nextX = step(fenceAtRender.cropX, 0.1);
+                if (nextX === fenceAtRender.cropX) return;
                 retireSelectionGeneration();
                 liveIdentityRef.current = {
                   ...liveIdentityRef.current,
@@ -444,6 +447,7 @@ export function GamePhotoSelection({
               disabled={disabled} onPress={() => {
                 if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
                 const nextY = step(fenceAtRender.cropY, -0.1);
+                if (nextY === fenceAtRender.cropY) return;
                 retireSelectionGeneration();
                 liveIdentityRef.current = {
                   ...liveIdentityRef.current,
@@ -467,6 +471,7 @@ export function GamePhotoSelection({
               disabled={disabled} onPress={() => {
                 if (!admit(fenceAtRender) || !fenceAtRender.assetUri) return;
                 const nextY = step(fenceAtRender.cropY, 0.1);
+                if (nextY === fenceAtRender.cropY) return;
                 retireSelectionGeneration();
                 liveIdentityRef.current = {
                   ...liveIdentityRef.current,

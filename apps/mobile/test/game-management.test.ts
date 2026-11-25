@@ -1191,3 +1191,96 @@ test('#522 FIX4: view departure clears parent creation photo; remount has no hid
   release();
   assert.equal(s.owner.hasCreationPhoto(), false);
 });
+
+test('#522 FIX8: initial create arms lease before dispatch; retire before send → zero POST; not UNKNOWN', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  const sent: ManagementPacket[] = [];
+  const tokenGate = deferred<void>();
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => ({ items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null }),
+    game: async () => draft,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      // Simulate AuthCoordinator post-token recheck of isCreationContinuationLive.
+      await tokenGate.promise;
+      if (!owner.isCreationContinuationLive()) throw new ParticipationError('stale');
+      sent.push(p);
+      return draft;
+    },
+  }, () => `key-${++serial}`, () => now);
+  owner.setActor(actor);
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  const release = owner.bindCreationView();
+  const work = owner.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(owner.isCreationContinuationLive(), true, 'create lease armed before token/API');
+  release();
+  assert.equal(owner.isCreationContinuationLive(), false);
+  tokenGate.resolve();
+  await work;
+  assert.equal(sent.length, 0);
+  assert.equal(owner.getSnapshot().created, null);
+  assert.equal(owner.getSnapshot().command, undefined);
+});
+
+test('#522 FIX8: cover→publish awaits detail refresh and admits authoritative version (no identity abort)', async () => {
+  let serial = 0;
+  const draft = { ...g, version: 7 };
+  let latest: Game = draft;
+  const sent: ManagementPacket[] = [];
+  let detailReads = 0;
+  const owner = new GameManagementCoordinator({
+    profile: async () => profile,
+    preferences: async () => preferences,
+    trainer: async () => { throw new ParticipationError('business', 404); },
+    venues: async () => ({ items: [venue], nextCursor: null }),
+    managed: async () => {
+      detailReads += 1;
+      return { items: [{ ...latest, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    },
+    game: async () => latest,
+    participants: async () => ({ items: [], nextCursor: null }),
+    send: async p => {
+      sent.push(p);
+      if (p.kind === 'create') {
+        latest = draft;
+        return draft;
+      }
+      if (p.kind === 'publish') {
+        assert.equal(p.body.expectedVersion, 8);
+        latest = { ...latest, status: 'published', version: 9 };
+        return latest;
+      }
+      throw new Error('unexpected');
+    },
+  }, () => `key-${++serial}`, () => now, {
+    saveCreationCover: async ({ gameId, gameVersion }) => {
+      assert.equal(gameId, draft.id);
+      assert.equal(gameVersion, 7);
+      latest = { ...draft, version: 8 };
+      return { version: 8 };
+    },
+  });
+  owner.setActor(actor);
+  owner.bindCreationView();
+  await owner.loadContext('city-1');
+  owner.update(form);
+  owner.preview();
+  owner.setCreationPhoto({ mime: 'image/jpeg', bytes: new Uint8Array([1]) });
+  await owner.publishPreview();
+  assert.equal(sent[0]?.kind, 'create');
+  assert.equal(sent[1]?.kind, 'publish');
+  assert.ok(detailReads >= 1, 'cover path must refresh detail before publish capture');
+  assert.equal(owner.getSnapshot().created?.status, 'published');
+  assert.equal(owner.getSnapshot().created?.version, 9);
+  const source = readFileSync(new URL('../src/game-management.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /currentGame !== game/);
+  assert.match(source, /currentGame\.id !== game\.id/);
+});

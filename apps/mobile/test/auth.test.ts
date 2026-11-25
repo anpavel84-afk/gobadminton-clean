@@ -2096,6 +2096,52 @@ test('#522 FIX4: deferred profile/token during create-publish after lease retire
   assert.deepEqual(management.getSnapshot().creationReference, { id: gameId, version: 7 });
 });
 
+test('#522 FIX8: deferred token during initial create after view retire → zero POST /games', async t => {
+  const s = setup(sessionEnvelope());
+  await s.auth.hydrate();
+  t.mock.method(publicApi, 'venues', async () => ({ items: [fixture.venue], nextCursor: null }));
+  const management = s.auth.gameManagement;
+  const gameId = '10000000-0000-4000-8000-000000000158';
+  const draft = { ...fixture, id: gameId, status: 'draft' as const, version: 7 };
+  const createPosts: string[] = [];
+  const refreshGate = deferred<typeof credentials>();
+  let deferRefresh = false;
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return deferRefresh ? refreshGate.promise : credentials;
+    if (path === '/me/social-profile') return { cityId: 'city-1', trainer: false, displayName: 'Creator' };
+    if (path === '/me/game-preferences') return { version: 0, defaultPublicGameContact: null };
+    if (path.startsWith('/me/games')) {
+      return { items: [{ ...draft, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    }
+    if (path === `/games/${gameId}`) return { ...draft, status: 'draft' };
+    if (path === '/games' && (init.method ?? 'GET') === 'POST') {
+      createPosts.push(path);
+      return draft;
+    }
+    if (path.includes('/participations')) return { items: [], nextCursor: null };
+    return { ok: true };
+  });
+  await management.loadContext('city-1');
+  management.update({ venueId: fixture.venue.id, date: '2026-11-20', time: '18:30', contact: '@creator' });
+  management.preview();
+  // Expire only for the create send so POST awaits refresh after lease capture.
+  deferRefresh = true;
+  const access = (s.auth as unknown as { access: { expiresAt: number } | null }).access;
+  if (access) access.expiresAt = 0;
+  const release = management.bindCreationView();
+  const work = management.publishPreview();
+  await new Promise(r => setImmediate(r));
+  assert.equal(management.isCreationContinuationLive(), true);
+  // Retire create view while token refresh is deferred — initial POST must not fire.
+  release();
+  refreshGate.resolve(credentials);
+  await work;
+  assert.equal(createPosts.length, 0);
+  assert.equal(management.getSnapshot().created, null);
+  assert.equal(management.getSnapshot().command, undefined);
+});
+
 test('#522 APK51: game-cover AuthCoordinator fences, GET/PUT/DELETE transport, no auto-publish', async () => {
   const s = setup(sessionEnvelope());
   await s.auth.hydrate();

@@ -358,57 +358,68 @@ export class GameManagementCoordinator {
     const live = () => this.creationActionLive(lease) && this.current(actor);
     const photo = this.creationPhoto;
     const packet: ManagementPacket = freeze({ actor, kind: 'create', key: this.random(), body: input });
-    // Create may still settle after view retirement (draft recoverable); cover/publish are gated.
-    const result = await this.dispatch(packet);
-    // Retired create result keeps draft/reference — no automatic cover/publish next step.
-    if (!result || !live() || this.state.created?.status !== 'draft') return;
-    const created = this.state.created;
-    if (!gameStartIsFuture(created.startsAt, this.now())) {
-      this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
-      return;
-    }
-    if (photo) {
-      const coverLive = () => live()
-        && this.state.created?.id === created.id
-        && this.state.creationReference?.id === created.id;
-      this.creationContinuationLive = coverLive;
-      let cover: { version: number } | null = null;
-      try {
-        cover = this.gate.saveCreationCover
-          ? await this.gate.saveCreationCover({
-            gameId: created.id,
-            gameVersion: created.version,
-            derivative: photo,
-            actor,
-            live: coverLive,
-          })
-          : null;
-      } finally {
-        this.creationContinuationLive = null;
-      }
-      if (!coverLive()) return;
-      if (!cover) {
-        // Hold until managed resolve/omit after authoritative cover read — not permanent on honest omit.
-        this.creationCoverHold = created.id;
-        this.show({ notice: GAME_PHOTO_SELECTION_COPY.saveFailed });
-        return;
-      }
-      this.creationCoverHold = null;
-      const current = this.state.created;
-      if (current?.id === created.id && current.version < cover.version) {
-        this.show({
-          created: { ...current, version: cover.version },
-          creationReference: { id: created.id, version: cover.version },
-        });
-      }
-      const forPublish = this.state.created ?? created;
-      if (!gameStartIsFuture(forPublish.startsAt, this.now())) {
+    // Arm create lease at token boundary BEFORE dispatch — not only cover/publish continuation.
+    const priorContinuation = this.creationContinuationLive;
+    this.creationContinuationLive = live;
+    try {
+      // Create may still settle after view retirement (draft recoverable); cover/publish are gated.
+      const result = await this.dispatch(packet);
+      // Retired create result keeps draft/reference — no automatic cover/publish next step.
+      if (!result || !live() || this.state.created?.status !== 'draft') return;
+      const created = this.state.created;
+      if (!gameStartIsFuture(created.startsAt, this.now())) {
         this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
         return;
       }
-    }
-    if (live() && this.state.created?.status === 'draft' && !this.creationCoverBlocksPublish(this.state.created.id)) {
-      await this.publishDraft(this.state.created.id, { creationLive: live });
+      if (photo) {
+        const coverLive = () => live()
+          && this.state.created?.id === created.id
+          && this.state.creationReference?.id === created.id;
+        this.creationContinuationLive = coverLive;
+        let cover: { version: number } | null = null;
+        try {
+          cover = this.gate.saveCreationCover
+            ? await this.gate.saveCreationCover({
+              gameId: created.id,
+              gameVersion: created.version,
+              derivative: photo,
+              actor,
+              live: coverLive,
+            })
+            : null;
+        } finally {
+          this.creationContinuationLive = null;
+        }
+        if (!coverLive()) return;
+        if (!cover) {
+          // Hold until managed resolve/omit after authoritative cover read — not permanent on honest omit.
+          this.creationCoverHold = created.id;
+          this.show({ notice: GAME_PHOTO_SELECTION_COPY.saveFailed });
+          return;
+        }
+        this.creationCoverHold = null;
+        const current = this.state.created;
+        if (current?.id === created.id && current.version < cover.version) {
+          this.show({
+            created: { ...current, version: cover.version },
+            creationReference: { id: created.id, version: cover.version },
+          });
+        }
+        // Await receipt/detail refresh before publication capture (onReceipt may soft-refresh in parallel).
+        await this.loadDetail(created.id);
+        if (!coverLive()) return;
+        const forPublish = this.state.created ?? created;
+        if (forPublish.status !== 'draft') return;
+        if (!gameStartIsFuture(forPublish.startsAt, this.now())) {
+          this.show({ notice: GAME_PHOTO_SELECTION_COPY.startExpiredAfterCreate });
+          return;
+        }
+      }
+      if (live() && this.state.created?.status === 'draft' && !this.creationCoverBlocksPublish(this.state.created.id)) {
+        await this.publishDraft(this.state.created.id, { creationLive: live });
+      }
+    } finally {
+      if (this.creationContinuationLive === live) this.creationContinuationLive = priorContinuation;
     }
   };
   /**
@@ -416,7 +427,8 @@ export class GameManagementCoordinator {
    * Creation lease is rechecked after profile await and at Auth token boundaries via continuation.
    */
   publishDraft = async (id: string, opts?: { creationLive?: () => boolean }) => {
-    const actor = this.state.actor, d = this.state.details[id], game = this.state.created?.id === id ? this.state.created : d?.game;
+    const actor = this.state.actor, d = this.state.details[id];
+    let game = this.state.created?.id === id ? this.state.created : d?.game;
     if (!actor || !game || game.status !== 'draft' || this.locked() || (this.state.created?.id !== id && (d?.status !== 'ready' || !d.management))) return;
     // Owner send guard: failed create-photo is not cleared by a plain Publish on the create summary.
     if (this.creationCoverBlocksPublish(id)) {
@@ -441,9 +453,13 @@ export class GameManagementCoordinator {
             notice: 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.' }); return;
         }
         const detail = this.state.details[id], currentGame = this.state.created?.id === id ? this.state.created : detail?.game;
-        if (this.locked() || currentGame !== game || (this.state.created?.id !== id && (detail?.status !== 'ready' || !detail.management))) return;
+        // Admit cover-receipt refreshed game (new object, same id/draft) — reference inequality must not abort.
+        if (this.locked() || !currentGame || currentGame.status !== 'draft' || currentGame.id !== game.id
+          || (this.state.created?.id !== id && (detail?.status !== 'ready' || !detail.management))) return;
         if (creationLive && !creationLive()) return;
         this.show({ profile, ...(this.state.context === 'setup' ? { context: 'idle' as const } : {}) });
+        // Authoritative version after receipt refresh (cover may have bumped it).
+        game = currentGame;
       } catch (e) {
         if (liveAfterIo()) this.show({ profile: null, ...(e instanceof ParticipationError && e.status === 404 ? { context: 'setup' as const, preview: null } : {}),
           notice: e instanceof ParticipationError && e.status === 404
@@ -512,11 +528,12 @@ export class GameManagementCoordinator {
         });
         return false;
       }
-      // Create-intent lease retired at token boundary before API — clear safely; keep draft/reference.
+      // Create/publish intent lease retired at token boundary before API — clear safely; keep draft/reference.
+      // Already-sent results are not wiped: stale is thrown only before managementMutation.
       if (
         e instanceof ParticipationError
         && e.kind === 'stale'
-        && packet.kind === 'publish'
+        && (packet.kind === 'publish' || packet.kind === 'create')
         && this.creationContinuationLive !== null
       ) {
         this.show({ command: undefined });

@@ -216,3 +216,20 @@ test('#522 FIX5: production gamePhotoSelectionLive — current confirm; stale af
   assert.match(create, /aspectRatio: 3/);
   assert.equal(GAME_COVER_EDITOR_COPY.confirmPick, 'Подтвердить выбор фото');
 });
+
+test('#522 FIX8: create-view rebinds after auth/actor generation; crop boundary no-op preserves confirm', () => {
+  const create = read('../src/components/create-game.tsx');
+  assert.match(create, /auth\.status !== 'authenticated' \|\| !actor/);
+  assert.match(create, /actor\?\.actorId,\s*actor\?\.sessionId,\s*actor\?\.generation/);
+  assert.match(create, /bindCreationView/);
+
+  const photoSelection = read('../src/components/game-photo-selection.tsx');
+  assert.match(photoSelection, /nextX === fenceAtRender\.cropX/);
+  assert.match(photoSelection, /nextY === fenceAtRender\.cropY/);
+  // step clamp: unchanged coordinate at 0/1 must early-return before invalidateConfirmed.
+  const step = (value: number, delta: number) =>
+    Math.min(1, Math.max(0, Math.round((value + delta) * 10) / 10));
+  assert.equal(step(0, -0.1), 0);
+  assert.equal(step(1, 0.1), 1);
+  assert.equal(step(0.5, -0.1), 0.4);
+});
