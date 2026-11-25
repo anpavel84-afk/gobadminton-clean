@@ -45,7 +45,7 @@ const databaseUrl =
 const describeIntegration =
   process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 
-const webOrigin = "http://127.0.0.1:3012";
+const webOrigin = "https://localhost:3001";
 
 function assertDisposableDatabase(url: string): void {
   if (process.env.RUN_DB_INTEGRATION !== "1") {
@@ -101,7 +101,7 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       APP_ENV: "local",
       HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3012",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: webOrigin,
       ALLOWED_WEB_ORIGINS: webOrigin,
       CONTENT_MODERATION_PROVIDER: "fake",
@@ -112,7 +112,7 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       ADMIN_AUTH_PEPPER: adminPepper,
       USER_RESTRICTIONS_INTERNAL_ENABLED: "1",
       GAME_MODERATION_INTERNAL_ENABLED: "1",
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "comment-mod-synthetic-pepper-only!!",
       NATIVE_AUTH_ENABLED: "1",
       NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{
@@ -132,7 +132,7 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       APP_ENV: "local",
       HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3012",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: webOrigin,
       ALLOWED_WEB_ORIGINS: webOrigin,
       CONTENT_MODERATION_PROVIDER: "fake",
@@ -143,7 +143,7 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       ADMIN_AUTH_PEPPER: adminPepper,
       USER_RESTRICTIONS_INTERNAL_ENABLED: "1",
       GAME_MODERATION_INTERNAL_ENABLED: "1",
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "comment-mod-synthetic-pepper-only!!",
       NATIVE_AUTH_ENABLED: "1",
       NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{
