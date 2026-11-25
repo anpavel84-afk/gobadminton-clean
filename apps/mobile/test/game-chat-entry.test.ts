@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { URL, fileURLToPath } from 'node:url';
 import { ParticipationError, type Actor, type ManagedGame } from '../src/participation.ts';
 import { MessagesError, type GameChat } from '../src/messages.ts';
 import {
