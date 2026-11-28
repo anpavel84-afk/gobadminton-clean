@@ -575,8 +575,10 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     expect(accepted.statusCode).toBe(200);
     expect((await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
       {expectedVersion:receipt.version},acceptKey)).json()).toEqual(accepted.json());
+    const mismatchedVersion=(BigInt(receipt.version)+1n).toString();
+    expect(mismatchedVersion).not.toBe(receipt.version);
     const wrongBody=await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
-      {expectedVersion:"1"},acceptKey);
+      {expectedVersion:mismatchedVersion},acceptKey);
     expect([409,422]).toContain(wrongBody.statusCode);
     const wrongKey=await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
       {expectedVersion:receipt.version},key());
