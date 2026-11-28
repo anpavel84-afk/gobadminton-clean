@@ -56,8 +56,11 @@ const profile = { version: 1, directoryVisible: true, socialEligible: true };
 function setup(send: (packet: FriendshipPacket) => Promise<unknown> = async () => receipt('pending')) {
   const calls: FriendshipPacket[] = [];
   const reads: string[] = [];
+  // Distinct new commands need unique deterministic keys; same-key replay reuses the parked packet
+  // (does not call random again), so counter-based keys preserve remount/reconcile assertions.
+  let keySeq = 0;
   const o = new FriendshipsCoordinator({
-    random: () => 'immutable-key-0001',
+    random: () => `immutable-key-${String(++keySeq).padStart(4, '0')}`,
     capabilities: async () => { reads.push('caps'); return caps; },
     list: async (tab, cursor) => {
       reads.push(`list:${tab}:${cursor ?? ''}`);
