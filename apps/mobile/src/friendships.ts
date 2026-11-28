@@ -17,97 +17,18 @@ export class FriendshipError extends Error {
 }
 
 /**
- * Server idempotency completed/UNKNOWN TTL
- * (`apps/api/src/common/idempotency.service.ts` IDEMPOTENCY_TTL_MS = 24h).
- * Reference only — client same-key replay uses the conservative ceiling below.
+ * Honest UNKNOWN hold — never same-key resend. A read-only relationship refresh is
+ * informational only and does not prove whether the original action committed.
  */
-export const FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+export const FRIENDSHIP_UNKNOWN_NOTICE =
+  'Результат исходной отправки неизвестен. Текущее состояние дружбы информативное и не доказывает, совершилось ли исходное действие.';
 
 /**
- * Client UNKNOWN same-key recovery ceiling — materially below server TTL so a
- * request permitted just before expiry cannot arrive after server purge as a
- * fresh command. Margin reduces the race window; timing cannot guarantee an
- * absolute delivery upper bound.
- */
-export const CLIENT_RECOVERY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
-/** Alias kept for module-local call sites / tests — client gate, not server TTL. */
-export const FRIENDSHIP_IDEMPOTENCY_TTL_MS = CLIENT_RECOVERY_MAX_AGE_MS;
-
-/** Honest expired UNKNOWN — result unknown; no same-key replay; no GET-inferred outcome. */
-export const FRIENDSHIP_RETENTION_EXPIRED_NOTICE =
-  'Результат исходной отправки неизвестен. Безопасный повтор того же действия уже недоступен. Проверьте дружбу отдельно; при необходимости снимите локальную блокировку.';
-
-/**
- * After explicit local retirement of expired UNKNOWN — outcome still unknown;
+ * After explicit local unlock of UNKNOWN — outcome still unknown;
  * never claims noncommit. Survives reload until explicit acknowledgement.
  */
 export const FRIENDSHIP_RETIREMENT_WARNING =
-  'Локальная блокировка снята. Исход прежней отправки по-прежнему неизвестен. Проверьте дружбу отдельно перед новым действием.';
-
-/** Wall + same-process monotonic stamps from the original first wire attempt. */
-export type FriendshipIdempotencyAge = Readonly<{
-  firstDispatchedAt?: number;
-  /** `performance.now()` at first dispatch; in-memory only — not durable across reload. */
-  firstDispatchedMono?: number;
-}>;
-
-/**
- * Process-local monotonic ms when `performance.now` is reliably available (RN/browser).
- * Missing/nonfinite → undefined (UNKNOWN replay must fail closed).
- */
-export function friendshipMonotonicNow(): number | undefined {
-  try {
-    const perf = globalThis.performance;
-    if (!perf || typeof perf.now !== 'function') return undefined;
-    const value = perf.now();
-    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function friendshipClockElapsedBlocked(
-  start: number | undefined,
-  now: number | undefined,
-): boolean {
-  if (typeof start !== 'number' || !Number.isFinite(start)) return true;
-  if (typeof now !== 'number' || !Number.isFinite(now)) return true;
-  // Backwards wall or monotonic reset/regression — never treat as fresh.
-  if (now < start) return true;
-  const elapsed = now - start;
-  if (!Number.isFinite(elapsed) || elapsed < 0) return true;
-  return elapsed >= CLIENT_RECOVERY_MAX_AGE_MS;
-}
-
-/**
- * Fail-closed UNKNOWN replay gate: wall and monotonic ages both required by default.
- * Missing/invalid/backwards/reset mono or wall, or either elapsed ≥ client ceiling.
- * Controllable via `clocks` for synthetic tests — never restarts original age.
- *
- * `requireMonotonic: false` is only for a first wire attempt when mono could not be
- * captured; UNKNOWN same-key replay always keeps the default (mono required).
- */
-export function friendshipIdempotencyReplayBlocked(
-  age: FriendshipIdempotencyAge | number | undefined,
-  clocks: {
-    wall?: number;
-    /** `null` forces unavailable mono (fail closed when required). */
-    mono?: number | null;
-    requireMonotonic?: boolean;
-  } = {},
-): boolean {
-  const wallStart = typeof age === 'object' && age !== null ? age.firstDispatchedAt : age;
-  const monoStart = typeof age === 'object' && age !== null ? age.firstDispatchedMono : undefined;
-  const wallNow = clocks.wall ?? Date.now();
-  const monoNow = 'mono' in clocks
-    ? (clocks.mono === null || clocks.mono === undefined ? undefined : clocks.mono)
-    : friendshipMonotonicNow();
-  const requireMonotonic = clocks.requireMonotonic !== false;
-
-  if (friendshipClockElapsedBlocked(wallStart, wallNow)) return true;
-  if (!requireMonotonic && monoStart === undefined) return false;
-  return friendshipClockElapsedBlocked(monoStart, monoNow);
-}
+  'Локальная блокировка снята. Исход прежней отправки по-прежнему неизвестен. Перед новым действием проверьте актуальное состояние дружбы.';
 
 const invalid = (): never => { throw new FriendshipError('invalid'); };
 const record = (v: unknown): Record<string, unknown> =>

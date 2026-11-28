@@ -3,8 +3,8 @@ import { AccessibilityInfo, findNodeHandle, Modal, Pressable, View } from 'react
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import {
-  FRIEND_ACTION_LABELS, FRIENDS_TABS, FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
-  friendCommand, friendshipIdempotencyReplayBlocked, friendStatus,
+  FRIEND_ACTION_LABELS, FRIENDS_TABS, FRIENDSHIP_UNKNOWN_NOTICE,
+  friendCommand, friendStatus,
   type FriendAction, type FriendshipView,
 } from '../friendships.ts';
 import { useFriendships } from '../friendships-runtime.tsx';
@@ -47,7 +47,7 @@ function sameFriendCommand(
   return packet.requestId === (view.request?.id ?? null);
 }
 
-/** Unresolved post-retirement warning — survives reload; blocks new actions until ack. */
+/** Unresolved post-unlock warning — survives reload; blocks new actions until ack. */
 function OutstandingRetirementWarning() {
   const { owner, state } = useFriendships();
   if (!state.outstandingWarning) return null;
@@ -59,8 +59,8 @@ function OutstandingRetirementWarning() {
   </View>;
 }
 
-/** Explicit UNKNOWN recovery when the owning row left the loaded surface — omission ≠ result. */
-function OrphanFriendRecovery({ listLease }: { listLease: number }) {
+/** Explicit UNKNOWN hold when the owning row left the loaded surface — omission ≠ result; never resend. */
+function OrphanFriendRecovery() {
   const { owner, state } = useFriendships();
   const command = state.command;
   if (!command || command.status !== 'unknown' || !state.foreground) return null;
@@ -69,19 +69,13 @@ function OrphanFriendRecovery({ listLease }: { listLease: number }) {
   const onList = packet.peerLease === null && state.listActive;
   const onProfile = packet.peerLease !== null && state.profilePeerId === packet.peerLease;
   if (!onList && !onProfile) return null;
-  const retentionBlocked = friendshipIdempotencyReplayBlocked(command);
-  const notice = retentionBlocked
-    ? (state.notice ?? FRIENDSHIP_RETENTION_EXPIRED_NOTICE)
-    : (state.notice
-      ?? 'Результат неизвестен. Сохранён исходный запрос; проверьте результат явно.');
+  const notice = state.notice ?? FRIENDSHIP_UNKNOWN_NOTICE;
   return <View style={{ gap: 8 }}>
-    <Label accessibilityLiveRegion="polite" accessibilityRole={retentionBlocked ? 'status' : undefined}>
+    <Label accessibilityLiveRegion="polite" accessibilityRole="status">
       {notice}
     </Label>
-    {retentionBlocked
-      ? <TextButton title="Снять локальную блокировку" onPress={() => owner.retireExpiredUnknown()} />
-      : <PrimaryButton title="Проверить результат"
-        onPress={() => { void owner.reconcile(listLease); }} />}
+    <TextButton title="Обновить состояние" onPress={() => owner.refreshUnknownRelationship()} />
+    <TextButton title="Понятно" onPress={() => owner.unlockUnknown()} />
   </View>;
 }
 
@@ -119,8 +113,6 @@ export function FriendActions({
   const { owner, state } = useFriendships();
   const [confirm, setConfirm] = useState(false);
   const locked = !!state.command || !!state.outstandingWarning;
-  const retentionBlocked = state.command?.status === 'unknown'
-    && friendshipIdempotencyReplayBlocked(state.command);
   const actions = (['request', 'accept', 'decline', 'cancel', 'remove'] as FriendAction[])
     .filter(action => friendCommand(view, peerId, action));
   function act(action: FriendAction) {
@@ -140,14 +132,13 @@ export function FriendActions({
             onPress={() => act(action)} />)}
     </View>
     {state.notice && state.command && sameFriendCommand(view, peerId, state.command.packet)
-      && <Label accessibilityLiveRegion="polite"
-        accessibilityRole={retentionBlocked ? 'status' : undefined}>{state.notice}</Label>}
+      && <Label accessibilityLiveRegion="polite" accessibilityRole="status">{state.notice}</Label>}
     {state.command?.status === 'unknown' && state.foreground
       && sameFriendCommand(view, peerId, state.command.packet)
-      && (retentionBlocked
-        ? <TextButton title="Снять локальную блокировку" onPress={() => owner.retireExpiredUnknown()} />
-        : <PrimaryButton title="Проверить результат"
-          onPress={() => { void owner.reconcile(listLease); }} />)}
+      && <>
+        <TextButton title="Обновить состояние" onPress={() => owner.refreshUnknownRelationship()} />
+        <TextButton title="Понятно" onPress={() => owner.unlockUnknown()} />
+      </>}
     {state.command?.status === 'sending' && sameFriendCommand(view, peerId, state.command.packet)
       && <Label accessibilityState={{ busy: true }}>Отправляем…</Label>}
     {confirm && <ConfirmDialog title="Удалить из друзей?" busy={state.command?.status === 'sending'}
@@ -194,7 +185,7 @@ export function ProfileFriendship({ peerId }: { peerId: string }) {
     </Label>}
     {state.profileStatus === 'ready' && state.profileView && <FriendActions
       view={state.profileView} peerId={peerId} listLease={state.episode} peerLease={peerId} />}
-    <OrphanFriendRecovery listLease={state.episode} />
+    <OrphanFriendRecovery />
     <OutstandingRetirementWarning />
   </View>;
 }
@@ -278,7 +269,7 @@ export function FriendsScreen() {
           onPress={() => { owner.nextPage(); }} />}
       </View>
     </>}
-    <OrphanFriendRecovery listLease={state.episode} />
+    <OrphanFriendRecovery />
     <OutstandingRetirementWarning />
     {state.notice && !state.command && !state.outstandingWarning
       && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}

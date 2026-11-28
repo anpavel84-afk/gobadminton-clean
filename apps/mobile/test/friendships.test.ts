@@ -4,52 +4,13 @@ import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import { FriendshipsCoordinator } from '../src/friendships-coordinator.ts';
 import {
-  CLIENT_RECOVERY_MAX_AGE_MS, FRIENDSHIP_IDEMPOTENCY_TTL_MS, FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
-  FRIENDSHIP_RETIREMENT_WARNING, FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS,
-  FriendshipError, friendCommand, friendshipIdempotencyReplayBlocked, friendshipWire,
+  FRIENDSHIP_UNKNOWN_NOTICE, FRIENDSHIP_RETIREMENT_WARNING,
+  FriendshipError, friendCommand, friendshipWire,
   friendshipsListPath, friendshipStatesPath, ownFriendsPrerequisite, parseFriendshipList,
   parseFriendshipReceipt, parseFriendshipStates, parseSocialCapabilities, parseFriendshipView,
   validVersion, type FriendshipPacket, type FriendshipView,
 } from '../src/friendships.ts';
 import { createNativeApi } from '../src/native-api.ts';
-
-/** Paired wall + process-local monotonic clocks for UNKNOWN retention tests. */
-const controllableDualClocks = () => {
-  let wall = 1_700_000_000_000;
-  let mono = 1_000;
-  return {
-    wall: {
-      now: () => wall,
-      advance: (ms: number) => { wall += ms; },
-      set: (value: number) => { wall = value; },
-    },
-    mono: {
-      now: () => mono,
-      advance: (ms: number) => { mono += ms; },
-      set: (value: number) => { mono = value; },
-    },
-  };
-};
-
-const installDualClocks = (clocks: ReturnType<typeof controllableDualClocks>) => {
-  const realNow = Date.now;
-  const realPerf = globalThis.performance;
-  const perfStub = { now: clocks.mono.now };
-  Date.now = clocks.wall.now;
-  Object.defineProperty(globalThis, 'performance', {
-    value: perfStub,
-    configurable: true,
-    writable: true,
-  });
-  return () => {
-    Date.now = realNow;
-    Object.defineProperty(globalThis, 'performance', {
-      value: realPerf,
-      configurable: true,
-      writable: true,
-    });
-  };
-};
 
 test('APK57 friendship source binds versionCode and FriendshipsProvider above Stack', () => {
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -97,8 +58,6 @@ const profile = { version: 1, directoryVisible: true, socialEligible: true };
 function setup(send: (packet: FriendshipPacket) => Promise<unknown> = async () => receipt('pending')) {
   const calls: FriendshipPacket[] = [];
   const reads: string[] = [];
-  // Distinct new commands need unique deterministic keys; same-key replay reuses the parked packet
-  // (does not call random again), so counter-based keys preserve remount/reconcile assertions.
   let keySeq = 0;
   const o = new FriendshipsCoordinator({
     random: () => `immutable-key-${String(++keySeq).padStart(4, '0')}`,
@@ -191,23 +150,24 @@ test('tab change retires prior page; out-of-order list reads cannot overwrite cu
   assert.equal(o.getSnapshot().page?.items[0]?.relationship, 'incoming_pending');
 });
 
-test('five commands keep exact bodies; removal confirmation stays UI-side; UNKNOWN retains packet', async () => {
+test('five commands keep exact bodies; removal confirmation stays UI-side; UNKNOWN retains packet without resend', async () => {
   const { o, calls } = setup(async () => { throw new Error('offline'); });
   o.openProfile(peerId); await o.loadProfile();
   await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0]!.body, { targetPublicPlayerId: peerId });
   assert.equal(o.getSnapshot().command?.status, 'unknown');
+  assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
   const packet = o.getSnapshot().command!.packet;
   o.closeProfile(); o.openProfile(peerId);
   assert.equal(o.getSnapshot().command?.packet, packet);
-  // Remount bumps episode; explicit recovery must still reuse immutable key/body.
+  // Remount bumps episode; never same-key resend.
   assert.notEqual(packet.viewLease, o.getSnapshot().episode);
-  await o.reconcile(o.getSnapshot().episode);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0], calls[1]);
-  assert.equal(calls[1]!.key, packet.key);
-  assert.equal(calls[1]!.viewLease, packet.viewLease);
+  o.refreshUnknownRelationship();
+  await o.loadProfile();
+  assert.equal(calls.length, 1, 'read-only refresh must not POST');
+  assert.equal(o.getSnapshot().command?.status, 'unknown');
+  assert.equal(o.getSnapshot().command!.packet.key, packet.key);
   assert.deepEqual(friendshipWire(packet).body, { targetPublicPlayerId: peerId });
 
   for (const [view, action, body] of [
@@ -226,29 +186,26 @@ test('five commands keep exact bodies; removal confirmation stays UI-side; UNKNO
   }
 });
 
-test('remount recovery: same-key retry; peer/actor/background/safety fence delayed reconcile; list surface', async () => {
-  // Profile remount + explicit same-key retry settles only in the same focused context.
+test('remount/reauth: UNKNOWN held; no automatic write; peer/actor/background/safety fences', async () => {
+  // Profile remount keeps UNKNOWN; no same-key retry; unlock + ack required for new action.
   {
-    let attempt = 0;
-    const { o, calls } = setup(async () => {
-      if (!attempt++) throw new Error('offline');
-      return receipt('pending');
-    });
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     const packet = o.getSnapshot().command!.packet;
     o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
     assert.equal(o.getSnapshot().command?.packet, packet);
-    await o.reconcile(o.getSnapshot().episode);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0], calls[1]);
-    assert.equal(o.getSnapshot().command, null);
-    assert.equal(o.getSnapshot().notice, 'Запрос отправлен.');
+    assert.equal(calls.length, 1);
+    o.refreshUnknownRelationship();
+    await o.loadProfile();
+    assert.equal(calls.length, 1);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
   }
 
-  // List remount: exit/enter keeps UNKNOWN; explicit reconcile reuses the same packet.
+  // List remount: exit/enter keeps UNKNOWN; refresh is GET only.
   {
-    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    const { o, calls, reads } = setup(async () => { throw new Error('offline'); });
     o.enterList(); await o.loadList();
     const episode = o.getSnapshot().episode;
     await o.act('cancel', outgoing, peerId, episode, null);
@@ -256,108 +213,44 @@ test('remount recovery: same-key retry; peer/actor/background/safety fence delay
     const packet = o.getSnapshot().command!.packet;
     o.exitList(); o.enterList(); await o.loadList();
     assert.equal(o.getSnapshot().command?.packet, packet);
-    assert.notEqual(packet.viewLease, o.getSnapshot().episode);
-    await o.reconcile(o.getSnapshot().episode);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0], calls[1]);
+    const readsBefore = reads.length;
+    o.refreshUnknownRelationship();
+    await o.loadList();
+    assert.equal(calls.length, 1);
+    assert.ok(reads.length > readsBefore, 'refresh must issue list GET');
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
   }
 
-  // Delayed post-token permit on explicit recovery: peer/actor/background/safety → zero recovery send.
+  // Actor/background/safety/peer while held: no additional send.
   for (const change of ['peer', 'actor', 'background', 'safety'] as const) {
-    const token = deferred();
-    const calls: FriendshipPacket[] = [];
-    const o = new FriendshipsCoordinator({
-      random: () => 'immutable-key-0001',
-      capabilities: async () => caps,
-      list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
-      states: async () => ({ items: [none] }),
-      ownProfile: async () => profile as never,
-      send: async (p, permit) => {
-        // First act fails immediately (UNKNOWN). Recovery awaits token then rechecks permit.
-        if (calls.length === 0) {
-          calls.push(p);
-          throw new Error('offline');
-        }
-        await token.promise;
-        if (!permit()) throw new FriendshipError('network');
-        calls.push(p);
-        return receipt('pending');
-      },
-    });
-    o.setActor(actor);
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     assert.equal(calls.length, 1);
-    assert.equal(o.getSnapshot().command?.status, 'unknown');
     const packet = o.getSnapshot().command!.packet;
-    o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
-    const work = o.reconcile(o.getSnapshot().episode);
     if (change === 'peer') o.openProfile('other-peer');
     else if (change === 'background') o.setForeground(false);
     else if (change === 'safety') o.invalidate();
     else o.setActor({ ...actor, actorId: 'other' });
-    token.resolve(undefined);
-    await work;
-    assert.equal(calls.length, 1, `${change} must not dispatch recovery after fence`);
+    o.refreshUnknownRelationship();
+    assert.equal(calls.length, 1, `${change} must not dispatch after fence`);
     assert.notEqual(o.getSnapshot().notice, 'Запрос отправлен.');
     if (change === 'actor') assert.equal(o.getSnapshot().command, null);
     else assert.equal(o.getSnapshot().command?.packet.key, packet.key);
   }
 
-  // Same context after remount: delayed post-token reconcile sends once and settles.
-  {
-    const token = deferred();
-    const calls: FriendshipPacket[] = [];
-    const o = new FriendshipsCoordinator({
-      random: () => 'immutable-key-0001',
-      capabilities: async () => caps,
-      list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
-      states: async () => ({ items: [none] }),
-      ownProfile: async () => profile as never,
-      send: async (p, permit) => {
-        if (calls.length === 0) {
-          calls.push(p);
-          throw new Error('offline');
-        }
-        await token.promise;
-        if (!permit()) throw new FriendshipError('network');
-        calls.push(p);
-        return receipt('pending');
-      },
-    });
-    o.setActor(actor);
-    o.openProfile(peerId); await o.loadProfile();
-    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-    const packet = o.getSnapshot().command!.packet;
-    o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
-    const work = o.reconcile(o.getSnapshot().episode);
-    token.resolve(undefined);
-    await work;
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0], calls[1]);
-    assert.equal(calls[1], packet);
-    assert.equal(o.getSnapshot().command, null);
-    assert.equal(o.getSnapshot().notice, 'Запрос отправлен.');
-  }
-
-  // Wrong peer / closed profile / stale rendered lease: no send; UNKNOWN retained (no noncommit inference).
+  // Wrong peer / closed profile: refresh no-ops; UNKNOWN retained.
   {
     const { o, calls } = setup(async () => { throw new Error('offline'); });
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     const packet = o.getSnapshot().command!.packet;
     o.openProfile('other-peer'); await o.loadProfile();
-    await o.reconcile(o.getSnapshot().episode);
+    o.refreshUnknownRelationship();
     assert.equal(calls.length, 1);
     assert.equal(o.getSnapshot().command?.packet, packet);
     o.closeProfile();
-    await o.reconcile(o.getSnapshot().episode);
-    assert.equal(calls.length, 1);
-    assert.equal(o.getSnapshot().command?.packet, packet);
-    o.openProfile(peerId);
-    const stale = o.getSnapshot().episode;
-    o.openProfile(peerId);
-    await o.reconcile(stale);
+    o.refreshUnknownRelationship();
     assert.equal(calls.length, 1);
     assert.equal(o.getSnapshot().command?.packet, packet);
   }
@@ -380,13 +273,10 @@ test('actor/session/background/peer/safety fences drop late receipts; no auto-se
     gate.resolve(receipt('pending'));
     await work;
     assert.equal(calls.length, 1);
-    // Late success must not settle as a current-actor notice for a retired lease.
     assert.notEqual(o.getSnapshot().notice, 'Запрос отправлен.');
     if (change === 'actor') {
-      // Different principal permanently drops parked UNKNOWN.
       assert.equal(o.getSnapshot().command, null);
     } else if (change === 'session' || change === 'generation') {
-      // Same-actor verified reauth restores UNKNOWN; never auto-settles the late receipt.
       assert.equal(o.getSnapshot().command?.status, 'unknown');
       assert.equal(o.getSnapshot().command?.packet.key, calls[0]!.key);
     }
@@ -435,28 +325,28 @@ test('wrong receipt identity stays UNKNOWN; disabled server capabilities clear a
     version: bigVersion, outcome: 'cancelled',
   }));
   o.enterList();
-  // Seed list-ready lease with outgoing pending for cancel.
-  o.getSnapshot();
   const episode = o.getSnapshot().episode;
   await o.act('cancel', outgoing, peerId, episode, null);
   assert.equal(calls.length, 1);
   assert.equal(o.getSnapshot().command?.status, 'unknown');
+  assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
   const disabled = parseFriendshipView({
     ...none, capabilities: { canRequest: false, canAccept: false, canDecline: false, canCancel: false, canRemove: false },
   });
   assert.equal(friendCommand(disabled, peerId, 'request'), null);
 });
 
-test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/logout wipe; deferred token fence', async () => {
-  // Server commit succeeded but refreshed list omits the row — explicit same-key recovery still reachable.
+test('QA57/#522: row omission keeps UNKNOWN hold; reauth restores; B/logout wipe; no resend', async () => {
+  // Server commit succeeded but refreshed list omits the row — UNKNOWN held; GET refresh only.
   {
     let attempt = 0;
     const calls: FriendshipPacket[] = [];
+    const reads: string[] = [];
     const o = new FriendshipsCoordinator({
       random: () => 'immutable-key-0001',
       capabilities: async () => caps,
       list: async () => {
-        // After ambiguous cancel, authoritative list no longer contains the outgoing row.
+        reads.push('list');
         return { items: attempt > 0 ? [] : [outgoing], nextCursor: null, asOf: 't' };
       },
       states: async () => ({ items: [none] }),
@@ -464,8 +354,8 @@ test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/l
       send: async (p, permit) => {
         if (!permit()) throw new FriendshipError('network');
         calls.push(p);
-        if (!attempt++) throw new Error('offline after commit');
-        return receipt('cancelled');
+        attempt++;
+        throw new Error('offline after commit');
       },
     });
     o.setActor(actor);
@@ -478,25 +368,21 @@ test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/l
     assert.equal(o.getSnapshot().page?.items.length, 0);
     assert.equal(o.getSnapshot().command?.packet, packet);
     assert.equal(o.commandMatchesSurface(packet), false);
-    // Route return keeps the frozen packet; omission never proves result.
     o.exitList(); o.enterList(); await o.loadList();
     assert.equal(o.getSnapshot().command?.packet.key, packet.key);
     assert.deepEqual(o.getSnapshot().command?.packet.body, packet.body);
-    await o.reconcile(o.getSnapshot().episode);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0], calls[1]);
-    assert.equal(calls[1]!.key, packet.key);
-    assert.equal(o.getSnapshot().command, null);
-    assert.equal(o.getSnapshot().notice, 'Запрос отменён.');
+    const readsBefore = reads.length;
+    o.refreshUnknownRelationship();
+    await o.loadList();
+    assert.ok(reads.length > readsBefore);
+    assert.equal(calls.length, 1, 'never same-key resend');
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
   }
 
-  // Same-actor reauth restores UNKNOWN with rebound session; no auto-write; explicit reconcile reuses key/body.
+  // Same-actor reauth restores UNKNOWN; no auto-write; unlock+ack then new independent action.
   {
-    let allow = false;
-    const { o, calls } = setup(async () => {
-      if (!allow) throw new Error('offline');
-      return receipt('accepted');
-    });
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
     o.enterList(); await o.loadList();
     await o.act('accept', incoming, peerId, o.getSnapshot().episode, null);
     const original = o.getSnapshot().command!.packet;
@@ -511,13 +397,17 @@ test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/l
     assert.equal(o.getSnapshot().command!.packet.actor.sessionId, 'reauth-session');
     assert.equal(calls.length, 1);
     o.enterList(); await o.loadList();
-    allow = true;
-    await o.reconcile(o.getSnapshot().episode);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1]!.key, original.key);
-    assert.deepEqual(calls[1]!.body, original.body);
+    o.refreshUnknownRelationship();
+    await o.loadList();
+    assert.equal(calls.length, 1);
+    o.unlockUnknown();
     assert.equal(o.getSnapshot().command, null);
-    assert.equal(o.getSnapshot().notice, 'Запрос принят.');
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(calls.length, 1);
+    o.acknowledgeOutstandingWarning();
+    await o.act('accept', incoming, peerId, o.getSnapshot().episode, null);
+    assert.equal(calls.length, 2);
+    assert.notEqual(calls[1]!.key, original.key, 'new action uses a new key');
   }
 
   // Other actor never sees parked packet; returning A after B cannot resurrect it.
@@ -529,7 +419,7 @@ test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/l
     o.setActor({ actorId: 'other', sessionId: 'other-session', generation: 3 });
     assert.equal(o.getSnapshot().command, null);
     o.enterList(); await o.loadList();
-    await o.reconcile(o.getSnapshot().episode);
+    o.refreshUnknownRelationship();
     assert.equal(calls.length, 1);
     await o.act('decline', incoming, peerId, o.getSnapshot().episode, null);
     assert.equal(calls.length, 2);
@@ -550,455 +440,133 @@ test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/l
     assert.equal(o.getSnapshot().command, null);
     assert.equal(calls.length, 1);
     o.openProfile(peerId); await o.loadProfile();
-    await o.reconcile(o.getSnapshot().episode);
+    o.refreshUnknownRelationship();
     assert.equal(calls.length, 1);
   }
+});
 
-  // Deferred post-token recovery: background/safety fence; same omitted-row context sends once.
-  for (const change of ['background', 'safety'] as const) {
-    const token = deferred();
-    const calls: FriendshipPacket[] = [];
-    const o = new FriendshipsCoordinator({
-      random: () => 'immutable-key-0001',
-      capabilities: async () => caps,
-      list: async () => ({ items: [], nextCursor: null, asOf: 't' }),
-      states: async () => ({ items: [none] }),
-      ownProfile: async () => profile as never,
-      send: async (p, permit) => {
-        if (calls.length === 0) {
-          calls.push(p);
-          throw new Error('offline');
-        }
-        await token.promise;
-        if (!permit()) throw new FriendshipError('network');
-        calls.push(p);
-        return receipt('cancelled');
-      },
-    });
-    o.setActor(actor);
-    o.enterList();
-    await o.act('cancel', outgoing, peerId, o.getSnapshot().episode, null);
-    assert.equal(o.getSnapshot().command?.status, 'unknown');
-    const packet = o.getSnapshot().command!.packet;
-    await o.loadList();
-    assert.equal(o.commandMatchesSurface(packet), false);
-    const work = o.reconcile(o.getSnapshot().episode);
-    if (change === 'background') o.setForeground(false);
-    else o.invalidate();
-    token.resolve(undefined);
-    await work;
-    assert.equal(calls.length, 1, `${change} must not complete deferred recovery`);
-    assert.equal(o.getSnapshot().command?.packet.key, packet.key);
-  }
-
+test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack; clocks irrelevant', async () => {
+  // Lost response stays held regardless of elapsed / wall rollback / sleep — no timer gate, no POST.
   {
-    const token = deferred();
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const key = o.getSnapshot().command!.packet.key;
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
+
+    // Simulate arbitrary clock / sleep / rollback: still no resend API exists.
+    o.refreshUnknownRelationship();
+    await o.loadProfile();
+    assert.equal(calls.length, 1);
+    assert.equal(o.getSnapshot().command!.packet.key, key);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
+  }
+
+  // Read-only refresh is GET only and does not prove original commit.
+  {
+    const reads: string[] = [];
     const calls: FriendshipPacket[] = [];
     const o = new FriendshipsCoordinator({
       random: () => 'immutable-key-0001',
-      capabilities: async () => caps,
-      list: async () => ({ items: [], nextCursor: null, asOf: 't' }),
-      states: async () => ({ items: [none] }),
+      capabilities: async () => { reads.push('caps'); return caps; },
+      list: async () => { reads.push('list'); return { items: [outgoing], nextCursor: null, asOf: 't' }; },
+      states: async id => { reads.push(`states:${id}`); return { items: [friends] }; },
       ownProfile: async () => profile as never,
       send: async (p, permit) => {
-        if (calls.length === 0) {
-          calls.push(p);
-          throw new Error('offline');
-        }
-        await token.promise;
         if (!permit()) throw new FriendshipError('network');
         calls.push(p);
-        return receipt('cancelled');
+        throw new Error('offline');
       },
     });
     o.setActor(actor);
-    o.enterList();
-    await o.act('cancel', outgoing, peerId, o.getSnapshot().episode, null);
-    const packet = o.getSnapshot().command!.packet;
-    await o.loadList();
-    const work = o.reconcile(o.getSnapshot().episode);
-    token.resolve(undefined);
-    await work;
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0], calls[1]);
-    assert.equal(calls[1]!.key, packet.key);
-    assert.equal(o.getSnapshot().command, null);
-    assert.equal(o.getSnapshot().notice, 'Запрос отменён.');
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    assert.equal(calls.length, 1);
+    const readsBefore = reads.filter(r => r.startsWith('states:')).length;
+    o.refreshUnknownRelationship();
+    await o.loadProfile();
+    assert.equal(calls.length, 1);
+    assert.ok(reads.filter(r => r.startsWith('states:')).length > readsBefore);
+    assert.equal(o.getSnapshot().profileView?.relationship, 'friends');
+    assert.equal(o.getSnapshot().command?.status, 'unknown', 'GET must not settle UNKNOWN');
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
   }
-});
 
-test('#522 QAFIX7/8: CLIENT_RECOVERY_MAX_AGE_MS is 23h; wall+mono fail-closed helper', () => {
-  assert.equal(FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS, 24 * 60 * 60 * 1000);
-  assert.equal(CLIENT_RECOVERY_MAX_AGE_MS, 23 * 60 * 60 * 1000);
-  assert.ok(CLIENT_RECOVERY_MAX_AGE_MS < FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS);
-  assert.equal(FRIENDSHIP_IDEMPOTENCY_TTL_MS, CLIENT_RECOVERY_MAX_AGE_MS);
-  const t0 = 1_700_000_000_000;
-  const m0 = 5_000;
-  assert.equal(friendshipIdempotencyReplayBlocked(undefined), true);
-  assert.equal(friendshipIdempotencyReplayBlocked(Number.NaN), true);
-  assert.equal(friendshipIdempotencyReplayBlocked({ firstDispatchedAt: t0 }, { wall: t0, mono: m0 }), true);
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, { wall: t0 - 1, mono: m0 }), true);
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, { wall: t0 + CLIENT_RECOVERY_MAX_AGE_MS - 1, mono: m0 + CLIENT_RECOVERY_MAX_AGE_MS - 1 }), false);
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, { wall: t0 + CLIENT_RECOVERY_MAX_AGE_MS, mono: m0 + 1 }), true);
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, { wall: t0 + 1, mono: m0 + CLIENT_RECOVERY_MAX_AGE_MS }), true);
-  // Wall still after dispatch but under ceiling while mono ≥ 23h (rollback hide) — blocked.
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, {
-    wall: t0 + 22 * 60 * 60 * 1000,
-    mono: m0 + 25 * 60 * 60 * 1000,
-  }), true);
-  // Missing / reset mono fail closed even when wall is in-window.
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, { wall: t0 + 1, mono: null }), true);
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, { wall: t0 + 1, mono: m0 - 1 }), true);
-  // Inside server TTL but at/after client ceiling — blocked (conservative margin).
-  assert.equal(friendshipIdempotencyReplayBlocked({
-    firstDispatchedAt: t0, firstDispatchedMono: m0,
-  }, {
-    wall: t0 + FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS - 1,
-    mono: m0 + FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS - 1,
-  }), true);
-});
+  // Explicit unlock warning persists until ack; then new independent user-chosen action.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const originalKey = o.getSnapshot().command!.packet.key;
+    o.unlockUnknown();
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(calls.length, 1);
+    // Automatic load must not drop unresolved warning or silently unlock controls.
+    o.enterList();
+    await o.loadList();
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(o.getSnapshot().command, null);
+    const blockedEpisode = o.getSnapshot().episode;
+    await o.act('request', none, peerId, blockedEpisode, null);
+    assert.equal(o.getSnapshot().command, null, 'new action blocked until warning ack');
+    assert.equal(calls.length, 1);
+    o.acknowledgeOutstandingWarning();
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    await o.act('request', none, peerId, o.getSnapshot().episode, null);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(calls.length, 2);
+    assert.notEqual(calls[1]!.key, originalKey);
+    // Unlock of held UNKNOWN; second unlock is a no-op while warning already set after clear.
+    o.unlockUnknown();
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    o.unlockUnknown();
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+  }
 
-test('#522 QAFIX7/8: in-window same-key recovery; wall+mono boundary/post-token; reauth; persistent retirement warning', async () => {
-  const clocks = controllableDualClocks();
-  const restore = installDualClocks(clocks);
-  try {
-    // In-window: client-ceiling-1 still same-key recovery; original wall+mono age preserved.
-    {
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      const age = o.getSnapshot().command!.firstDispatchedAt;
-      const mono = o.getSnapshot().command!.firstDispatchedMono;
-      const key = o.getSnapshot().command!.packet.key;
-      assert.equal(typeof age, 'number');
-      assert.equal(typeof mono, 'number');
-      assert.equal(calls.length, 1);
+  // Outstanding warning is per actor/session; logout/account switch clears private state.
+  {
+    const { o } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    o.unlockUnknown();
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    o.setActor(null);
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    o.setActor({ ...actor, sessionId: 'reauth-session', generation: 3 });
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(o.getSnapshot().command, null);
+    o.setActor(null);
+    o.setActor({ actorId: 'other-actor', sessionId: 'other-session', generation: 1 });
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    o.setActor(actor);
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    o.unlockUnknown();
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    o.forget();
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    assert.equal(o.getSnapshot().actor, null);
+  }
 
-      clocks.wall.advance(CLIENT_RECOVERY_MAX_AGE_MS - 1);
-      clocks.mono.advance(CLIENT_RECOVERY_MAX_AGE_MS - 1);
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, 2);
-      assert.equal(calls[1]!.key, key);
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-    }
-
-    // Exact client ceiling and beyond: no POST, no new key, honest expired notice.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      const key = o.getSnapshot().command!.packet.key;
-      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
-      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS);
-      const before = calls.length;
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-      assert.equal(o.retentionExpiredFor(), true);
-
-      clocks.wall.advance(1);
-      clocks.mono.advance(1);
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-    }
-
-    // Backwards wall / missing age fail closed — no replay, no fresh key.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const key = o.getSnapshot().command!.packet.key;
-      const before = calls.length;
-      (o.getSnapshot().command as { firstDispatchedAt: number }).firstDispatchedAt = clocks.wall.now() + 60_000;
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-
-      delete (o.getSnapshot().command as { firstDispatchedAt?: number }).firstDispatchedAt;
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-    }
-
-    // Wall+mono advance past client ceiling during post-token await → zero recovery send.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const token = deferred();
-      const calls: FriendshipPacket[] = [];
-      const o = new FriendshipsCoordinator({
-        random: () => 'immutable-key-0001',
-        capabilities: async () => caps,
-        list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
-        states: async () => ({ items: [none] }),
-        ownProfile: async () => profile as never,
-        send: async (p, permit) => {
-          if (calls.length === 0) {
-            calls.push(p);
-            throw new Error('offline');
-          }
-          await token.promise;
-          if (!permit()) throw new FriendshipError('network');
-          calls.push(p);
-          return receipt('pending');
-        },
-      });
-      o.setActor(actor);
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      const key = o.getSnapshot().command!.packet.key;
-      assert.equal(calls.length, 1);
-      const work = o.reconcile(o.getSnapshot().episode);
-      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
-      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS);
-      token.resolve(undefined);
-      await work;
-      assert.equal(calls.length, 1, 'deferred recovery must not send after client ceiling');
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-    }
-
-    // Same-actor reauth preserves wall+mono; never auto-send; no key rotation.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      const key = o.getSnapshot().command!.packet.key;
-      const body = o.getSnapshot().command!.packet.body;
-      clocks.wall.advance(60_000);
-      clocks.mono.advance(60_000);
-      o.setActor(null);
-      o.setActor({ ...actor, sessionId: 'reauth-session', generation: 2 });
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.deepEqual(o.getSnapshot().command!.packet.body, body);
-      assert.equal(calls.length, 1);
-
-      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
-      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS);
-      o.openProfile(peerId); await o.loadProfile();
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, 1);
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-    }
-
-    // QAFIX8: wall rollback still after dispatch (22h) while mono advanced 25h — no stale UNKNOWN replay.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      const key = o.getSnapshot().command!.packet.key;
-      const body = structuredClone(o.getSnapshot().command!.packet.body);
-      clocks.mono.advance(25 * 60 * 60 * 1000);
-      clocks.wall.set(age + 22 * 60 * 60 * 1000);
-      const before = calls.length;
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before, 'wall rollback must not hide mono expiry');
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.deepEqual(o.getSnapshot().command!.packet.body, body);
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-      assert.equal(o.retentionExpiredFor(), true);
-    }
-
-    // QAFIX8: missing / reset mono fail closed while wall remains in-window.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const key = o.getSnapshot().command!.packet.key;
-      const before = calls.length;
-      clocks.wall.advance(60_000);
-      clocks.mono.advance(60_000);
-      delete (o.getSnapshot().command as { firstDispatchedMono?: number }).firstDispatchedMono;
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-
-      (o.getSnapshot().command as { firstDispatchedMono: number }).firstDispatchedMono = clocks.mono.now() + 1;
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-
-      // Monotonic reset below stamp — fail closed.
-      (o.getSnapshot().command as { firstDispatchedMono: number }).firstDispatchedMono = clocks.mono.now() - 1;
-      clocks.mono.set(0);
-      await o.reconcile(o.getSnapshot().episode);
-      assert.equal(calls.length, before);
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-    }
-
-    // QAFIX8: post-token mono crosses 23h while wall rolled back under ceiling — zero send.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const token = deferred();
-      const calls: FriendshipPacket[] = [];
-      const o = new FriendshipsCoordinator({
-        random: () => 'immutable-key-0001',
-        capabilities: async () => caps,
-        list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
-        states: async () => ({ items: [none] }),
-        ownProfile: async () => profile as never,
-        send: async (p, permit) => {
-          if (calls.length === 0) {
-            calls.push(p);
-            throw new Error('offline');
-          }
-          await token.promise;
-          if (!permit()) throw new FriendshipError('network');
-          calls.push(p);
-          return receipt('pending');
-        },
-      });
-      o.setActor(actor);
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      const key = o.getSnapshot().command!.packet.key;
-      assert.equal(calls.length, 1);
-      const work = o.reconcile(o.getSnapshot().episode);
-      clocks.wall.set(age + 22 * 60 * 60 * 1000);
-      clocks.mono.set(mono + 25 * 60 * 60 * 1000);
-      token.resolve(undefined);
-      await work;
-      assert.equal(calls.length, 1, 'post-token mono expiry must block despite wall rollback');
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(o.getSnapshot().command!.packet.key, key);
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
-    }
-
-    // Explicit retirement: outstanding warning survives reload; ack required before new action.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o, calls } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS + 1);
-      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS + 1);
-      o.retireExpiredUnknown();
-      assert.equal(o.getSnapshot().command, null);
-      assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETIREMENT_WARNING);
-      assert.equal(calls.length, 1);
-      // Automatic load must not drop unresolved warning or silently unlock controls.
-      o.enterList();
-      await o.loadList();
-      assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
-      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETIREMENT_WARNING);
-      assert.equal(o.getSnapshot().command, null);
-      const blockedEpisode = o.getSnapshot().episode;
-      await o.act('request', none, peerId, blockedEpisode, null);
-      assert.equal(o.getSnapshot().command, null, 'new action blocked until warning ack');
-      assert.equal(calls.length, 1);
-      o.acknowledgeOutstandingWarning();
-      assert.equal(o.getSnapshot().outstandingWarning, null);
-      await o.act('request', none, peerId, o.getSnapshot().episode, null);
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(calls.length, 2);
-      // In-window retire is refused — only expired UNKNOWN may clear.
-      const midAge = o.getSnapshot().command!.firstDispatchedAt!;
-      const midMono = o.getSnapshot().command!.firstDispatchedMono!;
-      o.retireExpiredUnknown();
-      assert.equal(o.getSnapshot().command?.status, 'unknown');
-      assert.equal(o.getSnapshot().command!.firstDispatchedAt, midAge);
-      assert.equal(o.getSnapshot().command!.firstDispatchedMono, midMono);
-    }
-
-    // Outstanding warning is per actor/session; logout/account switch clears private state.
-    {
-      clocks.wall.set(1_700_000_000_000);
-      clocks.mono.set(1_000);
-      const { o } = setup(async () => { throw new Error('offline'); });
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      const age = o.getSnapshot().command!.firstDispatchedAt!;
-      const mono = o.getSnapshot().command!.firstDispatchedMono!;
-      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS + 1);
-      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS + 1);
-      o.retireExpiredUnknown();
-      assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
-      // Same-actor null gap restores outstanding warning without inventing noncommit.
-      o.setActor(null);
-      assert.equal(o.getSnapshot().outstandingWarning, null);
-      o.setActor({ ...actor, sessionId: 'reauth-session', generation: 3 });
-      assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
-      assert.equal(o.getSnapshot().command, null);
-      // Different account must not inherit the warning.
-      o.setActor(null);
-      o.setActor({ actorId: 'other-actor', sessionId: 'other-session', generation: 1 });
-      assert.equal(o.getSnapshot().outstandingWarning, null);
-      // Explicit logout wipe.
-      o.setActor(actor);
-      o.openProfile(peerId); await o.loadProfile();
-      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      clocks.wall.set(o.getSnapshot().command!.firstDispatchedAt! + CLIENT_RECOVERY_MAX_AGE_MS + 1);
-      clocks.mono.set(o.getSnapshot().command!.firstDispatchedMono! + CLIENT_RECOVERY_MAX_AGE_MS + 1);
-      o.retireExpiredUnknown();
-      assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
-      o.forget();
-      assert.equal(o.getSnapshot().outstandingWarning, null);
-      assert.equal(o.getSnapshot().actor, null);
-    }
-  } finally {
-    restore();
+  // UI source: no misleading "Проверить результат"; honest labels present.
+  {
+    const ui = readFileSync(new URL('../src/components/friendships.tsx', import.meta.url), 'utf8');
+    assert.doesNotMatch(ui, /Проверить результат/);
+    assert.match(ui, /Обновить состояние/);
+    assert.match(ui, /Понятно/);
+    assert.doesNotMatch(ui, /\.reconcile\b/);
+    assert.doesNotMatch(ui, /friendshipIdempotencyReplayBlocked/);
+    const coordinator = readFileSync(new URL('../src/friendships-coordinator.ts', import.meta.url), 'utf8');
+    assert.doesNotMatch(coordinator, /reconcile\s*=/);
+    assert.doesNotMatch(coordinator, /firstDispatchedAt/);
+    assert.doesNotMatch(coordinator, /CLIENT_RECOVERY/);
+    assert.match(coordinator, /refreshUnknownRelationship/);
+    assert.match(coordinator, /unlockUnknown/);
   }
 });
