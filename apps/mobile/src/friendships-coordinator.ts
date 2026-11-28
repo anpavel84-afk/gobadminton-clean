@@ -2,7 +2,8 @@ import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import { NativeAuthError } from './native-auth-protocol.ts';
 import {
-  FRIENDS_TABS, FriendshipError, friendCommand, friendshipStatesPath, friendshipsListPath,
+  FRIENDS_TABS, FriendshipError, FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
+  friendCommand, friendshipIdempotencyReplayBlocked, friendshipStatesPath, friendshipsListPath,
   ownFriendsPrerequisite, parseFriendshipList, parseFriendshipReceipt, parseFriendshipStates,
   parseSocialCapabilities, publicPlayerId, type FriendAction, type FriendshipList,
   type FriendshipPacket, type FriendshipView, type FriendsTab, type SocialCapabilities,
@@ -11,7 +12,12 @@ import { ProfileError, type OwnProfile } from './profile.ts';
 
 type ListStatus = 'idle' | 'loading' | 'ready' | 'guest' | 'prerequisite' | 'unavailable' | 'error';
 type ProfileStatus = 'idle' | 'loading' | 'ready' | 'guest' | 'unavailable' | 'error';
-type Command = { packet: FriendshipPacket; status: 'sending' | 'unknown' };
+type Command = {
+  packet: FriendshipPacket;
+  status: 'sending' | 'unknown';
+  /** Trustworthy first wire attempt; frozen through reauth; never rotated on reconcile. */
+  firstDispatchedAt?: number;
+};
 
 export type FriendshipsSnapshot = {
   actor: Actor | null;
@@ -44,6 +50,14 @@ const empty = (actor: Actor | null, episode: number, foreground = true): Friends
   actor, foreground, episode, listActive: false, tab: 'accepted', cursor: null, page: null,
   listStatus: 'idle', capabilities: null, profilePeerId: null, profileView: null,
   profileStatus: 'idle', command: null, notice: null,
+});
+
+const withAge = (command: Command, status: Command['status']): Command => ({
+  packet: command.packet,
+  status,
+  ...(command.firstDispatchedAt !== undefined
+    ? { firstDispatchedAt: command.firstDispatchedAt }
+    : {}),
 });
 
 /** Root owner outlives Friends route and profile card. Commands never auto-dispatch. */
@@ -82,15 +96,18 @@ export class FriendshipsCoordinator {
       this.show(next);
       return;
     }
-    // Rebind session/generation only; preserve original key/body/path/ids. No auto-send.
+    // Rebind session/generation only; preserve original key/body/path/ids/age. No auto-send.
     const restored = Object.freeze({
       ...saved.command.packet,
       actor: Object.freeze({ ...actor }),
     }) as FriendshipPacket;
+    const command = withAge({ ...saved.command, packet: restored }, 'unknown');
     this.show({
       ...next,
-      command: { packet: restored, status: 'unknown' },
-      notice: unknownNotice,
+      command,
+      notice: friendshipIdempotencyReplayBlocked(command.firstDispatchedAt)
+        ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+        : unknownNotice,
     });
   }
 
@@ -102,6 +119,36 @@ export class FriendshipsCoordinator {
     this.show(empty(null, this.state.episode + 1, this.state.foreground));
   };
 
+  /**
+   * Explicit local retirement after retention expiry only — outcome stays unknown;
+   * never invents noncommit; frees the surface for independent future actions.
+   */
+  retireExpiredUnknown = () => {
+    const c = this.state.command;
+    if (!c || c.status !== 'unknown') return;
+    if (!friendshipIdempotencyReplayBlocked(c.firstDispatchedAt)) return;
+    this.quarantine = null;
+    this.authority++;
+    this.sequence++;
+    this.show({
+      command: null,
+      episode: this.state.episode + 1,
+      page: null,
+      profileView: null,
+      listStatus: this.state.listActive ? 'loading' : this.state.listStatus,
+      profileStatus: this.state.profilePeerId ? 'loading' : this.state.profileStatus,
+      notice: 'Локальная блокировка снята. Исход прежней отправки по-прежнему неизвестен. Проверьте дружбу отдельно перед новым действием.',
+    });
+  };
+
+  /** True when parked UNKNOWN must not same-key replay (missing/invalid/expired age). */
+  retentionExpiredFor = (packet?: FriendshipPacket): boolean => {
+    const c = this.state.command;
+    if (!c || c.status !== 'unknown') return false;
+    if (packet && c.packet !== packet && c.packet.key !== packet.key) return false;
+    return friendshipIdempotencyReplayBlocked(c.firstDispatchedAt);
+  };
+
   setForeground = (foreground: boolean) => {
     if (foreground === this.state.foreground) return;
     this.sequence++;
@@ -110,8 +157,12 @@ export class FriendshipsCoordinator {
       page: null, listStatus: this.state.listActive ? 'loading' : 'idle',
       capabilities: null, profileView: null,
       profileStatus: this.state.profilePeerId ? 'loading' : 'idle',
-      notice: this.state.command ? unknownNotice : null,
-      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
+      notice: this.state.command
+        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+          : unknownNotice)
+        : null,
+      ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
 
@@ -131,8 +182,12 @@ export class FriendshipsCoordinator {
     this.show({
       listActive: true, episode: this.state.episode + 1, tab: 'accepted', cursor: null,
       page: null, listStatus: 'loading', capabilities: null,
-      notice: this.state.command ? unknownNotice : null,
-      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
+      notice: this.state.command
+        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+          : unknownNotice)
+        : null,
+      ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
 
@@ -141,8 +196,12 @@ export class FriendshipsCoordinator {
     this.show({
       listActive: false, episode: this.state.episode + 1, page: null, cursor: null,
       listStatus: 'idle', capabilities: null,
-      notice: this.state.command ? unknownNotice : null,
-      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
+      notice: this.state.command
+        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+          : unknownNotice)
+        : null,
+      ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
 
@@ -178,8 +237,12 @@ export class FriendshipsCoordinator {
     this.show({
       profilePeerId: peerId, profileView: null, profileStatus: 'loading',
       episode: this.state.episode + 1,
-      notice: this.state.command ? unknownNotice : null,
-      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
+      notice: this.state.command
+        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+          : unknownNotice)
+        : null,
+      ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
 
@@ -188,8 +251,12 @@ export class FriendshipsCoordinator {
     this.show({
       profilePeerId: null, profileView: null, profileStatus: 'idle',
       episode: this.state.episode + 1,
-      notice: this.state.command ? unknownNotice : null,
-      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
+      notice: this.state.command
+        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+          : unknownNotice)
+        : null,
+      ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
 
@@ -206,7 +273,12 @@ export class FriendshipsCoordinator {
     const tab = this.state.tab, cursor = this.state.cursor;
     if (!this.state.listActive || !this.state.foreground) return;
     if (!actor) { this.show({ listStatus: 'guest', page: null, capabilities: null }); return; }
-    this.show({ listStatus: 'loading', page: null, notice: null });
+    // Reads never settle UNKNOWN; keep expired retention copy when a parked command remains.
+    const retained = this.state.command
+      && friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+      ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+      : null;
+    this.show({ listStatus: 'loading', page: null, notice: retained });
     try {
       const capabilities = parseSocialCapabilities(await this.port.capabilities(actor));
       if (sequence !== this.sequence || !sameActor(actor, this.state.actor) || episode !== this.state.episode) return;
@@ -217,6 +289,7 @@ export class FriendshipsCoordinator {
         this.show({
           capabilities, page: null,
           listStatus: ownFriendsPrerequisite(profile) ? 'prerequisite' : 'unavailable',
+          ...(retained ? { notice: retained } : {}),
         });
         return;
       }
@@ -224,7 +297,10 @@ export class FriendshipsCoordinator {
       const page = parseFriendshipList(await this.port.list(tab, cursor, actor));
       if (sequence !== this.sequence || !sameActor(actor, this.state.actor) || episode !== this.state.episode) return;
       if (this.state.tab !== tab || this.state.cursor !== cursor) return;
-      this.show({ capabilities, page, listStatus: 'ready' });
+      this.show({
+        capabilities, page, listStatus: 'ready',
+        ...(retained ? { notice: retained } : {}),
+      });
     } catch (error) {
       if (sequence !== this.sequence || !sameActor(actor, this.state.actor)) return;
       if (error instanceof FriendshipError && error.kind === 'authority'
@@ -236,7 +312,7 @@ export class FriendshipsCoordinator {
         && [403, 404, 503].includes(error.status);
       this.show({
         listStatus: unavailable ? 'unavailable' : 'error', page: null,
-        notice: unavailable || error instanceof ProfileError ? null : 'Не удалось загрузить друзей',
+        notice: retained ?? (unavailable || error instanceof ProfileError ? null : 'Не удалось загрузить друзей'),
       });
     }
   };
@@ -246,20 +322,30 @@ export class FriendshipsCoordinator {
     const peerId = this.state.profilePeerId;
     if (!peerId || !this.state.foreground) return;
     if (!actor) { this.show({ profileStatus: 'guest', profileView: null }); return; }
-    this.show({ profileStatus: 'loading', profileView: null, notice: null });
+    const retained = this.state.command
+      && friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+      ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+      : null;
+    this.show({ profileStatus: 'loading', profileView: null, notice: retained });
     try {
       const capabilities = parseSocialCapabilities(await this.port.capabilities(actor));
       if (sequence !== this.sequence || !sameActor(actor, this.state.actor) || episode !== this.state.episode) return;
       if (this.state.profilePeerId !== peerId) return;
       if (!capabilities.friends) {
-        this.show({ capabilities, profileStatus: 'unavailable', profileView: null });
+        this.show({
+          capabilities, profileStatus: 'unavailable', profileView: null,
+          ...(retained ? { notice: retained } : {}),
+        });
         return;
       }
       friendshipStatesPath(peerId);
       const view = parseFriendshipStates(await this.port.states(peerId, actor), peerId);
       if (sequence !== this.sequence || !sameActor(actor, this.state.actor) || episode !== this.state.episode) return;
       if (this.state.profilePeerId !== peerId) return;
-      this.show({ capabilities, profileView: view, profileStatus: 'ready' });
+      this.show({
+        capabilities, profileView: view, profileStatus: 'ready',
+        ...(retained ? { notice: retained } : {}),
+      });
     } catch (error) {
       if (sequence !== this.sequence || !sameActor(actor, this.state.actor)) return;
       if (error instanceof FriendshipError && error.kind === 'authority'
@@ -271,6 +357,7 @@ export class FriendshipsCoordinator {
         && [403, 404, 503].includes(error.status);
       this.show({
         profileStatus: unavailable ? 'unavailable' : 'error', profileView: null,
+        ...(retained ? { notice: retained } : {}),
       });
     }
   };
@@ -344,34 +431,77 @@ export class FriendshipsCoordinator {
     const packet = c.packet;
     // Same actor + same selected target surface; row omission never proves noncommit.
     if (!this.commandSurfaceLive(packet)) return;
-    // Fresh recovery lease for permit only — never mutate original key/body/id/version/viewLease.
+    // Explicit tap: retention expiry fail-closed — no same-key replay, no new key.
+    if (friendshipIdempotencyReplayBlocked(c.firstDispatchedAt)) {
+      this.retentionExpiredHold(c);
+      return;
+    }
+    // Fresh recovery lease for permit only — never mutate original key/body/id/version/viewLease/age.
     await this.dispatch(c, renderedLease);
   };
+
+  private retentionExpiredHold(command: Command) {
+    this.show({
+      command: withAge(command, 'unknown'),
+      notice: FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
+    });
+  }
 
   private async dispatch(command: Command, recoveryLease?: number) {
     const packet = command.packet;
     const authority = this.authority;
     // Initial send binds packet.viewLease; explicit recovery supplies a separate current lease.
     const activeLease = recoveryLease ?? packet.viewLease;
-    this.show({ command: { ...command, status: 'sending' }, notice: null });
-    const valid = () => sameActor(packet.actor, this.state.actor) && this.state.command?.packet === packet
+    const reconciling = recoveryLease !== undefined;
+    // First actual dispatch stamps age once; reconcile never invents or rotates the clock.
+    const firstDispatchedAt = reconciling
+      ? command.firstDispatchedAt
+      : (command.firstDispatchedAt ?? Date.now());
+    if (reconciling && friendshipIdempotencyReplayBlocked(firstDispatchedAt)) {
+      this.retentionExpiredHold({ packet, status: 'unknown', firstDispatchedAt });
+      return;
+    }
+    const stamped: Command = {
+      packet,
+      status: 'sending',
+      ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+    };
+    this.show({ command: stamped, notice: null });
+    const surfaceOk = () => sameActor(packet.actor, this.state.actor) && this.state.command?.packet === packet
       && activeLease === this.state.episode
       && (packet.peerLease === null || packet.peerLease === this.state.profilePeerId)
       && (packet.peerLease !== null || this.state.listActive || recoveryLease === undefined)
       && this.state.foreground;
+    // Post-token permit: age checked again so delayed send cannot race past TTL.
+    const valid = () => surfaceOk() && authority === this.authority
+      && !friendshipIdempotencyReplayBlocked(firstDispatchedAt);
+    const holdIfRetention = () => {
+      if (!sameActor(packet.actor, this.state.actor) || this.state.command?.packet !== packet) return false;
+      if (!friendshipIdempotencyReplayBlocked(firstDispatchedAt)) return false;
+      this.retentionExpiredHold({
+        packet,
+        status: 'unknown',
+        ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+      });
+      return true;
+    };
     try {
       const receipt = parseFriendshipReceipt(
-        await this.port.send(packet, () => valid() && authority === this.authority),
+        await this.port.send(packet, () => valid()),
         packet.action,
       );
       if (!valid()) {
-        // Late receipt after authority/surface retire must not settle or invent noncommit.
+        // Late receipt after authority/surface/retention retire must not settle or invent noncommit.
+        holdIfRetention();
         return;
       }
       // Receipt identity must match the frozen packet target/request/friendship ids.
       if (packet.action === 'remove' && packet.friendshipId && receipt.friendshipId !== packet.friendshipId
         || packet.requestId && receipt.requestId !== packet.requestId) {
-        this.show({ command: { ...command, status: 'unknown' }, notice: unknownNotice });
+        this.show({
+          command: withAge(stamped, 'unknown'),
+          notice: unknownNotice,
+        });
         return;
       }
       this.show({
@@ -388,11 +518,14 @@ export class FriendshipsCoordinator {
       });
       return receipt;
     } catch (error) {
-      if (!valid()) return;
+      if (!valid()) {
+        holdIfRetention();
+        return;
+      }
       const refusal = error instanceof FriendshipError && error.kind === 'refused'
         && !['KEY_REUSED', 'IDEMPOTENCY_KEY_REUSED'].includes(error.code);
       this.show({
-        command: refusal ? null : { ...command, status: 'unknown' },
+        command: refusal ? null : withAge(stamped, 'unknown'),
         page: null,
         profileView: null,
         listStatus: this.state.listActive ? 'loading' : this.state.listStatus,

@@ -3,7 +3,9 @@ import { AccessibilityInfo, findNodeHandle, Modal, Pressable, View } from 'react
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import {
-  FRIEND_ACTION_LABELS, FRIENDS_TABS, friendCommand, friendStatus, type FriendAction, type FriendshipView,
+  FRIEND_ACTION_LABELS, FRIENDS_TABS, FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
+  friendCommand, friendshipIdempotencyReplayBlocked, friendStatus,
+  type FriendAction, type FriendshipView,
 } from '../friendships.ts';
 import { useFriendships } from '../friendships-runtime.tsx';
 import type { PublicPlayer } from '../players.ts';
@@ -55,12 +57,19 @@ function OrphanFriendRecovery({ listLease }: { listLease: number }) {
   const onList = packet.peerLease === null && state.listActive;
   const onProfile = packet.peerLease !== null && state.profilePeerId === packet.peerLease;
   if (!onList && !onProfile) return null;
-  const notice = state.notice
-    ?? 'Результат неизвестен. Сохранён исходный запрос; проверьте результат явно.';
+  const retentionBlocked = friendshipIdempotencyReplayBlocked(command.firstDispatchedAt);
+  const notice = retentionBlocked
+    ? (state.notice ?? FRIENDSHIP_RETENTION_EXPIRED_NOTICE)
+    : (state.notice
+      ?? 'Результат неизвестен. Сохранён исходный запрос; проверьте результат явно.');
   return <View style={{ gap: 8 }}>
-    <Label accessibilityLiveRegion="polite">{notice}</Label>
-    <PrimaryButton title="Проверить результат"
-      onPress={() => { void owner.reconcile(listLease); }} />
+    <Label accessibilityLiveRegion="polite" accessibilityRole={retentionBlocked ? 'status' : undefined}>
+      {notice}
+    </Label>
+    {retentionBlocked
+      ? <TextButton title="Снять локальную блокировку" onPress={() => owner.retireExpiredUnknown()} />
+      : <PrimaryButton title="Проверить результат"
+        onPress={() => { void owner.reconcile(listLease); }} />}
   </View>;
 }
 
@@ -98,6 +107,8 @@ export function FriendActions({
   const { owner, state } = useFriendships();
   const [confirm, setConfirm] = useState(false);
   const locked = !!state.command;
+  const retentionBlocked = state.command?.status === 'unknown'
+    && friendshipIdempotencyReplayBlocked(state.command.firstDispatchedAt);
   const actions = (['request', 'accept', 'decline', 'cancel', 'remove'] as FriendAction[])
     .filter(action => friendCommand(view, peerId, action));
   function act(action: FriendAction) {
@@ -117,11 +128,14 @@ export function FriendActions({
             onPress={() => act(action)} />)}
     </View>
     {state.notice && state.command && sameFriendCommand(view, peerId, state.command.packet)
-      && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+      && <Label accessibilityLiveRegion="polite"
+        accessibilityRole={retentionBlocked ? 'status' : undefined}>{state.notice}</Label>}
     {state.command?.status === 'unknown' && state.foreground
       && sameFriendCommand(view, peerId, state.command.packet)
-      && <PrimaryButton title="Проверить результат"
-        onPress={() => { void owner.reconcile(listLease); }} />}
+      && (retentionBlocked
+        ? <TextButton title="Снять локальную блокировку" onPress={() => owner.retireExpiredUnknown()} />
+        : <PrimaryButton title="Проверить результат"
+          onPress={() => { void owner.reconcile(listLease); }} />)}
     {state.command?.status === 'sending' && sameFriendCommand(view, peerId, state.command.packet)
       && <Label accessibilityState={{ busy: true }}>Отправляем…</Label>}
     {confirm && <ConfirmDialog title="Удалить из друзей?" busy={state.command?.status === 'sending'}

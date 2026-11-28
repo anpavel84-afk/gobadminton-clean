@@ -16,6 +16,34 @@ export class FriendshipError extends Error {
   }
 }
 
+/**
+ * Client UNKNOWN same-key recovery ceiling — matches server idempotency completed/UNKNOWN TTL
+ * (`apps/api/src/common/idempotency.service.ts` IDEMPOTENCY_TTL_MS = 24h). Replay at/after this
+ * age is blocked so a purged receipt cannot be treated as a fresh command.
+ */
+export const CLIENT_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Alias kept for module-local call sites / tests. */
+export const FRIENDSHIP_IDEMPOTENCY_TTL_MS = CLIENT_RECOVERY_MAX_AGE_MS;
+
+/** Honest expired UNKNOWN — result unknown; no same-key replay; no GET-inferred outcome. */
+export const FRIENDSHIP_RETENTION_EXPIRED_NOTICE =
+  'Результат исходной отправки неизвестен. Безопасный повтор того же действия уже недоступен. Проверьте дружбу отдельно; при необходимости снимите локальную блокировку.';
+
+/**
+ * Fail-closed UNKNOWN replay gate: missing/invalid/backwards clock or elapsed ≥ server TTL.
+ * Controllable via `now` for synthetic tests — never restarts original age.
+ */
+export function friendshipIdempotencyReplayBlocked(
+  firstDispatchedAt: number | undefined,
+  now = Date.now(),
+): boolean {
+  if (typeof firstDispatchedAt !== 'number' || !Number.isFinite(firstDispatchedAt)) return true;
+  if (!Number.isFinite(now) || now < firstDispatchedAt) return true;
+  const elapsed = now - firstDispatchedAt;
+  if (!Number.isFinite(elapsed) || elapsed < 0) return true;
+  return elapsed >= CLIENT_RECOVERY_MAX_AGE_MS;
+}
+
 const invalid = (): never => { throw new FriendshipError('invalid'); };
 const record = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : invalid();
