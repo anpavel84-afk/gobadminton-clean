@@ -157,9 +157,13 @@ test('five commands keep exact bodies; removal confirmation stays UI-side; UNKNO
   const packet = o.getSnapshot().command!.packet;
   o.closeProfile(); o.openProfile(peerId);
   assert.equal(o.getSnapshot().command?.packet, packet);
-  await o.reconcile();
+  // Remount bumps episode; explicit recovery must still reuse immutable key/body.
+  assert.notEqual(packet.viewLease, o.getSnapshot().episode);
+  await o.reconcile(o.getSnapshot().episode);
   assert.equal(calls.length, 2);
   assert.equal(calls[0], calls[1]);
+  assert.equal(calls[1]!.key, packet.key);
+  assert.equal(calls[1]!.viewLease, packet.viewLease);
   assert.deepEqual(friendshipWire(packet).body, { targetPublicPlayerId: peerId });
 
   for (const [view, action, body] of [
@@ -175,6 +179,143 @@ test('five commands keep exact bodies; removal confirmation stays UI-side; UNKNO
       friendshipId: action === 'remove' ? friendshipId : null, key: 'k', path: wire.path,
       body: { expectedVersion: 1 } as never, viewLease: 1, listLease: 1, peerLease: peerId,
     }));
+  }
+});
+
+test('remount recovery: same-key retry; peer/actor/background/safety fence delayed reconcile; list surface', async () => {
+  // Profile remount + explicit same-key retry settles only in the same focused context.
+  {
+    let attempt = 0;
+    const { o, calls } = setup(async () => {
+      if (!attempt++) throw new Error('offline');
+      return receipt('pending');
+    });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const packet = o.getSnapshot().command!.packet;
+    o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
+    assert.equal(o.getSnapshot().command?.packet, packet);
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0], calls[1]);
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().notice, 'Запрос отправлен.');
+  }
+
+  // List remount: exit/enter keeps UNKNOWN; explicit reconcile reuses the same packet.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.enterList(); await o.loadList();
+    const episode = o.getSnapshot().episode;
+    await o.act('cancel', outgoing, peerId, episode, null);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    const packet = o.getSnapshot().command!.packet;
+    o.exitList(); o.enterList(); await o.loadList();
+    assert.equal(o.getSnapshot().command?.packet, packet);
+    assert.notEqual(packet.viewLease, o.getSnapshot().episode);
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0], calls[1]);
+  }
+
+  // Delayed post-token permit on explicit recovery: peer/actor/background/safety → zero recovery send.
+  for (const change of ['peer', 'actor', 'background', 'safety'] as const) {
+    const token = deferred();
+    const calls: FriendshipPacket[] = [];
+    const o = new FriendshipsCoordinator({
+      random: () => 'immutable-key-0001',
+      capabilities: async () => caps,
+      list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
+      states: async () => ({ items: [none] }),
+      ownProfile: async () => profile as never,
+      send: async (p, permit) => {
+        // First act fails immediately (UNKNOWN). Recovery awaits token then rechecks permit.
+        if (calls.length === 0) {
+          calls.push(p);
+          throw new Error('offline');
+        }
+        await token.promise;
+        if (!permit()) throw new FriendshipError('network');
+        calls.push(p);
+        return receipt('pending');
+      },
+    });
+    o.setActor(actor);
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    assert.equal(calls.length, 1);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    const packet = o.getSnapshot().command!.packet;
+    o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
+    const work = o.reconcile(o.getSnapshot().episode);
+    if (change === 'peer') o.openProfile('other-peer');
+    else if (change === 'background') o.setForeground(false);
+    else if (change === 'safety') o.invalidate();
+    else o.setActor({ ...actor, actorId: 'other' });
+    token.resolve(undefined);
+    await work;
+    assert.equal(calls.length, 1, `${change} must not dispatch recovery after fence`);
+    assert.notEqual(o.getSnapshot().notice, 'Запрос отправлен.');
+    if (change === 'actor') assert.equal(o.getSnapshot().command, null);
+    else assert.equal(o.getSnapshot().command?.packet, packet);
+  }
+
+  // Same context after remount: delayed post-token reconcile sends once and settles.
+  {
+    const token = deferred();
+    const calls: FriendshipPacket[] = [];
+    const o = new FriendshipsCoordinator({
+      random: () => 'immutable-key-0001',
+      capabilities: async () => caps,
+      list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
+      states: async () => ({ items: [none] }),
+      ownProfile: async () => profile as never,
+      send: async (p, permit) => {
+        if (calls.length === 0) {
+          calls.push(p);
+          throw new Error('offline');
+        }
+        await token.promise;
+        if (!permit()) throw new FriendshipError('network');
+        calls.push(p);
+        return receipt('pending');
+      },
+    });
+    o.setActor(actor);
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const packet = o.getSnapshot().command!.packet;
+    o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
+    const work = o.reconcile(o.getSnapshot().episode);
+    token.resolve(undefined);
+    await work;
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0], calls[1]);
+    assert.equal(calls[1], packet);
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().notice, 'Запрос отправлен.');
+  }
+
+  // Wrong peer / closed profile / stale rendered lease: no send; UNKNOWN retained (no noncommit inference).
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const packet = o.getSnapshot().command!.packet;
+    o.openProfile('other-peer'); await o.loadProfile();
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 1);
+    assert.equal(o.getSnapshot().command?.packet, packet);
+    o.closeProfile();
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 1);
+    assert.equal(o.getSnapshot().command?.packet, packet);
+    o.openProfile(peerId);
+    const stale = o.getSnapshot().episode;
+    o.openProfile(peerId);
+    await o.reconcile(stale);
+    assert.equal(calls.length, 1);
+    assert.equal(o.getSnapshot().command?.packet, packet);
   }
 });
 

@@ -91,8 +91,10 @@ export function FriendActions({
     </View>
     {state.notice && state.command && sameFriendCommand(view, peerId, state.command.packet)
       && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
-    {state.command?.status === 'unknown' && sameFriendCommand(view, peerId, state.command.packet)
-      && <PrimaryButton title="Проверить результат" onPress={() => { void owner.reconcile(); }} />}
+    {state.command?.status === 'unknown' && state.foreground
+      && sameFriendCommand(view, peerId, state.command.packet)
+      && <PrimaryButton title="Проверить результат"
+        onPress={() => { void owner.reconcile(listLease); }} />}
     {state.command?.status === 'sending' && sameFriendCommand(view, peerId, state.command.packet)
       && <Label accessibilityState={{ busy: true }}>Отправляем…</Label>}
     {confirm && <ConfirmDialog title="Удалить из друзей?" busy={state.command?.status === 'sending'}

@@ -277,20 +277,51 @@ export class FriendshipsCoordinator {
     await this.dispatch(command);
   };
 
-  reconcile = async () => {
+  /** True when the frozen command still names the relation on the current surface (if loaded). */
+  private commandVisible(packet: FriendshipPacket): boolean {
+    if (packet.peerLease !== null) {
+      if (this.state.profilePeerId !== packet.peerLease) return false;
+      if (this.state.profileStatus !== 'ready' || !this.state.profileView) return true;
+      const view = this.state.profileView;
+      if (packet.action === 'remove') return packet.friendshipId === view.friendshipId;
+      if (packet.action === 'request') {
+        return packet.target === (packet.peerLease ?? view.peer?.publicPlayerId ?? null);
+      }
+      return packet.requestId === (view.request?.id ?? null);
+    }
+    if (!this.state.listActive) return false;
+    if (this.state.listStatus !== 'ready' || !this.state.page) return true;
+    return this.state.page.items.some(view => {
+      if (packet.action === 'remove') return packet.friendshipId === view.friendshipId;
+      if (packet.action === 'request') {
+        return packet.target === (view.peer?.publicPlayerId ?? null);
+      }
+      return packet.requestId === (view.request?.id ?? null);
+    });
+  }
+
+  reconcile = async (renderedLease = this.state.episode) => {
     const c = this.state.command;
     if (!c || c.status !== 'unknown' || !sameActor(c.packet.actor, this.state.actor) || !this.state.foreground) return;
-    // Original immutable body/version/key. Current relationship GET never substitutes for a receipt.
-    await this.dispatch(c);
+    // Stale UI lease after another remount must not recover.
+    if (renderedLease !== this.state.episode) return;
+    const packet = c.packet;
+    // Same actor + same selected target surface; keep UNKNOWN if relation left the current view.
+    if (!this.commandVisible(packet)) return;
+    // Fresh recovery lease for permit only — never mutate original key/body/id/version/viewLease.
+    await this.dispatch(c, renderedLease);
   };
 
-  private async dispatch(command: Command) {
+  private async dispatch(command: Command, recoveryLease?: number) {
     const packet = command.packet;
     const authority = this.authority;
+    // Initial send binds packet.viewLease; explicit recovery supplies a separate current lease.
+    const activeLease = recoveryLease ?? packet.viewLease;
     this.show({ command: { ...command, status: 'sending' }, notice: null });
     const valid = () => sameActor(packet.actor, this.state.actor) && this.state.command?.packet === packet
-      && packet.viewLease === this.state.episode
+      && activeLease === this.state.episode
       && (packet.peerLease === null || packet.peerLease === this.state.profilePeerId)
+      && (packet.peerLease !== null || this.state.listActive || recoveryLease === undefined)
       && this.state.foreground;
     try {
       const receipt = parseFriendshipReceipt(
