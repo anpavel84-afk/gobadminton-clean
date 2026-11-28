@@ -14,6 +14,14 @@ import { BackLink, Header, Label, Loading, Page, PrimaryButton, TextButton, styl
 const iosModalOrientations = ['portrait'] as const;
 type Trigger = ComponentRef<typeof Pressable>;
 
+/** Ghost control — TextButton has no disabled; keep accepted textButton look with a11y. */
+function SoftTextButton({ title, onPress, disabled = false }: { title: string; onPress: () => void; disabled?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => [styles.textButton, { opacity: disabled ? 0.5 : 1 }, !disabled && pressed && { backgroundColor: colors.paper }]}>
+    <Label style={{ color: colors.ink, textAlign: 'center' }}>{title}</Label>
+  </Pressable>;
+}
+
 function peerAsPlayer(peer: NonNullable<FriendshipView['peer']>): PublicPlayer {
   return {
     publicPlayerId: peer.publicPlayerId,
@@ -81,12 +89,12 @@ export function FriendActions({
     <Label accessibilityRole="status">{friendStatus[view.relationship]}</Label>
     <View style={{ gap: 8 }}>
       {actions.map(action => action === 'remove'
-        ? <TextButton key={action} title={FRIEND_ACTION_LABELS[action]} disabled={locked}
+        ? <SoftTextButton key={action} title={FRIEND_ACTION_LABELS[action]} disabled={locked}
           onPress={() => setConfirm(true)} />
         : action === 'request' || action === 'accept'
           ? <PrimaryButton key={action} title={FRIEND_ACTION_LABELS[action]} disabled={locked}
             onPress={() => act(action)} />
-          : <TextButton key={action} title={FRIEND_ACTION_LABELS[action]} disabled={locked}
+          : <SoftTextButton key={action} title={FRIEND_ACTION_LABELS[action]} disabled={locked}
             onPress={() => act(action)} />)}
     </View>
     {state.notice && state.command && sameFriendCommand(view, peerId, state.command.packet)
@@ -104,7 +112,7 @@ export function FriendActions({
         setConfirm(false);
         act('remove');
       }} />
-      <TextButton title="Оставить в друзьях" disabled={state.command?.status === 'sending'}
+      <SoftTextButton title="Оставить в друзьях" disabled={state.command?.status === 'sending'}
         onPress={() => setConfirm(false)} />
     </ConfirmDialog>}
   </View>;
