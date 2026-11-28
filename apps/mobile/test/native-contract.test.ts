@@ -113,7 +113,7 @@ test('conditions use server counts, timezone and external price terms without im
 });
 
 test('native navigation/version source binds canonical WEB order and paths while owners stay above Stack', () => {
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 56);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 57);
   const nav = read('../src/components/main-navigation.tsx');
   const paths = read('../../web/src/components/consumer/nav-icon-paths.tsx');
   for (const section of ['games', 'players', 'mine', 'messages']) {
@@ -127,8 +127,8 @@ test('native navigation/version source binds canonical WEB order and paths while
   assert.match(nav, /width: 30,height: 3/);
   assert.match(nav, /selected \? colors.limeSoft/);
   const layout = read('../app/_layout.tsx');
-  assert.match(layout, /<AuthProvider><RadarProvider><VenueCommunityProvider><GameCommentsProvider><MessagesOwner><MainNavigation><Stack/);
-  assert.match(layout, /<\/MainNavigation><\/MessagesOwner><\/GameCommentsProvider><\/VenueCommunityProvider><\/RadarProvider><\/AuthProvider>/);
+  assert.match(layout, /<AuthProvider><RadarProvider><VenueCommunityProvider><GameCommentsProvider><FriendshipsProvider><MessagesOwner><MainNavigation><Stack/);
+  assert.match(layout, /<\/MainNavigation><\/MessagesOwner><\/FriendshipsProvider><\/GameCommentsProvider><\/VenueCommunityProvider><\/RadarProvider><\/AuthProvider>/);
   assert.doesNotMatch(layout, /key=/);
   assert.match(nav, /paddingBottom: insets.bottom/);
 });

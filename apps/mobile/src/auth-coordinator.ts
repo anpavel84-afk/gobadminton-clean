@@ -4,6 +4,7 @@ import { PostgameCoordinator } from './postgame-coordinator.ts';
 import { PostgameError } from './postgame.ts';
 import type { RadarCommand, RadarRead } from './radar.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
+import type { FriendshipPacket, FriendsTab } from './friendships.ts';
 import { SafetyCoordinator } from './safety-coordinator.ts';
 import { SafetyError } from './safety.ts';
 import { ContactCoordinator } from './contact-coordinator.ts';
@@ -452,6 +453,18 @@ export class AuthCoordinator {
   playInterestMutation = (packet: PlayInterestPacket, permit: () => boolean) => this.participationRead(access => {
     if (!permit()) throw new ParticipationError('stale');
     return this.deps.api.playInterestMutation(access, packet);
+  }, packet.actor);
+  /** Closed friendship ports share the existing private token and actor fences. */
+  socialCapabilities = (actor: Actor) => this.participationRead(access => this.deps.api.socialCapabilities(access), actor);
+  listFriendships = (tab: FriendsTab, cursor: string | null, actor: Actor) =>
+    this.participationRead(access => this.deps.api.listFriendships(access, tab, cursor), actor);
+  friendshipStates = (peerId: string, actor: Actor) =>
+    this.participationRead(access => this.deps.api.friendshipStates(access, peerId), actor);
+  friendshipsOwnProfile = (actor: Actor) =>
+    this.participationRead(access => this.deps.api.ownProfile(access), actor);
+  friendshipMutation = (packet: FriendshipPacket, permit: () => boolean) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.friendshipMutation(access, packet);
   }, packet.actor);
   /** Closed venue-only ports use the same actor/session/generation gate as participation. */
   communityOwn = (venueId: string, actor: Actor) => this.participationRead(access => this.deps.api.communityOwn(access, venueId), actor);

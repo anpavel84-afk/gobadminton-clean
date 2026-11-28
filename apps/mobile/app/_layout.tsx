@@ -1,5 +1,6 @@
 import { VenueCommunityProvider } from '../src/venue-community-runtime.tsx';
 import { GameCommentsProvider } from '../src/game-comments-runtime.tsx';
+import { FriendshipsProvider } from '../src/friendships-runtime.tsx';
 import { RadarProvider } from '../src/radar-runtime.tsx';
 import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
@@ -41,7 +42,7 @@ export default function RootLayout() {
   }, [attempt]);
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
-      <AuthProvider><RadarProvider><VenueCommunityProvider><GameCommentsProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
+      <AuthProvider><RadarProvider><VenueCommunityProvider><GameCommentsProvider><FriendshipsProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }}>
           <Stack.Screen name="games/create/venue/[venueId]" options={{
             presentation: 'formSheet',
             headerShown: false,
@@ -50,7 +51,7 @@ export default function RootLayout() {
             sheetGrabberVisible: true,
             sheetExpandsWhenScrolledToEdge: false,
           }} />
-        </Stack><PublicRoleReviewHost /></MainNavigation></MessagesOwner></GameCommentsProvider></VenueCommunityProvider></RadarProvider></AuthProvider>
+        </Stack><PublicRoleReviewHost /></MainNavigation></MessagesOwner></FriendshipsProvider></GameCommentsProvider></VenueCommunityProvider></RadarProvider></AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />
       {font === 'error' && <><Label>Не удалось загрузить шрифт приложения.</Label>

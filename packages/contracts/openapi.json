@@ -13870,10 +13870,13 @@
           "Friends"
         ],
         "summary": "getSocialCapabilities",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [],
@@ -13968,10 +13971,13 @@
           "Friends"
         ],
         "summary": "listFriendships",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14109,10 +14115,13 @@
           "Friends"
         ],
         "summary": "getFriendshipStates",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14224,10 +14233,13 @@
           "Friends"
         ],
         "summary": "getFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14332,10 +14344,13 @@
           "Friends"
         ],
         "summary": "createFriendRequest",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14352,19 +14367,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -14516,10 +14532,13 @@
           "Friends"
         ],
         "summary": "acceptFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14545,19 +14564,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -14671,10 +14691,13 @@
           "Friends"
         ],
         "summary": "declineFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14700,19 +14723,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -14826,10 +14850,13 @@
           "Friends"
         ],
         "summary": "cancelFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -14855,19 +14882,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
@@ -14981,10 +15009,13 @@
           "Friends"
         ],
         "summary": "removeFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001. NativeBearer opt-in while enabled; mixed credentials rejected. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Invalid or revoked bearer is 401 and disabled native transport is 404.",
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -15010,19 +15041,20 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           },
           {
             "name": "Origin",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Must match a configured consumer web origin."
+            "description": " Exact allowed consumer web Origin; required and validated for cookie transport via requirePrincipalMutation cookie path; not required for native bearer."
           }
         ],
         "responses": {
