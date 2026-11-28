@@ -17,12 +17,20 @@ export class FriendshipError extends Error {
 }
 
 /**
- * Client UNKNOWN same-key recovery ceiling — matches server idempotency completed/UNKNOWN TTL
- * (`apps/api/src/common/idempotency.service.ts` IDEMPOTENCY_TTL_MS = 24h). Replay at/after this
- * age is blocked so a purged receipt cannot be treated as a fresh command.
+ * Server idempotency completed/UNKNOWN TTL
+ * (`apps/api/src/common/idempotency.service.ts` IDEMPOTENCY_TTL_MS = 24h).
+ * Reference only — client same-key replay uses the conservative ceiling below.
  */
-export const CLIENT_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-/** Alias kept for module-local call sites / tests. */
+export const FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Client UNKNOWN same-key recovery ceiling — materially below server TTL so a
+ * request permitted just before expiry cannot arrive after server purge as a
+ * fresh command. Margin reduces the race window; timing cannot guarantee an
+ * absolute delivery upper bound.
+ */
+export const CLIENT_RECOVERY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
+/** Alias kept for module-local call sites / tests — client gate, not server TTL. */
 export const FRIENDSHIP_IDEMPOTENCY_TTL_MS = CLIENT_RECOVERY_MAX_AGE_MS;
 
 /** Honest expired UNKNOWN — result unknown; no same-key replay; no GET-inferred outcome. */
@@ -30,7 +38,15 @@ export const FRIENDSHIP_RETENTION_EXPIRED_NOTICE =
   'Результат исходной отправки неизвестен. Безопасный повтор того же действия уже недоступен. Проверьте дружбу отдельно; при необходимости снимите локальную блокировку.';
 
 /**
- * Fail-closed UNKNOWN replay gate: missing/invalid/backwards clock or elapsed ≥ server TTL.
+ * After explicit local retirement of expired UNKNOWN — outcome still unknown;
+ * never claims noncommit. Survives reload until explicit acknowledgement.
+ */
+export const FRIENDSHIP_RETIREMENT_WARNING =
+  'Локальная блокировка снята. Исход прежней отправки по-прежнему неизвестен. Проверьте дружбу отдельно перед новым действием.';
+
+/**
+ * Fail-closed UNKNOWN replay gate: missing/invalid/backwards clock or elapsed ≥
+ * client recovery ceiling (conservative vs server TTL).
  * Controllable via `now` for synthetic tests — never restarts original age.
  */
 export function friendshipIdempotencyReplayBlocked(

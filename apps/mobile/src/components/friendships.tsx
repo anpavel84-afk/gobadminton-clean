@@ -47,6 +47,18 @@ function sameFriendCommand(
   return packet.requestId === (view.request?.id ?? null);
 }
 
+/** Unresolved post-retirement warning — survives reload; blocks new actions until ack. */
+function OutstandingRetirementWarning() {
+  const { owner, state } = useFriendships();
+  if (!state.outstandingWarning) return null;
+  return <View style={{ gap: 8 }}>
+    <Label accessibilityLiveRegion="polite" accessibilityRole="status">
+      {state.outstandingWarning}
+    </Label>
+    <TextButton title="Понятно" onPress={() => owner.acknowledgeOutstandingWarning()} />
+  </View>;
+}
+
 /** Explicit UNKNOWN recovery when the owning row left the loaded surface — omission ≠ result. */
 function OrphanFriendRecovery({ listLease }: { listLease: number }) {
   const { owner, state } = useFriendships();
@@ -106,7 +118,7 @@ export function FriendActions({
 }) {
   const { owner, state } = useFriendships();
   const [confirm, setConfirm] = useState(false);
-  const locked = !!state.command;
+  const locked = !!state.command || !!state.outstandingWarning;
   const retentionBlocked = state.command?.status === 'unknown'
     && friendshipIdempotencyReplayBlocked(state.command.firstDispatchedAt);
   const actions = (['request', 'accept', 'decline', 'cancel', 'remove'] as FriendAction[])
@@ -183,6 +195,7 @@ export function ProfileFriendship({ peerId }: { peerId: string }) {
     {state.profileStatus === 'ready' && state.profileView && <FriendActions
       view={state.profileView} peerId={peerId} listLease={state.episode} peerLease={peerId} />}
     <OrphanFriendRecovery listLease={state.episode} />
+    <OutstandingRetirementWarning />
   </View>;
 }
 
@@ -266,6 +279,8 @@ export function FriendsScreen() {
       </View>
     </>}
     <OrphanFriendRecovery listLease={state.episode} />
-    {state.notice && !state.command && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
+    <OutstandingRetirementWarning />
+    {state.notice && !state.command && !state.outstandingWarning
+      && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
   </Page>;
 }

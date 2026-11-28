@@ -3,6 +3,7 @@ import type { Actor } from './participation.ts';
 import { NativeAuthError } from './native-auth-protocol.ts';
 import {
   FRIENDS_TABS, FriendshipError, FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
+  FRIENDSHIP_RETIREMENT_WARNING,
   friendCommand, friendshipIdempotencyReplayBlocked, friendshipStatesPath, friendshipsListPath,
   ownFriendsPrerequisite, parseFriendshipList, parseFriendshipReceipt, parseFriendshipStates,
   parseSocialCapabilities, publicPlayerId, type FriendAction, type FriendshipList,
@@ -34,6 +35,8 @@ export type FriendshipsSnapshot = {
   profileStatus: ProfileStatus;
   command: Command | null;
   notice: string | null;
+  /** Unresolved post-retirement warning; blocks new actions until explicit ack. */
+  outstandingWarning: string | null;
 };
 
 export type FriendshipsPort = {
@@ -49,7 +52,7 @@ const unknownNotice = 'Результат неизвестен. Сохранён
 const empty = (actor: Actor | null, episode: number, foreground = true): FriendshipsSnapshot => ({
   actor, foreground, episode, listActive: false, tab: 'accepted', cursor: null, page: null,
   listStatus: 'idle', capabilities: null, profilePeerId: null, profileView: null,
-  profileStatus: 'idle', command: null, notice: null,
+  profileStatus: 'idle', command: null, notice: null, outstandingWarning: null,
 });
 
 const withAge = (command: Command, status: Command['status']): Command => ({
@@ -67,7 +70,11 @@ export class FriendshipsCoordinator {
   private sequence = 0;
   private authority = 0;
   /** Same-actor verified reauth may restore; other account / forget wipe. Never auto-dispatch. */
-  private quarantine: { actorId: string; command: Command } | null = null;
+  private quarantine: {
+    actorId: string;
+    command: Command | null;
+    outstandingWarning: string | null;
+  } | null = null;
   private port: FriendshipsPort;
 
   constructor(port: FriendshipsPort) { this.port = port; }
@@ -80,10 +87,14 @@ export class FriendshipsCoordinator {
 
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || !actor && !this.state.actor) return;
-    // Park pending/UNKNOWN under the last verified owner; null gap retains quarantine.
+    // Park pending/UNKNOWN + outstanding warning under last verified owner; null gap retains quarantine.
     if (this.state.actor) {
-      this.quarantine = this.state.command
-        ? { actorId: this.state.actor.actorId, command: this.state.command }
+      this.quarantine = (this.state.command || this.state.outstandingWarning)
+        ? {
+          actorId: this.state.actor.actorId,
+          command: this.state.command,
+          outstandingWarning: this.state.outstandingWarning,
+        }
         : null;
     }
     if (actor && this.quarantine?.actorId !== actor.actorId) this.quarantine = null;
@@ -92,8 +103,17 @@ export class FriendshipsCoordinator {
     this.authority++;
     this.sequence++;
     const next = empty(actor ? { ...actor } : null, this.state.episode + 1, this.state.foreground);
-    if (!actor || !saved?.command) {
+    if (!actor || (!saved?.command && !saved?.outstandingWarning)) {
       this.show(next);
+      return;
+    }
+    if (!saved.command) {
+      // Distinct outstanding retirement warning only — never invents noncommit; no auto-send.
+      this.show({
+        ...next,
+        outstandingWarning: saved.outstandingWarning,
+        notice: saved.outstandingWarning,
+      });
       return;
     }
     // Rebind session/generation only; preserve original key/body/path/ids/age. No auto-send.
@@ -105,6 +125,7 @@ export class FriendshipsCoordinator {
     this.show({
       ...next,
       command,
+      outstandingWarning: saved.outstandingWarning,
       notice: friendshipIdempotencyReplayBlocked(command.firstDispatchedAt)
         ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
         : unknownNotice,
@@ -121,7 +142,7 @@ export class FriendshipsCoordinator {
 
   /**
    * Explicit local retirement after retention expiry only — outcome stays unknown;
-   * never invents noncommit; frees the surface for independent future actions.
+   * never invents noncommit. Outstanding warning blocks new actions until ack.
    */
   retireExpiredUnknown = () => {
     const c = this.state.command;
@@ -137,7 +158,18 @@ export class FriendshipsCoordinator {
       profileView: null,
       listStatus: this.state.listActive ? 'loading' : this.state.listStatus,
       profileStatus: this.state.profilePeerId ? 'loading' : this.state.profileStatus,
-      notice: 'Локальная блокировка снята. Исход прежней отправки по-прежнему неизвестен. Проверьте дружбу отдельно перед новым действием.',
+      outstandingWarning: FRIENDSHIP_RETIREMENT_WARNING,
+      notice: FRIENDSHIP_RETIREMENT_WARNING,
+    });
+  };
+
+  /** Explicit acknowledgement of post-retirement warning — required before any new action. */
+  acknowledgeOutstandingWarning = () => {
+    const warning = this.state.outstandingWarning;
+    if (!warning) return;
+    this.show({
+      outstandingWarning: null,
+      notice: this.state.notice === warning ? null : this.state.notice,
     });
   };
 
@@ -149,6 +181,15 @@ export class FriendshipsCoordinator {
     return friendshipIdempotencyReplayBlocked(c.firstDispatchedAt);
   };
 
+  private surfaceNotice(): string | null {
+    if (this.state.command) {
+      return friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+        ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
+        : unknownNotice;
+    }
+    return this.state.outstandingWarning;
+  }
+
   setForeground = (foreground: boolean) => {
     if (foreground === this.state.foreground) return;
     this.sequence++;
@@ -157,11 +198,7 @@ export class FriendshipsCoordinator {
       page: null, listStatus: this.state.listActive ? 'loading' : 'idle',
       capabilities: null, profileView: null,
       profileStatus: this.state.profilePeerId ? 'loading' : 'idle',
-      notice: this.state.command
-        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
-          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-          : unknownNotice)
-        : null,
+      notice: this.surfaceNotice(),
       ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
@@ -182,11 +219,7 @@ export class FriendshipsCoordinator {
     this.show({
       listActive: true, episode: this.state.episode + 1, tab: 'accepted', cursor: null,
       page: null, listStatus: 'loading', capabilities: null,
-      notice: this.state.command
-        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
-          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-          : unknownNotice)
-        : null,
+      notice: this.surfaceNotice(),
       ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
@@ -196,11 +229,7 @@ export class FriendshipsCoordinator {
     this.show({
       listActive: false, episode: this.state.episode + 1, page: null, cursor: null,
       listStatus: 'idle', capabilities: null,
-      notice: this.state.command
-        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
-          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-          : unknownNotice)
-        : null,
+      notice: this.surfaceNotice(),
       ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
@@ -209,7 +238,8 @@ export class FriendshipsCoordinator {
     if (!this.state.listActive || !FRIENDS_TABS.some(([value]) => value === tab) || tab === this.state.tab) return;
     this.sequence++;
     this.show({
-      tab, cursor: null, page: null, listStatus: 'loading', episode: this.state.episode + 1, notice: null,
+      tab, cursor: null, page: null, listStatus: 'loading', episode: this.state.episode + 1,
+      notice: this.state.outstandingWarning,
     });
   };
 
@@ -218,7 +248,7 @@ export class FriendshipsCoordinator {
     this.sequence++;
     this.show({
       cursor: this.state.page.nextCursor, page: null, listStatus: 'loading',
-      episode: this.state.episode + 1, notice: null,
+      episode: this.state.episode + 1, notice: this.state.outstandingWarning,
     });
   };
 
@@ -227,7 +257,7 @@ export class FriendshipsCoordinator {
     this.sequence++;
     this.show({
       cursor: null, page: null, listStatus: 'loading', capabilities: null,
-      episode: this.state.episode + 1, notice: null,
+      episode: this.state.episode + 1, notice: this.state.outstandingWarning,
     });
   };
 
@@ -237,11 +267,7 @@ export class FriendshipsCoordinator {
     this.show({
       profilePeerId: peerId, profileView: null, profileStatus: 'loading',
       episode: this.state.episode + 1,
-      notice: this.state.command
-        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
-          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-          : unknownNotice)
-        : null,
+      notice: this.surfaceNotice(),
       ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
@@ -251,11 +277,7 @@ export class FriendshipsCoordinator {
     this.show({
       profilePeerId: null, profileView: null, profileStatus: 'idle',
       episode: this.state.episode + 1,
-      notice: this.state.command
-        ? (friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
-          ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-          : unknownNotice)
-        : null,
+      notice: this.surfaceNotice(),
       ...(this.state.command ? { command: withAge(this.state.command, 'unknown') } : {}),
     });
   };
@@ -264,7 +286,8 @@ export class FriendshipsCoordinator {
     if (!this.state.profilePeerId) return;
     this.sequence++;
     this.show({
-      profileView: null, profileStatus: 'loading', episode: this.state.episode + 1, notice: null,
+      profileView: null, profileStatus: 'loading', episode: this.state.episode + 1,
+      notice: this.state.outstandingWarning,
     });
   };
 
@@ -273,11 +296,11 @@ export class FriendshipsCoordinator {
     const tab = this.state.tab, cursor = this.state.cursor;
     if (!this.state.listActive || !this.state.foreground) return;
     if (!actor) { this.show({ listStatus: 'guest', page: null, capabilities: null }); return; }
-    // Reads never settle UNKNOWN; keep expired retention copy when a parked command remains.
+    // Reads never settle UNKNOWN; keep expired retention or unresolved retirement warning.
     const retained = this.state.command
       && friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
       ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-      : null;
+      : (this.state.outstandingWarning ?? null);
     this.show({ listStatus: 'loading', page: null, notice: retained });
     try {
       const capabilities = parseSocialCapabilities(await this.port.capabilities(actor));
@@ -325,7 +348,7 @@ export class FriendshipsCoordinator {
     const retained = this.state.command
       && friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
       ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
-      : null;
+      : (this.state.outstandingWarning ?? null);
     this.show({ profileStatus: 'loading', profileView: null, notice: retained });
     try {
       const capabilities = parseSocialCapabilities(await this.port.capabilities(actor));
@@ -370,7 +393,7 @@ export class FriendshipsCoordinator {
     peerLease: string | null,
   ) => {
     const s = this.state;
-    if (!s.actor || !s.foreground || s.command || listLease !== s.episode) return;
+    if (!s.actor || !s.foreground || s.command || s.outstandingWarning || listLease !== s.episode) return;
     if (peerLease !== null && peerLease !== s.profilePeerId) return;
     const wire = friendCommand(view, peerId, action);
     if (!wire) return;
