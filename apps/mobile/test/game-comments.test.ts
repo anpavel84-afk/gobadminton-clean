@@ -259,7 +259,7 @@ test('composition mounts only for published/public game; provider above Stack; S
   assert.match(contract, /R-22/);
   assert.match(contract, /SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE/);
   assert.match(readme, /APK56|counter \*\*55→56\*\*/);
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 56);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 57);
 });
 
 test('descending roots still transport reply reads as order=asc', async () => {

@@ -1084,6 +1084,45 @@ test('bare browse real login → durable pending → hydrate/callback → entry;
   for(const path of ['/players','/players/browse/','/players/browse?name=a','/players/browse#x','/players/%62rowse','/players/browse\n','/players/browse/send','https://user:pass@dev.gobadminton.ru/players/browse','//dev.gobadminton.ru/players/browse'])assert.equal(canonicalReturnPath(path),null);
 });
 
+test('bare /friends login return never auto-submits friendship actions',async()=>{
+  const {hydratedEntryRoute,emptyPreferences}=await import('../src/entry.ts');
+  assert.equal(canonicalReturnPath('/friends'),'/friends');
+  const s=setup();await s.auth.hydrate();const login=await s.auth.beginLogin('/friends');assert.ok(login);
+  const secure=parseSecureEnvelope(s.stored(),now)!;assert.equal(secure.pending?.returnPath,'/friends');
+  const restart=setup(secure);await restart.auth.hydrate();
+  const returned=await restart.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${secure.pending!.state}`);
+  assert.equal(returned,'/friends');
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,restart.auth.getSnapshot()),'/friends');
+  for (const path of ['/friends/','/friends?tab=incoming','/friends#x','/friends\n','/friend','/%66riends','https://dev.gobadminton.ru/friends','//evil/friends']) {
+    assert.equal(canonicalReturnPath(path),null,path);
+  }
+  assert.equal(restart.calls.filter(c=>c.path.includes('friend-requests')||c.path.includes('/friendships')).length,0);
+});
+
+test('friendships lifecycle: auth show drives setActor; explicit logout forget; account-switch skip forget', async () => {
+  const s = setup(sessionEnvelope());
+  const actors: Array<string | null> = [];
+  let forgets = 0;
+  s.auth.bindFriendshipsLifecycle({
+    setActor: actor => { actors.push(actor?.actorId ?? null); },
+    forget: () => { forgets++; },
+  });
+  await s.auth.hydrate();
+  assert.ok(actors.includes(me.id));
+  await s.auth.logout();
+  assert.equal(forgets, 1);
+  assert.equal(actors.at(-1), null);
+  // beginLogin uses logout(false, false) — fences without friendships forget.
+  const before = forgets;
+  s.setHandler(async path => path === '/auth/methods'
+    ? { items: [{ method: 'vk', type: 'oauth', available: true }] }
+    : { transactionId: token('t'), expiresAt: new Date(now + 600000).toISOString(),
+      browserStartUrl: `https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}` });
+  await s.auth.beginLogin('/friends');
+  assert.equal(forgets, before);
+  s.auth.bindFriendshipsLifecycle(null);
+});
+
 const interestReceipt = {interestId:'10000000-0000-4000-8000-000000000001',version:'9007199254740993',outcome:'mutual'};
 function interestPacket(auth:AuthCoordinator):PlayInterestPacket {
   return Object.freeze({kind:'send',path:'/play-interests',target:'peer',key:'auth-interest-key',

@@ -50,7 +50,7 @@ export function hydratedEntryRoute(preferences: Preferences, preferencesHydrated
   // Exact bare intents only — reserved `/players/browse` stays distinct from player-detail.
   const returnPath = canonicalVenuePath(auth.returnPath)
     ?? canonicalPostgamePath(auth.returnPath)
-    ?? (auth.returnPath === '/players/browse' ? auth.returnPath : null)
+    ?? (auth.returnPath === '/players/browse' || auth.returnPath === '/friends' ? auth.returnPath : null)
     ?? canonicalPlayerPath(auth.returnPath)
     ?? canonicalGamePath(auth.returnPath);
   if (returnPath) return returnPath;

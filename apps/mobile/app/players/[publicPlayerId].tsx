@@ -1,6 +1,7 @@
 import { safetyPeerId } from '../../src/safety-coordinator.ts';
 import { NativeSafety } from '../../src/components/safety.tsx';
 import { NativeContactAction } from '../../src/components/contact-editor.tsx';
+import { ProfileFriendship } from '../../src/components/friendships.tsx';
 import { PlayerRoleReputation } from '../../src/components/player-role-reputation.tsx';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -30,6 +31,7 @@ export default function PlayerDetail() {
       : detail?.data ? <>
         <PlayerProfile key={`${viewScope}:${detail.data.cover?.uploadedUrl}`} player={detail.data} city={cities.state.data?.find(c => c.id === detail.data?.cityId)?.nameRu} />
         <NativeContactAction target={id} />
+        <ProfileFriendship peerId={id} />
         <PlayerRoleReputation key={viewScope} publicPlayerId={id} />
       </> : null}
     {id && auth.status === 'authenticated' &&

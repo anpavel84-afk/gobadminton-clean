@@ -8,6 +8,7 @@ import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
 import { SESSION_COOKIE } from "../../src/auth/constants";
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
@@ -25,7 +26,8 @@ import { buildTestCoreModule } from "./test-core.module";
 // Runner must provide a fresh disposable PostGIS DB with this exact name.
 const DB_NAME = "gobadminton_friends_s1_disposable";
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
+const nativeClientId = "friends-s1-native-fixture";
 function disposableUrl(): string {
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error("DATABASE_URL must explicitly identify the Friends S1 disposable DB");
@@ -73,6 +75,7 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
+  let native: NativeSessionService;
   const pairs = new ObservedPairs();
   let a: Actor, b: Actor, outsider: Actor;
   let schema0031Evidence: {capabilities:unknown;list:unknown;sendStatus:number};
@@ -102,7 +105,9 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
       }
     } finally { client.release(); }
     env = loadEnv({NODE_ENV:"test",APP_ENV:"local",HOST:"127.0.0.1",DATABASE_URL:databaseUrl,
-      PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",
+      PUBLIC_API_ORIGIN:"https://localhost:3000",PUBLIC_WEB_ORIGIN:origin,
+      COOKIE_SECURE:"true",NATIVE_AUTH_ENABLED:"1",
+      NATIVE_AUTH_CLIENTS_JSON:JSON.stringify([{clientId:nativeClientId,redirectUris:["https://app.example.test/auth/callback"]}]),
       AUTH_PEPPER:"friends-s1-synthetic-fixture-pepper-only",CONTENT_MODERATION_PROVIDER:"fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET:"friends-s1-synthetic-fingerprint-only",SOCIAL_DIRECTORY_ENABLED:"1",
       SOCIAL_INVITATIONS_ENABLED:"1",SOCIAL_INBOX_ENABLED:"1",
@@ -116,6 +121,7 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     app.setGlobalPrefix("v1");app.useGlobalFilters(new ProblemExceptionFilter());
     await app.init();await app.getHttpAdapter().getInstance().ready();
     sessions = ref.get(SessionService);
+    native = ref.get(NativeSessionService);
     // Feature OFF against schema0031, before unchanged migration0032 is applied.
     env.FRIENDS_INTERNAL_ENABLED = false;
     const oldActor = await actor("S1 schema0031 synthetic");
@@ -193,6 +199,19 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
       headers:{cookie:who.cookie,origin,"x-csrf-token":who.csrfToken,"idempotency-key":idem}}) as Promise<Response>;
   }
   function get(who:Actor,url:string):Promise<Response> {return app.inject({method:"GET",url,headers:{cookie:who.cookie}}) as Promise<Response>;}
+  async function nativeCredentials(who:Actor) {
+    return native.transaction(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, nativeClientId);
+    });
+  }
+  function nativeGet(token:string,url:string):Promise<Response> {
+    return app.inject({method:"GET",url,headers:{authorization:`Bearer ${token}`}}) as Promise<Response>;
+  }
+  function nativePost(token:string,url:string,payload:unknown,idem=key()):Promise<Response> {
+    return app.inject({method:"POST",url,payload:payload as object,
+      headers:{authorization:`Bearer ${token}`,"idempotency-key":idem}}) as Promise<Response>;
+  }
   async function request(from=a,to=b,idem=key()):Promise<FriendshipReceipt> {
     const response=await post(from,"/v1/friend-requests",{targetPublicPlayerId:to.publicPlayerId},idem);
     expect(response.statusCode).toBe(201);expect(response.headers["cache-control"]).toBe("no-store");
@@ -534,6 +553,67 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     expect((await post(a,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId,actorId:outsider.userId})).statusCode).toBe(422);
     expect((await post(a,"/v1/friend-requests",{targetPublicPlayerId:a.publicPlayerId})).statusCode).toBe(404);
     expect((await pool.query("SELECT count(*)::int AS n FROM friendships WHERE requester_user_id=$1",[a.userId])).rows[0].n).toBe(0);
+  });
+  it("native principal shares cookie records for request→accept→remove; cancel/decline; exact key replay",async()=>{
+    const tokenA=await nativeCredentials(a),tokenB=await nativeCredentials(b);
+    const caps=await nativeGet(tokenA.accessToken,"/v1/me/social-capabilities");
+    expect(caps.statusCode).toBe(200);expect(caps.json().friends).toBe(true);
+    const createKey=key();
+    const created=await nativePost(tokenA.accessToken,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId},createKey);
+    expect(created.statusCode).toBe(201);expect(created.headers["cache-control"]).toBe("no-store");
+    const receipt=created.json<FriendshipReceipt>();
+    expect(typeof receipt.version).toBe("string");expect(/^[1-9][0-9]*$/.test(receipt.version)).toBe(true);
+    expect((await nativePost(tokenA.accessToken,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId},createKey)).json())
+      .toEqual(receipt);
+    const outgoing=await nativeGet(tokenA.accessToken,"/v1/me/friendships?view=outgoing");
+    expect(outgoing.statusCode).toBe(200);expect(outgoing.json().items[0].request.id).toBe(receipt.requestId);
+    const incoming=await nativeGet(tokenB.accessToken,"/v1/me/friendships?view=incoming");
+    expect(incoming.statusCode).toBe(200);expect(incoming.json().items[0].request.id).toBe(receipt.requestId);
+    const acceptKey=key();
+    const accepted=await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
+      {expectedVersion:receipt.version},acceptKey);
+    expect(accepted.statusCode).toBe(200);
+    expect((await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
+      {expectedVersion:receipt.version},acceptKey)).json()).toEqual(accepted.json());
+    const mismatchedVersion=(BigInt(receipt.version)+1n).toString();
+    expect(mismatchedVersion).not.toBe(receipt.version);
+    const wrongBody=await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
+      {expectedVersion:mismatchedVersion},acceptKey);
+    expect([409,422]).toContain(wrongBody.statusCode);
+    const wrongKey=await nativePost(tokenB.accessToken,`/v1/friend-requests/${receipt.requestId}/accept`,
+      {expectedVersion:receipt.version},key());
+    expect(wrongKey.statusCode).toBe(409);
+    const friends=await nativeGet(tokenA.accessToken,"/v1/me/friendships?view=accepted");
+    expect(friends.json().items[0].relationship).toBe("friends");
+    const cookieFriends=await get(a,"/v1/me/friendships?view=accepted");
+    expect(cookieFriends.json().items[0].friendshipId).toBe(friends.json().items[0].friendshipId);
+    const removed=await nativePost(tokenA.accessToken,`/v1/friendships/${receipt.friendshipId}/remove`,
+      {expectedVersion:accepted.json().version});
+    expect(removed.statusCode).toBe(200);expect(removed.json().outcome).toBe("removed");
+
+    const cancelReceipt=(await nativePost(tokenA.accessToken,"/v1/friend-requests",
+      {targetPublicPlayerId:outsider.publicPlayerId})).json<FriendshipReceipt>();
+    expect((await nativePost(tokenA.accessToken,`/v1/friend-requests/${cancelReceipt.requestId}/cancel`,
+      {expectedVersion:cancelReceipt.version})).statusCode).toBe(200);
+    const declineReceipt=(await nativePost(tokenA.accessToken,"/v1/friend-requests",
+      {targetPublicPlayerId:b.publicPlayerId})).json<FriendshipReceipt>();
+    expect((await nativePost(tokenB.accessToken,`/v1/friend-requests/${declineReceipt.requestId}/decline`,
+      {expectedVersion:declineReceipt.version})).statusCode).toBe(200);
+  });
+  it("native malformed/revoked/mixed credentials fail closed without actor override",async()=>{
+    const credentials=await nativeCredentials(a);
+    expect((await nativeGet("not-a-token","/v1/me/social-capabilities")).statusCode).toBe(401);
+    expect((await app.inject({method:"GET",url:"/v1/me/friendships?view=accepted",
+      headers:{authorization:`Bearer ${credentials.accessToken}`,cookie:a.cookie}})).statusCode).toBe(403);
+    expect((await nativePost(credentials.accessToken,"/v1/friend-requests",
+      {targetPublicPlayerId:b.publicPlayerId,actorId:outsider.userId})).statusCode).toBe(422);
+    await pool.query("UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[credentials.sessionId]);
+    expect((await nativeGet(credentials.accessToken,"/v1/me/social-capabilities")).statusCode).toBe(401);
+    const fresh=await nativeCredentials(a);
+    await pool.query("UPDATE native_access_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE session_id=$1",
+      [fresh.sessionId]);
+    expect((await nativePost(fresh.accessToken,"/v1/friend-requests",
+      {targetPublicPlayerId:b.publicPlayerId})).statusCode).toBe(401);
   });
   it("ledger failure rolls back pair/friendship/rates/idempotency; explicit SQLSTATE is captured",async()=>{
     const client=await pool.connect();

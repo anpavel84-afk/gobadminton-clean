@@ -113,6 +113,11 @@ export default function Profile() {
         {!editing && <OwnProfileCard onEdit={() => setEditing(true)} onSettings={toggleSettings} settingsOpen={settingsOpen} />}
         {!editing && <GameContactPreferenceCard />}
         {!editing && <View style={{ gap: 8 }}>
+          <Label accessibilityRole="header" style={styles.subtitle}>Друзья</Label>
+          <Label>Дружба и личная переписка управляются отдельно.</Label>
+          <TextButton title="Друзья" onPress={() => router.push('/friends')} />
+        </View>}
+        {!editing && <View style={{ gap: 8 }}>
           <Label accessibilityRole="header" style={styles.subtitle}>Отзывы о площадках</Label>
           <Label>Этот список видите только вы.</Label>
           <OwnVenueReviewsEntry onOpen={() => auth.postgame.openOwnVenueHistory()} />

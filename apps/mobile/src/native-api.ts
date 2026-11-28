@@ -29,6 +29,11 @@ import {
 import type { ActorAwareRoleReputationSummary, RoleKind } from './role-reputation.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
+import {
+  FriendshipError, friendshipWire, friendshipStatesPath, friendshipsListPath,
+  parseFriendshipList, parseFriendshipReceipt, parseFriendshipStates, parseSocialCapabilities,
+} from './friendships.ts';
+import type { FriendshipPacket, FriendsTab } from './friendships.ts';
 import { RadarError, RADAR_WIRE, resultProof } from './radar.ts';
 import type { RadarRead, RadarCommand } from './radar.ts';
 import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
@@ -144,6 +149,35 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     } catch (error) {
       if(error instanceof NativeAuthError || error instanceof PlayInterestError) throw error;
       throw new PlayInterestError(error instanceof SyntaxError ? 'invalid' : 'network');
+    } finally { clearTimeout(timeout); }
+  }
+  async function friendshipRequest(path: string, access: string, packet?: FriendshipPacket) {
+    const wire = packet ? friendshipWire(packet) : null;
+    if (wire && wire.path !== path) throw new FriendshipError('invalid');
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
+        method: packet ? 'POST' : 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'application/json', Authorization: `Bearer ${access}`,
+          ...(packet ? { 'Content-Type': 'application/json', 'Idempotency-Key': packet.key } : {}) },
+        ...(wire ? { body: JSON.stringify(wire.body) } : {}),
+      });
+      if (response.status === 401) throw new NativeAuthError('authority');
+      if (!response.ok) {
+        let code = '';
+        try {
+          const row = await response.json();
+          if (typeof row?.code === 'string' && /^[A-Z_]{1,80}$/.test(row.code)) code = row.code;
+        } catch { /* No raw response retained. */ }
+        throw new FriendshipError(
+          [400, 403, 404, 409, 422, 429].includes(response.status) && code !== 'COMMAND_IN_PROGRESS' ? 'refused' : 'network',
+          response.status, code,
+        );
+      }
+      return await response.json();
+    } catch (error) {
+      if (error instanceof NativeAuthError || error instanceof FriendshipError) throw error;
+      throw new FriendshipError(error instanceof SyntaxError ? 'invalid' : 'network');
     } finally { clearTimeout(timeout); }
   }
   async function postgameRequest(path: string, access: string, packet?: PostgamePacket): Promise<unknown> {
@@ -476,6 +510,16 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     playInterestMutation: async (access: string, packet: PlayInterestPacket) => {
       const wire = interestWire(packet);
       return parsePlayInterestReceipt(await interestRequest(wire.path,access,packet),packet.kind);
+    },
+    socialCapabilities: async (access: string) =>
+      parseSocialCapabilities(await friendshipRequest('/me/social-capabilities', access)),
+    listFriendships: async (access: string, tab: FriendsTab, cursor: string | null) =>
+      parseFriendshipList(await friendshipRequest(friendshipsListPath(tab, cursor), access)),
+    friendshipStates: async (access: string, peerId: string) =>
+      parseFriendshipStates(await friendshipRequest(friendshipStatesPath(peerId), access), peerId),
+    friendshipMutation: async (access: string, packet: FriendshipPacket) => {
+      const wire = friendshipWire(packet);
+      return parseFriendshipReceipt(await friendshipRequest(wire.path, access, packet), packet.action);
     },
     radarRead: async (access: string, operation: RadarRead, previewKey: string) => {
       if (operation.kind === 'config') return radarRequest('/radar/config', 'GET', access);

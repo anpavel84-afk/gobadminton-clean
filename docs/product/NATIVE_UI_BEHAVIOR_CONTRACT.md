@@ -312,6 +312,19 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Evidence | Source APK counter 56; `game-comments*` owner/UI + API comments adapt; focused `game-comments.test.ts` + comments unit/disposable/moderation native path; twelve version pins; staticfix5 scope narrowing + offscreen safety clear + Page keyboard |
 | Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native public-game discussion; Root precheck staticfix5 (nullable scope + offscreen safety cache clear + Page keyboard) SOURCE_PENDING only — not tests/device/QA results; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
 
+## R-23 · Native friendship lifecycle — profile actions + Friends lists (#522 PARTIAL)
+
+| Field | Content |
+| --- | --- |
+| Authority | Accepted web `FriendsPage` + `ProfileFriendship`/`FriendActions`; existing friendship routes with narrow native principal admit (`requirePrincipal` / `requirePrincipalMutation`); same server records/policy/IDs/decimal versions/cursors |
+| Entry | Own-profile «Друзья» → `/friends` (three tabs); ready public-player profile friendship section; login return bare `/friends` never auto-acts |
+| Trigger | Capabilities before private list/state reads; request/accept/decline/cancel/remove only when server capabilities permit; remove confirmation dialog; pagination next page; explicit refresh |
+| Expected | Prerequisite vs unavailable when `friends=false`; redacted peer stays «Игрок недоступен»; frozen UNKNOWN same-key recovery; actor/session/tab/peer/foreground/view/safety fences; no friendship=messaging entitlement; no search/`q` UI |
+| Accessibility | Accepted-web Russian copy; existing Onest/theme/44px tabs/buttons/avatar/dialog/back |
+| Non-scope | Recommendations; bottom-nav destination; messaging entitlement; PROD; device/OTA/iOS completion; Mode B READY claim |
+| Evidence | Source APK counter 57; `friendships*` owner/UI + API controller/OpenAPI nine-op NativeBearer + friends-s1 native journeys; focused `friendships.test.ts` + auth/entry `/friends`; twelve version pins |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — #522 PARTIAL native friendship lifecycle; not VERIFIED_SOURCE / not device PASS / UAT=NOT_TESTED |
+
 ## R-03 · MyGames invitations filter + in-card decisions (#522)
 
 | Field | Content |

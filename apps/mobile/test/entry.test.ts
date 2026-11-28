@@ -90,3 +90,12 @@ test('#522 QA1: authenticated cold player-detail return restores same bare path;
     assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'authenticated', returnPath: bad }), '/games', bad);
   }
 });
+
+test('#522 friends: bare /friends cold entry restores exact path; query/hash/encoding rejected', () => {
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'authenticated', returnPath: '/friends' }), '/friends');
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'guest', returnPath: '/friends' }), '/friends');
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'signing-in', returnPath: '/friends' }), '/profile');
+  for (const bad of ['/friends/', '/friends?tab=1', '/friends#x', '/friends\n', '/%66riends', '/friends/extra']) {
+    assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'authenticated', returnPath: bad }), '/games', bad);
+  }
+});

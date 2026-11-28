@@ -80,7 +80,7 @@ export function canonicalPlayerPath(value: unknown): string | null {
 export function canonicalReturnPath(value: unknown): string | null {
   return canonicalVenuePath(value)
     ?? canonicalPostgamePath(value)
-    ?? (value === '/players/browse' ? value : null)
+    ?? (value === '/players/browse' || value === '/friends' ? value : null)
     ?? canonicalPlayerPath(value)
     ?? canonicalVenueCreatePath(value)
     ?? (value === '/games/create' || typeof value === 'string' && /^\/games\/manage\/[A-Za-z0-9_-]{1,128}$/.test(value)
