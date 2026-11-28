@@ -45,6 +45,25 @@ function sameFriendCommand(
   return packet.requestId === (view.request?.id ?? null);
 }
 
+/** Explicit UNKNOWN recovery when the owning row left the loaded surface — omission ≠ result. */
+function OrphanFriendRecovery({ listLease }: { listLease: number }) {
+  const { owner, state } = useFriendships();
+  const command = state.command;
+  if (!command || command.status !== 'unknown' || !state.foreground) return null;
+  if (owner.commandMatchesSurface(command.packet)) return null;
+  const packet = command.packet;
+  const onList = packet.peerLease === null && state.listActive;
+  const onProfile = packet.peerLease !== null && state.profilePeerId === packet.peerLease;
+  if (!onList && !onProfile) return null;
+  const notice = state.notice
+    ?? 'Результат неизвестен. Сохранён исходный запрос; проверьте результат явно.';
+  return <View style={{ gap: 8 }}>
+    <Label accessibilityLiveRegion="polite">{notice}</Label>
+    <PrimaryButton title="Проверить результат"
+      onPress={() => { void owner.reconcile(listLease); }} />
+  </View>;
+}
+
 function ConfirmDialog({
   title, children, close, busy,
 }: {
@@ -149,6 +168,7 @@ export function ProfileFriendship({ peerId }: { peerId: string }) {
     </Label>}
     {state.profileStatus === 'ready' && state.profileView && <FriendActions
       view={state.profileView} peerId={peerId} listLease={state.episode} peerLease={peerId} />}
+    <OrphanFriendRecovery listLease={state.episode} />
   </View>;
 }
 
@@ -231,6 +251,7 @@ export function FriendsScreen() {
           onPress={() => { owner.nextPage(); }} />}
       </View>
     </>}
+    <OrphanFriendRecovery listLease={state.episode} />
     {state.notice && !state.command && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
   </Page>;
 }

@@ -257,7 +257,7 @@ test('remount recovery: same-key retry; peer/actor/background/safety fence delay
     assert.equal(calls.length, 1, `${change} must not dispatch recovery after fence`);
     assert.notEqual(o.getSnapshot().notice, 'Запрос отправлен.');
     if (change === 'actor') assert.equal(o.getSnapshot().command, null);
-    else assert.equal(o.getSnapshot().command?.packet, packet);
+    else assert.equal(o.getSnapshot().command?.packet.key, packet.key);
   }
 
   // Same context after remount: delayed post-token reconcile sends once and settles.
@@ -338,8 +338,13 @@ test('actor/session/background/peer/safety fences drop late receipts; no auto-se
     assert.equal(calls.length, 1);
     // Late success must not settle as a current-actor notice for a retired lease.
     assert.notEqual(o.getSnapshot().notice, 'Запрос отправлен.');
-    if (change === 'actor' || change === 'session' || change === 'generation') {
+    if (change === 'actor') {
+      // Different principal permanently drops parked UNKNOWN.
       assert.equal(o.getSnapshot().command, null);
+    } else if (change === 'session' || change === 'generation') {
+      // Same-actor verified reauth restores UNKNOWN; never auto-settles the late receipt.
+      assert.equal(o.getSnapshot().command?.status, 'unknown');
+      assert.equal(o.getSnapshot().command?.packet.key, calls[0]!.key);
     }
   }
   const idle = setup();
@@ -396,4 +401,184 @@ test('wrong receipt identity stays UNKNOWN; disabled server capabilities clear a
     ...none, capabilities: { canRequest: false, canAccept: false, canDecline: false, canCancel: false, canRemove: false },
   });
   assert.equal(friendCommand(disabled, peerId, 'request'), null);
+});
+
+test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/logout wipe; deferred token fence', async () => {
+  // Server commit succeeded but refreshed list omits the row — explicit same-key recovery still reachable.
+  {
+    let attempt = 0;
+    const calls: FriendshipPacket[] = [];
+    const o = new FriendshipsCoordinator({
+      random: () => 'immutable-key-0001',
+      capabilities: async () => caps,
+      list: async () => {
+        // After ambiguous cancel, authoritative list no longer contains the outgoing row.
+        return { items: attempt > 0 ? [] : [outgoing], nextCursor: null, asOf: 't' };
+      },
+      states: async () => ({ items: [none] }),
+      ownProfile: async () => profile as never,
+      send: async (p, permit) => {
+        if (!permit()) throw new FriendshipError('network');
+        calls.push(p);
+        if (!attempt++) throw new Error('offline after commit');
+        return receipt('cancelled');
+      },
+    });
+    o.setActor(actor);
+    o.enterList(); await o.loadList();
+    const episode = o.getSnapshot().episode;
+    await o.act('cancel', outgoing, peerId, episode, null);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    const packet = o.getSnapshot().command!.packet;
+    o.refreshList(); await o.loadList();
+    assert.equal(o.getSnapshot().page?.items.length, 0);
+    assert.equal(o.getSnapshot().command?.packet, packet);
+    assert.equal(o.commandMatchesSurface(packet), false);
+    // Route return keeps the frozen packet; omission never proves result.
+    o.exitList(); o.enterList(); await o.loadList();
+    assert.equal(o.getSnapshot().command?.packet.key, packet.key);
+    assert.deepEqual(o.getSnapshot().command?.packet.body, packet.body);
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0], calls[1]);
+    assert.equal(calls[1]!.key, packet.key);
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().notice, 'Запрос отменён.');
+  }
+
+  // Same-actor reauth restores UNKNOWN with rebound session; no auto-write; explicit reconcile reuses key/body.
+  {
+    let allow = false;
+    const { o, calls } = setup(async () => {
+      if (!allow) throw new Error('offline');
+      return receipt('accepted');
+    });
+    o.enterList(); await o.loadList();
+    await o.act('accept', incoming, peerId, o.getSnapshot().episode, null);
+    const original = o.getSnapshot().command!.packet;
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    o.setActor(null);
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(calls.length, 1);
+    o.setActor({ ...actor, sessionId: 'reauth-session', generation: 2 });
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().command!.packet.key, original.key);
+    assert.deepEqual(o.getSnapshot().command!.packet.body, original.body);
+    assert.equal(o.getSnapshot().command!.packet.actor.sessionId, 'reauth-session');
+    assert.equal(calls.length, 1);
+    o.enterList(); await o.loadList();
+    allow = true;
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1]!.key, original.key);
+    assert.deepEqual(calls[1]!.body, original.body);
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().notice, 'Запрос принят.');
+  }
+
+  // Other actor never sees parked packet; returning A after B cannot resurrect it.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.enterList(); await o.loadList();
+    await o.act('decline', incoming, peerId, o.getSnapshot().episode, null);
+    const key = o.getSnapshot().command!.packet.key;
+    o.setActor({ actorId: 'other', sessionId: 'other-session', generation: 3 });
+    assert.equal(o.getSnapshot().command, null);
+    o.enterList(); await o.loadList();
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 1);
+    await o.act('decline', incoming, peerId, o.getSnapshot().episode, null);
+    assert.equal(calls.length, 2);
+    assert.notEqual(calls[1]!.key, key);
+    o.setActor(actor);
+    assert.equal(o.getSnapshot().command, null);
+  }
+
+  // Explicit forget (logout policy) wipes parked UNKNOWN; same-account return stays empty.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    o.setActor(null);
+    o.forget();
+    o.setActor({ ...actor, sessionId: 'after-logout', generation: 4 });
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(calls.length, 1);
+    o.openProfile(peerId); await o.loadProfile();
+    await o.reconcile(o.getSnapshot().episode);
+    assert.equal(calls.length, 1);
+  }
+
+  // Deferred post-token recovery: background/safety fence; same omitted-row context sends once.
+  for (const change of ['background', 'safety'] as const) {
+    const token = deferred();
+    const calls: FriendshipPacket[] = [];
+    const o = new FriendshipsCoordinator({
+      random: () => 'immutable-key-0001',
+      capabilities: async () => caps,
+      list: async () => ({ items: [], nextCursor: null, asOf: 't' }),
+      states: async () => ({ items: [none] }),
+      ownProfile: async () => profile as never,
+      send: async (p, permit) => {
+        if (calls.length === 0) {
+          calls.push(p);
+          throw new Error('offline');
+        }
+        await token.promise;
+        if (!permit()) throw new FriendshipError('network');
+        calls.push(p);
+        return receipt('cancelled');
+      },
+    });
+    o.setActor(actor);
+    o.enterList();
+    await o.act('cancel', outgoing, peerId, o.getSnapshot().episode, null);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    const packet = o.getSnapshot().command!.packet;
+    await o.loadList();
+    assert.equal(o.commandMatchesSurface(packet), false);
+    const work = o.reconcile(o.getSnapshot().episode);
+    if (change === 'background') o.setForeground(false);
+    else o.invalidate();
+    token.resolve(undefined);
+    await work;
+    assert.equal(calls.length, 1, `${change} must not complete deferred recovery`);
+    assert.equal(o.getSnapshot().command?.packet.key, packet.key);
+  }
+
+  {
+    const token = deferred();
+    const calls: FriendshipPacket[] = [];
+    const o = new FriendshipsCoordinator({
+      random: () => 'immutable-key-0001',
+      capabilities: async () => caps,
+      list: async () => ({ items: [], nextCursor: null, asOf: 't' }),
+      states: async () => ({ items: [none] }),
+      ownProfile: async () => profile as never,
+      send: async (p, permit) => {
+        if (calls.length === 0) {
+          calls.push(p);
+          throw new Error('offline');
+        }
+        await token.promise;
+        if (!permit()) throw new FriendshipError('network');
+        calls.push(p);
+        return receipt('cancelled');
+      },
+    });
+    o.setActor(actor);
+    o.enterList();
+    await o.act('cancel', outgoing, peerId, o.getSnapshot().episode, null);
+    const packet = o.getSnapshot().command!.packet;
+    await o.loadList();
+    const work = o.reconcile(o.getSnapshot().episode);
+    token.resolve(undefined);
+    await work;
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0], calls[1]);
+    assert.equal(calls[1]!.key, packet.key);
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().notice, 'Запрос отменён.');
+  }
 });

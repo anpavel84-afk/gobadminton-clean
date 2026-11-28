@@ -1099,6 +1099,30 @@ test('bare /friends login return never auto-submits friendship actions',async()=
   assert.equal(restart.calls.filter(c=>c.path.includes('friend-requests')||c.path.includes('/friendships')).length,0);
 });
 
+test('friendships lifecycle: auth show drives setActor; explicit logout forget; account-switch skip forget', async () => {
+  const s = setup(sessionEnvelope());
+  const actors: Array<string | null> = [];
+  let forgets = 0;
+  s.auth.bindFriendshipsLifecycle({
+    setActor: actor => { actors.push(actor?.actorId ?? null); },
+    forget: () => { forgets++; },
+  });
+  await s.auth.hydrate();
+  assert.ok(actors.includes(me.id));
+  await s.auth.logout();
+  assert.equal(forgets, 1);
+  assert.equal(actors.at(-1), null);
+  // beginLogin uses logout(false, false) — fences without friendships forget.
+  const before = forgets;
+  s.setHandler(async path => path === '/auth/methods'
+    ? { items: [{ method: 'vk', type: 'oauth', available: true }] }
+    : { transactionId: token('t'), expiresAt: new Date(now + 600000).toISOString(),
+      browserStartUrl: `https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}` });
+  await s.auth.beginLogin('/friends');
+  assert.equal(forgets, before);
+  s.auth.bindFriendshipsLifecycle(null);
+});
+
 const interestReceipt = {interestId:'10000000-0000-4000-8000-000000000001',version:'9007199254740993',outcome:'mutual'};
 function interestPacket(auth:AuthCoordinator):PlayInterestPacket {
   return Object.freeze({kind:'send',path:'/play-interests',target:'peer',key:'auth-interest-key',

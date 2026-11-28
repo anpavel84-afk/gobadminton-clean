@@ -52,7 +52,8 @@ export class FriendshipsCoordinator {
   private listeners = new Set<() => void>();
   private sequence = 0;
   private authority = 0;
-  private quarantine: Command[] = [];
+  /** Same-actor verified reauth may restore; other account / forget wipe. Never auto-dispatch. */
+  private quarantine: { actorId: string; command: Command } | null = null;
   private port: FriendshipsPort;
 
   constructor(port: FriendshipsPort) { this.port = port; }
@@ -65,14 +66,41 @@ export class FriendshipsCoordinator {
 
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || !actor && !this.state.actor) return;
-    if (this.state.command) this.quarantine.push(this.state.command);
+    // Park pending/UNKNOWN under the last verified owner; null gap retains quarantine.
+    if (this.state.actor) {
+      this.quarantine = this.state.command
+        ? { actorId: this.state.actor.actorId, command: this.state.command }
+        : null;
+    }
+    if (actor && this.quarantine?.actorId !== actor.actorId) this.quarantine = null;
+    const saved = actor ? this.quarantine : null;
+    if (actor) this.quarantine = null;
     this.authority++;
     this.sequence++;
+    const next = empty(actor ? { ...actor } : null, this.state.episode + 1, this.state.foreground);
+    if (!actor || !saved?.command) {
+      this.show(next);
+      return;
+    }
+    // Rebind session/generation only; preserve original key/body/path/ids. No auto-send.
+    const restored = Object.freeze({
+      ...saved.command.packet,
+      actor: Object.freeze({ ...actor }),
+    }) as FriendshipPacket;
     this.show({
-      ...empty(actor ? { ...actor } : null, this.state.episode + 1, this.state.foreground),
-      command: null, notice: null,
+      ...next,
+      command: { packet: restored, status: 'unknown' },
+      notice: unknownNotice,
     });
   }
+
+  /** Explicit logout wipes parked UNKNOWN and private command state before fencing auth. */
+  forget = () => {
+    this.quarantine = null;
+    this.authority++;
+    this.sequence++;
+    this.show(empty(null, this.state.episode + 1, this.state.foreground));
+  };
 
   setForeground = (foreground: boolean) => {
     if (foreground === this.state.foreground) return;
@@ -102,7 +130,9 @@ export class FriendshipsCoordinator {
     this.sequence++;
     this.show({
       listActive: true, episode: this.state.episode + 1, tab: 'accepted', cursor: null,
-      page: null, listStatus: 'loading', capabilities: null, notice: null,
+      page: null, listStatus: 'loading', capabilities: null,
+      notice: this.state.command ? unknownNotice : null,
+      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
     });
   };
 
@@ -147,7 +177,9 @@ export class FriendshipsCoordinator {
     this.sequence++;
     this.show({
       profilePeerId: peerId, profileView: null, profileStatus: 'loading',
-      episode: this.state.episode + 1, notice: null,
+      episode: this.state.episode + 1,
+      notice: this.state.command ? unknownNotice : null,
+      ...(this.state.command ? { command: { ...this.state.command, status: 'unknown' as const } } : {}),
     });
   };
 
@@ -253,10 +285,6 @@ export class FriendshipsCoordinator {
     const s = this.state;
     if (!s.actor || !s.foreground || s.command || listLease !== s.episode) return;
     if (peerLease !== null && peerLease !== s.profilePeerId) return;
-    if (this.quarantine.some(c => c.packet.actor.actorId === s.actor!.actorId)) {
-      this.show({ notice: 'Предыдущий запрос сохранён в прежнем сеансе с неизвестным результатом. Новый запрос не отправлен.' });
-      return;
-    }
     const wire = friendCommand(view, peerId, action);
     if (!wire) return;
     const packet = Object.freeze({
@@ -277,11 +305,14 @@ export class FriendshipsCoordinator {
     await this.dispatch(command);
   };
 
-  /** True when the frozen command still names the relation on the current surface (if loaded). */
-  private commandVisible(packet: FriendshipPacket): boolean {
+  /**
+   * True when the frozen command still names the relation on the current surface (if loaded).
+   * Used by UI to decide in-row vs orphan recovery — omission never settles UNKNOWN.
+   */
+  commandMatchesSurface(packet: FriendshipPacket): boolean {
     if (packet.peerLease !== null) {
       if (this.state.profilePeerId !== packet.peerLease) return false;
-      if (this.state.profileStatus !== 'ready' || !this.state.profileView) return true;
+      if (this.state.profileStatus !== 'ready' || !this.state.profileView) return false;
       const view = this.state.profileView;
       if (packet.action === 'remove') return packet.friendshipId === view.friendshipId;
       if (packet.action === 'request') {
@@ -289,8 +320,7 @@ export class FriendshipsCoordinator {
       }
       return packet.requestId === (view.request?.id ?? null);
     }
-    if (!this.state.listActive) return false;
-    if (this.state.listStatus !== 'ready' || !this.state.page) return true;
+    if (!this.state.listActive || this.state.listStatus !== 'ready' || !this.state.page) return false;
     return this.state.page.items.some(view => {
       if (packet.action === 'remove') return packet.friendshipId === view.friendshipId;
       if (packet.action === 'request') {
@@ -300,14 +330,20 @@ export class FriendshipsCoordinator {
     });
   }
 
+  /** Owning list/profile surface is current — row presence is not required for explicit recovery. */
+  private commandSurfaceLive(packet: FriendshipPacket): boolean {
+    if (packet.peerLease !== null) return this.state.profilePeerId === packet.peerLease;
+    return this.state.listActive;
+  }
+
   reconcile = async (renderedLease = this.state.episode) => {
     const c = this.state.command;
     if (!c || c.status !== 'unknown' || !sameActor(c.packet.actor, this.state.actor) || !this.state.foreground) return;
     // Stale UI lease after another remount must not recover.
     if (renderedLease !== this.state.episode) return;
     const packet = c.packet;
-    // Same actor + same selected target surface; keep UNKNOWN if relation left the current view.
-    if (!this.commandVisible(packet)) return;
+    // Same actor + same selected target surface; row omission never proves noncommit.
+    if (!this.commandSurfaceLive(packet)) return;
     // Fresh recovery lease for permit only — never mutate original key/body/id/version/viewLease.
     await this.dispatch(c, renderedLease);
   };
@@ -329,7 +365,7 @@ export class FriendshipsCoordinator {
         packet.action,
       );
       if (!valid()) {
-        this.quarantine = this.quarantine.filter(c => c.packet !== packet);
+        // Late receipt after authority/surface retire must not settle or invent noncommit.
         return;
       }
       // Receipt identity must match the frozen packet target/request/friendship ids.

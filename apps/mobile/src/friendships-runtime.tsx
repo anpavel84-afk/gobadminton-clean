@@ -18,18 +18,25 @@ export function FriendshipsProvider({ children }: PropsWithChildren) {
     random: () => Crypto.randomUUID(),
   }));
   useLayoutEffect(() => {
-    const sync = () => {
-      const auth = nativeAuth.getSnapshot();
-      if (auth.status === 'hydrating') return;
-      owner.setActor(auth.status === 'authenticated' ? nativeAuth.participation.getSnapshot().actor : null);
-    };
+    // Auth show() drives setActor; explicit logout forget() wipes parked UNKNOWN.
+    nativeAuth.bindFriendshipsLifecycle({
+      setActor: actor => owner.setActor(actor),
+      forget: () => owner.forget(),
+    });
     owner.setForeground(AppState.currentState === 'active');
-    sync();
-    const auth = nativeAuth.subscribe(sync);
+    const auth = nativeAuth.getSnapshot();
+    if (auth.status !== 'hydrating') {
+      owner.setActor(auth.status === 'authenticated' ? nativeAuth.participation.getSnapshot().actor : null);
+    }
     const lifecycle = AppState.addEventListener('change', state => owner.setForeground(state === 'active'));
     // Verified block/unblock retires friendship grants before any new action.
     const safety = nativeAuth.contact.subscribeRadarInvalidation(owner.invalidate);
-    return () => { auth(); lifecycle.remove(); safety(); owner.setActor(null); };
+    return () => {
+      lifecycle.remove();
+      safety();
+      nativeAuth.bindFriendshipsLifecycle(null);
+      owner.setActor(null);
+    };
   }, [owner]);
   return <Context.Provider value={owner}>{children}</Context.Provider>;
 }

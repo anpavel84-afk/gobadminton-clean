@@ -64,6 +64,8 @@ export class AuthCoordinator {
   private writable = true;
   private starting: Promise<{ url: string; generation: string } | null> | null = null;
   private snapshot: AuthSnapshot = { status: 'hydrating', me: null, sessions: [], returnPath: null, notice: null };
+  /** Root FriendshipsProvider binds here — same authority lifecycle as contact/safety owners. */
+  private friendshipsLifecycle: { setActor: (actor: Actor | null) => void; forget: () => void } | null = null;
   readonly players = new PlayersCoordinator();
   readonly participation: ParticipationCoordinator;
   readonly messages: MessagesCoordinator;
@@ -527,6 +529,10 @@ export class AuthCoordinator {
   getSnapshot = (): AuthSnapshot => this.snapshot;
   refreshDelay = () => Math.max(1, (this.access?.expiresAt ?? this.now()) - this.now() + 1);
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  /** FriendshipsProvider registers setActor/forget; unmount clears the binding. */
+  bindFriendshipsLifecycle = (
+    lifecycle: { setActor: (actor: Actor | null) => void; forget: () => void } | null,
+  ) => { this.friendshipsLifecycle = lifecycle; };
   private show(patch: Partial<AuthSnapshot>) {
     this.snapshot = { ...this.snapshot, ...patch };
     if (this.snapshot.status === 'authenticated' && this.snapshot.me) {
@@ -548,6 +554,7 @@ export class AuthCoordinator {
     }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
+    this.friendshipsLifecycle?.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -950,6 +957,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
     if (forgetCreation) this.postgame.forget();
+    if (forgetCreation) this.friendshipsLifecycle?.forget();
     this.show({ status: 'guest', me: null, sessions: [], notice: null });
     // Queue the local clear immediately. Remote revocation is bounded by the API timeout and never persisted/retried.
     const clear = this.persist(envelope, epoch).catch(() => {
