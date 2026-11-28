@@ -69,7 +69,7 @@ function OrphanFriendRecovery({ listLease }: { listLease: number }) {
   const onList = packet.peerLease === null && state.listActive;
   const onProfile = packet.peerLease !== null && state.profilePeerId === packet.peerLease;
   if (!onList && !onProfile) return null;
-  const retentionBlocked = friendshipIdempotencyReplayBlocked(command.firstDispatchedAt);
+  const retentionBlocked = friendshipIdempotencyReplayBlocked(command);
   const notice = retentionBlocked
     ? (state.notice ?? FRIENDSHIP_RETENTION_EXPIRED_NOTICE)
     : (state.notice
@@ -120,7 +120,7 @@ export function FriendActions({
   const [confirm, setConfirm] = useState(false);
   const locked = !!state.command || !!state.outstandingWarning;
   const retentionBlocked = state.command?.status === 'unknown'
-    && friendshipIdempotencyReplayBlocked(state.command.firstDispatchedAt);
+    && friendshipIdempotencyReplayBlocked(state.command);
   const actions = (['request', 'accept', 'decline', 'cancel', 'remove'] as FriendAction[])
     .filter(action => friendCommand(view, peerId, action));
   function act(action: FriendAction) {

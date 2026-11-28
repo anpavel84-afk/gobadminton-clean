@@ -13,12 +13,41 @@ import {
 } from '../src/friendships.ts';
 import { createNativeApi } from '../src/native-api.ts';
 
-const controllableClock = () => {
-  let now = 1_700_000_000_000;
+/** Paired wall + process-local monotonic clocks for UNKNOWN retention tests. */
+const controllableDualClocks = () => {
+  let wall = 1_700_000_000_000;
+  let mono = 1_000;
   return {
-    now: () => now,
-    advance: (ms: number) => { now += ms; },
-    set: (value: number) => { now = value; },
+    wall: {
+      now: () => wall,
+      advance: (ms: number) => { wall += ms; },
+      set: (value: number) => { wall = value; },
+    },
+    mono: {
+      now: () => mono,
+      advance: (ms: number) => { mono += ms; },
+      set: (value: number) => { mono = value; },
+    },
+  };
+};
+
+const installDualClocks = (clocks: ReturnType<typeof controllableDualClocks>) => {
+  const realNow = Date.now;
+  const realPerf = globalThis.performance;
+  const perfStub = { now: clocks.mono.now };
+  Date.now = clocks.wall.now;
+  Object.defineProperty(globalThis, 'performance', {
+    value: perfStub,
+    configurable: true,
+    writable: true,
+  });
+  return () => {
+    Date.now = realNow;
+    Object.defineProperty(globalThis, 'performance', {
+      value: realPerf,
+      configurable: true,
+      writable: true,
+    });
   };
 };
 
@@ -598,80 +627,117 @@ test('QA57: row omission keeps UNKNOWN recovery; same-actor reauth restores; B/l
   }
 });
 
-test('#522 QAFIX7: CLIENT_RECOVERY_MAX_AGE_MS is 23h below server 24h TTL; fail-closed helper', () => {
+test('#522 QAFIX7/8: CLIENT_RECOVERY_MAX_AGE_MS is 23h; wall+mono fail-closed helper', () => {
   assert.equal(FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS, 24 * 60 * 60 * 1000);
   assert.equal(CLIENT_RECOVERY_MAX_AGE_MS, 23 * 60 * 60 * 1000);
   assert.ok(CLIENT_RECOVERY_MAX_AGE_MS < FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS);
   assert.equal(FRIENDSHIP_IDEMPOTENCY_TTL_MS, CLIENT_RECOVERY_MAX_AGE_MS);
   const t0 = 1_700_000_000_000;
+  const m0 = 5_000;
   assert.equal(friendshipIdempotencyReplayBlocked(undefined), true);
   assert.equal(friendshipIdempotencyReplayBlocked(Number.NaN), true);
-  assert.equal(friendshipIdempotencyReplayBlocked(t0, t0 - 1), true);
-  assert.equal(friendshipIdempotencyReplayBlocked(t0, t0 + CLIENT_RECOVERY_MAX_AGE_MS - 1), false);
-  assert.equal(friendshipIdempotencyReplayBlocked(t0, t0 + CLIENT_RECOVERY_MAX_AGE_MS), true);
-  assert.equal(friendshipIdempotencyReplayBlocked(t0, t0 + CLIENT_RECOVERY_MAX_AGE_MS + 1), true);
+  assert.equal(friendshipIdempotencyReplayBlocked({ firstDispatchedAt: t0 }, { wall: t0, mono: m0 }), true);
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, { wall: t0 - 1, mono: m0 }), true);
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, { wall: t0 + CLIENT_RECOVERY_MAX_AGE_MS - 1, mono: m0 + CLIENT_RECOVERY_MAX_AGE_MS - 1 }), false);
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, { wall: t0 + CLIENT_RECOVERY_MAX_AGE_MS, mono: m0 + 1 }), true);
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, { wall: t0 + 1, mono: m0 + CLIENT_RECOVERY_MAX_AGE_MS }), true);
+  // Wall still after dispatch but under ceiling while mono ≥ 23h (rollback hide) — blocked.
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, {
+    wall: t0 + 22 * 60 * 60 * 1000,
+    mono: m0 + 25 * 60 * 60 * 1000,
+  }), true);
+  // Missing / reset mono fail closed even when wall is in-window.
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, { wall: t0 + 1, mono: null }), true);
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, { wall: t0 + 1, mono: m0 - 1 }), true);
   // Inside server TTL but at/after client ceiling — blocked (conservative margin).
-  assert.equal(friendshipIdempotencyReplayBlocked(t0, t0 + FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS - 1), true);
-  assert.equal(friendshipIdempotencyReplayBlocked(t0, t0 + FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS), true);
+  assert.equal(friendshipIdempotencyReplayBlocked({
+    firstDispatchedAt: t0, firstDispatchedMono: m0,
+  }, {
+    wall: t0 + FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS - 1,
+    mono: m0 + FRIENDSHIP_SERVER_IDEMPOTENCY_TTL_MS - 1,
+  }), true);
 });
 
-test('#522 QAFIX7: in-window same-key recovery; 23h boundary/post-token; reauth; persistent retirement warning', async () => {
-  const clock = controllableClock();
-  const realNow = Date.now;
-  Date.now = clock.now;
+test('#522 QAFIX7/8: in-window same-key recovery; wall+mono boundary/post-token; reauth; persistent retirement warning', async () => {
+  const clocks = controllableDualClocks();
+  const restore = installDualClocks(clocks);
   try {
-    // In-window: client-ceiling-1 still same-key recovery; original firstDispatchedAt preserved.
+    // In-window: client-ceiling-1 still same-key recovery; original wall+mono age preserved.
     {
       const { o, calls } = setup(async () => { throw new Error('offline'); });
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       assert.equal(o.getSnapshot().command?.status, 'unknown');
       const age = o.getSnapshot().command!.firstDispatchedAt;
+      const mono = o.getSnapshot().command!.firstDispatchedMono;
       const key = o.getSnapshot().command!.packet.key;
       assert.equal(typeof age, 'number');
+      assert.equal(typeof mono, 'number');
       assert.equal(calls.length, 1);
 
-      clock.advance(CLIENT_RECOVERY_MAX_AGE_MS - 1);
+      clocks.wall.advance(CLIENT_RECOVERY_MAX_AGE_MS - 1);
+      clocks.mono.advance(CLIENT_RECOVERY_MAX_AGE_MS - 1);
       await o.reconcile(o.getSnapshot().episode);
       assert.equal(calls.length, 2);
       assert.equal(calls[1]!.key, key);
       assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
       assert.equal(o.getSnapshot().command?.status, 'unknown');
     }
 
     // Exact client ceiling and beyond: no POST, no new key, honest expired notice.
     {
-      clock.set(1_700_000_000_000);
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
       const { o, calls } = setup(async () => { throw new Error('offline'); });
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       const age = o.getSnapshot().command!.firstDispatchedAt!;
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
       const key = o.getSnapshot().command!.packet.key;
-      clock.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
+      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
+      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS);
       const before = calls.length;
       await o.reconcile(o.getSnapshot().episode);
       assert.equal(calls.length, before);
       assert.equal(o.getSnapshot().command?.status, 'unknown');
       assert.equal(o.getSnapshot().command!.packet.key, key);
       assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
       assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
       assert.equal(o.retentionExpiredFor(), true);
 
-      clock.advance(1);
+      clocks.wall.advance(1);
+      clocks.mono.advance(1);
       await o.reconcile(o.getSnapshot().episode);
       assert.equal(calls.length, before);
       assert.equal(o.getSnapshot().command!.packet.key, key);
     }
 
-    // Backwards clock / missing age fail closed — no replay, no fresh key.
+    // Backwards wall / missing age fail closed — no replay, no fresh key.
     {
-      clock.set(1_700_000_000_000);
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
       const { o, calls } = setup(async () => { throw new Error('offline'); });
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       const key = o.getSnapshot().command!.packet.key;
       const before = calls.length;
-      (o.getSnapshot().command as { firstDispatchedAt: number }).firstDispatchedAt = clock.now() + 60_000;
+      (o.getSnapshot().command as { firstDispatchedAt: number }).firstDispatchedAt = clocks.wall.now() + 60_000;
       await o.reconcile(o.getSnapshot().episode);
       assert.equal(calls.length, before);
       assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
@@ -683,9 +749,10 @@ test('#522 QAFIX7: in-window same-key recovery; 23h boundary/post-token; reauth;
       assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
     }
 
-    // Time advances past client ceiling during post-token await → zero recovery send; stay UNKNOWN.
+    // Wall+mono advance past client ceiling during post-token await → zero recovery send.
     {
-      clock.set(1_700_000_000_000);
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
       const token = deferred();
       const calls: FriendshipPacket[] = [];
       const o = new FriendshipsCoordinator({
@@ -709,51 +776,164 @@ test('#522 QAFIX7: in-window same-key recovery; 23h boundary/post-token; reauth;
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       const age = o.getSnapshot().command!.firstDispatchedAt!;
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
       const key = o.getSnapshot().command!.packet.key;
       assert.equal(calls.length, 1);
       const work = o.reconcile(o.getSnapshot().episode);
-      clock.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
+      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
+      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS);
       token.resolve(undefined);
       await work;
       assert.equal(calls.length, 1, 'deferred recovery must not send after client ceiling');
       assert.equal(o.getSnapshot().command?.status, 'unknown');
       assert.equal(o.getSnapshot().command!.packet.key, key);
       assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
       assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
     }
 
-    // Same-actor reauth preserves initial timestamp; never auto-send; no key rotation.
+    // Same-actor reauth preserves wall+mono; never auto-send; no key rotation.
     {
-      clock.set(1_700_000_000_000);
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
       const { o, calls } = setup(async () => { throw new Error('offline'); });
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       const age = o.getSnapshot().command!.firstDispatchedAt!;
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
       const key = o.getSnapshot().command!.packet.key;
-      clock.advance(60_000);
+      const body = o.getSnapshot().command!.packet.body;
+      clocks.wall.advance(60_000);
+      clocks.mono.advance(60_000);
       o.setActor(null);
       o.setActor({ ...actor, sessionId: 'reauth-session', generation: 2 });
       assert.equal(o.getSnapshot().command?.status, 'unknown');
       assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
       assert.equal(o.getSnapshot().command!.packet.key, key);
+      assert.deepEqual(o.getSnapshot().command!.packet.body, body);
       assert.equal(calls.length, 1);
 
-      clock.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
+      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS);
+      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS);
       o.openProfile(peerId); await o.loadProfile();
       await o.reconcile(o.getSnapshot().episode);
       assert.equal(calls.length, 1);
       assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
+      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
+    }
+
+    // QAFIX8: wall rollback still after dispatch (22h) while mono advanced 25h — no stale UNKNOWN replay.
+    {
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
+      const { o, calls } = setup(async () => { throw new Error('offline'); });
+      o.openProfile(peerId); await o.loadProfile();
+      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+      const age = o.getSnapshot().command!.firstDispatchedAt!;
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
+      const key = o.getSnapshot().command!.packet.key;
+      const body = structuredClone(o.getSnapshot().command!.packet.body);
+      clocks.mono.advance(25 * 60 * 60 * 1000);
+      clocks.wall.set(age + 22 * 60 * 60 * 1000);
+      const before = calls.length;
+      await o.reconcile(o.getSnapshot().episode);
+      assert.equal(calls.length, before, 'wall rollback must not hide mono expiry');
+      assert.equal(o.getSnapshot().command?.status, 'unknown');
+      assert.equal(o.getSnapshot().command!.packet.key, key);
+      assert.deepEqual(o.getSnapshot().command!.packet.body, body);
+      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
+      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
+      assert.equal(o.retentionExpiredFor(), true);
+    }
+
+    // QAFIX8: missing / reset mono fail closed while wall remains in-window.
+    {
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
+      const { o, calls } = setup(async () => { throw new Error('offline'); });
+      o.openProfile(peerId); await o.loadProfile();
+      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+      const key = o.getSnapshot().command!.packet.key;
+      const before = calls.length;
+      clocks.wall.advance(60_000);
+      clocks.mono.advance(60_000);
+      delete (o.getSnapshot().command as { firstDispatchedMono?: number }).firstDispatchedMono;
+      await o.reconcile(o.getSnapshot().episode);
+      assert.equal(calls.length, before);
+      assert.equal(o.getSnapshot().command!.packet.key, key);
+      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
+
+      (o.getSnapshot().command as { firstDispatchedMono: number }).firstDispatchedMono = clocks.mono.now() + 1;
+      await o.reconcile(o.getSnapshot().episode);
+      assert.equal(calls.length, before);
+      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
+
+      // Monotonic reset below stamp — fail closed.
+      (o.getSnapshot().command as { firstDispatchedMono: number }).firstDispatchedMono = clocks.mono.now() - 1;
+      clocks.mono.set(0);
+      await o.reconcile(o.getSnapshot().episode);
+      assert.equal(calls.length, before);
+      assert.equal(o.getSnapshot().command!.packet.key, key);
+      assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
+    }
+
+    // QAFIX8: post-token mono crosses 23h while wall rolled back under ceiling — zero send.
+    {
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
+      const token = deferred();
+      const calls: FriendshipPacket[] = [];
+      const o = new FriendshipsCoordinator({
+        random: () => 'immutable-key-0001',
+        capabilities: async () => caps,
+        list: async () => ({ items: [outgoing], nextCursor: null, asOf: 't' }),
+        states: async () => ({ items: [none] }),
+        ownProfile: async () => profile as never,
+        send: async (p, permit) => {
+          if (calls.length === 0) {
+            calls.push(p);
+            throw new Error('offline');
+          }
+          await token.promise;
+          if (!permit()) throw new FriendshipError('network');
+          calls.push(p);
+          return receipt('pending');
+        },
+      });
+      o.setActor(actor);
+      o.openProfile(peerId); await o.loadProfile();
+      await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+      const age = o.getSnapshot().command!.firstDispatchedAt!;
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
+      const key = o.getSnapshot().command!.packet.key;
+      assert.equal(calls.length, 1);
+      const work = o.reconcile(o.getSnapshot().episode);
+      clocks.wall.set(age + 22 * 60 * 60 * 1000);
+      clocks.mono.set(mono + 25 * 60 * 60 * 1000);
+      token.resolve(undefined);
+      await work;
+      assert.equal(calls.length, 1, 'post-token mono expiry must block despite wall rollback');
+      assert.equal(o.getSnapshot().command?.status, 'unknown');
+      assert.equal(o.getSnapshot().command!.packet.key, key);
+      assert.equal(o.getSnapshot().command!.firstDispatchedAt, age);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, mono);
       assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETENTION_EXPIRED_NOTICE);
     }
 
     // Explicit retirement: outstanding warning survives reload; ack required before new action.
     {
-      clock.set(1_700_000_000_000);
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
       const { o, calls } = setup(async () => { throw new Error('offline'); });
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       const age = o.getSnapshot().command!.firstDispatchedAt!;
-      clock.set(age + CLIENT_RECOVERY_MAX_AGE_MS + 1);
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
+      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS + 1);
+      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS + 1);
       o.retireExpiredUnknown();
       assert.equal(o.getSnapshot().command, null);
       assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
@@ -776,19 +956,24 @@ test('#522 QAFIX7: in-window same-key recovery; 23h boundary/post-token; reauth;
       assert.equal(calls.length, 2);
       // In-window retire is refused — only expired UNKNOWN may clear.
       const midAge = o.getSnapshot().command!.firstDispatchedAt!;
+      const midMono = o.getSnapshot().command!.firstDispatchedMono!;
       o.retireExpiredUnknown();
       assert.equal(o.getSnapshot().command?.status, 'unknown');
       assert.equal(o.getSnapshot().command!.firstDispatchedAt, midAge);
+      assert.equal(o.getSnapshot().command!.firstDispatchedMono, midMono);
     }
 
     // Outstanding warning is per actor/session; logout/account switch clears private state.
     {
-      clock.set(1_700_000_000_000);
+      clocks.wall.set(1_700_000_000_000);
+      clocks.mono.set(1_000);
       const { o } = setup(async () => { throw new Error('offline'); });
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
       const age = o.getSnapshot().command!.firstDispatchedAt!;
-      clock.set(age + CLIENT_RECOVERY_MAX_AGE_MS + 1);
+      const mono = o.getSnapshot().command!.firstDispatchedMono!;
+      clocks.wall.set(age + CLIENT_RECOVERY_MAX_AGE_MS + 1);
+      clocks.mono.set(mono + CLIENT_RECOVERY_MAX_AGE_MS + 1);
       o.retireExpiredUnknown();
       assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
       // Same-actor null gap restores outstanding warning without inventing noncommit.
@@ -805,7 +990,8 @@ test('#522 QAFIX7: in-window same-key recovery; 23h boundary/post-token; reauth;
       o.setActor(actor);
       o.openProfile(peerId); await o.loadProfile();
       await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-      clock.set(o.getSnapshot().command!.firstDispatchedAt! + CLIENT_RECOVERY_MAX_AGE_MS + 1);
+      clocks.wall.set(o.getSnapshot().command!.firstDispatchedAt! + CLIENT_RECOVERY_MAX_AGE_MS + 1);
+      clocks.mono.set(o.getSnapshot().command!.firstDispatchedMono! + CLIENT_RECOVERY_MAX_AGE_MS + 1);
       o.retireExpiredUnknown();
       assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
       o.forget();
@@ -813,6 +999,6 @@ test('#522 QAFIX7: in-window same-key recovery; 23h boundary/post-token; reauth;
       assert.equal(o.getSnapshot().actor, null);
     }
   } finally {
-    Date.now = realNow;
+    restore();
   }
 });

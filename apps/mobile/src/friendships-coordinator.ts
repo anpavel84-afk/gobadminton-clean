@@ -4,7 +4,8 @@ import { NativeAuthError } from './native-auth-protocol.ts';
 import {
   FRIENDS_TABS, FriendshipError, FRIENDSHIP_RETENTION_EXPIRED_NOTICE,
   FRIENDSHIP_RETIREMENT_WARNING,
-  friendCommand, friendshipIdempotencyReplayBlocked, friendshipStatesPath, friendshipsListPath,
+  friendCommand, friendshipIdempotencyReplayBlocked, friendshipMonotonicNow,
+  friendshipStatesPath, friendshipsListPath,
   ownFriendsPrerequisite, parseFriendshipList, parseFriendshipReceipt, parseFriendshipStates,
   parseSocialCapabilities, publicPlayerId, type FriendAction, type FriendshipList,
   type FriendshipPacket, type FriendshipView, type FriendsTab, type SocialCapabilities,
@@ -16,8 +17,10 @@ type ProfileStatus = 'idle' | 'loading' | 'ready' | 'guest' | 'unavailable' | 'e
 type Command = {
   packet: FriendshipPacket;
   status: 'sending' | 'unknown';
-  /** Trustworthy first wire attempt; frozen through reauth; never rotated on reconcile. */
+  /** Trustworthy first wire wall time; frozen through reauth; never rotated on reconcile. */
   firstDispatchedAt?: number;
+  /** Same-process performance.now at first wire; preserved across reauth; not durable. */
+  firstDispatchedMono?: number;
 };
 
 export type FriendshipsSnapshot = {
@@ -60,6 +63,9 @@ const withAge = (command: Command, status: Command['status']): Command => ({
   status,
   ...(command.firstDispatchedAt !== undefined
     ? { firstDispatchedAt: command.firstDispatchedAt }
+    : {}),
+  ...(command.firstDispatchedMono !== undefined
+    ? { firstDispatchedMono: command.firstDispatchedMono }
     : {}),
 });
 
@@ -116,7 +122,7 @@ export class FriendshipsCoordinator {
       });
       return;
     }
-    // Rebind session/generation only; preserve original key/body/path/ids/age. No auto-send.
+    // Rebind session/generation only; preserve original key/body/path/ids/wall+mono age. No auto-send.
     const restored = Object.freeze({
       ...saved.command.packet,
       actor: Object.freeze({ ...actor }),
@@ -126,7 +132,7 @@ export class FriendshipsCoordinator {
       ...next,
       command,
       outstandingWarning: saved.outstandingWarning,
-      notice: friendshipIdempotencyReplayBlocked(command.firstDispatchedAt)
+      notice: friendshipIdempotencyReplayBlocked(command)
         ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
         : unknownNotice,
     });
@@ -147,7 +153,7 @@ export class FriendshipsCoordinator {
   retireExpiredUnknown = () => {
     const c = this.state.command;
     if (!c || c.status !== 'unknown') return;
-    if (!friendshipIdempotencyReplayBlocked(c.firstDispatchedAt)) return;
+    if (!friendshipIdempotencyReplayBlocked(c)) return;
     this.quarantine = null;
     this.authority++;
     this.sequence++;
@@ -178,12 +184,12 @@ export class FriendshipsCoordinator {
     const c = this.state.command;
     if (!c || c.status !== 'unknown') return false;
     if (packet && c.packet !== packet && c.packet.key !== packet.key) return false;
-    return friendshipIdempotencyReplayBlocked(c.firstDispatchedAt);
+    return friendshipIdempotencyReplayBlocked(c);
   };
 
   private surfaceNotice(): string | null {
     if (this.state.command) {
-      return friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+      return friendshipIdempotencyReplayBlocked(this.state.command)
         ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
         : unknownNotice;
     }
@@ -298,7 +304,7 @@ export class FriendshipsCoordinator {
     if (!actor) { this.show({ listStatus: 'guest', page: null, capabilities: null }); return; }
     // Reads never settle UNKNOWN; keep expired retention or unresolved retirement warning.
     const retained = this.state.command
-      && friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+      && friendshipIdempotencyReplayBlocked(this.state.command)
       ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
       : (this.state.outstandingWarning ?? null);
     this.show({ listStatus: 'loading', page: null, notice: retained });
@@ -346,7 +352,7 @@ export class FriendshipsCoordinator {
     if (!peerId || !this.state.foreground) return;
     if (!actor) { this.show({ profileStatus: 'guest', profileView: null }); return; }
     const retained = this.state.command
-      && friendshipIdempotencyReplayBlocked(this.state.command.firstDispatchedAt)
+      && friendshipIdempotencyReplayBlocked(this.state.command)
       ? FRIENDSHIP_RETENTION_EXPIRED_NOTICE
       : (this.state.outstandingWarning ?? null);
     this.show({ profileStatus: 'loading', profileView: null, notice: retained });
@@ -455,7 +461,7 @@ export class FriendshipsCoordinator {
     // Same actor + same selected target surface; row omission never proves noncommit.
     if (!this.commandSurfaceLive(packet)) return;
     // Explicit tap: retention expiry fail-closed — no same-key replay, no new key.
-    if (friendshipIdempotencyReplayBlocked(c.firstDispatchedAt)) {
+    if (friendshipIdempotencyReplayBlocked(c)) {
       this.retentionExpiredHold(c);
       return;
     }
@@ -476,18 +482,27 @@ export class FriendshipsCoordinator {
     // Initial send binds packet.viewLease; explicit recovery supplies a separate current lease.
     const activeLease = recoveryLease ?? packet.viewLease;
     const reconciling = recoveryLease !== undefined;
-    // First actual dispatch stamps age once; reconcile never invents or rotates the clock.
+    // First actual dispatch stamps wall+mono once; reconcile never invents or rotates either clock.
     const firstDispatchedAt = reconciling
       ? command.firstDispatchedAt
       : (command.firstDispatchedAt ?? Date.now());
-    if (reconciling && friendshipIdempotencyReplayBlocked(firstDispatchedAt)) {
-      this.retentionExpiredHold({ packet, status: 'unknown', firstDispatchedAt });
+    const firstDispatchedMono = reconciling
+      ? command.firstDispatchedMono
+      : (command.firstDispatchedMono ?? friendshipMonotonicNow());
+    const age = { firstDispatchedAt, firstDispatchedMono };
+    if (reconciling && friendshipIdempotencyReplayBlocked(age)) {
+      this.retentionExpiredHold({
+        packet, status: 'unknown',
+        ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+        ...(firstDispatchedMono !== undefined ? { firstDispatchedMono } : {}),
+      });
       return;
     }
     const stamped: Command = {
       packet,
       status: 'sending',
       ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+      ...(firstDispatchedMono !== undefined ? { firstDispatchedMono } : {}),
     };
     this.show({ command: stamped, notice: null });
     const surfaceOk = () => sameActor(packet.actor, this.state.actor) && this.state.command?.packet === packet
@@ -495,16 +510,20 @@ export class FriendshipsCoordinator {
       && (packet.peerLease === null || packet.peerLease === this.state.profilePeerId)
       && (packet.peerLease !== null || this.state.listActive || recoveryLease === undefined)
       && this.state.foreground;
-    // Post-token permit: age checked again so delayed send cannot race past TTL.
-    const valid = () => surfaceOk() && authority === this.authority
-      && !friendshipIdempotencyReplayBlocked(firstDispatchedAt);
+    // Post-token permit: wall+mono checked again so delayed send cannot race past TTL / wall rollback.
+    const ageBlocked = () => friendshipIdempotencyReplayBlocked(age, {
+      // First wire without mono: wall-only; UNKNOWN replay always requires mono.
+      requireMonotonic: reconciling || firstDispatchedMono !== undefined,
+    });
+    const valid = () => surfaceOk() && authority === this.authority && !ageBlocked();
     const holdIfRetention = () => {
       if (!sameActor(packet.actor, this.state.actor) || this.state.command?.packet !== packet) return false;
-      if (!friendshipIdempotencyReplayBlocked(firstDispatchedAt)) return false;
+      if (!ageBlocked()) return false;
       this.retentionExpiredHold({
         packet,
         status: 'unknown',
         ...(firstDispatchedAt !== undefined ? { firstDispatchedAt } : {}),
+        ...(firstDispatchedMono !== undefined ? { firstDispatchedMono } : {}),
       });
       return true;
     };

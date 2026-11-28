@@ -44,20 +44,69 @@ export const FRIENDSHIP_RETENTION_EXPIRED_NOTICE =
 export const FRIENDSHIP_RETIREMENT_WARNING =
   'Локальная блокировка снята. Исход прежней отправки по-прежнему неизвестен. Проверьте дружбу отдельно перед новым действием.';
 
+/** Wall + same-process monotonic stamps from the original first wire attempt. */
+export type FriendshipIdempotencyAge = Readonly<{
+  firstDispatchedAt?: number;
+  /** `performance.now()` at first dispatch; in-memory only — not durable across reload. */
+  firstDispatchedMono?: number;
+}>;
+
 /**
- * Fail-closed UNKNOWN replay gate: missing/invalid/backwards clock or elapsed ≥
- * client recovery ceiling (conservative vs server TTL).
- * Controllable via `now` for synthetic tests — never restarts original age.
+ * Process-local monotonic ms when `performance.now` is reliably available (RN/browser).
+ * Missing/nonfinite → undefined (UNKNOWN replay must fail closed).
  */
-export function friendshipIdempotencyReplayBlocked(
-  firstDispatchedAt: number | undefined,
-  now = Date.now(),
+export function friendshipMonotonicNow(): number | undefined {
+  try {
+    const perf = globalThis.performance;
+    if (!perf || typeof perf.now !== 'function') return undefined;
+    const value = perf.now();
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function friendshipClockElapsedBlocked(
+  start: number | undefined,
+  now: number | undefined,
 ): boolean {
-  if (typeof firstDispatchedAt !== 'number' || !Number.isFinite(firstDispatchedAt)) return true;
-  if (!Number.isFinite(now) || now < firstDispatchedAt) return true;
-  const elapsed = now - firstDispatchedAt;
+  if (typeof start !== 'number' || !Number.isFinite(start)) return true;
+  if (typeof now !== 'number' || !Number.isFinite(now)) return true;
+  // Backwards wall or monotonic reset/regression — never treat as fresh.
+  if (now < start) return true;
+  const elapsed = now - start;
   if (!Number.isFinite(elapsed) || elapsed < 0) return true;
   return elapsed >= CLIENT_RECOVERY_MAX_AGE_MS;
+}
+
+/**
+ * Fail-closed UNKNOWN replay gate: wall and monotonic ages both required by default.
+ * Missing/invalid/backwards/reset mono or wall, or either elapsed ≥ client ceiling.
+ * Controllable via `clocks` for synthetic tests — never restarts original age.
+ *
+ * `requireMonotonic: false` is only for a first wire attempt when mono could not be
+ * captured; UNKNOWN same-key replay always keeps the default (mono required).
+ */
+export function friendshipIdempotencyReplayBlocked(
+  age: FriendshipIdempotencyAge | number | undefined,
+  clocks: {
+    wall?: number;
+    /** `null` forces unavailable mono (fail closed when required). */
+    mono?: number | null;
+    requireMonotonic?: boolean;
+  } = {},
+): boolean {
+  const wallStart = typeof age === 'object' && age !== null ? age.firstDispatchedAt : age;
+  const monoStart = typeof age === 'object' && age !== null ? age.firstDispatchedMono : undefined;
+  const wallNow = clocks.wall ?? Date.now();
+  const monoNow = 'mono' in clocks
+    ? (clocks.mono === null || clocks.mono === undefined ? undefined : clocks.mono)
+    : friendshipMonotonicNow();
+  const requireMonotonic = clocks.requireMonotonic !== false;
+
+  if (friendshipClockElapsedBlocked(wallStart, wallNow)) return true;
+  if (!requireMonotonic && monoStart === undefined) return false;
+  return friendshipClockElapsedBlocked(monoStart, monoNow);
 }
 
 const invalid = (): never => { throw new FriendshipError('invalid'); };
