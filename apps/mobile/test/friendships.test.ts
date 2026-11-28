@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
-import { FriendshipsCoordinator } from '../src/friendships-coordinator.ts';
+import {
+  FriendshipsCoordinator,
+  type FriendshipUnknownBind,
+  type FriendshipWarningBind,
+} from '../src/friendships-coordinator.ts';
 import {
   FRIENDSHIP_UNKNOWN_NOTICE, FRIENDSHIP_RETIREMENT_WARNING,
   FriendshipError, friendCommand, friendshipWire,
@@ -72,6 +76,30 @@ function setup(send: (packet: FriendshipPacket) => Promise<unknown> = async () =
   });
   o.setActor(actor);
   return { o, calls, reads };
+}
+
+function captureUnknown(o: FriendshipsCoordinator): FriendshipUnknownBind {
+  const s = o.getSnapshot();
+  if (!s.actor || s.command?.status !== 'unknown') throw new Error('expected UNKNOWN bind');
+  return {
+    actor: { ...s.actor },
+    packet: s.command.packet,
+    episode: s.episode,
+    foreground: s.foreground,
+    authority: s.authority,
+  };
+}
+
+function captureWarning(o: FriendshipsCoordinator): FriendshipWarningBind {
+  const s = o.getSnapshot();
+  if (!s.actor || !s.outstandingWarning) throw new Error('expected warning bind');
+  return {
+    actor: { ...s.actor },
+    warning: s.outstandingWarning,
+    episode: s.episode,
+    foreground: s.foreground,
+    authority: s.authority,
+  };
 }
 
 test('parsers keep decimal versions, refuse JS number versions, and bind list/states tightly', () => {
@@ -163,7 +191,7 @@ test('five commands keep exact bodies; removal confirmation stays UI-side; UNKNO
   assert.equal(o.getSnapshot().command?.packet, packet);
   // Remount bumps episode; never same-key resend.
   assert.notEqual(packet.viewLease, o.getSnapshot().episode);
-  o.refreshUnknownRelationship();
+  o.refreshUnknownRelationship(captureUnknown(o));
   await o.loadProfile();
   assert.equal(calls.length, 1, 'read-only refresh must not POST');
   assert.equal(o.getSnapshot().command?.status, 'unknown');
@@ -196,7 +224,7 @@ test('remount/reauth: UNKNOWN held; no automatic write; peer/actor/background/sa
     o.closeProfile(); o.openProfile(peerId); await o.loadProfile();
     assert.equal(o.getSnapshot().command?.packet, packet);
     assert.equal(calls.length, 1);
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(captureUnknown(o));
     await o.loadProfile();
     assert.equal(calls.length, 1);
     assert.equal(o.getSnapshot().command?.status, 'unknown');
@@ -214,7 +242,7 @@ test('remount/reauth: UNKNOWN held; no automatic write; peer/actor/background/sa
     o.exitList(); o.enterList(); await o.loadList();
     assert.equal(o.getSnapshot().command?.packet, packet);
     const readsBefore = reads.length;
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(captureUnknown(o));
     await o.loadList();
     assert.equal(calls.length, 1);
     assert.ok(reads.length > readsBefore, 'refresh must issue list GET');
@@ -228,11 +256,12 @@ test('remount/reauth: UNKNOWN held; no automatic write; peer/actor/background/sa
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     assert.equal(calls.length, 1);
     const packet = o.getSnapshot().command!.packet;
+    const stale = captureUnknown(o);
     if (change === 'peer') o.openProfile('other-peer');
     else if (change === 'background') o.setForeground(false);
     else if (change === 'safety') o.invalidate();
     else o.setActor({ ...actor, actorId: 'other' });
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(stale);
     assert.equal(calls.length, 1, `${change} must not dispatch after fence`);
     assert.notEqual(o.getSnapshot().notice, 'Запрос отправлен.');
     if (change === 'actor') assert.equal(o.getSnapshot().command, null);
@@ -245,12 +274,13 @@ test('remount/reauth: UNKNOWN held; no automatic write; peer/actor/background/sa
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     const packet = o.getSnapshot().command!.packet;
+    const stale = captureUnknown(o);
     o.openProfile('other-peer'); await o.loadProfile();
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(stale);
     assert.equal(calls.length, 1);
     assert.equal(o.getSnapshot().command?.packet, packet);
     o.closeProfile();
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(stale);
     assert.equal(calls.length, 1);
     assert.equal(o.getSnapshot().command?.packet, packet);
   }
@@ -372,7 +402,7 @@ test('QA57/#522: row omission keeps UNKNOWN hold; reauth restores; B/logout wipe
     assert.equal(o.getSnapshot().command?.packet.key, packet.key);
     assert.deepEqual(o.getSnapshot().command?.packet.body, packet.body);
     const readsBefore = reads.length;
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(captureUnknown(o));
     await o.loadList();
     assert.ok(reads.length > readsBefore);
     assert.equal(calls.length, 1, 'never same-key resend');
@@ -397,14 +427,14 @@ test('QA57/#522: row omission keeps UNKNOWN hold; reauth restores; B/logout wipe
     assert.equal(o.getSnapshot().command!.packet.actor.sessionId, 'reauth-session');
     assert.equal(calls.length, 1);
     o.enterList(); await o.loadList();
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(captureUnknown(o));
     await o.loadList();
     assert.equal(calls.length, 1);
-    o.unlockUnknown();
+    o.unlockUnknown(captureUnknown(o));
     assert.equal(o.getSnapshot().command, null);
     assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
     assert.equal(calls.length, 1);
-    o.acknowledgeOutstandingWarning();
+    o.acknowledgeOutstandingWarning(captureWarning(o));
     await o.act('accept', incoming, peerId, o.getSnapshot().episode, null);
     assert.equal(calls.length, 2);
     assert.notEqual(calls[1]!.key, original.key, 'new action uses a new key');
@@ -416,10 +446,11 @@ test('QA57/#522: row omission keeps UNKNOWN hold; reauth restores; B/logout wipe
     o.enterList(); await o.loadList();
     await o.act('decline', incoming, peerId, o.getSnapshot().episode, null);
     const key = o.getSnapshot().command!.packet.key;
+    const stale = captureUnknown(o);
     o.setActor({ actorId: 'other', sessionId: 'other-session', generation: 3 });
     assert.equal(o.getSnapshot().command, null);
     o.enterList(); await o.loadList();
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(stale);
     assert.equal(calls.length, 1);
     await o.act('decline', incoming, peerId, o.getSnapshot().episode, null);
     assert.equal(calls.length, 2);
@@ -434,13 +465,14 @@ test('QA57/#522: row omission keeps UNKNOWN hold; reauth restores; B/logout wipe
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     assert.equal(o.getSnapshot().command?.status, 'unknown');
+    const stale = captureUnknown(o);
     o.setActor(null);
     o.forget();
     o.setActor({ ...actor, sessionId: 'after-logout', generation: 4 });
     assert.equal(o.getSnapshot().command, null);
     assert.equal(calls.length, 1);
     o.openProfile(peerId); await o.loadProfile();
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(stale);
     assert.equal(calls.length, 1);
   }
 });
@@ -456,7 +488,7 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     assert.equal(o.getSnapshot().notice, FRIENDSHIP_UNKNOWN_NOTICE);
 
     // Simulate arbitrary clock / sleep / rollback: still no resend API exists.
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(captureUnknown(o));
     await o.loadProfile();
     assert.equal(calls.length, 1);
     assert.equal(o.getSnapshot().command!.packet.key, key);
@@ -485,7 +517,7 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     assert.equal(calls.length, 1);
     const readsBefore = reads.filter(r => r.startsWith('states:')).length;
-    o.refreshUnknownRelationship();
+    o.refreshUnknownRelationship(captureUnknown(o));
     await o.loadProfile();
     assert.equal(calls.length, 1);
     assert.ok(reads.filter(r => r.startsWith('states:')).length > readsBefore);
@@ -500,7 +532,8 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
     const originalKey = o.getSnapshot().command!.packet.key;
-    o.unlockUnknown();
+    const firstUnlock = captureUnknown(o);
+    o.unlockUnknown(firstUnlock);
     assert.equal(o.getSnapshot().command, null);
     assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
     assert.equal(o.getSnapshot().notice, FRIENDSHIP_RETIREMENT_WARNING);
@@ -515,17 +548,19 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     await o.act('request', none, peerId, blockedEpisode, null);
     assert.equal(o.getSnapshot().command, null, 'new action blocked until warning ack');
     assert.equal(calls.length, 1);
-    o.acknowledgeOutstandingWarning();
+    o.acknowledgeOutstandingWarning(captureWarning(o));
     assert.equal(o.getSnapshot().outstandingWarning, null);
     await o.act('request', none, peerId, o.getSnapshot().episode, null);
     assert.equal(o.getSnapshot().command?.status, 'unknown');
     assert.equal(calls.length, 2);
     assert.notEqual(calls[1]!.key, originalKey);
-    // Unlock of held UNKNOWN; second unlock is a no-op while warning already set after clear.
-    o.unlockUnknown();
+    // Unlock of held UNKNOWN; stale prior bind and second unlock cannot disturb warning.
+    const secondUnlock = captureUnknown(o);
+    o.unlockUnknown(secondUnlock);
     assert.equal(o.getSnapshot().command, null);
     assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
-    o.unlockUnknown();
+    o.unlockUnknown(firstUnlock);
+    o.unlockUnknown(secondUnlock);
     assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
   }
 
@@ -534,7 +569,7 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     const { o } = setup(async () => { throw new Error('offline'); });
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-    o.unlockUnknown();
+    o.unlockUnknown(captureUnknown(o));
     assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
     o.setActor(null);
     assert.equal(o.getSnapshot().outstandingWarning, null);
@@ -547,14 +582,14 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     o.setActor(actor);
     o.openProfile(peerId); await o.loadProfile();
     await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
-    o.unlockUnknown();
+    o.unlockUnknown(captureUnknown(o));
     assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
     o.forget();
     assert.equal(o.getSnapshot().outstandingWarning, null);
     assert.equal(o.getSnapshot().actor, null);
   }
 
-  // UI source: no misleading "Проверить результат"; honest labels present.
+  // UI source: no misleading "Проверить результат"; honest labels present; binds captured.
   {
     const ui = readFileSync(new URL('../src/components/friendships.tsx', import.meta.url), 'utf8');
     assert.doesNotMatch(ui, /Проверить результат/);
@@ -562,11 +597,132 @@ test('#522 QAFIX9: NEVER resend UNKNOWN; read-only refresh; explicit unlock+ack;
     assert.match(ui, /Понятно/);
     assert.doesNotMatch(ui, /\.reconcile\b/);
     assert.doesNotMatch(ui, /friendshipIdempotencyReplayBlocked/);
+    assert.match(ui, /authority:\s*state\.authority/);
+    assert.match(ui, /unlockUnknown\((?:bind|unknownBind|\{)/);
+    assert.match(ui, /refreshUnknownRelationship\((?:bind|unknownBind|\{)/);
+    assert.match(ui, /acknowledgeOutstandingWarning\(\{/);
     const coordinator = readFileSync(new URL('../src/friendships-coordinator.ts', import.meta.url), 'utf8');
     assert.doesNotMatch(coordinator, /reconcile\s*=/);
     assert.doesNotMatch(coordinator, /firstDispatchedAt/);
     assert.doesNotMatch(coordinator, /CLIENT_RECOVERY/);
     assert.match(coordinator, /refreshUnknownRelationship/);
     assert.match(coordinator, /unlockUnknown/);
+    assert.match(coordinator, /FriendshipUnknownBind/);
+    assert.match(coordinator, /bindLive/);
+  }
+});
+
+test('#522 QAFIX10: deferred stale UNKNOWN unlock/refresh/ack binds cannot clear newer hold or cross account', async () => {
+  // Old command bind vs newer UNKNOWN — zero clear/write; exact current bind unlocks.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const oldBind = captureUnknown(o);
+    o.unlockUnknown(oldBind);
+    o.acknowledgeOutstandingWarning(captureWarning(o));
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const newer = o.getSnapshot().command!.packet;
+    assert.notEqual(newer, oldBind.packet);
+    o.unlockUnknown(oldBind);
+    o.refreshUnknownRelationship(oldBind);
+    assert.equal(o.getSnapshot().command?.packet, newer);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(calls.length, 2);
+    o.unlockUnknown(captureUnknown(o));
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(calls.length, 2);
+  }
+
+  // Actor switch: captured A callback must not clear B or write.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const fromA = captureUnknown(o);
+    o.setActor({ actorId: 'other-actor', sessionId: 'other-session', generation: 1 });
+    assert.equal(o.getSnapshot().command, null);
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const bPacket = o.getSnapshot().command!.packet;
+    o.unlockUnknown(fromA);
+    o.refreshUnknownRelationship(fromA);
+    assert.equal(o.getSnapshot().command?.packet, bPacket);
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    assert.equal(calls.length, 2);
+    o.unlockUnknown(captureUnknown(o));
+    assert.equal(o.getSnapshot().command, null);
+  }
+
+  // Peer/list navigation retires captured episode/surface — zero clear; fresh bind on live surface works.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const onProfile = captureUnknown(o);
+    o.closeProfile();
+    o.enterList();
+    await o.loadList();
+    o.unlockUnknown(onProfile);
+    o.refreshUnknownRelationship(onProfile);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    assert.equal(calls.length, 1);
+    // Restore profile surface; exact current bind unlocks.
+    o.exitList();
+    o.openProfile(peerId);
+    await o.loadProfile();
+    o.unlockUnknown(captureUnknown(o));
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    o.acknowledgeOutstandingWarning(captureWarning(o));
+
+    // List-owned cancel UNKNOWN: leave list → stale unlock no-ops; re-enter + fresh bind works.
+    o.enterList();
+    await o.loadList();
+    await o.act('cancel', outgoing, peerId, o.getSnapshot().episode, null);
+    const listBind = captureUnknown(o);
+    o.exitList();
+    o.unlockUnknown(listBind);
+    o.refreshUnknownRelationship(listBind);
+    assert.equal(o.getSnapshot().command?.status, 'unknown');
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    o.enterList();
+    await o.loadList();
+    o.unlockUnknown(captureUnknown(o));
+    assert.equal(o.getSnapshot().command, null);
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    assert.equal(calls.length, 2);
+  }
+
+  // Foreground + safety invalidation: stale unlock/refresh/ack write nothing.
+  {
+    const { o, calls } = setup(async () => { throw new Error('offline'); });
+    o.openProfile(peerId); await o.loadProfile();
+    await o.act('request', none, peerId, o.getSnapshot().episode, peerId);
+    const beforeBg = captureUnknown(o);
+    o.setForeground(false);
+    o.unlockUnknown(beforeBg);
+    o.refreshUnknownRelationship(beforeBg);
+    assert.equal(o.getSnapshot().command?.packet, beforeBg.packet);
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    o.setForeground(true);
+    await o.loadProfile();
+    const beforeSafety = captureUnknown(o);
+    o.invalidate();
+    o.unlockUnknown(beforeSafety);
+    o.refreshUnknownRelationship(beforeSafety);
+    assert.equal(o.getSnapshot().command?.packet, beforeSafety.packet);
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    assert.equal(calls.length, 1);
+    o.unlockUnknown(captureUnknown(o));
+    const warn = captureWarning(o);
+    o.invalidate();
+    o.acknowledgeOutstandingWarning(warn);
+    assert.equal(o.getSnapshot().outstandingWarning, FRIENDSHIP_RETIREMENT_WARNING);
+    o.acknowledgeOutstandingWarning(captureWarning(o));
+    assert.equal(o.getSnapshot().outstandingWarning, null);
+    assert.equal(calls.length, 1);
   }
 });

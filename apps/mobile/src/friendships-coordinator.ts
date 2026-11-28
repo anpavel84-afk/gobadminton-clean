@@ -22,6 +22,8 @@ export type FriendshipsSnapshot = {
   actor: Actor | null;
   foreground: boolean;
   episode: number;
+  /** Safety/auth generation — UI ack/refresh callbacks must capture and re-check. */
+  authority: number;
   listActive: boolean;
   tab: FriendsTab;
   cursor: string | null;
@@ -37,6 +39,24 @@ export type FriendshipsSnapshot = {
   outstandingWarning: string | null;
 };
 
+/** Exact UI bind for UNKNOWN unlock / read-only refresh — validated at execution. */
+export type FriendshipUnknownBind = {
+  actor: Actor;
+  packet: FriendshipPacket;
+  episode: number;
+  foreground: boolean;
+  authority: number;
+};
+
+/** Exact UI bind for post-unlock warning acknowledgement — validated at execution. */
+export type FriendshipWarningBind = {
+  actor: Actor;
+  warning: string;
+  episode: number;
+  foreground: boolean;
+  authority: number;
+};
+
 export type FriendshipsPort = {
   capabilities: (actor: Actor) => Promise<unknown>;
   list: (tab: FriendsTab, cursor: string | null, actor: Actor) => Promise<unknown>;
@@ -46,8 +66,8 @@ export type FriendshipsPort = {
   random: () => string;
 };
 
-const empty = (actor: Actor | null, episode: number, foreground = true): FriendshipsSnapshot => ({
-  actor, foreground, episode, listActive: false, tab: 'accepted', cursor: null, page: null,
+const empty = (actor: Actor | null, episode: number, foreground = true, authority = 0): FriendshipsSnapshot => ({
+  actor, foreground, episode, authority, listActive: false, tab: 'accepted', cursor: null, page: null,
   listStatus: 'idle', capabilities: null, profilePeerId: null, profileView: null,
   profileStatus: 'idle', command: null, notice: null, outstandingWarning: null,
 });
@@ -70,8 +90,23 @@ export class FriendshipsCoordinator {
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   private show(p: Partial<FriendshipsSnapshot>) {
-    this.state = { ...this.state, ...p };
+    this.state = { ...this.state, ...p, authority: this.authority };
     this.listeners.forEach(fn => fn());
+  }
+
+  /** Actor + view episode + foreground + safety authority still match the captured UI bind. */
+  private bindLive(bound: {
+    actor: Actor;
+    episode: number;
+    foreground: boolean;
+    authority: number;
+  }): boolean {
+    return !!this.state.actor
+      && sameActor(bound.actor, this.state.actor)
+      && bound.episode === this.state.episode
+      && bound.foreground === true
+      && this.state.foreground
+      && bound.authority === this.authority;
   }
 
   setActor(actor: Actor | null) {
@@ -91,7 +126,12 @@ export class FriendshipsCoordinator {
     if (actor) this.quarantine = null;
     this.authority++;
     this.sequence++;
-    const next = empty(actor ? { ...actor } : null, this.state.episode + 1, this.state.foreground);
+    const next = empty(
+      actor ? { ...actor } : null,
+      this.state.episode + 1,
+      this.state.foreground,
+      this.authority,
+    );
     if (!actor || (!saved?.command && !saved?.outstandingWarning)) {
       this.show(next);
       return;
@@ -124,17 +164,21 @@ export class FriendshipsCoordinator {
     this.quarantine = null;
     this.authority++;
     this.sequence++;
-    this.show(empty(null, this.state.episode + 1, this.state.foreground));
+    this.show(empty(null, this.state.episode + 1, this.state.foreground, this.authority));
   };
 
   /**
    * Explicit local unlock of held UNKNOWN — outcome stays unknown;
    * never invents noncommit. Outstanding warning blocks new actions until ack.
-   * Never same-key resend.
+   * Never same-key resend. Stale UI callbacks must carry the exact captured bind.
    */
-  unlockUnknown = () => {
+  unlockUnknown = (bound: FriendshipUnknownBind) => {
     const c = this.state.command;
     if (!c || c.status !== 'unknown') return;
+    if (c.packet !== bound.packet) return;
+    if (!sameActor(bound.actor, c.packet.actor)) return;
+    if (!this.bindLive(bound)) return;
+    if (!this.commandSurfaceLive(c.packet)) return;
     this.quarantine = null;
     this.authority++;
     this.sequence++;
@@ -151,9 +195,10 @@ export class FriendshipsCoordinator {
   };
 
   /** Explicit acknowledgement of post-unlock warning — required before any new action. */
-  acknowledgeOutstandingWarning = () => {
+  acknowledgeOutstandingWarning = (bound: FriendshipWarningBind) => {
     const warning = this.state.outstandingWarning;
-    if (!warning) return;
+    if (!warning || warning !== bound.warning) return;
+    if (!this.bindLive(bound)) return;
     this.show({
       outstandingWarning: null,
       notice: this.state.notice === warning ? null : this.state.notice,
@@ -269,12 +314,14 @@ export class FriendshipsCoordinator {
   /**
    * Explicit READ-ONLY refresh of the current relationship while UNKNOWN is held.
    * GET only — never POSTs, never settles UNKNOWN, never invents commit/noncommit.
+   * Stale UI callbacks must carry the exact captured bind.
    */
-  refreshUnknownRelationship = () => {
+  refreshUnknownRelationship = (bound: FriendshipUnknownBind) => {
     const c = this.state.command;
-    if (!c || c.status !== 'unknown' || !sameActor(c.packet.actor, this.state.actor) || !this.state.foreground) {
-      return;
-    }
+    if (!c || c.status !== 'unknown') return;
+    if (c.packet !== bound.packet) return;
+    if (!sameActor(bound.actor, c.packet.actor)) return;
+    if (!this.bindLive(bound)) return;
     if (!this.commandSurfaceLive(c.packet)) return;
     const packet = c.packet;
     if (packet.peerLease !== null) {

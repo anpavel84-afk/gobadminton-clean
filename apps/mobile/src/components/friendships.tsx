@@ -50,12 +50,19 @@ function sameFriendCommand(
 /** Unresolved post-unlock warning — survives reload; blocks new actions until ack. */
 function OutstandingRetirementWarning() {
   const { owner, state } = useFriendships();
-  if (!state.outstandingWarning) return null;
+  if (!state.outstandingWarning || !state.actor) return null;
+  const actor = state.actor;
+  const warning = state.outstandingWarning;
+  const episode = state.episode;
+  const foreground = state.foreground;
+  const authority = state.authority;
   return <View style={{ gap: 8 }}>
     <Label accessibilityLiveRegion="polite" accessibilityRole="status">
-      {state.outstandingWarning}
+      {warning}
     </Label>
-    <TextButton title="Понятно" onPress={() => owner.acknowledgeOutstandingWarning()} />
+    <TextButton title="Понятно" onPress={() => owner.acknowledgeOutstandingWarning({
+      actor, warning, episode, foreground, authority,
+    })} />
   </View>;
 }
 
@@ -63,19 +70,26 @@ function OutstandingRetirementWarning() {
 function OrphanFriendRecovery() {
   const { owner, state } = useFriendships();
   const command = state.command;
-  if (!command || command.status !== 'unknown' || !state.foreground) return null;
+  if (!command || command.status !== 'unknown' || !state.foreground || !state.actor) return null;
   if (owner.commandMatchesSurface(command.packet)) return null;
   const packet = command.packet;
   const onList = packet.peerLease === null && state.listActive;
   const onProfile = packet.peerLease !== null && state.profilePeerId === packet.peerLease;
   if (!onList && !onProfile) return null;
   const notice = state.notice ?? FRIENDSHIP_UNKNOWN_NOTICE;
+  const bind = {
+    actor: state.actor,
+    packet,
+    episode: state.episode,
+    foreground: state.foreground,
+    authority: state.authority,
+  };
   return <View style={{ gap: 8 }}>
     <Label accessibilityLiveRegion="polite" accessibilityRole="status">
       {notice}
     </Label>
-    <TextButton title="Обновить состояние" onPress={() => owner.refreshUnknownRelationship()} />
-    <TextButton title="Понятно" onPress={() => owner.unlockUnknown()} />
+    <TextButton title="Обновить состояние" onPress={() => owner.refreshUnknownRelationship(bind)} />
+    <TextButton title="Понятно" onPress={() => owner.unlockUnknown(bind)} />
   </View>;
 }
 
@@ -119,6 +133,16 @@ export function FriendActions({
     if (locked) return;
     void owner.act(action, view, peerId, listLease, peerLease);
   }
+  const unknownBind = state.command?.status === 'unknown' && state.foreground && state.actor
+    && sameFriendCommand(view, peerId, state.command.packet)
+    ? {
+      actor: state.actor,
+      packet: state.command.packet,
+      episode: state.episode,
+      foreground: state.foreground,
+      authority: state.authority,
+    }
+    : null;
   return <View style={{ gap: 8 }}>
     <Label accessibilityRole="status">{friendStatus[view.relationship]}</Label>
     <View style={{ gap: 8 }}>
@@ -133,11 +157,9 @@ export function FriendActions({
     </View>
     {state.notice && state.command && sameFriendCommand(view, peerId, state.command.packet)
       && <Label accessibilityLiveRegion="polite" accessibilityRole="status">{state.notice}</Label>}
-    {state.command?.status === 'unknown' && state.foreground
-      && sameFriendCommand(view, peerId, state.command.packet)
-      && <>
-        <TextButton title="Обновить состояние" onPress={() => owner.refreshUnknownRelationship()} />
-        <TextButton title="Понятно" onPress={() => owner.unlockUnknown()} />
+    {unknownBind && <>
+        <TextButton title="Обновить состояние" onPress={() => owner.refreshUnknownRelationship(unknownBind)} />
+        <TextButton title="Понятно" onPress={() => owner.unlockUnknown(unknownBind)} />
       </>}
     {state.command?.status === 'sending' && sameFriendCommand(view, peerId, state.command.packet)
       && <Label accessibilityState={{ busy: true }}>Отправляем…</Label>}
